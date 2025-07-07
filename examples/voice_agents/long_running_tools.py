@@ -41,12 +41,12 @@ class Job:
         if self.status == "pending":
             return {
                 "status": "pending",
-                "message": f"{self.job_type.capitalize()} job {self.id} is pending, waiting for available GPU resources...",
+                "message": f"{self.job_type.capitalize()} job {self.id} is pending, waiting for available GPU resources...",  # noqa: E501
             }
         elif self.status == "running":
             return {
                 "status": "running",
-                "message": f"{self.job_type.capitalize()} job {self.id} is running, progress: {self.progress}%",
+                "message": f"{self.job_type.capitalize()} job {self.id} is running, progress: {self.progress}%",  # noqa: E501
             }
         elif self.status == "completed":
             return {
@@ -56,12 +56,12 @@ class Job:
         elif self.status == "failed":
             return {
                 "status": "failed",
-                "message": f"{self.job_type.capitalize()} job {self.id} failed. Error: {self.error}",
+                "message": f"{self.job_type.capitalize()} job {self.id} failed. Error: {self.error}",  # noqa: E501
             }
         elif self.status == "timeout":
             return {
                 "status": "timeout",
-                "message": f"{self.job_type.capitalize()} job {self.id} timed out. No GPU resources available.",
+                "message": f"{self.job_type.capitalize()} job {self.id} timed out. No GPU resources available.",  # noqa: E501
             }
         else:
             raise ValueError(f"Invalid job status: {self.status}")
@@ -157,7 +157,7 @@ async def model_inference(
 
     if model_name not in ctx.userdata.checkpoints:
         raise ToolError(
-            f"Model {model_name} has not been trained yet, please use `model_training` to train it first."
+            f"Model {model_name} has not been trained yet, please use `model_training` to train it first."  # noqa: E501
         )
 
     job = ctx.userdata.add_job("inference")
@@ -232,7 +232,7 @@ async def model_training(
     for i in range(10):
         await asyncio.sleep(4)
         logger.info(
-            f"Training progress of job={job.id} model={model_name} technique={technique}: {i + 1} / 10"
+            f"Training progress of job={job.id} model={model_name} technique={technique}: {i + 1} / 10"  # noqa: E501
         )
         job.progress = (i + 1) * 10
 
@@ -242,7 +242,7 @@ async def model_training(
         ctx.userdata.checkpoints[model_name].version += 1
         ctx.userdata.checkpoints[
             model_name
-        ].s3_path = f"s3://{model_name}/checkpoint_{model_name}_v{ctx.userdata.checkpoints[model_name].version}.pt"
+        ].s3_path = f"s3://{model_name}/checkpoint_{model_name}_v{ctx.userdata.checkpoints[model_name].version}.pt"  # noqa: E501
     else:
         ctx.userdata.checkpoints[model_name] = Checkpoint(
             id=model_name, version=1, s3_path=f"s3://{model_name}/checkpoint_{model_name}_v1.pt"
@@ -259,21 +259,21 @@ class ModelTrainingAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are a helpful assistant that manages long-running model training and inference jobs on a GPU cluster. "
-                "You interact asynchronously with tools and should notify the user once results are available.\n\n"
+                "You are a helpful assistant that manages long-running model training and inference jobs on a GPU cluster. "  # noqa: E501
+                "You interact asynchronously with tools and should notify the user once results are available.\n\n"  # noqa: E501
                 "Available tools:\n"
-                "- `model_training`: Start training a model with a selected technique. Creates a checkpoint upon success.\n"
+                "- `model_training`: Start training a model with a selected technique. Creates a checkpoint upon success.\n"  # noqa: E501
                 "- `model_inference`: Run inference using a trained model checkpoint.\n"
-                "- `check_cluster_status`: View current GPU availability, jobs, and checkpoints.\n\n"
+                "- `check_cluster_status`: View current GPU availability, jobs, and checkpoints.\n\n"  # noqa: E501
                 "Behavior:\n"
-                "- You do not wait for job results synchronously; tools return progress or results as they become available.\n"
-                "- When a job finishes **while you are speaking**, gracefully pause and say something like: "
+                "- You do not wait for job results synchronously; tools return progress or results as they become available.\n"  # noqa: E501
+                "- When a job finishes **while you are speaking**, gracefully pause and say something like: "  # noqa: E501
                 "'Oh, by the way, a job just completed: (details).'\n"
                 "- When **idle** and a job finishes, proactively tell the user the result.\n"
                 "- If a model hasn't been trained, inform the user to run `model_training` first.\n"
-                "- Use `check_cluster_status` for real-time insights before scheduling new jobs.\n\n"
-                "Be concise, informative, and always keep the user updated on job progress and system status. "
-                "Do not output markdown text since you are talking to a user. Format response to be more conversational."
+                "- Use `check_cluster_status` for real-time insights before scheduling new jobs.\n\n"  # noqa: E501
+                "Be concise, informative, and always keep the user updated on job progress and system status. "  # noqa: E501
+                "Do not output markdown text since you are talking to a user. Format response to be more conversational."  # noqa: E501
             ),
             tools=[model_training, model_inference, check_cluster_status],
         )
