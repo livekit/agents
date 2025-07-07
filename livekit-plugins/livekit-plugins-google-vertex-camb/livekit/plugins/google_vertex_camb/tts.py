@@ -189,63 +189,52 @@ class ChunkedStream(tts.ChunkedStream):
         """Run the TTS synthesis process"""
         request_id = utils.shortuuid()
 
+        audio_ref_bytes = None
+        with open(self._opts.audio_ref_path, "rb") as f:
+            audio_ref_bytes = base64.b64encode(f.read()).decode("utf-8")
+
+        # Create the instances payload for MARS7 API
+        instances = {
+            "text": self._input_text,
+            "language": self._opts.language.value,
+            "audio_ref": audio_ref_bytes,
+        }
+        if is_given(self._opts.ref_text):
+            instances["ref_text"] = self._opts.ref_text
+
+        endpoint = aiplatform.Endpoint(endpoint_name=self._opts.endpoint_id)
+        data = {"instances": [instances]}
         try:
-            audio_ref_bytes = None
-            with open(self._opts.audio_ref_path, "rb") as f:
-                audio_ref_bytes = base64.b64encode(f.read()).decode("utf-8")
-
-            # Create the instances payload for MARS7 API
-            instances = {
-                "text": self._input_text,
-                "language": self._opts.language.value,
-                "audio_ref": audio_ref_bytes,
-            }
-            if is_given(self._opts.ref_text):
-                instances["ref_text"] = self._opts.ref_text
-
-            endpoint = aiplatform.Endpoint(endpoint_name=self._opts.endpoint_id)
-            data = {"instances": [instances]}
-            
             response = endpoint.raw_predict(
                 body=json.dumps(data).encode("utf-8"),
                 headers={"Content-Type": "application/json"}
             )
-
-            response_data = json.loads(response.content)
-            if "predictions" not in response_data or not response_data["predictions"]:
-                raise APIStatusError(
-                    message="No predictions returned from MARS7 API",
-                    status_code=500,
-                    request_id=request_id,
-                    body=str(response_data),
-                )
-
-            audio_bytes = base64.b64decode(response_data["predictions"][0])
-
-            if audio_bytes:
-                # Initialize the output emitter
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=DEFAULT_SAMPLE_RATE,
-                    num_channels=1,
-                    mime_type="audio/flac",
-                )
-                
-                # Push the raw FLAC audio bytes directly
-                output_emitter.push(audio_bytes)
-                
-                # Flush to complete the emission
-                output_emitter.flush()
-
         except Exception as e:
-            if "credentials" in str(e).lower():
-                raise APIConnectionError(f"Authentication failed: {e}") from e
-            elif "endpoint" in str(e).lower():
-                raise APIStatusError(
-                    message=f"Endpoint error: {e}",
-                    status_code=404,
-                    request_id=request_id,
-                    body=None,
-                ) from e
-            else:
-                raise APIConnectionError(f"MARS7 API error: {e}") from e
+            raise APIConnectionError(f"MARS7 API error: {e}") from e
+
+        response_data = json.loads(response.content)
+        if "predictions" not in response_data or not response_data["predictions"]:
+            raise APIStatusError(
+                message="No predictions returned from MARS7 API",
+                status_code=500,
+                request_id=request_id,
+                body=str(response_data),
+            )
+
+        audio_bytes = base64.b64decode(response_data["predictions"][0])
+
+        if audio_bytes:
+            # Initialize the output emitter
+            output_emitter.initialize(
+                request_id=request_id,
+                sample_rate=DEFAULT_SAMPLE_RATE,
+                num_channels=1,
+                mime_type="audio/flac",
+            )
+            
+            # Push the raw FLAC audio bytes directly
+            output_emitter.push(audio_bytes)
+            
+            # Flush to complete the emission
+            output_emitter.flush()
+
