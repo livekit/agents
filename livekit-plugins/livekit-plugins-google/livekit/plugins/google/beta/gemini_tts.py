@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
@@ -14,14 +15,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-# Gemini TTS models that support native text-to-speech
-GEMINI_TTS_MODELS = [
-    "gemini-2.5-flash-preview-tts",
-    "gemini-2.5-pro-preview-tts",
-]
-
-# Available voice options for Gemini TTS
-GEMINI_VOICES = [
+GEMINI_TTS_MODELS = Literal["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
+GEMINI_VOICES = Literal[
     "Zephyr",
     "Puck",
     "Charon",
@@ -62,8 +57,8 @@ NUM_CHANNELS = 1
 
 @dataclass
 class _TTSOptions:
-    model: str
-    voice_name: str
+    model: GEMINI_TTS_MODELS | str
+    voice_name: GEMINI_VOICES | str
     vertexai: bool
     project: str | None
     location: str | None
@@ -73,8 +68,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: str = DEFAULT_MODEL,
-        voice_name: str = DEFAULT_VOICE,
+        model: GEMINI_TTS_MODELS | str = DEFAULT_MODEL,
+        voice_name: GEMINI_VOICES | str = DEFAULT_VOICE,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
@@ -104,19 +99,10 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        if model not in GEMINI_TTS_MODELS:
-            raise ValueError(
-                f"Model {model} is not supported. Available models: {GEMINI_TTS_MODELS}"
-            )
-
-        if voice_name not in GEMINI_VOICES:
-            raise ValueError(
-                f"Voice {voice_name} is not supported. Available voices: {GEMINI_VOICES}"
-            )
-
-        # Setup authentication similar to LLM plugin
-        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location = (
+        gcp_project: str | None = (
+            project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        )
+        gcp_location: str | None = (
             location
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
@@ -132,7 +118,7 @@ class TTS(tts.TTS):
             if not gcp_project:
                 from google.auth._default_async import default_async
 
-                _, gcp_project = default_async(
+                _, gcp_project = default_async(  # type: ignore
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
             gemini_api_key = None  # VertexAI does not require an API key
@@ -176,15 +162,7 @@ class TTS(tts.TTS):
             voice_name (str, optional): The voice to use for synthesis.
         """
         if is_given(voice_name):
-            if voice_name not in GEMINI_VOICES:
-                raise ValueError(
-                    f"Voice {voice_name} is not supported. Available voices: {GEMINI_VOICES}"
-                )
             self._opts.voice_name = voice_name
-
-    async def aclose(self) -> None:
-        # Close any resources if needed
-        pass
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -194,7 +172,6 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            # Configure the request for Gemini TTS
             config = types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=types.SpeechConfig(
@@ -205,23 +182,27 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 ),
             )
-
-            # Make the request to Gemini TTS
             response = await self._tts._client.aio.models.generate_content(
                 model=self._tts._opts.model,
                 contents=self._input_text,
                 config=config,
             )
 
-            # Check if we have a valid response
-            if not response.candidates or not response.candidates[0].content:
+            if (
+                not response.candidates
+                or not (content := response.candidates[0].content)
+                or not content.parts
+            ):
                 raise APIStatusError("No audio content generated")
 
-            # Extract audio data from the response
             audio_data = None
-            for part in response.candidates[0].content.parts:
-                if part.inline_data and part.inline_data.mime_type.startswith("audio/"):
-                    audio_data = part.inline_data.data
+            for part in content.parts:
+                if (
+                    (inline_data := part.inline_data)
+                    and inline_data.mime_type
+                    and inline_data.mime_type.startswith("audio/")
+                ):
+                    audio_data = inline_data.data
                     # audio/L16;codec=pcm;rate=24000
                     mime_type = "audio/pcm"
                     break
@@ -229,7 +210,6 @@ class ChunkedStream(tts.ChunkedStream):
             if not audio_data:
                 raise APIStatusError("No audio data found in response")
 
-            # Initialize the audio emitter
             output_emitter.initialize(
                 request_id=utils.shortuuid(),
                 sample_rate=self._tts.sample_rate,
@@ -237,7 +217,6 @@ class ChunkedStream(tts.ChunkedStream):
                 mime_type=mime_type,
             )
 
-            # Push the audio data
             output_emitter.push(audio_data)
 
         except ClientError as e:
