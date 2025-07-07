@@ -23,7 +23,11 @@ from typing import Literal
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
-from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
+from google.cloud.texttospeech_v1.types import (
+    CustomPronunciations,
+    SsmlVoiceGender,
+    SynthesizeSpeechResponse,
+)
 from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, tokenize, tts, utils
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -51,6 +55,7 @@ class _TTSOptions:
     speaking_rate: float
     tokenizer: tokenize.SentenceTokenizer
     volume_gain_db: float
+    custom_pronunciations: CustomPronunciations | None
     enable_ssml: bool
     input_type: InputType
 
@@ -72,6 +77,7 @@ class TTS(tts.TTS):
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
         enable_ssml: bool = False,
         input_type: InputType = "text",
@@ -96,6 +102,7 @@ class TTS(tts.TTS):
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
+            custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
             input_type (InputType, optional): Input type for synthesis. "text" for plain text, "markup" for SSML/markup. Default is "text".
@@ -126,6 +133,8 @@ class TTS(tts.TTS):
         if not is_given(tokenizer):
             tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
 
+        pronunciations = None if not is_given(custom_pronunciations) else custom_pronunciations
+
         self._opts = _TTSOptions(
             voice=voice_params,
             encoding=audio_encoding,
@@ -135,6 +144,7 @@ class TTS(tts.TTS):
             speaking_rate=speaking_rate,
             tokenizer=tokenizer,
             volume_gain_db=volume_gain_db,
+            custom_pronunciations=pronunciations,
             enable_ssml=enable_ssml,
             input_type=input_type,
         )
@@ -236,9 +246,9 @@ class ChunkedStream(tts.ChunkedStream):
             # Determine input based on enable_ssml or input_type
             if self._opts.enable_ssml:
                 input = (
-                    texttospeech.SynthesisInput(ssml=self._build_ssml())
+                    texttospeech.SynthesisInput(ssml=self._build_ssml(),custom_pronunciations=self._opts.custom_pronunciations,)
                     if self._opts.enable_ssml
-                    else texttospeech.SynthesisInput(text=self._input_text)
+                    else texttospeech.SynthesisInput(text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations,)
                 )
             else:
                 synthesis_input_params = {}
@@ -308,6 +318,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sample_rate_hertz=self._opts.sample_rate,
                 speaking_rate=self._opts.speaking_rate,
             ),
+            custom_pronunciations=self._opts.custom_pronunciations,
         )
 
         async def _tokenize_input() -> None:

@@ -689,8 +689,16 @@ class AgentActivity(RecognitionHooks):
         if self.draining and not bypass_draining:
             raise RuntimeError("cannot schedule new speech, the agent is draining")
 
-        # Negate the priority to make it a max heap
-        heapq.heappush(self._speech_q, (-priority, time.monotonic_ns(), speech))
+        while True:
+            try:
+                # negate the priority to make it a max heap
+                heapq.heappush(self._speech_q, (-priority, time.perf_counter_ns(), speech))
+                break
+            except TypeError:
+                # handle TypeError when identical timestamps cause speech comparison failure
+                # with perf_counter_ns(), collisions should be rare
+                pass
+
         self._wake_up_main_task()
 
     @utils.log_exceptions(logger=logger)
