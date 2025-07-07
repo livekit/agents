@@ -1,8 +1,8 @@
 import json
 import uuid
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
 from livekit.agents import llm
 
@@ -20,7 +20,7 @@ SAMPLE_SIZE_BITS = Literal[16]  # only supports 16-bit audio
 CHANNEL_COUNT = Literal[1]  # only supports monochannel audio
 
 
-class BaseModel(BaseModel):
+class BaseModel(_BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
@@ -91,7 +91,7 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
-    toolChoice: dict[str, dict[str, str]] | None = None
+    toolChoice: Optional[dict[str, dict[str, str]]] = None
     tools: list[Tool]
 
 
@@ -260,6 +260,8 @@ class SonicEventBuilder:
             else:
                 return "other_event"
 
+        raise ValueError(f"Unknown event type: {json_data}")
+
     def create_text_content_block(
         self,
         content_name: str,
@@ -313,10 +315,18 @@ class SonicEventBuilder:
         if chat_ctx.items:
             logger.debug("initiating session with chat context")
             for item in chat_ctx.items:
+                if item.type != "message":
+                    continue
+
+                if (role := item.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
+                    continue
+
                 ctx_content_name = str(uuid.uuid4())
                 init_events.extend(
                     self.create_text_content_block(
-                        ctx_content_name, item.role.upper(), "".join(item.content)
+                        ctx_content_name,
+                        cast(ROLE, role),
+                        "".join(c for c in item.content if isinstance(c, str)),
                     )
                 )
 
@@ -481,26 +491,15 @@ class SonicEventBuilder:
         sample_rate: SAMPLE_RATE_HERTZ,
         tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
     ) -> str:
-        tool_configuration = tool_configuration or ToolConfiguration(tools=[])
-        for tool in tool_configuration.tools:
-            logger.debug(f"TOOL JSON SCHEMA: {tool.toolSpec.inputSchema}")
-        tool_objects = [
-            Tool(
-                toolSpec=ToolSpec(
-                    name=tool.toolSpec.name,
-                    description=tool.toolSpec.description,
-                    inputSchema=ToolInputSchema(json_=tool.toolSpec.inputSchema.json_),
-                )
-            )
-            for tool in tool_configuration.tools
-        ]
-
         if tool_configuration is None:
             tool_configuration = ToolConfiguration(tools=[])
         elif isinstance(tool_configuration, str):
-            tool_configuration = ToolConfiguration(**json.loads(tool_configuration))
+            tool_configuration = ToolConfiguration.model_validate_json(tool_configuration)
         elif isinstance(tool_configuration, dict):
-            tool_configuration = ToolConfiguration(**tool_configuration)
+            tool_configuration = ToolConfiguration.model_validate(tool_configuration)
+
+        for tool in tool_configuration.tools:
+            logger.debug(f"TOOL JSON SCHEMA: {tool.toolSpec.inputSchema}")
 
         tool_objects = list(tool_configuration.tools)
         event = Event(
