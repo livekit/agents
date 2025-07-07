@@ -85,16 +85,13 @@ class TTS(tts.TTS):
         Args:
             model (str, optional): The Gemini TTS model to use. Defaults to "gemini-2.5-flash-preview-tts".
             voice_name (str, optional): The voice to use for synthesis. Defaults to "Kore".
-            sample_rate (int, optional): Audio sample rate in Hz. Defaults to 24000.
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
             project (str, optional): The Google Cloud project to use (only for VertexAI).
             location (str, optional): The location to use for VertexAI API requests. Defaults to "us-central1".
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False
-            ),  # Gemini TTS doesn't support streaming yet
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
@@ -188,6 +185,13 @@ class ChunkedStream(tts.ChunkedStream):
                 config=config,
             )
 
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=self._tts.sample_rate,
+                num_channels=self._tts.num_channels,
+                mime_type="audio/pcm",
+            )
+
             if (
                 not response.candidates
                 or not (content := response.candidates[0].content)
@@ -195,29 +199,15 @@ class ChunkedStream(tts.ChunkedStream):
             ):
                 raise APIStatusError("No audio content generated")
 
-            audio_data = None
             for part in content.parts:
                 if (
                     (inline_data := part.inline_data)
+                    and inline_data.data
                     and inline_data.mime_type
                     and inline_data.mime_type.startswith("audio/")
                 ):
-                    audio_data = inline_data.data
-                    # audio/L16;codec=pcm;rate=24000
-                    mime_type = "audio/pcm"
-                    break
-
-            if not audio_data:
-                raise APIStatusError("No audio data found in response")
-
-            output_emitter.initialize(
-                request_id=utils.shortuuid(),
-                sample_rate=self._tts.sample_rate,
-                num_channels=self._tts.num_channels,
-                mime_type=mime_type,
-            )
-
-            output_emitter.push(audio_data)
+                    # mime_type: audio/L16;codec=pcm;rate=24000
+                    output_emitter.push(inline_data.data)
 
         except ClientError as e:
             raise APIStatusError(
