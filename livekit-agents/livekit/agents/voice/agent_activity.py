@@ -1838,6 +1838,18 @@ class AgentActivity(RecognitionHooks):
                     bypass_draining=True,
                 )
 
+        for scheduled_task in tool_output.scheduled_tool_tasks:
+            task = asyncio.create_task(
+                self._schedule_async_tool_task(scheduled_task, speech_handle),
+                name=f"scheduled_tool_task_{scheduled_task.fnc_call.name}",
+            )
+            tasks.append(task)
+
+            def _on_async_tool_task_done(_, *, task: asyncio.Task[None]) -> None:
+                self._scheduled_tool_tasks.discard(task)
+
+            task.add_done_callback(partial(_on_async_tool_task_done, task=task))
+
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
     def vad(self) -> vad.VAD | None:

@@ -14,7 +14,7 @@ from livekit.agents.llm import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
 from livekit.plugins import cartesia, deepgram, openai, silero
 
-logger = logging.getLogger("annotated-tool-args")
+logger = logging.getLogger("long-running-tools")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
@@ -290,7 +290,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=cartesia.TTS(),
+        tts=cartesia.TTS(speed="fastest"),
         userdata=userdata,
     )
 
