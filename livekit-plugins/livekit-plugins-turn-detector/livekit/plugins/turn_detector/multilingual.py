@@ -33,6 +33,9 @@ class MultilingualModel(EOUModelBase):
         return _EUORunnerMultilingual.INFERENCE_METHOD
 
     async def unlikely_threshold(self, language: str | None) -> float | None:
+        if not language:
+            return None
+
         threshold = await super().unlikely_threshold(language)
         if threshold is None:
             if url := _remote_inference_url():
@@ -47,7 +50,7 @@ class MultilingualModel(EOUModelBase):
                     data = await resp.json()
                     threshold = data.get("threshold")
                     if threshold:
-                        self._languages[language] = {"threshold": data["threshold"]}
+                        self._languages[language] = {"threshold": threshold}
 
         return threshold
 
@@ -56,7 +59,7 @@ class MultilingualModel(EOUModelBase):
     ) -> float:
         url = _remote_inference_url()
         if not url:
-            return super().predict_end_of_turn(chat_ctx, timeout=timeout)
+            return await super().predict_end_of_turn(chat_ctx, timeout=timeout)
 
         started_at = perf_counter()
         async with utils.http_context.http_session().post(
@@ -67,7 +70,7 @@ class MultilingualModel(EOUModelBase):
             resp.raise_for_status()
             data = await resp.json()
             probability = data.get("probability")
-            if probability:
+            if isinstance(probability, float) and probability >= 0:
                 logger.debug(
                     "eou prediction",
                     extra={
