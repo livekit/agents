@@ -34,8 +34,7 @@ async def entrypoint(ctx: JobContext):
         for _ in range(3):
             await session.generate_reply(
                 instructions=(
-                    "The user has been inactive. Politely check if the user is still present, and "
-                    "gently guide the conversation back toward your intended goal."
+                    "The user has been inactive. Politely check if the user is still present."
                 )
             )
             await asyncio.sleep(10)

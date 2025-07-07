@@ -95,7 +95,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
+        # wheels to build:
+        include:
+          - os: ubuntu-latest
+            archs: x86_64
+          - os: namespace-profile-default-arm64
+            archs: aarch64
+          - os: windows-latest
+            archs: AMD64
+          - os: macos-latest
+            archs: x86_64 arm64
 
     defaults:
       run:
@@ -117,7 +126,7 @@ jobs:
         run: cibuildwheel --output-dir dist
         env:
           CIBW_BUILD_VERBOSITY: 3
-          CIBW_ARCHS_WINDOWS: "AMD64"
+          CIBW_ARCHS: ${{ matrix.archs }}
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v4

@@ -1,3 +1,3 @@
-from . import anthropic, aws, google, openai
+from . import anthropic, aws, google, mistralai, openai
 
-__all__ = ["openai", "google", "aws", "anthropic"]
+__all__ = ["openai", "google", "aws", "anthropic", "mistralai"]
