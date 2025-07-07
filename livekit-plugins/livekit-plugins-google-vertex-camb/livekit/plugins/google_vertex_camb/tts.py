@@ -17,21 +17,15 @@ from __future__ import annotations
 import base64
 import json
 import os
-import tempfile
 import weakref
 from dataclasses import dataclass
-from typing import Any
 
-import numpy as np
-import soundfile as sf
 from google.cloud import aiplatform
-from livekit import rtc
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     tokenize,
     tts,
     utils,
@@ -90,7 +84,8 @@ class TTS(tts.TTS):
                 Can be set via argument or `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
             language (Language): Target language for synthesis. Defaults to EN_US.
             audio_ref_path (NotGivenOr[str]): Path to reference audio file for voice cloning.
-            ref_text (NotGivenOr[str]): Optional transcription of reference audio for better results.
+            ref_text (NotGivenOr[str]): Optional transcription of reference audio for
+                better results.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer]): Tokenizer for processing text.
         """
         super().__init__(
@@ -107,7 +102,7 @@ class TTS(tts.TTS):
 
         # Set up project and location
         resolved_project_id = (
-            project_id if is_given(project_id) 
+            project_id if is_given(project_id)
             else os.environ.get("GOOGLE_CLOUD_PROJECT")
         )
         resolved_location = (
@@ -119,7 +114,7 @@ class TTS(tts.TTS):
         try:
             aiplatform.init(project=resolved_project_id, location=resolved_location)
         except Exception as e:
-            raise ValueError(f"Failed to initialize Vertex AI: {e}")
+            raise ValueError(f"Failed to initialize Vertex AI: {e}") from e
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(
@@ -231,10 +226,10 @@ class ChunkedStream(tts.ChunkedStream):
                 num_channels=1,
                 mime_type="audio/flac",
             )
-            
+
             # Push the raw FLAC audio bytes directly
             output_emitter.push(audio_bytes)
-            
+
             # Flush to complete the emission
             output_emitter.flush()
 

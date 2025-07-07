@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from enum import Enum
+
+
 class Language(str, Enum):
     """Language enum for Google Vertex AI MARS7 API"""
 
