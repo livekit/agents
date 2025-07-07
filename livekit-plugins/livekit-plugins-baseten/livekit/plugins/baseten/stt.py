@@ -379,7 +379,7 @@ class SpeechStream(stt.SpeechStream):
 
         # Build and send the metadata payload as the first message
         metadata = {
-            "vad_params": {
+            "streaming_vad_config": {
                 "threshold": self._opts.vad_threshold,
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
