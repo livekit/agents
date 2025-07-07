@@ -134,6 +134,44 @@ def function_tool(
     f: Raw_F,
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
+    reply_mode: None = None,
+) -> RawFunctionTool: ...
+
+
+@overload
+def function_tool(
+    f: None = None,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    reply_mode: None = None,
+) -> Callable[[Raw_F], RawFunctionTool]: ...
+
+
+@overload
+def function_tool(
+    f: F,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    reply_mode: None = None,
+) -> FunctionTool: ...
+
+
+@overload
+def function_tool(
+    f: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    reply_mode: None = None,
+) -> Callable[[F], FunctionTool]: ...
+
+
+@overload
+def function_tool(
+    f: Async_Raw_F,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
     reply_mode: ToolReplyMode | None = None,
 ) -> RawFunctionTool: ...
 
@@ -144,12 +182,12 @@ def function_tool(
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     reply_mode: ToolReplyMode | None = None,
-) -> Callable[[Raw_F], RawFunctionTool]: ...
+) -> Callable[[Async_Raw_F], RawFunctionTool]: ...
 
 
 @overload
 def function_tool(
-    f: F,
+    f: Async_F,
     *,
     name: str | None = None,
     description: str | None = None,
@@ -164,7 +202,7 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     reply_mode: ToolReplyMode | None = None,
-) -> Callable[[F], FunctionTool]: ...
+) -> Callable[[Async_F], FunctionTool]: ...
 
 
 def function_tool(
@@ -179,6 +217,8 @@ def function_tool(
     | RawFunctionTool
     | Callable[[F], FunctionTool]
     | Callable[[Raw_F], RawFunctionTool]
+    | Callable[[Async_F], FunctionTool]
+    | Callable[[Async_Raw_F], RawFunctionTool]
 ):
     def deco_raw(func: Raw_F) -> RawFunctionTool:
         assert raw_schema is not None

@@ -1458,6 +1458,13 @@ class AgentActivity(RecognitionHooks):
         scheduled_task: ScheduledToolTask,
         speech_handle: SpeechHandle,
     ) -> None:
+        logger.info(
+            "scheduling long running tool",
+            extra={
+                "function": scheduled_task.fnc_call.name,
+                "speech_id": speech_handle.id,
+            },
+        )
         py_out = await schedule_async_tool_execution(
             tool_task=scheduled_task,
             speech_handle=speech_handle,
@@ -1491,6 +1498,16 @@ class AgentActivity(RecognitionHooks):
                 "output": sanitized_out.fnc_call_out.output if sanitized_out.fnc_call_out else "",
             },
             indent=2,
+        )
+
+        logger.info(
+            "long running tool finished execution",
+            extra={
+                "function": scheduled_task.fnc_call.name,
+                "speech_id": speech_handle.id,
+                "reply_mode": reply_mode,
+                "content": content,
+            },
         )
 
         chat_ctx = self._agent._chat_ctx.copy()
