@@ -99,7 +99,8 @@ class LangGraphStream(llm.LLMStream):
         ):
             # Filter by node name using metadata if streaming_nodes is specified
             if self._streaming_nodes is not None:
-                node_name = metadata.get("langgraph_node")
+                # Ensure metadata is a dict-like object before accessing it
+                node_name = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
                 if node_name not in self._streaming_nodes:
                     continue
 
