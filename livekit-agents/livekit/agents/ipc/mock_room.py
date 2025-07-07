@@ -25,7 +25,7 @@ MockRoom.remote_participants = {mock_remote_participant.sid: mock_remote_partici
 if __name__ == "__main__":
     mock_room = MockRoom
 
-    async def test():
+    async def test() -> None:
         print("sid", await mock_room.sid())
 
     import asyncio

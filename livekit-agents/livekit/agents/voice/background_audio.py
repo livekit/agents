@@ -69,7 +69,7 @@ class BackgroundAudioPlayer:
         thinking_sound: NotGivenOr[
             AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
-        stream_timeout_ms: int = 200
+        stream_timeout_ms: int = 200,
     ) -> None:
         """
         Initializes the BackgroundAudio component with optional ambient and thinking sounds.

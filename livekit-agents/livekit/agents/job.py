@@ -296,7 +296,7 @@ class JobContext:
         """Deletes the room and disconnects all participants."""
         if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
             logger.warning("job_ctx.delete_room() is not executed while in console mode")
-            fut = asyncio.Future()
+            fut = asyncio.Future[api.DeleteRoomResponse]()
             fut.set_result(api.DeleteRoomResponse())
             return fut
 
@@ -331,7 +331,7 @@ class JobContext:
         """
         if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
             logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
-            fut = asyncio.Future()
+            fut = asyncio.Future[api.SIPParticipantInfo]()
             fut.set_result(api.SIPParticipantInfo())
             return fut
 
@@ -376,7 +376,7 @@ class JobContext:
             logger.warning(
                 "job_ctx.transfer_sip_participant() is not executed while in console mode"
             )
-            fut = asyncio.Future()
+            fut = asyncio.Future[api.SIPParticipantInfo]()
             fut.set_result(api.SIPParticipantInfo())
             return fut
 
