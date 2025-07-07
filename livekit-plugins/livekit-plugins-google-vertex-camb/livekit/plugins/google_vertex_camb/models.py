@@ -27,4 +27,3 @@ class Language(str, Enum):
     ZH_CN = "zh-cn"
     EN_GB = "en-gb"
     FR_CA = "fr-ca"
-

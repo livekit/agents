@@ -43,6 +43,7 @@ from .models import Language
 NUM_CHANNELS = 1
 DEFAULT_SAMPLE_RATE = 24000
 
+
 @dataclass
 class _TTSOptions:
     """Internal options for Google Vertex AI MARS7 TTS"""
@@ -102,12 +103,10 @@ class TTS(tts.TTS):
 
         # Set up project and location
         resolved_project_id = (
-            project_id if is_given(project_id)
-            else os.environ.get("GOOGLE_CLOUD_PROJECT")
+            project_id if is_given(project_id) else os.environ.get("GOOGLE_CLOUD_PROJECT")
         )
         resolved_location = (
-            location if is_given(location)
-            else os.environ.get("GOOGLE_CLOUD_LOCATION")
+            location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
         )
 
         # Initialize Vertex AI
@@ -201,8 +200,7 @@ class ChunkedStream(tts.ChunkedStream):
         data = {"instances": [instances]}
         try:
             response = endpoint.raw_predict(
-                body=json.dumps(data).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
+                body=json.dumps(data).encode("utf-8"), headers={"Content-Type": "application/json"}
             )
         except Exception as e:
             raise APIConnectionError(f"MARS7 API error: {e}") from e
@@ -232,4 +230,3 @@ class ChunkedStream(tts.ChunkedStream):
 
             # Flush to complete the emission
             output_emitter.flush()
-
