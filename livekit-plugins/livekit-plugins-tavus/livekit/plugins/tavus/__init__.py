@@ -17,7 +17,8 @@
 See https://docs.livekit.io/agents/integrations/avatar/tavus/ for more information.
 """
 
-from .avatar import AvatarSession, TavusException
+from .api import TavusException
+from .avatar import AvatarSession
 from .version import __version__
 
 __all__ = [

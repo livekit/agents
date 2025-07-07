@@ -15,12 +15,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import io
 import struct
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import av
 import av.container
@@ -30,6 +30,36 @@ from livekit import rtc
 from ...log import logger
 from .. import aio
 from ..audio import AudioByteStream
+
+
+def _mime_to_av_format(mime: str | None) -> str | None:
+    """Return the libav *container* short‑name for a given MIME‑type.
+
+    If *mime* is *None* or not recognised, return *None* so that PyAV will
+    fall back to auto‑detection.
+    """
+
+    if not mime:
+        return None
+
+    mime = mime.lower()
+    _TABLE: dict[str, str] = {
+        "audio/mpeg": "mp3",
+        "audio/mp3": "mp3",
+        "audio/x-mpeg": "mp3",
+        "audio/aac": "aac",
+        "audio/x-aac": "aac",
+        "audio/flac": "flac",
+        "audio/x-flac": "flac",
+        "audio/wav": "wav",
+        "audio/wave": "wav",
+        "audio/x-wav": "wav",
+        "audio/opus": "ogg",
+        "audio/ogg": "ogg",
+        "audio/webm": "webm",
+        "audio/mp4": "mp4",
+    }
+    return _TABLE.get(mime)
 
 
 class StreamBuffer:
@@ -97,15 +127,20 @@ class AudioStreamDecoder:
     _executor: ThreadPoolExecutor | None = None
 
     def __init__(
-        self, *, sample_rate: int = 48000, num_channels: int = 1, format: str | None = None
+        self,
+        *,
+        sample_rate: int | None = 48000,
+        num_channels: int | None = 1,
+        format: str | None = None,
     ):
         self._sample_rate = sample_rate
+
         self._layout = "mono"
         if num_channels == 2:
             self._layout = "stereo"
-        elif num_channels != 1:
-            raise ValueError(f"Invalid number of channels: {num_channels}")
-        self._format = format.lower() if format else None
+
+        self._mime_type = format.lower() if format else None
+        self._av_format = _mime_to_av_format(self._mime_type)
 
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
@@ -121,11 +156,7 @@ class AudioStreamDecoder:
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
-            # choose decode loop based on format
-            if self._format == "wav":
-                target = self._decode_wav_loop
-            else:
-                target = self._decode_loop
+            target = self._decode_wav_loop if self._av_format == "wav" else self._decode_loop
             self._loop.run_in_executor(self.__class__._executor, target)
 
     def end_input(self) -> None:
@@ -139,26 +170,55 @@ class AudioStreamDecoder:
         resampler: av.AudioResampler | None = None
         try:
             # open container in low-latency streaming mode
-            container = av.open(self._input_buf, mode="r")
+            container = av.open(
+                self._input_buf,
+                mode="r",
+                format=self._av_format,
+                buffer_size=256,
+                options={
+                    "probesize": "32",
+                    "analyzeduration": "0",
+                    "fflags": "nobuffer+flush_packets",
+                    "flags": "low_delay",
+                    "reorder_queue_size": "0",
+                    "max_delay": "0",
+                    "avioflags": "direct",
+                },
+            )
+            # explicitly disable internal buffering flags on the FFmpeg container
+            container.flags |= cast(
+                int, av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
+            )
+
             if len(container.streams.audio) == 0:
                 raise ValueError("no audio stream found")
 
             audio_stream = container.streams.audio[0]
-            resampler = av.AudioResampler(format="s16", layout=self._layout, rate=self._sample_rate)
+
+            # Set up resampler only if needed
+            if self._sample_rate is not None or self._layout is not None:
+                resampler = av.AudioResampler(
+                    format="s16", layout=self._layout, rate=self._sample_rate
+                )
 
             for frame in container.decode(audio_stream):
                 if self._closed:
                     return
 
-                for resampled_frame in resampler.resample(frame):
-                    nchannels = len(resampled_frame.layout.channels)
+                if resampler:
+                    frames = resampler.resample(frame)
+                else:
+                    frames = [frame]
+
+                for f in frames:
+                    nchannels = len(f.layout.channels)
                     self._loop.call_soon_threadsafe(
                         self._output_ch.send_nowait,
                         rtc.AudioFrame(
-                            data=resampled_frame.to_ndarray().tobytes(),
+                            data=f.to_ndarray().tobytes(),
                             num_channels=nchannels,
-                            sample_rate=int(resampled_frame.sample_rate),
-                            samples_per_channel=int(resampled_frame.samples / nchannels),
+                            sample_rate=int(f.sample_rate),
+                            samples_per_channel=int(f.samples / nchannels),
                         ),
                     )
 
@@ -227,11 +287,19 @@ class AudioStreamDecoder:
 
             # now ready to decode
             bstream = AudioByteStream(sample_rate=wave_rate, num_channels=wave_channels)
-            resampler = rtc.AudioResampler(
-                input_rate=wave_rate, output_rate=self._sample_rate, num_channels=wave_channels
+            resampler = (
+                rtc.AudioResampler(
+                    input_rate=wave_rate, output_rate=self._sample_rate, num_channels=wave_channels
+                )
+                if self._sample_rate is not None
+                else None
             )
 
             def resample_and_push(frame: rtc.AudioFrame) -> None:
+                if not resampler:
+                    self._loop.call_soon_threadsafe(self._output_ch.send_nowait, frame)
+                    return
+
                 for resampled_frame in resampler.push(frame):
                     self._loop.call_soon_threadsafe(
                         self._output_ch.send_nowait,
@@ -266,7 +334,9 @@ class AudioStreamDecoder:
         self.end_input()
         self._closed = True
         self._input_buf.close()
-        # wait for decode loop to finish, only if anything's been pushed
-        with contextlib.suppress(aio.ChanClosed):
-            if self._started:
-                await self._output_ch.recv()
+
+        if not self._started:
+            return
+
+        async for _ in self._output_ch:
+            pass

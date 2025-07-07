@@ -86,8 +86,7 @@ class BufferedTokenStream:
                     TokenData(token=self._out_buf, segment_id=self._current_segment_id)
                 )
 
-            self._current_segment_id = shortuuid()
-
+        self._current_segment_id = shortuuid()
         self._in_buf = ""
         self._out_buf = ""
 

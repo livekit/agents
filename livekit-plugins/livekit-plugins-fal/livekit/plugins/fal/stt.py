@@ -34,7 +34,7 @@ class WizperSTT(stt.STT):
         self._api_key = api_key if is_given(api_key) else os.getenv("FAL_KEY")
         if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
-        self._opts = _STTOptions(language=language)
+        self._opts = _STTOptions(language=language if is_given(language) else "en")
         self._fal_client = fal_client.AsyncClient(key=self._api_key)
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:

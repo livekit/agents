@@ -16,7 +16,7 @@ async def get_access_token(api_key: str) -> str:
             if resp.status == 201:
                 try:
                     data = await resp.json()
-                    return data["key_value"]
+                    return data["key_value"]  # type: ignore
                 except (ValueError, KeyError) as e:
                     raise Exception(
                         f"Failed to parse Speechmatics access token response: {e}"
@@ -29,12 +29,12 @@ async def get_access_token(api_key: str) -> str:
                 )
 
 
-def get_sdk_version():
+def get_sdk_version() -> str:
     version = importlib.metadata.version("livekit-plugins-speechmatics")
     return f"livekit-plugins-{version}"
 
 
-def sanitize_url(url, language):
+def sanitize_url(url: str, language: str) -> str:
     from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
     parsed_url = urlparse(url)

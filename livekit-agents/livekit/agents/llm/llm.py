@@ -28,11 +28,17 @@ from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
 
 class CompletionUsage(BaseModel):
     completion_tokens: int
+    """The number of tokens in the completion."""
     prompt_tokens: int
+    """The number of input tokens used (includes cached tokens)."""
     prompt_cached_tokens: int = 0
+    """The number of cached input tokens used."""
     cache_creation_tokens: int = 0
+    """The number of tokens used to create the cache."""
     cache_read_tokens: int = 0
+    """The number of tokens read from the cache."""
     total_tokens: int
+    """The total number of tokens used (completion + prompt tokens)."""
 
 
 class FunctionToolCall(BaseModel):
@@ -91,6 +97,10 @@ class LLM(
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 
+    def prewarm(self) -> None:
+        """Pre-warm connection to the LLM service"""
+        pass
+
     async def aclose(self) -> None: ...
 
     async def __aenter__(self) -> LLM:
@@ -137,6 +147,8 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
@@ -149,7 +161,7 @@ class LLMStream(ABC):
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
+                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -157,8 +169,10 @@ class LLMStream(ABC):
                         },
                     )
 
-                await asyncio.sleep(self._conn_options.retry_interval)
-                # Reset the flag when retrying
+                if retry_interval > 0:
+                    await asyncio.sleep(retry_interval)
+
+                # reset the flag when retrying
                 self._current_attempt_has_error = False
 
             except Exception as e:

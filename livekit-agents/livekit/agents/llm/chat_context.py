@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
@@ -27,6 +27,7 @@ from .. import utils
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
+from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
@@ -92,7 +93,7 @@ class ImageContent(BaseModel):
     """
     MIME type of the image
     """
-    _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
+    _cache: dict[Any, Any] = PrivateAttr(default_factory=dict)
 
 
 class AudioContent(BaseModel):
@@ -110,6 +111,7 @@ class ChatMessage(BaseModel):
     role: ChatRole
     content: list[ChatContent]
     interrupted: bool = False
+    transcript_confidence: float | None = None
     hash: bytes | None = None
     created_at: float = Field(default_factory=time.time)
 
@@ -200,7 +202,7 @@ class ChatContext:
 
     def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
         """Insert an item or list of items into the chat context by creation time."""
-        items = item if isinstance(item, list) else [item]
+        items = list(item) if isinstance(item, Sequence) else [item]
 
         for _item in items:
             idx = self.find_insertion_index(created_at=_item.created_at)
@@ -217,6 +219,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
+        exclude_empty_message: bool = False,
         tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -251,6 +254,9 @@ class ChatContext:
                 and item.type == "message"
                 and item.role in ["system", "developer"]
             ):
+                continue
+
+            if exclude_empty_message and item.type == "message" and not item.content:
                 continue
 
             if (
@@ -329,6 +335,64 @@ class ChatContext:
                 for item in items
             ],
         }
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["openai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], _provider_format.aws.BedrockFormatData]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["anthropic"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
+    def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
+
+    def to_provider_format(
+        self,
+        format: Literal["openai", "google", "aws", "anthropic", "mistralai"] | str,
+        *,
+        inject_dummy_user_message: bool = True,
+        **kwargs: Any,
+    ) -> tuple[list[dict], Any]:
+        """Convert the chat context to a provider-specific format.
+
+        If ``inject_dummy_user_message`` is ``True``, a dummy user message will be added
+        to the beginning or end of the chat context depending on the provider.
+
+        This is necessary because some providers expect a user message to be present for
+        generating a response.
+        """
+        kwargs["inject_dummy_user_message"] = inject_dummy_user_message
+
+        if format == "openai":
+            return _provider_format.openai.to_chat_ctx(self, **kwargs)
+        elif format == "google":
+            return _provider_format.google.to_chat_ctx(self, **kwargs)
+        elif format == "aws":
+            return _provider_format.aws.to_chat_ctx(self, **kwargs)
+        elif format == "anthropic":
+            return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
+        elif format == "mistralai":
+            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
+        else:
+            raise ValueError(f"Unsupported provider format: {format}")
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """

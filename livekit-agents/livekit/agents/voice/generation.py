@@ -244,11 +244,17 @@ async def _audio_forwarding_task(
                 out.first_frame_fut.set_result(None)
     finally:
         if isinstance(tts_output, _ACloseable):
-            await tts_output.aclose()
+            try:
+                await tts_output.aclose()
+            except Exception as e:
+                logger.error("error while closing tts output", exc_info=e)
 
         if resampler:
-            for frame in resampler.flush():
-                await audio_output.capture_frame(frame)
+            try:
+                for frame in resampler.flush():
+                    await audio_output.capture_frame(frame)
+            except Exception as e:
+                logger.error("error while flushing resampler", exc_info=e)
 
         audio_output.flush()
 
@@ -332,6 +338,7 @@ async def _execute_tools_task(
                 )
                 continue
 
+            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 json_args = fnc_call.arguments or "{}"
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
@@ -342,7 +349,7 @@ async def _execute_tools_task(
                     ),
                 )
 
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as e:
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={
@@ -351,6 +358,8 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                py_out.exception = e
+                tool_output.output.append(py_out)
                 continue
 
             if not tool_output.first_tool_fut.done():
@@ -365,7 +374,6 @@ async def _execute_tools_task(
                 },
             )
 
-            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 task = asyncio.create_task(
                     function_tool(*fnc_args, **fnc_kwargs),
@@ -374,7 +382,7 @@ async def _execute_tools_task(
 
                 tasks.append(task)
                 _authorize_inline_task(task, function_call=fnc_call)
-            except Exception:
+            except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
                 # invocation time.
@@ -385,6 +393,8 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                py_out.exception = e
+                tool_output.output.append(py_out)
                 continue
 
             def _log_exceptions(
@@ -604,7 +614,10 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
         if chat_ctx.items[idx].type == "message":
             # create a new instance to avoid mutating the original
             chat_ctx.items[idx] = llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]
+                id=INSTRUCTIONS_MESSAGE_ID,
+                role="system",
+                content=[instructions],
+                created_at=chat_ctx.items[idx].created_at,
             )
         else:
             raise ValueError(

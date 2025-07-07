@@ -19,11 +19,11 @@ Support for speech-to-text with [Deepgram](https://deepgram.com/).
 See https://docs.livekit.io/agents/integrations/stt/deepgram/ for more information.
 """
 
-from .stt import STT, AudioEnergyFilter, SpeechStream
+from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "AudioEnergyFilter", "__version__", "TTS"]
+__all__ = ["STT", "SpeechStream", "__version__", "TTS"]
 
 
 from livekit.agents import Plugin
@@ -32,7 +32,7 @@ from .log import logger
 
 
 class DeepgramPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 

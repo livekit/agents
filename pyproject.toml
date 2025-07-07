@@ -7,12 +7,14 @@ livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
+livekit-plugins-baseten = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
+livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-rime = { workspace = true }
@@ -29,10 +31,16 @@ livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
 livekit-plugins-hume = { workspace = true }
+livekit-plugins-hedra = { workspace = true }
+livekit-plugins-spitch = { workspace = true }
+livekit-plugins-langchain = { workspace = true }
+livekit-plugins-sarvam = { workspace = true }
+livekit-plugins-inworld = { workspace = true }
+livekit-plugins-mistralai = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
-exclude = ["livekit-plugins/livekit-plugins-browser"]
+exclude = ["livekit-plugins/livekit-plugins-browser", "livekit-plugins/livekit-blingfire"]
 
 [dependency-groups]
 dev = [
@@ -42,6 +50,12 @@ dev = [
     "ruff",
     "pytest-asyncio>=0.25.3",
     "jiwer>=3.1.0",
+    "scipy>=1.13.1",
+    "tiktoken>=0.9.0",
+]
+docs = [
+    "pdoc3",
+    "setuptools",
 ]
 
 [tool.ruff]
@@ -76,9 +90,6 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 
 [tool.mypy]
 strict = true
-
-[[tool.mypy.overrides]]
-module = "livekit.agents.*"
 disallow_any_generics = false
 
 [[tool.mypy.overrides]]
@@ -91,9 +102,17 @@ follow_imports = "normal"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = "aiobotocore"
+module = "boto3"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = "boto3"
-follow_untyped_imports = true
+module = "aws_sdk_bedrock_runtime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_core.*"
+ignore_missing_imports = true

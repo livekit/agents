@@ -44,6 +44,7 @@ class SpeechData:
     start_time: float = 0.0
     end_time: float = 0.0
     confidence: float = 0.0  # [0, 1]
+    speaker_id: str | None = None
 
 
 @dataclass
@@ -194,6 +195,10 @@ class STT(
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+    def prewarm(self) -> None:
+        """Pre-warm connection to the STT service"""
+        pass
 
 
 class RecognizeStream(ABC):

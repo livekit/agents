@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Callable
+from typing import Callable, Optional
 
 import aiohttp
 
 from ..log import logger
 
 _ClientFactory = Callable[[], aiohttp.ClientSession]
-_ContextVar = contextvars.ContextVar("agent_http_session")  # type: ignore
+_ContextVar = contextvars.ContextVar[Optional[_ClientFactory]]("agent_http_session")
 
 
 def _new_session_ctx() -> _ClientFactory:
@@ -26,7 +26,11 @@ def _new_session_ctx() -> _ClientFactory:
             except RuntimeError:
                 http_proxy = None
 
-            g_session = aiohttp.ClientSession(proxy=http_proxy)
+            connector = aiohttp.TCPConnector(
+                limit_per_host=50,
+                keepalive_timeout=120,  # the default is only 15s
+            )
+            g_session = aiohttp.ClientSession(proxy=http_proxy, connector=connector)
         return g_session
 
     _ContextVar.set(_new_session)
@@ -44,7 +48,7 @@ def http_session() -> aiohttp.ClientSession:
             "Attempted to use an http session outside of a job context. This is probably because you are trying to use a plugin without using the agent worker api. You may need to create your own aiohttp.ClientSession, pass it into the plugin constructor as a kwarg, and manage its lifecycle."  # noqa: E501
         )
 
-    return val()  # type: ignore
+    return val()
 
 
 async def _close_http_ctx() -> None:

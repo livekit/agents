@@ -49,6 +49,9 @@ class TranscriptionConfig:
     transcript_filtering_config: Optional[dict] = None
     """Removes disfluencies with the remove_disfluencies setting."""
 
+    speaker_diarization_config: Optional[dict] = None
+    """Options for speaker diarization such as ``max_speakers``."""
+
     def asdict(self) -> dict[Any, Any]:
         """Returns model as a dict while excluding None values recursively."""
         return asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
@@ -65,7 +68,7 @@ class AudioSettings:
     sample_rate: int = 16000
     """Sampling rate in hertz."""
 
-    def asdict(self):
+    def asdict(self) -> dict[str, Any]:
         return {
             "type": "raw",
             "encoding": self.encoding,

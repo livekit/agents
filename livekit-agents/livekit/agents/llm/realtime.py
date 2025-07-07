@@ -83,6 +83,7 @@ EventTypes = Literal[
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
     "generation_created",
+    "session_reconnected",
     "metrics_collected",
     "error",
 ]
@@ -97,6 +98,11 @@ class InputTranscriptionCompleted:
     transcript: str
     """transcript of the input audio"""
     is_final: bool
+
+
+@dataclass
+class RealtimeSessionReconnectedEvent:
+    pass
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
@@ -161,3 +167,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
 
     @abstractmethod
     async def aclose(self) -> None: ...
+
+    def start_user_activity(self) -> None:
+        """notifies the model that user activity has started"""
+        pass

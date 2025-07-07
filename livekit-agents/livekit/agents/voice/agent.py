@@ -39,6 +39,7 @@ class Agent:
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         self._instructions = instructions
@@ -50,6 +51,7 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
+        self._min_consecutive_speech_delay = min_consecutive_speech_delay
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -315,7 +317,8 @@ class Agent:
 
                 wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
 
-            async with wrapped_stt.stream() as stream:
+            conn_options = activity.session.conn_options.stt_conn_options
+            async with wrapped_stt.stream(conn_options=conn_options) as stream:
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
@@ -346,8 +349,9 @@ class Agent:
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
             activity_llm = activity.llm
 
+            conn_options = activity.session.conn_options.llm_conn_options
             async with activity_llm.chat(
-                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice
+                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
             ) as stream:
                 async for chunk in stream:
                     yield chunk
@@ -367,7 +371,8 @@ class Agent:
                     tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
                 )
 
-            async with wrapped_tts.stream() as stream:
+            conn_options = activity.session.conn_options.tts_conn_options
+            async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
                     async for chunk in text:
@@ -506,6 +511,19 @@ class Agent:
             NotGivenOr[bool]: Whether interruptions are permitted.
         """
         return self._allow_interruptions
+
+    @property
+    def min_consecutive_speech_delay(self) -> NotGivenOr[float]:
+        """
+        Retrieves the minimum consecutive speech delay for the agent.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
+        the minimum consecutive speech delay, the session's value will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[float]: The minimum consecutive speech delay.
+        """
+        return self._min_consecutive_speech_delay
 
     @property
     def session(self) -> AgentSession:

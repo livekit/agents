@@ -31,12 +31,15 @@ class APIError(Exception):
     retryable: bool = False
     """Whether the error can be retried."""
 
-    def __init__(self, message: str, *, body: object | None, retryable: bool = True) -> None:
+    def __init__(self, message: str, *, body: object | None = None, retryable: bool = True) -> None:
         super().__init__(message)
 
         self.message = message
         self.body = body
         self.retryable = retryable
+
+    def __str__(self) -> str:
+        return f"{self.message} (body={self.body}, retryable={self.retryable})"
 
 
 class APIStatusError(APIError):
@@ -71,7 +74,10 @@ class APIStatusError(APIError):
     def __str__(self) -> str:
         return (
             f"{self.message} "
-            f"(status_code={self.status_code}, request_id={self.request_id}, body={self.body})"
+            f"(status_code={self.status_code}, "
+            f"request_id={self.request_id}, "
+            f"body={self.body}, "
+            f"retryable={self.retryable})"
         )
 
 
