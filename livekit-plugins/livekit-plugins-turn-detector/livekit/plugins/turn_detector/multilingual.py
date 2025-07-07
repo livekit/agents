@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from time import perf_counter
 
 import aiohttp
 
@@ -25,7 +26,7 @@ class MultilingualModel(EOUModelBase):
         super().__init__(
             model_type="multilingual",
             unlikely_threshold=unlikely_threshold,
-            load_languages=remote_inference_url() is None,
+            load_languages=_remote_inference_url() is None,
         )
 
     def _inference_method(self) -> str:
@@ -34,7 +35,7 @@ class MultilingualModel(EOUModelBase):
     async def unlikely_threshold(self, language: str | None) -> float | None:
         threshold = await super().unlikely_threshold(language)
         if threshold is None:
-            if url := remote_inference_url():
+            if url := _remote_inference_url():
                 async with utils.http_context.http_session().post(
                     url=url,
                     json={
@@ -53,10 +54,11 @@ class MultilingualModel(EOUModelBase):
     async def predict_end_of_turn(
         self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
     ) -> float:
-        url = remote_inference_url()
+        url = _remote_inference_url()
         if not url:
             return super().predict_end_of_turn(chat_ctx, timeout=timeout)
 
+        started_at = perf_counter()
         async with utils.http_context.http_session().post(
             url=url,
             json=chat_ctx.to_dict(exclude_function_call=True),
@@ -68,7 +70,10 @@ class MultilingualModel(EOUModelBase):
             if probability:
                 logger.debug(
                     "eou prediction",
-                    extra=data,
+                    extra={
+                        "eou_probability": probability,
+                        "duration": perf_counter() - started_at,
+                    },
                 )
                 return probability
             else:
@@ -76,9 +81,12 @@ class MultilingualModel(EOUModelBase):
                 return 1
 
 
-def remote_inference_url() -> str | None:
-    return os.getenv("LIVEKIT_EOT_MULTI_URL")
+def _remote_inference_url() -> str | None:
+    url_base = os.getenv("LIVEKIT_REMOTE_EOT_URL")
+    if not url_base:
+        return None
+    return f"{url_base}/eot/multi"
 
 
-if not remote_inference_url():
+if not _remote_inference_url():
     _InferenceRunner.register_runner(_EUORunnerMultilingual)
