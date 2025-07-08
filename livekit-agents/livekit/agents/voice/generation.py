@@ -576,6 +576,11 @@ def make_tool_output(
 ) -> ToolExecutionOutput:
     from .agent import Agent
 
+    # support returning Exception instead of raising them (for devex purposes inside evals)
+    if isinstance(output, BaseException):
+        exception = output
+        output = None
+
     if isinstance(exception, ToolError):
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
