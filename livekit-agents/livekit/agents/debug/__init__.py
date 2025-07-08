@@ -1,9 +1,15 @@
+from opentelemetry import trace
+
 from .tracing import Tracing, TracingGraph, TracingHandle
+
+tracer = trace.get_tracer("livekit-agents")
+
 
 __all__ = [
     "Tracing",
     "TracingGraph",
     "TracingHandle",
+    "tracer",
 ]
 
 # Cleanup docs of unexported modules

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
+import json
+from opentelemetry import trace
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
@@ -29,6 +32,7 @@ from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
+from ..debug import tracer
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -58,74 +62,98 @@ def perform_llm_inference(
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str]()
     function_ch = aio.Chan[llm.FunctionCall]()
-
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
-
-    @utils.log_exceptions(logger=logger)
-    async def _inference_task() -> bool:
-        tools = list(tool_ctx.function_tools.values())
-        llm_node = node(
-            chat_ctx,
-            tools,
-            model_settings,
-        )
-        if asyncio.iscoroutine(llm_node):
-            llm_node = await llm_node
-
-        # update the tool context after llm node
-        tool_ctx.update_tools(tools)
-
-        if isinstance(llm_node, str):
-            data.generated_text = llm_node
-            text_ch.send_nowait(llm_node)
-            return True
-
-        if isinstance(llm_node, AsyncIterable):
-            # forward llm stream to output channels
-            try:
-                async for chunk in llm_node:
-                    # io.LLMNode can either return a string or a ChatChunk
-                    if isinstance(chunk, str):
-                        data.generated_text += chunk
-                        text_ch.send_nowait(chunk)
-
-                    elif isinstance(chunk, ChatChunk):
-                        if not chunk.delta:
-                            continue
-
-                        if chunk.delta.tool_calls:
-                            for tool in chunk.delta.tool_calls:
-                                if tool.type != "function":
-                                    continue
-
-                                fnc_call = llm.FunctionCall(
-                                    id=f"{data.id}/fnc_{len(data.generated_functions)}",
-                                    call_id=tool.call_id,
-                                    name=tool.name,
-                                    arguments=tool.arguments,
-                                )
-                                data.generated_functions.append(fnc_call)
-                                function_ch.send_nowait(fnc_call)
-
-                        if chunk.delta.content:
-                            data.generated_text += chunk.delta.content
-                            text_ch.send_nowait(chunk.delta.content)
-                    else:
-                        logger.warning(
-                            f"LLM node returned an unexpected type: {type(chunk)}",
-                        )
-            finally:
-                if isinstance(llm_node, _ACloseable):
-                    await llm_node.aclose()
-
-            return True
-
-        return False
-
-    llm_task = asyncio.create_task(_inference_task())
+    llm_task = asyncio.create_task(
+        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data)
+    )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
     return llm_task, data
+
+
+@utils.log_exceptions(logger=logger)
+@tracer.start_as_current_span("llm_node")
+async def _llm_inference_task(
+    node: io.LLMNode,
+    chat_ctx: ChatContext,
+    tool_ctx: ToolContext,
+    model_settings: ModelSettings,
+    data: _LLMGenerationData,
+) -> bool:
+    current_span = trace.get_current_span()
+
+    text_ch, function_ch = data.text_ch, data.function_ch
+    tools = list(tool_ctx.function_tools.values())
+
+    current_span.set_attribute(
+        "livekit.chat_ctx",
+        json.dumps(
+            chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
+        ),
+    )
+    current_span.set_attribute("livekit.function_tools", json.dumps(tool_ctx.function_tools.keys()))
+
+    llm_node = node(chat_ctx, tools, model_settings)
+    if asyncio.iscoroutine(llm_node):
+        llm_node = await llm_node
+
+    # update the tool context after llm node
+    tool_ctx.update_tools(tools)
+
+    if isinstance(llm_node, str):
+        data.generated_text = llm_node
+        text_ch.send_nowait(llm_node)
+        current_span.set_attribute("livekit.response.text", data.generated_text)
+        return True
+
+    if not isinstance(llm_node, AsyncIterable):
+        return False
+
+    # forward llm stream to output channels
+    try:
+        async for chunk in llm_node:
+            # io.LLMNode can either return a string or a ChatChunk
+            if isinstance(chunk, str):
+                data.generated_text += chunk
+                text_ch.send_nowait(chunk)
+
+            elif isinstance(chunk, ChatChunk):
+                if not chunk.delta:
+                    continue
+
+                if chunk.delta.tool_calls:
+                    for tool in chunk.delta.tool_calls:
+                        if tool.type != "function":
+                            continue
+
+                        fnc_call = llm.FunctionCall(
+                            id=f"{data.id}/fnc_{len(data.generated_functions)}",
+                            call_id=tool.call_id,
+                            name=tool.name,
+                            arguments=tool.arguments,
+                        )
+                        data.generated_functions.append(fnc_call)
+                        function_ch.send_nowait(fnc_call)
+
+                if chunk.delta.content:
+                    data.generated_text += chunk.delta.content
+                    text_ch.send_nowait(chunk.delta.content)
+            else:
+                logger.warning(
+                    f"LLM node returned an unexpected type: {type(chunk)}",
+                )
+    finally:
+        if isinstance(llm_node, _ACloseable):
+            await llm_node.aclose()
+
+    current_span.set_attribute("livekit.response.text", data.generated_text)
+    current_span.set_attribute(
+        "livekit.response.function_calls",
+        json.dumps(
+            [fnc.model_dump(exclude={"type", "created_at"}) for fnc in data.generated_functions]
+        ),
+    )
+    return True
 
 
 @dataclass
@@ -139,38 +167,47 @@ def perform_tts_inference(
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
     timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
+    data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
-    @utils.log_exceptions(logger=logger)
-    async def _inference_task() -> bool:
-        tts_node = node(input, model_settings)
-        if asyncio.iscoroutine(tts_node):
-            tts_node = await tts_node
-
-        if isinstance(tts_node, AsyncIterable):
-            timed_text_ch = aio.Chan[io.TimedString]()
-            timed_texts_fut.set_result(timed_text_ch)
-
-            async for audio_frame in tts_node:
-                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                    timed_text_ch.send_nowait(text)
-
-                audio_ch.send_nowait(audio_frame)
-
-            return True
-
-        timed_texts_fut.set_result(None)
-        return False
-
-    tts_task = asyncio.create_task(_inference_task())
+    tts_task = asyncio.create_task(_tts_inference_task(node, input, model_settings, data))
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
             timed_text_ch.close()
+
         audio_ch.close()
 
     tts_task.add_done_callback(_inference_done)
 
-    return tts_task, _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
+    return tts_task, data
+
+
+@utils.log_exceptions(logger=logger)
+@tracer.start_as_current_span("tts_node")
+async def _tts_inference_task(
+    node: io.TTSNode,
+    input: AsyncIterable[str],
+    model_settings: ModelSettings,
+    data: _TTSGenerationData,
+) -> bool:
+    audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
+    tts_node = node(input, model_settings)
+    if asyncio.iscoroutine(tts_node):
+        tts_node = await tts_node
+
+    if isinstance(tts_node, AsyncIterable):
+        timed_text_ch = aio.Chan[io.TimedString]()
+        timed_texts_fut.set_result(timed_text_ch)
+
+        async for audio_frame in tts_node:
+            for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                timed_text_ch.send_nowait(text)
+
+            audio_ch.send_nowait(audio_frame)
+        return True
+
+    timed_texts_fut.set_result(None)
+    return False
 
 
 @dataclass
@@ -364,7 +401,6 @@ async def _execute_tools_task(
                 )
                 continue
 
-            # py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 json_args = fnc_call.arguments or "{}"
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
@@ -420,7 +456,7 @@ async def _execute_tools_task(
                         else:
                             return mock(*fnc_args, **fnc_kwargs)
 
-                    task = asyncio.create_task(_run_mock(mock), name=f"mock_tool_{fnc_call.name}")
+                    function_callable = functools.partial(_run_mock, mock)
                 else:
                     logger.debug(
                         "executing tool",
@@ -430,18 +466,48 @@ async def _execute_tools_task(
                             "speech_id": speech_handle.id,
                         },
                     )
-                    task = asyncio.create_task(
-                        function_tool(*fnc_args, **fnc_kwargs),
-                        name=f"function_tool_{fnc_call.name}",
+                    function_callable = functools.partial(function_tool, *fnc_args, **fnc_kwargs)
+
+                @tracer.start_as_current_span("function_tool")
+                async def _traceable_fnc_tool(
+                    function_callable: Callable, fnc_call: llm.FunctionCall
+                ) -> None:
+                    current_span = trace.get_current_span()
+                    current_span.set_attribute("livekit.function_tool.name", fnc_call.name)
+                    current_span.set_attribute(
+                        "livekit.function_tool.arguments", fnc_call.arguments
                     )
 
-                tasks.append(task)
+                    try:
+                        val = await function_callable()
+                        output = make_tool_output(
+                            fnc_call=fnc_call, output=task.result(), exception=None
+                        )
+                    except BaseException as e:
+                        logger.exception(
+                            "exception occurred while executing tool",
+                            extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                        )
+
+                        output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
+
+                    if fnc_call_out := output.fnc_call_out:
+                        current_span.set_attribute(
+                            "livekit.function_tool.output", fnc_call_out.output
+                        )
+                        current_span.set_attribute(
+                            "livekit.function_tool.is_error", fnc_call_out.is_error
+                        )
+
+                    # TODO(theomonnom): Add the agent handoff inside the current_span
+                    _tool_completed(output)
+
+                task = asyncio.create_task(_traceable_fnc_tool(function_callable, fnc_call))
                 _set_activity_task_info(
-                    task,
-                    speech_handle=speech_handle,
-                    function_call=fnc_call,
-                    inline_task=True,
+                    task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
                 )
+                tasks.append(task)
+                task.add_done_callback(lambda task: tasks.remove(task))
             except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
@@ -455,32 +521,6 @@ async def _execute_tools_task(
                 )
                 _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
-
-            def _log_exceptions(
-                task: asyncio.Task[Any],
-                *,
-                fnc_call: llm.FunctionCall,
-            ) -> None:
-                if task.exception() is not None:
-                    logger.error(
-                        "exception occurred while executing tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "speech_id": speech_handle.id,
-                        },
-                        exc_info=task.exception(),
-                    )
-                    _tool_completed(
-                        make_tool_output(fnc_call=fnc_call, output=None, exception=task.exception())
-                    )
-                    return
-
-                _tool_completed(
-                    make_tool_output(fnc_call=fnc_call, output=task.result(), exception=None)
-                )
-                tasks.remove(task)
-
-            task.add_done_callback(partial(_log_exceptions, fnc_call=fnc_call))
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 

@@ -51,6 +51,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
+from opentelemetry import trace
 
 
 def log_event(event: str, **kwargs: Any) -> None:
@@ -446,7 +447,7 @@ class AgentActivity(RecognitionHooks):
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
             min_endpointing_delay=self._session.options.min_endpointing_delay,
             max_endpointing_delay=self._session.options.max_endpointing_delay,
-            turn_detection_mode=self._turn_detection_mode,
+            turn_detection_mode=self._turn_detection_mode,  # type: ignore
         )
         self._audio_recognition.start()
 
@@ -887,7 +888,7 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
 
-        # self.interrupt() isn't going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
+        # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
         try:
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
