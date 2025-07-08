@@ -412,13 +412,38 @@ async def _execute_tools_task(
 
                     async def _run_mock(mock: Callable) -> Any:
                         sig = inspect.signature(mock)
-                        bound = sig.bind_partial(*fnc_args, **fnc_kwargs)
+
+                        pos_param_names = [
+                            name
+                            for name, param in sig.parameters.items()
+                            if param.kind
+                            in (
+                                inspect.Parameter.POSITIONAL_ONLY,
+                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            )
+                        ]
+                        max_positional = len(pos_param_names)
+                        trimmed_args = fnc_args[:max_positional]
+                        kw_param_names = [
+                            name
+                            for name, param in sig.parameters.items()
+                            if param.kind
+                            in (
+                                inspect.Parameter.KEYWORD_ONLY,
+                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            )
+                        ]
+                        trimmed_kwargs = {
+                            k: v for k, v in fnc_kwargs.items() if k in kw_param_names
+                        }
+
+                        bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
                         bound.apply_defaults()
 
                         if asyncio.iscoroutinefunction(mock):
-                            return await mock(*fnc_args, **fnc_kwargs)
+                            return await mock(*bound.args, **bound.kwargs)
                         else:
-                            return mock(*fnc_args, **fnc_kwargs)
+                            return mock(*bound.args, **bound.kwargs)
 
                     task = asyncio.create_task(_run_mock(mock), name=f"mock_tool_{fnc_call.name}")
                 else:
