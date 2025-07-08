@@ -9,7 +9,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
 
-# to run it, add gemini api in .env and
+# to run it,pip install livekit google.genai livekit-agents livekit-api python-dotenv google-genai livekit-plugins-google,  add gemini api in .env and
 # then run "python dual_voice_agents_livekit_gemini.py console" in terminal
 
 import asyncio
