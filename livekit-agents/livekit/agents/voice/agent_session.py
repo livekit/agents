@@ -432,12 +432,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
 
-            else:
-                if not self._room_io and not self.output.audio and not self.output.transcription:
-                    logger.warning(
-                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
-                    )
-
             # session can be restarted, register the callbacks only once
             try:
                 job_ctx = get_job_context()

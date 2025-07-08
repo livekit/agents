@@ -41,9 +41,9 @@ async def test_slot_scheduling() -> None:
     async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
         await sess.start(FrontDeskAgent(timezone=TIMEZONE))
         result = await sess.run(user_input="Can I get an appointment tomorrow?")
-        result.expect.maybe_message(role="assistant")
-        result.expect.function_call(name="list_available_slots")
-        result.expect.function_call_output()
+        result.expect.skip_next_event_if(type="message", role="assistant")
+        result.expect.next_event().is_function_call(name="list_available_slots")
+        result.expect.next_event().is_function_call_output()
 
         tomorrow = today + timedelta(days=1)
         expected_tomorrow_slots = [slot for slot in slots if slot.start_time.date() == tomorrow]
@@ -51,18 +51,22 @@ async def test_slot_scheduling() -> None:
             slot.start_time.strftime("%-I:%M %p") for slot in expected_tomorrow_slots
         )
 
-        await result.expect.message(role="assistant").judge(
-            llm,
-            intent=(
-                "must suggest one or more available appointment time slots for tomorrow "
-                f"({today + timedelta(days=1):%B %-d, %Y}). For reference, today is {today:%B %-d, %Y}"
-                f"Must only suggest times that are present in the calendar slots for tomorrow, "
-                f"which are: {expected_times_text}."
-            ),
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(
+                llm,
+                intent=(
+                    "must suggest one or more available appointment time slots for tomorrow "
+                    f"({today + timedelta(days=1):%B %-d, %Y}). For reference, today is {today:%B %-d, %Y}"
+                    f"Must only suggest times that are present in the calendar slots for tomorrow, "
+                    f"which are: {expected_times_text}."
+                ),
+            )
         )
 
         result = await sess.run(user_input="2 in the afternoon sounds good")
-        result.expect.maybe_message(role="assistant")
+        result.expect.skip_next_event_if(type="message", role="assistant")
 
         slot_id = next(
             s.unique_hash
@@ -70,29 +74,37 @@ async def test_slot_scheduling() -> None:
             if s.start_time == datetime.combine(today + timedelta(days=1), time(14, 0), tzinfo=tz)
         )
 
-        result.expect.function_call(name="schedule_appointment", arguments={"slot_id": slot_id})
-        result.expect.agent_handoff(new_agent_type=workflows.GetEmailAgent)
-        await result.expect.message(role="assistant").judge(
-            llm, intent="must ask for the email address"
+        result.expect.next_event().is_function_call(
+            name="schedule_appointment", arguments={"slot_id": slot_id}
+        )
+        result.expect.next_event().is_agent_handoff(new_agent_type=workflows.GetEmailAgent)
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(llm, intent="must ask for the email address")
         )
 
         result = await sess.run(user_input="My email address is theo@livekit.io")
-        result.expect.function_call(
+        result.expect.next_event().is_function_call(
             name="update_email_address", arguments={"email": "theo@livekit.io"}
         )
-        result.expect.function_call_output()
-        await result.expect.message(role="assistant").judge(
-            llm, intent="must ask for the email address confirmation/validation"
+        result.expect.next_event().is_function_call_output()
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(llm, intent="must ask for the email address confirmation/validation")
         )
 
         result = await sess.run(user_input="Yes, it's valid")
-        result.expect.function_call(name="confirm_email_address")
-        result.expect.function_call_output()
-        result.expect.agent_handoff(new_agent_type=FrontDeskAgent)
+        result.expect.next_event().is_function_call(name="confirm_email_address")
+        result.expect.next_event().is_function_call_output()
+        result.expect.next_event().is_agent_handoff(new_agent_type=FrontDeskAgent)
 
-        result.expect.function_call_output()  # output of the schedule_appointment
-        await result.expect.message(role="assistant").judge(
-            llm, intent="must confirm the appointment was scheduled"
+        result.expect.next_event().is_function_call_output()  # output of the schedule_appointment
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(llm, intent="must confirm the appointment was scheduled")
         )
 
 
@@ -105,10 +117,11 @@ async def test_no_availability() -> None:
         result = await sess.run(
             user_input="Hello, can I need an appointment, what's your availability for the next 2 weeks?"
         )
-        print(result.events)
-        result.expect.maybe_message(role="assistant")
-        result.expect.function_call(name="list_available_slots")
-        result.expect.function_call_output()
-        await result.expect.message(role="assistant").judge(
-            llm, intent="must say that there is no availability"
+        result.expect.skip_next_event_if(type="message", role="assistant")
+        result.expect.next_event().is_function_call(name="list_available_slots")
+        result.expect.next_event().is_function_call_output()
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(llm, intent="must say that there is no availability")
         )
