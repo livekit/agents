@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import logging
 import asyncio
 import contextlib
 import contextvars
@@ -28,6 +30,8 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .agent import Agent
 
+
+lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
 
 Run_T = TypeVar("Run_T")
 
@@ -61,10 +65,11 @@ RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, A
 
 
 class RunResult(Generic[Run_T]):
-    def __init__(self, *, output_type: type[Run_T] | None) -> None:
+    def __init__(self, *, user_input: str | None = None, output_type: type[Run_T] | None) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
 
         self._done_fut = asyncio.Future[None]()
+        self._user_input = user_input
         self._output_type = output_type
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
@@ -77,6 +82,16 @@ class RunResult(Generic[Run_T]):
 
     @functools.cached_property
     def expect(self) -> RunAssert:
+        # TODO(theomonnom): probably not the best place to log
+        if lk_evals_verbose:
+            events_str = "\n    ".join(_format_events(self.events))
+            print(
+                "\n+ RunResult(\n"
+                f"   user_input=`{self._user_input}`\n"
+                f"   events:\n    {events_str}\n"
+                ")"
+            )
+
         return RunAssert(self)
 
     @property
@@ -199,29 +214,8 @@ class RunAssert:
         __tracebackhide__ = True
 
         marker_index = self._current_index if index is None else index
-        lines: list[str] = []
-
-        for i, event in enumerate(self._events_list):
-            prefix = ">>>" if i == marker_index else "   "
-
-            if isinstance(event, (ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent)):
-                item_repr = event.item.model_dump(
-                    exclude_none=True,
-                    exclude_defaults=True,
-                    exclude={"type", "id", "call_id", "created_at"},
-                )
-                line = f"{prefix} [{i}] {event.__class__.__name__}(item={item_repr})"
-            elif isinstance(event, AgentHandoffEvent):
-                line = (
-                    f"{prefix} [{i}] AgentHandoffEvent("
-                    f"old_agent={event.old_agent}, new_agent={event.new_agent})"
-                )
-            else:
-                line = f"{prefix} [{i}] {event}"
-
-            lines.append(line)
-
-        raise AssertionError(f"{message}\nContext around failure:\n" + "\n".join(lines))
+        events_str = "\n".join(_format_events(self._events_list, selected_index=marker_index))
+        raise AssertionError(f"{message}\nContext around failure:\n" + events_str)
 
     def next_event(
         self,
@@ -512,9 +506,11 @@ class ChatMessageAssert:
 
         if not msg_content:
             self._raise("The chat message is empty.")
+            raise RuntimeError("unreachable")
 
         if not intent:
             self._raise("Intent is required to judge the message.")
+            raise RuntimeError("unreachable")
 
         @function_tool
         async def check_intent(success: bool, reason: str) -> tuple[bool, str]:
@@ -572,8 +568,14 @@ class ChatMessageAssert:
         )
 
         success, reason = await check_intent(*fnc_args, **fnc_kwargs)
+
         if not success:
             self._raise(f"Judgement failed: {reason}")
+        else:
+            from textwrap import shorten
+
+            print_msg = shorten(msg_content.replace("\n", "\\n"), width=30, placeholder="...")
+            print(f"- Judgment succeeded for `{print_msg}`: `{reason}`")
 
         return self
 
@@ -630,3 +632,30 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
         yield
     finally:
         _MockToolsContextVar.reset(token)
+
+
+def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:
+    lines: list[str] = []
+    for i, event in enumerate(events):
+        prefix = ""
+        if selected_index is not None:
+            prefix = ">>>" if i == selected_index else "   "
+
+        if isinstance(event, (ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent)):
+            item_repr = event.item.model_dump(
+                exclude_none=True,
+                exclude_defaults=True,
+                exclude={"type", "id", "call_id", "created_at"},
+            )
+            line = f"{prefix} [{i}] {event.__class__.__name__}(item={item_repr})"
+        elif isinstance(event, AgentHandoffEvent):
+            line = (
+                f"{prefix} [{i}] AgentHandoffEvent("
+                f"old_agent={event.old_agent}, new_agent={event.new_agent})"
+            )
+        else:
+            line = f"{prefix} [{i}] {event}"
+
+        lines.append(line)
+
+    return lines
