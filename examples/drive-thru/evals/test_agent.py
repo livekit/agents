@@ -25,6 +25,8 @@ async def test_item_ordering() -> None:
         # add big mac
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get a Big Mac, no meal?")
+        # some LLMs would confirm the order
+        result.expect.maybe_message(role="assistant")
         result.expect.function_call(name="order_regular_item", arguments={"item_id": "big_mac"})
         fnc_out = result.expect.function_call_output()
         assert fnc_out.event().item.output.startswith("The item was added")
@@ -36,10 +38,8 @@ async def test_item_ordering() -> None:
         result.expect.maybe_message(role="assistant")
         result.expect.maybe_function_call(name="list_order_items")
         result.expect.maybe_function_call_output()
-        result.expect.function_call(name="remove_order_item")
-        result.expect.function_call_output()
-        result.expect.message(role="assistant")
-        result.expect.no_more_events()
+        result.expect[:].contains_function_call(name="remove_order_item")
+        result.expect[-1].is_message(role="assistant")
 
         # order mcflurry
         result = await sess.run(user_input="Can I get a McFlurry Oreo?")
@@ -182,14 +182,16 @@ async def test_consecutive_order() -> None:
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get two mayonnaise sauces?")
         result.expect.maybe_message(role="assistant")
-        result.expect.function_call(name="order_regular_item", arguments={"item_id": "mayonnaise"})
-        result.expect.function_call_output()
-        result.expect.function_call(name="order_regular_item", arguments={"item_id": "mayonnaise"})
-        result.expect.function_call_output()
-        await result.expect.message(role="assistant").judge(
+        # ensure we have two mayonnaise sauces
+        num_mayonnaise = 0
+        for item in userdata.order.items.values():
+            if item.item_id == "mayonnaise":
+                num_mayonnaise += 1
+        assert num_mayonnaise == 2, "we should have two mayonnaise"
+
+        await result.expect[-1].is_message(role="assistant").judge(
             llm, intent="should confirm that two mayonnaise sauces was ordered"
         )
-        result.expect.no_more_events()
 
     async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
         await sess.start(DriveThruAgent(userdata=userdata))
