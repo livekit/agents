@@ -506,14 +506,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         reason: CloseReason,
         drain: bool = False,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
-    ) -> asyncio.Task[None]:
+    ) -> None:
         if self._closing_task:
-            return self._closing_task
+            return
 
         self._closing_task = asyncio.create_task(
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
-        return self._closing_task
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(

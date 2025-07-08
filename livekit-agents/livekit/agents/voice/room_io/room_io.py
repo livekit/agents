@@ -16,7 +16,7 @@ from ...types import (
     TOPIC_CHAT,
     NotGivenOr,
 )
-from ..events import AgentStateChangedEvent, CloseReason, UserInputTranscribedEvent
+from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
@@ -428,17 +428,16 @@ class RoomIO:
                     ),
                 },
             )
-            closing_task = self._agent_session._close_soon(
-                reason=CloseReason.PARTICIPANT_DISCONNECTED
-            )
 
-            def on_closed(task: asyncio.Task[None]) -> None:
-                if not task.cancelled() and (
-                    not self._disconnect_room_atask or self._disconnect_room_atask.done()
-                ):
+            def _on_closed(ev: CloseEvent) -> None:
+                if self._disconnect_room_atask and not self._disconnect_room_atask.done():
+                    return
+
+                if ev.reason == CloseReason.PARTICIPANT_DISCONNECTED:
                     self._disconnect_room_atask = asyncio.create_task(self._room.disconnect())
 
-            closing_task.add_done_callback(on_closed)
+            self._agent_session.once("close", _on_closed)
+            self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_atask:
