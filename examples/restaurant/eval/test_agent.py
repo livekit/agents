@@ -29,7 +29,8 @@ async def test_reservation() -> None:
     async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
         await sess.start(agents["greeter"])
         if sess.current_speech:
-            # `generate_reply` is called in `on_enter`
+            # `generate_reply` is called in `on_enter`, wait for it to finish
+            # to ensure `user_input` is created after the agent response in `on_enter`
             await sess.current_speech
 
         result = await sess.run(user_input="I want to make a reservation for tomorrow.")
