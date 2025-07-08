@@ -348,7 +348,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(output_type=output_type)
+        run_state = RunResult(user_input=user_input, output_type=output_type)
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input)
         return run_state
