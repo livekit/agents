@@ -823,7 +823,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         answered = False
 
-        async def _on_reject(terminate=False) -> None:
+        async def _on_reject(terminate: bool = False) -> None:
             nonlocal answered
             answered = True
 
