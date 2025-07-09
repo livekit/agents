@@ -854,7 +854,7 @@ class ChatMessageAssert:
 
         if not success:
             self._raise(f"Judgement failed: {reason}")
-        else:
+        elif lk_evals_verbose:
             from textwrap import shorten
 
             print_msg = shorten(msg_content.replace("\n", "\\n"), width=30, placeholder="...")
