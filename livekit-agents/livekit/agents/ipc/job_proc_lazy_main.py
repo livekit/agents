@@ -27,10 +27,12 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from ..cli import cli
-from ..debug import tracing, tracer
+from ..debug import tracer, tracing
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
@@ -47,7 +49,6 @@ from .proto import (
     TracingRequest,
     TracingResponse,
 )
-from opentelemetry import trace
 
 
 @dataclass

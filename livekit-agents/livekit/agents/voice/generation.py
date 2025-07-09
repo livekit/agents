@@ -4,17 +4,18 @@ import asyncio
 import functools
 import inspect
 import json
-from opentelemetry import trace
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
 
+from opentelemetry import trace
 from pydantic import ValidationError
 
 from livekit import rtc
 
 from .. import debug, llm, utils
+from ..debug import tracer, types as trace_types
 from ..llm import (
     ChatChunk,
     ChatContext,
@@ -32,7 +33,6 @@ from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
-from ..debug import tracer
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -86,12 +86,14 @@ async def _llm_inference_task(
     tools = list(tool_ctx.function_tools.values())
 
     current_span.set_attribute(
-        "livekit.chat_ctx",
+        trace_types.ATTR_CHAT_CTX,
         json.dumps(
             chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
         ),
     )
-    current_span.set_attribute("livekit.function_tools", json.dumps(tool_ctx.function_tools.keys()))
+    current_span.set_attribute(
+        trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
+    )
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -103,7 +105,7 @@ async def _llm_inference_task(
     if isinstance(llm_node, str):
         data.generated_text = llm_node
         text_ch.send_nowait(llm_node)
-        current_span.set_attribute("livekit.response.text", data.generated_text)
+        current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
         return True
 
     if not isinstance(llm_node, AsyncIterable):
@@ -146,9 +148,9 @@ async def _llm_inference_task(
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
 
-    current_span.set_attribute("livekit.response.text", data.generated_text)
+    current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
-        "livekit.response.function_calls",
+        trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
         json.dumps(
             [fnc.model_dump(exclude={"type", "created_at"}) for fnc in data.generated_functions]
         ),
@@ -473,9 +475,9 @@ async def _execute_tools_task(
                     function_callable: Callable, fnc_call: llm.FunctionCall
                 ) -> None:
                     current_span = trace.get_current_span()
-                    current_span.set_attribute("livekit.function_tool.name", fnc_call.name)
+                    current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, fnc_call.name)
                     current_span.set_attribute(
-                        "livekit.function_tool.arguments", fnc_call.arguments
+                        trace_types.ATTR_FUNCTION_TOOL_ARGUMENTS, fnc_call.arguments
                     )
 
                     try:
@@ -493,10 +495,10 @@ async def _execute_tools_task(
 
                     if fnc_call_out := output.fnc_call_out:
                         current_span.set_attribute(
-                            "livekit.function_tool.output", fnc_call_out.output
+                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT, fnc_call_out.output
                         )
                         current_span.set_attribute(
-                            "livekit.function_tool.is_error", fnc_call_out.is_error
+                            trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, fnc_call_out.is_error
                         )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span

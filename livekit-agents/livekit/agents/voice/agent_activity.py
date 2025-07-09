@@ -7,9 +7,12 @@ import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..debug import tracer, types as trace_types
 from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import (
@@ -51,7 +54,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-from opentelemetry import trace
 
 
 def log_event(event: str, **kwargs: Any) -> None:
@@ -1280,6 +1282,7 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
+    @tracer.start_as_current_span("agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -1293,6 +1296,13 @@ class AgentActivity(RecognitionHooks):
         _tools_messages: Sequence[llm.ChatItem] | None = None,
     ) -> None:
         from .agent import ModelSettings
+
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+        if new_message:
+            current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content)
+        if instructions:
+            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
 
         log_event("generation started", speech_id=speech_handle.id)
 

@@ -16,10 +16,13 @@ from typing import (
     runtime_checkable,
 )
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
+from ..debug import tracer
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
@@ -279,6 +282,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        self._user_speaking_span: trace.Span | None = None
+        self._agent_speaking_span: trace.Span | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -859,6 +864,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
 
+            if self._agent_speaking_span is None:
+                self._agent_speaking_span = tracer.start_span("agent_speaking")
+        elif self._agent_speaking_span is not None:
+            self._agent_speaking_span.end()
+            self._agent_speaking_span = None
+
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()
         else:
@@ -874,6 +885,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_user_state(self, state: UserState) -> None:
         if self._user_state == state:
             return
+
+        if state == "speaking" and self._user_speaking_span is None:
+            # TODO(long): add last user speaking time and user_turn
+            self._user_speaking_span = tracer.start_span("user_speaking")
+        elif self._user_speaking_span is not None:
+            self._user_speaking_span.end()
+            self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
             self._set_user_away_timer()

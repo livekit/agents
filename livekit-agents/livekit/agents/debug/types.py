@@ -1,0 +1,7 @@
+ATTR_SPEECH_ID = "lk.speech_id"
+ATTR_USER_INPUT = "lk.user_input"
+ATTR_INSTRUCTIONS = "lk.instructions"
+ATTR_CHAT_CTX = "lk.chat_ctx"
+ATTR_FUNCTION_TOOLS = "lk.function_tools"
+ATTR_RESPONSE_TEXT = "lk.response.text"
+ATTR_RESPONSE_FUNCTION_CALLS = "lk.response.function_calls"
