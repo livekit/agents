@@ -1,38 +1,33 @@
-import os
-from dataclasses import dataclass
-import logging
+from __future__ import annotations
+
 import datetime
+import logging
+import os
 import sys
+from dataclasses import dataclass
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
+from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
-    workflows,
-    function_tool,
-    JobContext,
-    cli,
-    WorkerOptions,
-    RunContext,
     AgentSession,
+    JobContext,
+    RunContext,
     ToolError,
+    WorkerOptions,
+    cli,
+    function_tool,
     workflows,
 )
-
-
-from dotenv import load_dotenv
-from calendar_api import CalComCalendar, Calendar, FakeCalendar, AvailableSlot
-from livekit.plugins import deepgram, openai, silero, cartesia
+from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-
 load_dotenv()
-
-
-TIMEZONE = "UTC"
 
 
 @dataclass
@@ -83,18 +78,21 @@ class FrontDeskAgent(Agent):
 
         email_result = await workflows.GetEmailAgent(chat_ctx=self.chat_ctx)
 
-        await ctx.userdata.cal.schedule_appointment(
-            start_time=slot.start_time, attendee_email=email_result.email_address
-        )
+        try:
+            await ctx.userdata.cal.schedule_appointment(
+                start_time=slot.start_time, attendee_email=email_result.email_address
+            )
+        except SlotUnavailableError:
+            # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
+            # Tell the LLM this slot isn't available anymore
+            raise ToolError("This slot isn't available anymore") from None
 
         local = slot.start_time.astimezone(self.tz)
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
     @function_tool
     async def list_available_slots(
-        self,
-        ctx: RunContext[Userdata],
-        range: Literal["+2week", "+1month", "+3month", "default"],
+        self, ctx: RunContext[Userdata], range: Literal["+2week", "+1month", "+3month", "default"]
     ) -> str:
         """
         Return a plain-text list of available slots, one per line.
@@ -126,12 +124,13 @@ class FrontDeskAgent(Agent):
             days = delta.days
             seconds = delta.seconds
 
-            if days == 0 and seconds < 3600:
-                rel = "in less than an hour"
-            elif days == 0:
-                rel = "later today"
-            elif days == 1:
-                rel = "in 1 day"
+            if local.date() == now.date():
+                if seconds < 3600:
+                    rel = "in less than an hour"
+                else:
+                    rel = "later today"
+            elif local.date() == (now.date() + datetime.timedelta(days=1)):
+                rel = "tomorrow"
             elif days < 7:
                 rel = f"in {days} days"
             elif days < 14:
@@ -151,14 +150,16 @@ class FrontDeskAgent(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    timezone = "utc"
+
     if cal_api_key := os.getenv("CAL_API_KEY", None):
         logger.info("CAL_API_KEY detected, using cal.com calendar")
-        cal = CalComCalendar(api_key=cal_api_key, timezone=TIMEZONE)
+        cal = CalComCalendar(api_key=cal_api_key, timezone=timezone)
     else:
         logger.warning(
             "CAL_API_KEY is not set. Falling back to FakeCalendar; set CAL_API_KEY to enable Cal.com integration."
         )
-        cal = FakeCalendar(timezone=TIMEZONE)
+        cal = FakeCalendar(timezone=timezone)
 
     await cal.initialize()
 
@@ -172,7 +173,7 @@ async def entrypoint(ctx: JobContext):
         max_tool_steps=1,
     )
 
-    await session.start(agent=FrontDeskAgent(timezone=TIMEZONE), room=ctx.room)
+    await session.start(agent=FrontDeskAgent(timezone=timezone), room=ctx.room)
 
 
 if __name__ == "__main__":

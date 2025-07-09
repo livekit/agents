@@ -1,4 +1,4 @@
-from . import basic, utils, blingfire
+from . import basic, blingfire, utils
 from .token_stream import BufferedSentenceStream, BufferedWordStream
 from .tokenizer import (
     SentenceStream,

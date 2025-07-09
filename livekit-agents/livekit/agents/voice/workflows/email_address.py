@@ -35,7 +35,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are only a single step in a broader system, responsible solely for capturing and confirming the user's email address.\n"
+                "You are only a single step in a broader system, responsible solely for capturing the user's email address.\n"
                 "Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:\n"
                 "- 'john dot doe at gmail dot com'\n"
                 "- 'susan underscore smith at yahoo dot co dot uk'\n"
@@ -49,8 +49,8 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
                 "- Filter out filler words or hesitations.\n"
                 "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
                 "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                "Call 'update_email_address' only when you are confident in the complete email. \n"
-                "Use 'validate_email_address' only after the user confirms the email, and only if 'update_email_address' was already called at least once.\n"
+                "Always call `update_email_address` immediately whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.) \n"
+                "Call `confirm_email_address` **only** after explicitly asking the user to confirm that the provided email address is correct. \n"
                 "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
             ),
@@ -66,11 +66,14 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
         self._current_email = ""
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask for the email address")
+        self.session.generate_reply(
+            instructions="Ask the user to provide their email address. If you already have it, ask for confirmation."
+        )
 
     @function_tool
     async def update_email_address(self, email: str) -> str:
-        """Store and your best guess of the user's email address.
+        """Store your best guess of the user's email address.
+        This must be called at the earliest opportunity
 
         Args:
             email: The corrected email address provided by the language model.
@@ -84,15 +87,18 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
         separated_email = " ".join(email)
 
         return (
-            f"Confirm the provided email address with the user: {email}\n"
-            f"For clarity, also repeat it character by character: {separated_email} if needed"
+            f"The email has been updated: {email}\n"
+            f"For clarity, you can also repeat it character by character: {separated_email} if needed"
         )
 
     @function_tool
-    async def validate_email_address(self) -> None:
-        """Validates the email address after explicit user confirmation."""
+    async def confirm_email_address(self) -> None:
+        """Validates the email address only after the user has explicitly confirmed it.
+        Always prompt the user for confirmation before calling this function."""
         if not self._current_email.strip():
-            raise ToolError("No valid email address were provided")
+            raise ToolError(
+                "no email address were provided, `update_email_address` must be called at least once before calling `confirm_email_address`"
+            )
 
         self.complete(GetEmailResult(email_address=self._current_email))
 
