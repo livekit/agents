@@ -700,7 +700,6 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
             else self.allow_interruptions,
-            scheduled=schedule_speech,
         )
         self._session.emit(
             "speech_created",
@@ -831,7 +830,6 @@ class AgentActivity(RecognitionHooks):
                 # handle TypeError when identical timestamps cause speech comparison failure
                 # with perf_counter_ns(), collisions should be rare
                 pass
-        speech._mark_scheduled()
 
         self._wake_up_scheduling_task()
 
@@ -1404,7 +1402,6 @@ class AgentActivity(RecognitionHooks):
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue
         # I should implement a retry mechanism?
 
-        self._session._update_agent_state("thinking")
         tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
@@ -1413,18 +1410,6 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
         tasks.append(llm_task)
-
-        # wait for the speech to be scheduled before TTS inference
-        wait_for_schedule = asyncio.ensure_future(speech_handle._wait_for_scheduled())
-        await speech_handle.wait_if_not_interrupted([wait_for_schedule])
-        if not speech_handle.scheduled:
-            wait_for_schedule.cancel()
-            await utils.aio.cancel_and_wait(*tasks)
-            return
-
-        if new_message is not None:
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
 
         text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
         tts_text_input, tr_input = text_tee
@@ -1454,6 +1439,12 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             await text_tee.aclose()
             return
+
+        self._session._update_agent_state("thinking")
+
+        if new_message is not None:
+            self._agent._chat_ctx.insert(new_message)
+            self._session._conversation_item_added(new_message)
 
         reply_started_at = time.time()
 

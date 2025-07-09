@@ -19,7 +19,7 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, *, speech_id: str, allow_interruptions: bool, scheduled: bool) -> None:
+    def __init__(self, *, speech_id: str, allow_interruptions: bool) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
 
@@ -27,9 +27,6 @@ class SpeechHandle:
         self._done_fut = asyncio.Future[None]()
         self._generation_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
-        self._scheduled_fut = asyncio.Future[None]()
-        if scheduled:
-            self._scheduled_fut.set_result(None)
 
         # internal tasks used by this generation
         self._tasks: list[asyncio.Task] = []
@@ -47,11 +44,10 @@ class SpeechHandle:
         self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
-    def create(allow_interruptions: bool = True, *, scheduled: bool = True) -> SpeechHandle:
+    def create(allow_interruptions: bool = True) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
-            scheduled=scheduled,
         )
 
     @property
@@ -65,10 +61,6 @@ class SpeechHandle:
     @property
     def interrupted(self) -> bool:
         return self._interrupt_fut.done()
-
-    @property
-    def scheduled(self) -> bool:
-        return self._scheduled_fut.done()
 
     @property
     def allow_interruptions(self) -> bool:
@@ -154,9 +146,6 @@ class SpeechHandle:
     async def _wait_for_generation(self) -> None:
         await asyncio.shield(self._generation_fut)
 
-    async def _wait_for_scheduled(self) -> None:
-        await asyncio.shield(self._scheduled_fut)
-
     def _mark_generation_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._generation_fut.set_result(None)
@@ -166,7 +155,3 @@ class SpeechHandle:
             # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
             self._mark_generation_done()
-
-    def _mark_scheduled(self) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
-            self._scheduled_fut.set_result(None)
