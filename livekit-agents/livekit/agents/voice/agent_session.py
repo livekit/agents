@@ -22,6 +22,7 @@ from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
+    AgentInterruptionResumedEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -262,7 +263,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
         self._agent_resume_timer: asyncio.TimerHandle | None = None
-        self._agent_resume_paused: bool = False
+        self._agent_resume_ev: AgentInterruptionResumedEvent | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -779,10 +780,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # pause the resume timer if user is speaking and recreate it when user is silent
         if state == "speaking" and self._agent_resume_timer:
+            agent_resume_ev = self._agent_resume_ev
             self._cancel_agent_resume_timer()
-            self._agent_resume_paused = True
-        elif state == "listening" and self._agent_resume_paused:
-            self._set_agent_resume_timer()
+            self._agent_resume_ev = agent_resume_ev
+        elif state == "listening" and self._agent_resume_ev:
+            self._set_agent_resume_timer(self._agent_resume_ev)
 
         old_state = self._user_state
         self._user_state = state
@@ -797,7 +799,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
-    def _set_agent_resume_timer(self) -> None:
+    def _set_agent_resume_timer(self, ev: AgentInterruptionResumedEvent) -> None:
         if self._opts.interruption_resume_delay is None:
             return
 
@@ -805,20 +807,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._agent_state != "listening" or self._user_state != "listening":
                 return
 
-            logger.debug("resuming agent speaking from interruption")
-            self.generate_reply()
+            self.emit("agent_interruption_resumed", ev)
             self._agent_resume_timer = None
 
         self._cancel_agent_resume_timer()
         self._agent_resume_timer = self._loop.call_later(
             self._opts.interruption_resume_delay, _resume_agent
         )
+        self._agent_resume_ev = ev
 
     def _cancel_agent_resume_timer(self) -> None:
         if self._agent_resume_timer is not None:
             self._agent_resume_timer.cancel()
             self._agent_resume_timer = None
-        self._agent_resume_paused = False
+        self._agent_resume_ev = None
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
