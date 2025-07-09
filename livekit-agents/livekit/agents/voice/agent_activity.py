@@ -1732,7 +1732,7 @@ class AgentActivity(RecognitionHooks):
             return  # TODO(theomonnom): remove the message from the serverside history
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
-            self._session._update_agent_state("speaking", speech_id=speech_handle.id)
+            self._session._update_agent_state("speaking")
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
