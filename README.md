@@ -322,6 +322,11 @@ The agent connects to LiveKit Cloud or your self-hosted server. Set the followin
 - LIVEKIT_API_SECRET
 
 You can connect using any LiveKit client SDK or telephony integration.
+
+You can use the sample agent in  
+[python-agents-examples/pipeline-stt/transcriber.py](https://github.com/livekit-examples/python-agents-examples/blob/main/pipeline-stt/transcriber.py).  
+Run it locally, then start the front-end and point it to the agent URL.
+
 To get started quickly, try the [Agents Playground](https://agents-playground.livekit.io/).
 
 ### Running for production
