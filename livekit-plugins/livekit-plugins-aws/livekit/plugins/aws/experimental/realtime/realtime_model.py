@@ -310,10 +310,10 @@ class RealtimeSession(  # noqa: F811
         self._audio_input_task = None
         self._stream_response = None
         self._bedrock_client = None
+        self._pending_tools: set[str] = set()
         self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
-        self._tool_type_map: dict[str, str] = {}
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._tools_ready = asyncio.get_running_loop().create_future()
         self._instructions_ready = asyncio.get_running_loop().create_future()
@@ -428,7 +428,6 @@ class RealtimeSession(  # noqa: F811
                     input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
                         "parameters"
                     ]
-                    self._tool_type_map[name] = "FunctionTool"
                 elif llm.tool_context.is_raw_function_tool(f):
                     description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
                         "description"
@@ -436,7 +435,6 @@ class RealtimeSession(  # noqa: F811
                     input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
                         "parameters"
                     ]
-                    self._tool_type_map[name] = "RawFunctionTool"
                 else:
                     continue
 
@@ -744,37 +742,14 @@ class RealtimeSession(  # noqa: F811
         ):
             args = event_data["event"]["toolUse"]["content"]
             self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
-                    call_id=tool_use_id,
-                    name=tool_name,
-                    arguments=args,
-                )
+                llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
             )
+            self._pending_tools.add(tool_use_id)
 
-            # note: may need to inject RunContext here...
-            tool_type = self._tool_type_map[tool_name]
-            if tool_type == "FunctionTool":
-                tool_result = await self.tools.function_tools[tool_name](**json.loads(args))
-            elif tool_type == "RawFunctionTool":
-                tool_result = await self.tools.function_tools[tool_name](json.loads(args))
-            else:
-                raise ValueError(f"Unknown tool type: {tool_type}")
-            logger.debug(f"TOOL ARGS: {args}\nTOOL RESULT: {tool_result}")
-
-            # Sonic only accepts Structured Output for tool results
-            # therefore, must JSON stringify ToolError
-            if isinstance(tool_result, ToolError):
-                logger.warning(f"TOOL ERROR: {tool_name} {tool_result.message}")
-                tool_result = {"error": tool_result.message}
-            self._tool_results_ch.send_nowait(
-                {
-                    "tool_use_id": tool_use_id,
-                    "tool_result": tool_result,
-                }
-            )
 
     async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
         log_event_data(event_data)
+        self._close_current_generation()
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
         """Associate the upcoming audio chunk with the active assistant message."""
@@ -918,7 +893,6 @@ class RealtimeSession(  # noqa: F811
 
                     else:
                         logger.error(f"Validation error: {ve}")
-                        request_id = ve.split(" ")[0].split("=")[1]
                         self.emit(
                             "error",
                             llm.RealtimeModelError(
@@ -927,7 +901,7 @@ class RealtimeSession(  # noqa: F811
                                 error=APIStatusError(
                                     message=ve.message,
                                     status_code=400,
-                                    request_id=request_id,
+                                    request_id="",
                                     body=ve,
                                     retryable=False,
                                 ),
@@ -1039,6 +1013,22 @@ class RealtimeSession(  # noqa: F811
             self._chat_ctx = chat_ctx.copy()
             logger.debug(f"Chat context updated: {self._chat_ctx.items}")
             self._chat_ctx_ready.set_result(True)
+
+        # for each function tool, send the result to aws
+        for item in chat_ctx.items:
+            if item.type != "function_call_output":
+                continue
+
+            if item.call_id not in self._pending_tools:
+                continue
+
+            self._pending_tools.discard(item.call_id)
+            self._tool_results_ch.send_nowait(
+                {
+                    "tool_use_id": item.call_id,
+                    "tool_result": item.output,
+                }
+            )
 
     async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
         """Send tool_result back to Bedrock, grouped under tool_use_id."""
