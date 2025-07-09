@@ -217,6 +217,9 @@ class RunAssert:
         raise AssertionError(f"{message}\nContext around failure:\n" + events_str)
 
     @overload
+    def next_event(self, *, type: None = None) -> EventAssert: ...
+
+    @overload
     def next_event(self, *, type: Literal["message"]) -> ChatMessageAssert: ...
 
     @overload
