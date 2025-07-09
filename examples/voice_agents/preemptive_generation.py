@@ -66,7 +66,7 @@ async def entrypoint(ctx: JobContext):
         if (
             ev.new_state == "speaking"
             and last_eou_metrics
-            and last_eou_metrics.speech_id == ev.speech_id
+            and last_eou_metrics.speech_id == session.current_speech.id
         ):
             logger.info(
                 f"End-to-end latency: {ev.created_at - last_eou_metrics.last_speaking_time}"

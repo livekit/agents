@@ -1289,7 +1289,7 @@ class AgentActivity(RecognitionHooks):
         tasks: list[asyncio.Task[Any]] = []
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
-            self._session._update_agent_state("speaking", speech_id=speech_handle.id)
+            self._session._update_agent_state("speaking")
 
         # audio output
         if audio_output is not None:
@@ -1459,7 +1459,7 @@ class AgentActivity(RecognitionHooks):
             tasks.append(text_forward_task)
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
-            self._session._update_agent_state("speaking", speech_id=speech_handle.id)
+            self._session._update_agent_state("speaking")
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
