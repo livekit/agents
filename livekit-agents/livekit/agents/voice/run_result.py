@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import os
-import logging
 import asyncio
 import contextlib
 import contextvars
 import functools
 import json
+import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass

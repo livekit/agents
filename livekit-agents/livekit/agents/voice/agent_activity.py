@@ -1195,16 +1195,18 @@ class AgentActivity(RecognitionHooks):
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
+            # make sure the on_user_turn_completed didn't change some request parameters
+            # otherwise invalidate the preemptive generation
             if (
                 preemptive.info.new_transcript == user_message.text_content
-                and preemptive.chat_ctx == temp_mutable_chat_ctx
+                and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
             ):
                 speech_handle = preemptive.speech_handle
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
-                    "preemptive generation used",
+                    "using preemptive generation",
                     extra={"preemptive_lead_time": time.time() - preemptive.created_at},
                 )
             else:
