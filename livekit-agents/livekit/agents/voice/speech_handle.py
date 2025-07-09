@@ -44,11 +44,10 @@ class SpeechHandle:
         self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
-    def create(
-        allow_interruptions: bool = True,
-    ) -> SpeechHandle:
+    def create(allow_interruptions: bool = True) -> SpeechHandle:
         return SpeechHandle(
-            speech_id=utils.shortuuid("speech_"), allow_interruptions=allow_interruptions
+            speech_id=utils.shortuuid("speech_"),
+            allow_interruptions=allow_interruptions,
         )
 
     @property
@@ -86,6 +85,10 @@ class SpeechHandle:
         if not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
+        self._cancel()
+        return self
+
+    def _cancel(self) -> SpeechHandle:
         if self.done():
             return self
 

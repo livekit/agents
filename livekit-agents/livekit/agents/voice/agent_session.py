@@ -73,6 +73,7 @@ class VoiceOptions:
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool
+    preemptive_generation: bool
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -151,6 +152,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: bool = False,
+        preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -215,6 +217,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``.
+            preemptive_generation (bool): Whether to use preemptive generation.
+                Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -240,6 +244,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
+            preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
