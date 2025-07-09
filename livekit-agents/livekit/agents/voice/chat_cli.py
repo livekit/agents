@@ -346,7 +346,7 @@ class ChatCLI:
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:  # type: ignore
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
-        
+
         try:
             self._apm.set_stream_delay_ms(int(total_delay * 1000))
         except RuntimeError:
