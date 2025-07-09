@@ -31,6 +31,7 @@ class SpeechHandle:
         self._authorize_fut = asyncio.Future[None]()
         self._playout_done_fut = asyncio.Future[None]()
         self._parent = parent
+        self._interrupted_by_user_turn: bool = False
 
         self._chat_message: llm.ChatMessage | None = None
 
@@ -60,6 +61,10 @@ class SpeechHandle:
         return self._interrupt_fut.done()
 
     @property
+    def interrupted_by_user_turn(self) -> bool:
+        return self.interrupted and self._interrupted_by_user_turn
+
+    @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
@@ -85,7 +90,7 @@ class SpeechHandle:
     def done(self) -> bool:
         return self._playout_done_fut.done()
 
-    def interrupt(self) -> SpeechHandle:
+    def interrupt(self, *, by_user_turn: bool = False) -> SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:
@@ -102,6 +107,8 @@ class SpeechHandle:
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._interrupt_fut.set_result(None)
+
+        self._interrupted_by_user_turn = by_user_turn
 
         return self
 

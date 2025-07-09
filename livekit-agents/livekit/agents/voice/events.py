@@ -63,6 +63,7 @@ EventTypes = Literal[
     "agent_state_changed",
     "user_input_transcribed",
     "conversation_item_added",
+    "agent_interruption_resumed",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -93,6 +94,14 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentInterruptionResumedEvent(BaseModel):
+    type: Literal["agent_interruption_resumed"] = "agent_interruption_resumed"
+    old_speech_source: Literal["say", "generate_reply", "tool_response"]
+    old_instructions: str | None = None
+    forwarded_text: str
     created_at: float = Field(default_factory=time.time)
 
 
@@ -170,6 +179,7 @@ AgentEvent = Annotated[
         UserInputTranscribedEvent,
         UserStateChangedEvent,
         AgentStateChangedEvent,
+        AgentInterruptionResumedEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,

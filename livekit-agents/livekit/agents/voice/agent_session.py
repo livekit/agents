@@ -22,12 +22,14 @@ from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
+    AgentInterruptionResumedEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
 )
@@ -56,6 +58,7 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
+    interruption_resume_delay: float | None
     min_consecutive_speech_delay: float
 
 
@@ -129,6 +132,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
+        interruption_resume_delay: float | None = None,
         min_consecutive_speech_delay: float = 0.0,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -188,6 +192,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
+            interruption_resume_delay (float, optional): If set, resume
+                the interrupted agent speaking after this amount of time if
+                the user is silent and no user transcript is detected after
+                the interruption. Default ``None``, set to ``None`` to disable.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -214,6 +222,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            interruption_resume_delay=interruption_resume_delay,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -253,6 +262,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        self._agent_resume_timer: asyncio.TimerHandle | None = None
+        self._agent_resume_ev: AgentInterruptionResumedEvent | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -506,6 +517,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self.emit("close", CloseEvent(error=error, reason=reason))
 
             self._cancel_user_away_timer()
+            self._cancel_agent_resume_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
@@ -748,6 +760,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
+        if state != "listening":
+            self._cancel_agent_resume_timer()
+
         old_state = self._agent_state
         self._agent_state = state
         self.emit(
@@ -763,13 +778,49 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
+        # pause the resume timer if user is speaking and recreate it when user is silent
+        if state == "speaking" and self._agent_resume_timer:
+            agent_resume_ev = self._agent_resume_ev
+            self._cancel_agent_resume_timer()
+            self._agent_resume_ev = agent_resume_ev
+        elif state == "listening" and self._agent_resume_ev:
+            self._set_agent_resume_timer(self._agent_resume_ev)
+
         old_state = self._user_state
         self._user_state = state
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
+    def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        self.emit("user_input_transcribed", ev)
+        if ev.is_final:
+            self._cancel_agent_resume_timer()
+
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    def _set_agent_resume_timer(self, ev: AgentInterruptionResumedEvent) -> None:
+        if self._opts.interruption_resume_delay is None:
+            return
+
+        def _resume_agent() -> None:
+            if self._agent_state != "listening" or self._user_state != "listening":
+                return
+
+            self.emit("agent_interruption_resumed", ev)
+            self._agent_resume_timer = None
+
+        self._cancel_agent_resume_timer()
+        self._agent_resume_timer = self._loop.call_later(
+            self._opts.interruption_resume_delay, _resume_agent
+        )
+        self._agent_resume_ev = ev
+
+    def _cancel_agent_resume_timer(self) -> None:
+        if self._agent_resume_timer is not None:
+            self._agent_resume_timer.cancel()
+            self._agent_resume_timer = None
+        self._agent_resume_ev = None
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

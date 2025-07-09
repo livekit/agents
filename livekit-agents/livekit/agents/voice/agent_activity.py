@@ -26,6 +26,7 @@ from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
+    AgentInterruptionResumedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -776,17 +777,16 @@ class AgentActivity(RecognitionHooks):
             self._session._update_user_state("listening")
 
         if ev.user_transcription_enabled:
-            self._session.emit(
-                "user_input_transcribed",
-                UserInputTranscribedEvent(transcript="", is_final=False),
+            self._session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="", is_final=False)
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         log_event("input_audio_transcription_completed")
-        self._session.emit(
-            "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final),
+        self._session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
         )
+
         if ev.is_final:
             msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
             self._agent._chat_ctx.items.append(msg)
@@ -866,15 +866,14 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
-            self._current_speech.interrupt()
+            self._current_speech.interrupt(by_user_turn=True)
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
-        self._session.emit(
-            "user_input_transcribed",
+        self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 transcript=ev.alternatives[0].text,
                 is_final=False,
@@ -887,8 +886,7 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
-        self._session.emit(
-            "user_input_transcribed",
+        self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 transcript=ev.alternatives[0].text,
                 is_final=True,
@@ -970,7 +968,7 @@ class AgentActivity(RecognitionHooks):
                 speech_id=self._current_speech.id,
             )
 
-            self._current_speech.interrupt()
+            self._current_speech.interrupt(by_user_turn=True)
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
@@ -1135,13 +1133,23 @@ class AgentActivity(RecognitionHooks):
             await tee.aclose()
 
         if add_to_chat_ctx:
+            forwarded_text = text_out.text if text_out else ""
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
-                content=text_out.text if text_out else "",
+                content=forwarded_text,
                 interrupted=speech_handle.interrupted,
             )
             speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)
+
+            if speech_handle.interrupted_by_user_turn:
+                self._session._set_agent_resume_timer(
+                    AgentInterruptionResumedEvent(
+                        old_speech_source="say",
+                        old_instructions=None,
+                        forwarded_text=forwarded_text,
+                    )
+                )
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
@@ -1303,6 +1311,17 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(msg)
                 self._session._conversation_item_added(msg)
                 speech_handle._set_chat_message(msg)
+
+            if speech_handle.interrupted_by_user_turn:
+                self._session._set_agent_resume_timer(
+                    AgentInterruptionResumedEvent(
+                        old_speech_source=(
+                            "generate_reply" if not _tools_messages else "tool_response"
+                        ),
+                        old_instructions=instructions,
+                        forwarded_text=forwarded_text,
+                    )
+                )
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
@@ -1466,6 +1485,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
+                instructions=instructions,
             )
         finally:
             # reset tool_choice value
@@ -1482,6 +1502,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle: SpeechHandle,
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
+        instructions: str | None = None,
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
@@ -1622,6 +1643,15 @@ class AgentActivity(RecognitionHooks):
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._set_chat_message(msg)
                     self._session._conversation_item_added(msg)
+
+                if speech_handle.interrupted_by_user_turn:
+                    self._session._set_agent_resume_timer(
+                        AgentInterruptionResumedEvent(
+                            old_speech_source="generate_reply",
+                            old_instructions=instructions,
+                            forwarded_text=forwarded_text,
+                        )
+                    )
 
             speech_handle._mark_playout_done()
             await utils.aio.cancel_and_wait(exe_task)
