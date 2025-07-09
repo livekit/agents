@@ -216,22 +216,49 @@ class RunAssert:
         events_str = "\n".join(_format_events(self._events_list, selected_index=marker_index))
         raise AssertionError(f"{message}\nContext around failure:\n" + events_str)
 
+    @overload
+    def next_event(self, *, type: Literal["message"]) -> ChatMessageAssert: ...
+
+    @overload
+    def next_event(self, *, type: Literal["function_call"]) -> FunctionCallAssert: ...
+
+    @overload
+    def next_event(self, *, type: Literal["function_call_output"]) -> FunctionCallOutputAssert: ...
+
+    @overload
+    def next_event(self, *, type: Literal["agent_handoff"]) -> AgentHandoffAssert: ...
+
     def next_event(
         self,
         *,
         type: Literal["message", "function_call", "function_call_output", "agent_handoff"]
         | None = None,
-    ) -> EventAssert:
+    ) -> (
+        EventAssert
+        | ChatMessageAssert
+        | FunctionCallAssert
+        | FunctionCallOutputAssert
+        | AgentHandoffAssert
+    ):
         __tracebackhide__ = True
 
         while True:
-            ev = self._current_event()
+            ev_assert = self._current_event()
             self._current_index += 1
 
-            if type is None or ev.event().type == type:
+            if type is None or ev_assert.event().type == type:
                 break
 
-        return ev
+        if type == "message":
+            return ev_assert.is_message()
+        elif type == "function_call":
+            return ev_assert.is_function_call()
+        elif type == "function_call_output":
+            return ev_assert.is_function_call_output()
+        elif type == "agent_handoff":
+            return ev_assert.is_agent_handoff()
+
+        return ev_assert
 
     @overload
     def skip_next_event_if(
