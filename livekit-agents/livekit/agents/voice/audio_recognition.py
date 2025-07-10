@@ -38,8 +38,8 @@ class _PreemptiveGenerationInfo:
 
 class _TurnDetector(Protocol):
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    def unlikely_threshold(self, language: str | None) -> float | None: ...
-    def supports_language(self, language: str | None) -> bool: ...
+    async def unlikely_threshold(self, language: str | None) -> float | None: ...
+    async def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
 
@@ -355,7 +355,7 @@ class AudioRecognition:
             endpointing_delay = self._min_endpointing_delay
 
             if turn_detector is not None:
-                if not turn_detector.supports_language(self._last_language):
+                if not await turn_detector.supports_language(self._last_language):
                     logger.debug("Turn detector does not support language %s", self._last_language)
                 else:
                     end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
@@ -363,7 +363,7 @@ class AudioRecognition:
                         "end of user turn probability",
                         {"probability": end_of_turn_probability},
                     )
-                    unlikely_threshold = turn_detector.unlikely_threshold(self._last_language)
+                    unlikely_threshold = await turn_detector.unlikely_threshold(self._last_language)
                     if (
                         unlikely_threshold is not None
                         and end_of_turn_probability < unlikely_threshold

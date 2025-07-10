@@ -155,25 +155,27 @@ class EOUModelBase(ABC):
         # if set, overrides the per-language threshold tuned for accuracy.
         # not recommended unless you're confident in the impact.
         unlikely_threshold: float | None = None,
+        load_languages: bool = True,
     ) -> None:
         self._model_type = model_type
         self._executor = inference_executor or get_job_context().inference_executor
-
-        config_fname = _download_from_hf_hub(
-            HG_MODEL,
-            "languages.json",
-            revision=MODEL_REVISIONS[self._model_type],
-            local_files_only=True,
-        )
-        with open(config_fname) as f:
-            self._languages = json.load(f)
-
         self._unlikely_threshold = unlikely_threshold
+        self._languages: dict[str, Any] = {}
+
+        if load_languages:
+            config_fname = _download_from_hf_hub(
+                HG_MODEL,
+                "languages.json",
+                revision=MODEL_REVISIONS[self._model_type],
+                local_files_only=True,
+            )
+            with open(config_fname) as f:
+                self._languages = json.load(f)
 
     @abstractmethod
     def _inference_method(self) -> str: ...
 
-    def unlikely_threshold(self, language: str | None) -> float | None:
+    async def unlikely_threshold(self, language: str | None) -> float | None:
         if language is None:
             return None
 
@@ -195,11 +197,8 @@ class EOUModelBase(ABC):
         else:
             return lang_data["threshold"]  # type: ignore
 
-    def supports_language(self, language: str | None) -> bool:
-        return self.unlikely_threshold(language) is not None
-
-    async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
-        return await self.predict_end_of_turn(chat_ctx)
+    async def supports_language(self, language: str | None) -> bool:
+        return await self.unlikely_threshold(language) is not None
 
     # our EOU model inference should be fast, 3 seconds is more than enough
     async def predict_end_of_turn(
