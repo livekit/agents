@@ -96,12 +96,12 @@ class STT(stt.STT):
         """Create a new instance of Deepgram STT.
 
         Args:
-            model: The Deepgram model to use for speech recognition. Defaults to "nova-2-general".
+            model: The Deepgram model to use for speech recognition. Defaults to "nova-3".
             language: The language code for recognition. Defaults to "en-US".
             detect_language: Whether to enable automatic language detection. Defaults to False.
             interim_results: Whether to return interim (non-final) transcription results. Defaults to True.
             punctuate: Whether to add punctuations to the transcription. Defaults to True. Turn detector will work better with punctuations.
-            smart_format: Whether to apply smart formatting to numbers, dates, etc. Defaults to True.
+            smart_format: Whether to apply smart formatting to numbers, dates, etc. Defaults to False.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             no_delay: When smart_format is used, ensures it does not wait for sequence to be complete before returning results. Defaults to True.
             endpointing_ms: Time in milliseconds of silence to consider end of speech. Set to 0 to disable. Defaults to 25.

@@ -66,6 +66,27 @@ class SpeechHandle:
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
+    @allow_interruptions.setter
+    def allow_interruptions(self, value: bool) -> bool:
+        """Allow or disallow interruptions on this SpeechHandle.
+
+        When set to False, the SpeechHandle will no longer accept any incoming
+        interruption requests until re-enabled. If the handle is already
+        interrupted, clearing interruptions is not allowed.
+
+        Args:
+            value (bool): True to allow interruptions, False to disallow.
+
+        Raises:
+            RuntimeError: If attempting to disable interruptions when already interrupted.
+        """
+        if self.interrupted and not value:
+            raise RuntimeError(
+                "Cannot set allow_interruptions to False, the SpeechHandle is already interrupted"
+            )
+
+        self._allow_interruptions = value
+
     @property
     def chat_items(self) -> list[llm.ChatItem]:
         return self._chat_items
