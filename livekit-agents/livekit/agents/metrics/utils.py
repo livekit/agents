@@ -15,9 +15,9 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             "LLM metrics",
             extra={
                 "ttft": round(metrics.ttft, 2),
-                "input_tokens": metrics.prompt_tokens,
-                "cached_input_tokens": metrics.prompt_cached_tokens,
-                "output_tokens": metrics.completion_tokens,
+                "prompt_tokens": metrics.prompt_tokens,
+                "prompt_cached_tokens": metrics.prompt_cached_tokens,
+                "completion_tokens": metrics.completion_tokens,
                 "tokens_per_second": round(metrics.tokens_per_second, 2),
             },
         )
