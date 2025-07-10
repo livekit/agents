@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import heapq
+import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -1544,6 +1545,8 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
+        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
             for msg in _tools_messages:
@@ -1587,7 +1590,6 @@ class AgentActivity(RecognitionHooks):
 
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)
-            current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return
 
         if generated_msg:
@@ -1603,8 +1605,6 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state("listening")
 
         log_event("playout completed", speech_id=speech_handle.id)
-        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, False)
-
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await text_tee.aclose()
 
@@ -1776,6 +1776,7 @@ class AgentActivity(RecognitionHooks):
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
 
+        # read text and audio outputs
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
             outputs: list[tuple[str, _TextOutput | None, _AudioOutput | None]],
@@ -1860,6 +1861,23 @@ class AgentActivity(RecognitionHooks):
             )
         )
 
+        # read function calls
+        fnc_tee = utils.aio.itertools.tee(generation_ev.function_stream, 2)
+        fnc_stream, fnc_stream_for_tracing = fnc_tee
+        tees.append(fnc_tee)
+        function_calls: list[llm.FunctionCall] = []
+
+        async def _read_fnc_stream() -> None:
+            async for fnc in fnc_stream_for_tracing:
+                function_calls.append(fnc)
+
+        tasks.append(
+            asyncio.create_task(
+                _read_fnc_stream(),
+                name="AgentActivity.realtime_generation.read_fnc_stream",
+            )
+        )
+
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
 
@@ -1872,12 +1890,18 @@ class AgentActivity(RecognitionHooks):
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             tool_choice=model_settings.tool_choice,
-            function_stream=generation_ev.function_stream,
+            function_stream=fnc_stream,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        current_span.set_attribute(
+            trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
+            json.dumps([fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]),
+        )
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
@@ -1933,10 +1957,8 @@ class AgentActivity(RecognitionHooks):
 
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)
-            current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return
 
-        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, False)
         if len(message_outputs) > 0:
             # there should be only one message
             msg_id, text_out, _ = message_outputs[0]
