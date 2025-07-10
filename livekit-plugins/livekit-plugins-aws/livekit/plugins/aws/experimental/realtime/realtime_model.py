@@ -435,7 +435,7 @@ class RealtimeSession(  # noqa: F811
                 tool = Tool(
                     toolSpec=ToolSpec(
                         name=name,
-                        description=description or "",
+                        description=description or "No description provided",
                         inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),  # type: ignore
                     )
                 )

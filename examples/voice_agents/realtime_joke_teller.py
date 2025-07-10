@@ -83,7 +83,7 @@ async def get_weather(raw_arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 # example of how to create a FunctionTool
-# note that if raw_schema is absent, the docstring is required!
+# note that if raw_schema is absent, you should be providing a docstring
 @function_tool
 async def get_median_home_price(location: str) -> dict[str, Any]:
     """
