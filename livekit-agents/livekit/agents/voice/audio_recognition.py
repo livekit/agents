@@ -12,7 +12,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
-from ..debug import tracer, tracing, types as trace_types
+from ..debug import trace_types, tracer, tracing
 from ..log import logger
 from ..utils import aio
 from . import io

@@ -14,7 +14,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
-from ..debug import tracer, types as trace_types
+from ..debug import trace_types, tracer
 from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import (

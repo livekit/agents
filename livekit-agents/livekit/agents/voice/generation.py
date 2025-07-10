@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from livekit import rtc
 
 from .. import debug, llm, utils
-from ..debug import tracer, types as trace_types
+from ..debug import trace_types, tracer
 from ..llm import (
     ChatChunk,
     ChatContext,
