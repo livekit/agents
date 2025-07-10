@@ -1091,6 +1091,7 @@ class AgentActivity(RecognitionHooks):
         def _on_first_frame(_: asyncio.Future[None]) -> None:
             self._session._update_agent_state("speaking")
 
+        audio_out: _AudioOutput | None = None
         if audio_output is None:
             # update the agent state based on text if no audio output
             if text_out is not None:
@@ -1118,32 +1119,12 @@ class AgentActivity(RecognitionHooks):
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
 
-        # capture playback event to track synchronized transcript when interrupted
-        playback_ev: io.PlaybackFinishedEvent | None = None
-        playback_fut: asyncio.Future[io.PlaybackFinishedEvent] | None = None
-
-        if audio_output is not None:
-            playback_fut = asyncio.Future[io.PlaybackFinishedEvent]()
-
-            def on_playback_finished(ev: io.PlaybackFinishedEvent) -> None:
-                if not playback_fut.done():
-                    playback_fut.set_result(ev)
-
-            audio_output.once("playback_finished", on_playback_finished)
-
         await speech_handle.wait_if_not_interrupted([*tasks])
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
-
-            # retrieve the playback event if available
-            if playback_fut and playback_fut.done():
-                playback_ev = playback_fut.result()
-
-            # clean up listener to prevent memory leaks
-            audio_output.off("playback_finished", on_playback_finished)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1152,26 +1133,25 @@ class AgentActivity(RecognitionHooks):
                 audio_output.clear_buffer()
                 await audio_output.wait_for_playout()
 
-                # capture playback event after interruption
-                if playback_fut and playback_fut.done():
-                    playback_ev = playback_fut.result()
-
         if tee is not None:
             await tee.aclose()
 
         if add_to_chat_ctx:
             # use synchronized transcript when available after interruption
-            final_text = ""
-            if speech_handle.interrupted and playback_ev and playback_ev.synchronized_transcript:
-                final_text = playback_ev.synchronized_transcript
-            else:
-                final_text = text_out.text if text_out else ""
+            forwarded_text = text_out.text if text_out else ""
+            if speech_handle.interrupted and audio_output is not None:
+                playback_ev = await audio_output.wait_for_playout()
 
-            msg = self._agent._chat_ctx.add_message(
-                role="assistant", content=final_text, interrupted=speech_handle.interrupted
-            )
-            speech_handle._set_chat_message(msg)
-            self._session._conversation_item_added(msg)
+                if audio_out is not None and audio_out.first_frame_fut.done():
+                    if playback_ev.synchronized_transcript is not None:
+                        forwarded_text = playback_ev.synchronized_transcript
+
+            if forwarded_text:
+                msg = self._agent._chat_ctx.add_message(
+                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
+                )
+                speech_handle._set_chat_message(msg)
+                self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
