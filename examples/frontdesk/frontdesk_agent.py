@@ -66,7 +66,7 @@ class FrontDeskAgent(Agent):
         self,
         ctx: RunContext[Userdata],
         slot_id: str,
-    ) -> str:
+    ) -> str | None:
         """
         Schedule an appointment at the given slot.
 
@@ -77,6 +77,11 @@ class FrontDeskAgent(Agent):
             raise ToolError(f"error: slot {slot_id} was not found")
 
         email_result = await workflows.GetEmailAgent(chat_ctx=self.chat_ctx)
+
+        if ctx.speech_handle.interrupted:
+            return
+
+        ctx.disallow_interruptions()
 
         try:
             await ctx.userdata.cal.schedule_appointment(
