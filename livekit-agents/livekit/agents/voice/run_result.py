@@ -505,6 +505,24 @@ class RunAssert:
         __tracebackhide__ = True
         return self[:].contains_function_call_output(output=output, is_error=is_error)
 
+    def contains_agent_handoff(
+        self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
+    ) -> AgentHandoffAssert:
+        """
+        Assert existence of an agent handoff event matching criteria.
+
+        Args:
+            new_agent_type (type, optional): Expected new agent class.
+
+        Returns:
+            AgentHandoffAssert: Assertion for the matching handoff.
+
+        Example:
+            >>> result.expect.contains_agent_handoff(new_agent_type=MyAgent)
+        """
+        __tracebackhide__ = True
+        return self[:].contains_agent_handoff(new_agent_type=new_agent_type)
+
 
 class EventAssert:
     def __init__(self, event: RunEvent, parent: RunAssert, index: int = -1):
@@ -752,6 +770,36 @@ class EventRangeAssert:
 
         self._parent._raise_with_debug_info(
             f"No FunctionCallOutputEvent matching criteria found in range {self._rng!r}"
+        )
+        raise RuntimeError("unreachable")
+
+    def contains_agent_handoff(
+        self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
+    ) -> AgentHandoffAssert:
+        """
+        Assert that an agent handoff matching criteria exists in the event range.
+
+        Args:
+            new_agent_type (type, optional): Expected new agent class.
+
+        Returns:
+            AgentHandoffAssert: Assertion for the matched handoff.
+
+        Raises:
+            AssertionError: If no matching handoff is found in range.
+
+        Example:
+            >>> result.expect[0:3].contains_agent_handoff(new_agent_type=MyAgent)
+        """
+        __tracebackhide__ = True
+
+        for idx, ev in enumerate(self._events):
+            candidate = EventAssert(ev, self._parent, (self._rng.start or 0) + idx)
+            with contextlib.suppress(AssertionError):
+                return candidate.is_agent_handoff(new_agent_type=new_agent_type)
+
+        self._parent._raise_with_debug_info(
+            f"No AgentHandoffEvent matching criteria found in range {self._rng!r}"
         )
         raise RuntimeError("unreachable")
 
