@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
@@ -35,7 +36,6 @@ from smithy_core.aio.interfaces.identity import IdentityResolver
 from livekit import rtc
 from livekit.agents import (
     APIStatusError,
-    ToolError,
     llm,
     utils,
 )
@@ -343,14 +343,8 @@ class RealtimeSession(  # noqa: F811
         }
         self._turn_tracker = _TurnTracker(
             cast(Callable[[str, Any], None], self.emit),
-            streams_provider=self._current_generation_streams,
+            cast(Callable[[], None], self.emit_generation_event),
         )
-
-    def _current_generation_streams(
-        self,
-    ) -> tuple[utils.aio.Chan[llm.MessageGeneration], utils.aio.Chan[llm.FunctionCall]]:
-        assert self._current_generation is not None, "current_generation is None"
-        return (self._current_generation.message_ch, self._current_generation.function_ch)
 
     @utils.log_exceptions(logger=logger)
     def _initialize_client(self) -> None:
@@ -551,7 +545,7 @@ class RealtimeSession(  # noqa: F811
         return self
 
     @utils.log_exceptions(logger=logger)
-    def _emit_generation_event(self) -> None:
+    def emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers."""
         logger.debug("Emitting generation event")
         assert self._current_generation is not None, "current_generation is None"
@@ -610,11 +604,10 @@ class RealtimeSession(  # noqa: F811
         """Handle text_output_content_start for both user and assistant roles."""
         log_event_data(event_data)
         role = event_data["event"]["contentStart"]["role"]
+        self._create_response_generation()
 
         # note: does not work if you emit llm.GCE too early (for some reason)
         if role == "USER":
-            self._create_response_generation()
-
             assert self._current_generation is not None, "current_generation is None"
 
             content_id = event_data["event"]["contentStart"]["contentId"]
@@ -746,10 +739,37 @@ class RealtimeSession(  # noqa: F811
             )
             self._pending_tools.add(tool_use_id)
 
+            # performing these acrobatics in order to release the deadlock
+            # LiveKit will not accept a new generation until the previous one is closed
+            # the issue is that audio data cannot be generated until toolResult is received
+            # however, toolResults only arrive after update_chat_ctx() is invoked
+            # which will only occur after agent speech has completed
+            # therefore we introduce an artificial turn to trigger update_chat_ctx()
+            # TODO: this is messy-- investigate if there is a better way to handle this
+            curr_gen = self._current_generation.messages[self._current_generation.response_id]
+            curr_gen.audio_ch.close()
+            curr_gen.text_ch.close()
+            self._current_generation.message_ch.close()
+            self._current_generation.message_ch = utils.aio.Chan()
+            self._current_generation.function_ch.close()
+            self._current_generation.function_ch = utils.aio.Chan()
+            msg_gen = _MessageGeneration(
+                message_id=self._current_generation.response_id,
+                text_ch=utils.aio.Chan(),
+                audio_ch=utils.aio.Chan(),
+            )
+            self._current_generation.messages[self._current_generation.response_id] = msg_gen
+            self._current_generation.message_ch.send_nowait(
+                llm.MessageGeneration(
+                    message_id=msg_gen.message_id,
+                    text_stream=msg_gen.text_ch,
+                    audio_stream=msg_gen.audio_ch,
+                )
+            )
+            self.emit_generation_event()
 
     async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
         log_event_data(event_data)
-        self._close_current_generation()
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
         """Associate the upcoming audio chunk with the active assistant message."""
@@ -803,6 +823,12 @@ class RealtimeSession(  # noqa: F811
                     curr_gen.audio_ch.close()
                 if not curr_gen.text_ch.closed:
                     curr_gen.text_ch.close()
+            if self._current_generation.response_id in self._current_generation.tool_messages:
+                curr_gen = self._current_generation.tool_messages[
+                    self._current_generation.response_id
+                ]
+                if not curr_gen.function_ch.closed:
+                    curr_gen.function_ch.close()
 
             if not self._current_generation.message_ch.closed:
                 self._current_generation.message_ch.close()
@@ -1022,11 +1048,14 @@ class RealtimeSession(  # noqa: F811
             if item.call_id not in self._pending_tools:
                 continue
 
+            logger.debug(f"function call output: {item}")
             self._pending_tools.discard(item.call_id)
             self._tool_results_ch.send_nowait(
                 {
                     "tool_use_id": item.call_id,
-                    "tool_result": item.output,
+                    "tool_result": item.output
+                    if not item.is_error
+                    else f"{{'error': '{item.error}'}}",
                 }
             )
 
@@ -1108,6 +1137,19 @@ class RealtimeSession(  # noqa: F811
                     val = self._tool_results_ch.recv_nowait()
                     tool_result = val["tool_result"]
                     tool_use_id = val["tool_use_id"]
+                    if not isinstance(tool_result, str):
+                        tool_result = json.dumps(tool_result)
+                    else:
+                        try:
+                            json.loads(tool_result)
+                        except json.JSONDecodeError:
+                            try:
+                                tool_result = json.dumps(ast.literal_eval(tool_result))
+                            except Exception:
+                                # return the original value
+                                pass
+
+                    logger.debug(f"Sending tool result: {tool_result}")
                     await self._send_tool_events(tool_use_id, tool_result)
 
                 except utils.aio.channel.ChanEmpty:
