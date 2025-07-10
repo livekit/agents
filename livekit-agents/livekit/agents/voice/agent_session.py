@@ -219,12 +219,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 is ``False``.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
-            preemptive_generation (bool):  
-                Whether to speculatively begin LLM and TTS requests before an end-of-turn is  
-                detected. When True, the agent sends inference calls as soon as a user  
-                transcript is received rather than waiting for a definitive turn boundary. This  
-                can reduce response latency by overlapping model inference with user audio,  
-                but may incur extra compute if the user interrupts or revises mid-utterance.  
+            preemptive_generation (bool):
+                Whether to speculatively begin LLM and TTS requests before an end-of-turn is
+                detected. When True, the agent sends inference calls as soon as a user
+                transcript is received rather than waiting for a definitive turn boundary. This
+                can reduce response latency by overlapping model inference with user audio,
+                but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
