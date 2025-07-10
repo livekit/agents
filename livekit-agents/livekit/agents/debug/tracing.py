@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Literal
 
+import numpy as np
 from aiohttp import web
 
 from .. import job
@@ -30,7 +31,7 @@ class TracingGraph:
         self._x_type = x_type
         self._data: list[tuple[float | int, float]] = []
 
-    def plot(self, x: float | int, y: float) -> None:
+    def plot(self, x: float, y: float) -> None:
         self._data.append((x, y))
         if len(self._data) > self._max_data_points:
             self._data.pop(0)
@@ -38,14 +39,14 @@ class TracingGraph:
 
 class TracingHandle:
     def __init__(self) -> None:
-        self._kv: dict[str, str | dict[str, Any]] = {}
-        self._events: list[dict[str, Any]] = []
+        self._kv: dict[str, str | dict] = {}
+        self._events: list[dict] = []
         self._graphs: list[TracingGraph] = []
 
-    def store_kv(self, key: str, value: str | dict[str, Any]) -> None:
+    def store_kv(self, key: str, value: str | dict) -> None:
         self._kv[key] = value
 
-    def log_event(self, name: str, data: dict[str, Any] | None) -> None:
+    def log_event(self, name: str, data: dict | None) -> None:
         self._events.append({"name": name, "data": data, "timestamp": time.time()})
 
     def add_graph(
@@ -111,11 +112,11 @@ class Tracing:
         return Tracing.with_handle(f"job_{job_id}")
 
     @staticmethod
-    def store_kv(key: str, value: str | dict[str, Any]) -> None:
+    def store_kv(key: str, value: str | dict) -> None:
         Tracing._get_current_handle().store_kv(key, value)
 
     @staticmethod
-    def log_event(name: str, data: dict[str, Any] | None = None) -> None:
+    def log_event(name: str, data: dict | None = None) -> None:
         Tracing._get_current_handle().log_event(name, data)
 
     @staticmethod
@@ -157,7 +158,7 @@ def _create_tracing_app(w: Worker) -> web.Application:
                     "id": runner.id,
                     "status": runner.status.name,
                     "job_id": runner.running_job.job.id if runner.running_job else None,
-                    "room": runner.running_job.job.room.name if runner.running_job else None,
+                    "room": (runner.running_job.job.room.name if runner.running_job else None),
                 }
                 for runner in w._proc_pool.processes
                 if runner.started and runner.running_job
@@ -167,6 +168,17 @@ def _create_tracing_app(w: Worker) -> web.Application:
         return web.json_response(data)
 
     async def runner(request: web.Request) -> web.Response:
+        def convert_np_types_to_general_types(
+            input_object: dict | list | np.generic,
+        ) -> dict | list | int | float | str | bool | None:
+            if isinstance(input_object, dict):
+                return {k: convert_np_types_to_general_types(v) for k, v in input_object.items()}
+            if isinstance(input_object, list):
+                return [convert_np_types_to_general_types(i) for i in input_object]
+            if isinstance(input_object, np.generic):
+                return input_object.item()  # type: ignore[no-any-return]
+            return input_object
+
         runner_id = request.query.get("id")
         if not runner_id:
             return web.Response(status=400)
@@ -177,7 +189,7 @@ def _create_tracing_app(w: Worker) -> web.Application:
             return web.Response(status=404)
 
         info = await asyncio.wait_for(runner.tracing_info(), timeout=5.0)  # proc could be stuck
-        return web.json_response({"tracing": info})
+        return web.json_response({"tracing": convert_np_types_to_general_types(info)})
 
     async def worker(request: web.Request) -> web.Response:
         return web.json_response(

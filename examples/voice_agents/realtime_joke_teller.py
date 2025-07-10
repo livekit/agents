@@ -45,7 +45,7 @@ weather_schema = {
             "city": {"type": "string", "description": "The city to get the weather for"},
             "units": {
                 "type": "string",
-                "description": "The units to use for the temperature in degrees (Celsius or Fahrenheit)", # noqa: E501
+                "description": "The units to use for the temperature in degrees (Celsius or Fahrenheit)",  # noqa: E501
                 "default": "fahrenheit",
                 "enum": ["celsius", "fahrenheit"],
             },
