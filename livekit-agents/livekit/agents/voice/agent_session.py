@@ -76,6 +76,7 @@ class VoiceOptions:
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool
+    preemptive_generation: bool
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -154,6 +155,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: bool = False,
+        preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -218,6 +220,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``.
+            preemptive_generation (bool): Whether to use preemptive generation.
+                Default ``False``.
+            preemptive_generation (bool):  
+                Whether to speculatively begin LLM and TTS requests before an end-of-turn is  
+                detected. When True, the agent sends inference calls as soon as a user  
+                transcript is received rather than waiting for a definitive turn boundary. This  
+                can reduce response latency by overlapping model inference with user audio,  
+                but may incur extra compute if the user interrupts or revises mid-utterance.  
+                Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -243,6 +254,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
+            preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -353,7 +365,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(output_type=output_type)
+        run_state = RunResult(user_input=user_input, output_type=output_type)
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input)
         return run_state
@@ -436,12 +448,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     output_options=room_output_options,
                 )
                 tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
-
-            else:
-                if not self._room_io and not self.output.audio and not self.output.transcription:
-                    logger.warning(
-                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
-                    )
 
             # session can be restarted, register the callbacks only once
             try:

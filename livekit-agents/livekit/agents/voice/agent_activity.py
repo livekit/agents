@@ -5,6 +5,7 @@ import contextvars
 import heapq
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from opentelemetry import trace
@@ -32,7 +33,12 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
-from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
+from .audio_recognition import (
+    AudioRecognition,
+    RecognitionHooks,
+    _EndOfTurnInfo,
+    _PreemptiveGenerationInfo,
+)
 from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
@@ -69,6 +75,16 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
+@dataclass
+class _PreemptiveGeneration:
+    speech_handle: SpeechHandle
+    info: _PreemptiveGenerationInfo
+    chat_ctx: llm.ChatContext
+    tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    tool_choice: llm.ToolChoice | None
+    created_at: float
+
+
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
@@ -92,6 +108,8 @@ class AgentActivity(RecognitionHooks):
         self._scheduling_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
+
+        self._preemptive_generation: _PreemptiveGeneration | None = None
 
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None
@@ -463,6 +481,7 @@ class AgentActivity(RecognitionHooks):
             )
             _set_activity_task_info(task, inline_task=False)
 
+            self._cancel_preemptive_generation()
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
@@ -532,6 +551,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            self._cancel_preemptive_generation()
 
             if isinstance(self.llm, llm.LLM):
                 self.llm.off("metrics_collected", self._on_metrics_collected)
@@ -650,6 +670,7 @@ class AgentActivity(RecognitionHooks):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        schedule_speech: bool = True,
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -681,7 +702,7 @@ class AgentActivity(RecognitionHooks):
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
-            else self.allow_interruptions
+            else self.allow_interruptions,
         )
         self._session.emit(
             "speech_created",
@@ -726,8 +747,15 @@ class AgentActivity(RecognitionHooks):
             )
             task.add_done_callback(self._on_pipeline_reply_done)
 
-        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+        if schedule_speech:
+            self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+
         return handle
+
+    def _cancel_preemptive_generation(self) -> None:
+        if self._preemptive_generation is not None:
+            self._preemptive_generation.speech_handle._cancel()
+            self._preemptive_generation = None
 
     def interrupt(self) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
@@ -736,6 +764,8 @@ class AgentActivity(RecognitionHooks):
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated
         """
+        self._cancel_preemptive_generation()
+
         future = asyncio.Future[None]()
         current_speech = self._current_speech
 
@@ -1026,11 +1056,40 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
+    def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
+        if (
+            not self._session.options.preemptive_generation
+            or self._scheduling_paused
+            or (self._current_speech is not None and not self._current_speech.interrupted)
+            or not isinstance(self.llm, llm.LLM)
+        ):
+            return
+
+        self._cancel_preemptive_generation()
+
+        user_message = llm.ChatMessage(
+            role="user",
+            content=[info.new_transcript],
+            transcript_confidence=info.transcript_confidence,
+        )
+        chat_ctx = self._agent.chat_ctx.copy()
+        self._preemptive_generation = _PreemptiveGeneration(
+            speech_handle=self._generate_reply(
+                user_message=user_message, chat_ctx=chat_ctx, schedule_speech=False
+            ),
+            info=info,
+            chat_ctx=chat_ctx.copy(),
+            tools=self.tools.copy(),
+            tool_choice=self._tool_choice,
+            created_at=time.time(),
+        )
+
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
 
         if self._scheduling_paused:
+            self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
@@ -1052,6 +1111,7 @@ class AgentActivity(RecognitionHooks):
             and len(split_words(info.new_transcript, split_character=True))
             < self._session.options.min_interruption_words
         ):
+            self._cancel_preemptive_generation()
             # avoid interruption if the new_transcript is too short
             return False
 
@@ -1134,11 +1194,36 @@ class AgentActivity(RecognitionHooks):
         elif self.llm is None:
             return  # skip response if no llm is set
 
-        # Ensure the new message is passed to generate_reply
-        # This preserves the original message_id, making it easier for users to track responses
-        speech_handle = self._generate_reply(
-            user_message=user_message, chat_ctx=temp_mutable_chat_ctx
-        )
+        speech_handle: SpeechHandle | None = None
+        if preemptive := self._preemptive_generation:
+            # make sure the on_user_turn_completed didn't change some request parameters
+            # otherwise invalidate the preemptive generation
+            if (
+                preemptive.info.new_transcript == user_message.text_content
+                and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
+                and preemptive.tools == self.tools
+                and preemptive.tool_choice == self._tool_choice
+            ):
+                speech_handle = preemptive.speech_handle
+                self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
+                logger.debug(
+                    "using preemptive generation",
+                    extra={"preemptive_lead_time": time.time() - preemptive.created_at},
+                )
+            else:
+                logger.warning(
+                    "preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`",  # noqa: E501
+                )
+                preemptive.speech_handle._cancel()
+
+            self._preemptive_generation = None
+
+        if speech_handle is None:
+            # Ensure the new message is passed to generate_reply
+            # This preserves the original message_id, making it easier for users to track responses
+            speech_handle = self._generate_reply(
+                user_message=user_message, chat_ctx=temp_mutable_chat_ctx
+            )
 
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated
@@ -1152,6 +1237,7 @@ class AgentActivity(RecognitionHooks):
             transcription_delay=info.transcription_delay,
             on_user_turn_completed_delay=callback_duration,
             speech_id=speech_handle.id,
+            last_speaking_time=info.last_speaking_time,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
@@ -1317,8 +1403,6 @@ class AgentActivity(RecognitionHooks):
 
         if new_message is not None:
             chat_ctx.insert(new_message)
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
 
         if instructions is not None:
             try:
@@ -1329,7 +1413,6 @@ class AgentActivity(RecognitionHooks):
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue
         # I should implement a retry mechanism?
 
-        self._session._update_agent_state("thinking")
         tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
@@ -1338,6 +1421,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
         tasks.append(llm_task)
+
         text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
         tts_text_input, tr_input = text_tee
 
@@ -1366,6 +1450,12 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             await text_tee.aclose()
             return
+
+        self._session._update_agent_state("thinking")
+
+        if new_message is not None:
+            self._agent._chat_ctx.insert(new_message)
+            self._session._conversation_item_added(new_message)
 
         reply_started_at = time.time()
 
