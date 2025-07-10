@@ -374,7 +374,7 @@ class AgentActivity(RecognitionHooks):
             self._started = True
 
             @tracer.start_as_current_span(
-                "on_enter", attributes={trace_types.ATTR_AGENT_AGENT_LABEL: self._agent.label}
+                "on_enter", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
             )
             async def _traceable_on_enter() -> None:
                 await self._agent.on_enter()
@@ -482,7 +482,7 @@ class AgentActivity(RecognitionHooks):
         # AgentSession makes sure there is always one agent available to the users.
 
         @tracer.start_as_current_span(
-            "on_exit", attributes={trace_types.ATTR_AGENT_AGENT_LABEL: self._agent.label}
+            "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
         )
         async def _traceable_on_exit() -> None:
             await self._agent.on_exit()
@@ -995,7 +995,10 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("speaking")
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session._update_user_state("listening")
+        self._session._update_user_state(
+            "listening",
+            last_speaking_time=time.time() - ev.silence_duration,
+        )
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode in ("manual", "realtime_llm"):

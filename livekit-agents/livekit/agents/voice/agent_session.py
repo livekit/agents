@@ -22,7 +22,7 @@ from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
-from ..debug import tracer, types as trace_types
+from ..debug import tracer
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
@@ -907,15 +907,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             AgentStateChangedEvent(old_state=old_state, new_state=state),
         )
 
-    def _update_user_state(self, state: UserState) -> None:
+    def _update_user_state(
+        self, state: UserState, *, last_speaking_time: float | None = None
+    ) -> None:
         if self._user_state == state:
             return
 
         if state == "speaking" and self._user_speaking_span is None:
-            # TODO(long): add last user speaking time and user_turn
             self._user_speaking_span = tracer.start_span("user_speaking")
         elif self._user_speaking_span is not None:
-            self._user_speaking_span.end()
+            end_time = (
+                int(last_speaking_time * 1_000_000_000) if last_speaking_time else time.time_ns()
+            )
+            self._user_speaking_span.end(end_time=end_time)
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":

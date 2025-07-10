@@ -1,4 +1,5 @@
 ATTR_SPEECH_ID = "lk.speech_id"
+ATTR_AGENT_LABEL = "lk.agent_label"
 
 # assistant turn
 ATTR_USER_INPUT = "lk.user_input"
@@ -22,7 +23,7 @@ ATTR_TTS_INPUT_TEXT = "lk.input_text"
 ATTR_TTS_STREAMING = "lk.tts.streaming"
 ATTR_TTS_LABEL = "lk.tts.label"
 
-# agent handoff
-ATTR_AGENT_AGENT_LABEL = "lk.agent_label"
-ATTR_AGENT_HANDOFF_PREVIOUS_AGENT = "lk.handoff.previous_agent"
-ATTR_AGENT_HANDOFF_NEXT_AGENT = "lk.handoff.next_agent"
+# eou detection
+ATTR_EOU_PROBABILITY = "lk.eou.probability"
+ATTR_EOU_UNLIKELY_THRESHOLD = "lk.eou.unlikely_threshold"
+ATTR_USER_TRANSCRIPT = "lk.user_transcript"
