@@ -83,6 +83,7 @@ async def get_weather(raw_arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 # example of how to create a FunctionTool
+# note that if raw_schema is absent, you should be providing a docstring
 @function_tool
 async def get_median_home_price(location: str) -> dict[str, Any]:
     """
@@ -99,13 +100,22 @@ async def get_median_home_price(location: str) -> dict[str, Any]:
 
 
 # example of how to handle a tool call that returns a ToolError
+# note: if you want the model to gracefully handle the error, return a dict with an "error" key
 @function_tool
 async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
     """
-    Search the web for information about a given query.
+    Search the web using DuckDuckGo search engine for information about a given query.
 
     Args:
         query (str): The query to search for.
+        max_results (int): The maximum number of results to return.
+
+    Returns:
+        dict[str, Any]: A dictionary containing the search results.
+        The keys are the index of the result and the values are another dictionary with the following keys:
+        - title: Title of the result.
+        - url: URL of the result.
+        - body: Body of the result.
     """
     try:
         results = g.text(query, max_results=max_results)
@@ -124,6 +134,7 @@ async def tell_joke(category: list[str] = ["Any"]) -> dict[str, Any]:
 
     Args:
         category (list[str]): The category of joke to tell.
+            Available categories are: Any, Misc, Programming, Dark, Pun, Spooky, Christmas
     """
     j = await Jokes()
     joke = await j.get_joke(category=category)
@@ -164,6 +175,9 @@ class Assistant(Agent):
     # example of how to use the RunContext to fetch userdata
     @function_tool
     async def get_user_name_and_age(self, context: RunContext[MySessionInfo]) -> dict[str, Any]:
+        """
+        Get the user name and age for the current session.
+        """
         return {"user_name": context.userdata.user_name, "age": context.userdata.age}
 
 
