@@ -16,7 +16,7 @@ from typing import (
     runtime_checkable,
 )
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
@@ -294,14 +294,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
-        self._user_speaking_span: trace.Span | None = None
-        self._agent_speaking_span: trace.Span | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
+
+        # trace
+        self._user_speaking_span: trace.Span | None = None
+        self._agent_speaking_span: trace.Span | None = None
+        self._root_span_context: otel_context.Context | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -391,6 +394,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._lock:
             if self._started:
                 return
+
+            self._root_span_context = otel_context.get_current()
 
             self._agent = agent
             self._update_agent_state("initializing")
@@ -585,6 +590,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent_state = "initializing"
             self._llm_error_counts = 0
             self._tts_error_counts = 0
+            self._root_span_context = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
@@ -797,6 +803,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
+        if self._root_span_context is not None:
+            # restore the root span context so on_exit, on_enter, and future turns
+            # are direct children of the root span, not nested under a tool call.
+            otel_context.attach(self._root_span_context)
+
         await self._update_activity(task)
 
     def _on_error(
