@@ -22,7 +22,7 @@ from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
-from ..debug import tracer
+from ..debug import tracer, types as trace_types
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
@@ -222,12 +222,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 is ``False``.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
-            preemptive_generation (bool):  
-                Whether to speculatively begin LLM and TTS requests before an end-of-turn is  
-                detected. When True, the agent sends inference calls as soon as a user  
-                transcript is received rather than waiting for a definitive turn boundary. This  
-                can reduce response latency by overlapping model inference with user audio,  
-                but may incur extra compute if the user interrupts or revises mid-utterance.  
+            preemptive_generation (bool):
+                Whether to speculatively begin LLM and TTS requests before an end-of-turn is
+                detected. When True, the agent sends inference calls as soon as a user
+                transcript is received rather than waiting for a definitive turn boundary. This
+                can reduce response latency by overlapping model inference with user audio,
+                but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
@@ -562,6 +562,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._activity.aclose()
                 self._activity = None
 
+            if self._agent_speaking_span:
+                self._agent_speaking_span.end()
+                self._agent_speaking_span = None
+
+            if self._user_speaking_span:
+                self._user_speaking_span.end()
+                self._user_speaking_span = None
+
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
@@ -732,8 +740,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
             run_state = self._global_run_state
             if run_state:
-                # don't mark the RunResult as done, if there is currently an agent transition happening.
-                # (used to make sure we're correctly adding the AgentHandoffResult before completion)
+                # don't mark the RunResult as done, if there is currently an agent transition happening.  # noqa: E501
+                # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
 
     async def _update_activity(

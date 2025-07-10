@@ -10,11 +10,13 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
+from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
 from .._exceptions import APIError
+from ..debug import tracer, types as trace_types
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
@@ -204,7 +206,16 @@ class ChunkedStream(ABC):
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
+    @tracer.start_as_current_span("tts_request")
     async def _main_task(self) -> None:
+        current_span = trace.get_current_span()
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_TTS_STREAMING: False,
+                trace_types.ATTR_TTS_LABEL: self._tts.label,
+            }
+        )
+
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
@@ -217,6 +228,7 @@ class ChunkedStream(ABC):
                 if output_emitter.pushed_duration() <= 0.0:
                     raise APIError("no audio frames were pushed")
 
+                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -309,7 +321,16 @@ class SynthesizeStream(ABC):
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
+    @tracer.start_as_current_span("tts_request")
     async def _main_task(self) -> None:
+        current_span = trace.get_current_span()
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_TTS_STREAMING: True,
+                trace_types.ATTR_TTS_LABEL: self._tts.label,
+            }
+        )
+
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
@@ -329,6 +350,7 @@ class SynthesizeStream(ABC):
                             f"but got {output_emitter.num_segments}"
                         )
 
+                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)

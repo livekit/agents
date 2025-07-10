@@ -6,7 +6,6 @@ import inspect
 import json
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
 
 from opentelemetry import trace
@@ -51,6 +50,7 @@ class _LLMGenerationData:
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
+    started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
 
 
 def perform_llm_inference(
@@ -68,6 +68,13 @@ def perform_llm_inference(
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
+
+    def _cleanup(_: asyncio.Task[bool]) -> None:
+        if not data.started_fut.done():
+            data.started_fut.set_result(None)
+
+    llm_task.add_done_callback(_cleanup)
+
     return llm_task, data
 
 
@@ -81,6 +88,7 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
 ) -> bool:
     current_span = trace.get_current_span()
+    data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = list(tool_ctx.function_tools.values())
@@ -448,7 +456,7 @@ async def _execute_tools_task(
                         },
                     )
 
-                    async def _run_mock(mock: Callable) -> Any:
+                    async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
                         sig = inspect.signature(mock)
 
                         pos_param_names = [
@@ -483,7 +491,7 @@ async def _execute_tools_task(
                         else:
                             return mock(*bound.args, **bound.kwargs)
 
-                    function_callable = functools.partial(_run_mock, mock)
+                    function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
                 else:
                     logger.debug(
                         "executing tool",
@@ -502,14 +510,12 @@ async def _execute_tools_task(
                     current_span = trace.get_current_span()
                     current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, fnc_call.name)
                     current_span.set_attribute(
-                        trace_types.ATTR_FUNCTION_TOOL_ARGUMENTS, fnc_call.arguments
+                        trace_types.ATTR_FUNCTION_TOOL_ARGS, fnc_call.arguments
                     )
 
                     try:
                         val = await function_callable()
-                        output = make_tool_output(
-                            fnc_call=fnc_call, output=task.result(), exception=None
-                        )
+                        output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
                         logger.exception(
                             "exception occurred while executing tool",
