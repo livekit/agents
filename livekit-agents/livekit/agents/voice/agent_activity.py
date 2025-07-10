@@ -1090,6 +1090,7 @@ class AgentActivity(RecognitionHooks):
         def _on_first_frame(_: asyncio.Future[None]) -> None:
             self._session._update_agent_state("speaking")
 
+        audio_out: _AudioOutput | None = None
         if audio_output is None:
             # update the agent state based on text if no audio output
             if text_out is not None:
@@ -1135,13 +1136,21 @@ class AgentActivity(RecognitionHooks):
             await tee.aclose()
 
         if add_to_chat_ctx:
-            msg = self._agent._chat_ctx.add_message(
-                role="assistant",
-                content=text_out.text if text_out else "",
-                interrupted=speech_handle.interrupted,
-            )
-            speech_handle._set_chat_message(msg)
-            self._session._conversation_item_added(msg)
+            # use synchronized transcript when available after interruption
+            forwarded_text = text_out.text if text_out else ""
+            if speech_handle.interrupted and audio_output is not None:
+                playback_ev = await audio_output.wait_for_playout()
+
+                if audio_out is not None and audio_out.first_frame_fut.done():
+                    if playback_ev.synchronized_transcript is not None:
+                        forwarded_text = playback_ev.synchronized_transcript
+
+            if forwarded_text:
+                msg = self._agent._chat_ctx.add_message(
+                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
+                )
+                speech_handle._set_chat_message(msg)
+                self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
