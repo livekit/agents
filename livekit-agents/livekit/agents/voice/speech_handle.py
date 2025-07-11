@@ -67,7 +67,7 @@ class SpeechHandle:
         return self._allow_interruptions
 
     @allow_interruptions.setter
-    def allow_interruptions(self, value: bool) -> bool:
+    def allow_interruptions(self, value: bool) -> None:
         """Allow or disallow interruptions on this SpeechHandle.
 
         When set to False, the SpeechHandle will no longer accept any incoming
