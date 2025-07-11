@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import time
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -22,7 +23,7 @@ from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
-from ..debug import tracer
+from ..debug import trace_types, tracer
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
@@ -373,6 +374,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.generate_reply(user_input=user_input)
         return run_state
 
+    @tracer.start_as_current_span("agent_session_start")
     async def start(
         self,
         agent: Agent,
@@ -396,6 +398,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             self._root_span_context = otel_context.get_current()
+            current_span = trace.get_current_span()
+            current_span.set_attribute(trace_types.ATTR_AGENT_NAME, agent.label)
+            current_span.set_attribute(
+                trace_types.ATTR_SESSION_OPTIONS, json.dumps(asdict(self._opts))
+            )
 
             self._agent = agent
             self._update_agent_state("initializing")
@@ -457,6 +464,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # session can be restarted, register the callbacks only once
             try:
                 job_ctx = get_job_context()
+                current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
+                current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
+                current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
                 if self._room_io:
                     # automatically connect to the room when room io is used
                     tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))

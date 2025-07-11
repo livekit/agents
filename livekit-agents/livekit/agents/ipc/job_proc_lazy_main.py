@@ -32,7 +32,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from ..cli import cli
-from ..debug import tracer, tracing
+from ..debug import trace_types, tracer, tracing
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
@@ -261,9 +261,9 @@ class _JobProc:
         async def _traceable_entrypoint(job_ctx: JobContext) -> None:
             job = job_ctx.job
             current_span = trace.get_current_span()
-            current_span.set_attribute("livekit.job.id", job.id)
-            current_span.set_attribute("livekit.agent_name", job.agent_name)
-            current_span.set_attribute("livekit.room", job.room.name)
+            current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
+            current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
+            current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
             await self._job_entrypoint_fnc(job_ctx)
 
         job_entry_task = asyncio.create_task(

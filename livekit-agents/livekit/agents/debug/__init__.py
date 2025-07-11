@@ -1,5 +1,5 @@
 from . import trace_types
-from .otel_trace import tracer
+from .otel_trace import set_tracer_provider, tracer, use_trace_langfuse
 from .tracing import Tracing, TracingGraph, TracingHandle
 
 __all__ = [
@@ -8,6 +8,8 @@ __all__ = [
     "TracingHandle",
     "tracer",
     "trace_types",
+    "use_trace_langfuse",
+    "set_tracer_provider",
 ]
 
 # Cleanup docs of unexported modules
