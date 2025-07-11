@@ -1,12 +1,9 @@
-import base64
-import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
+from typing import Any
 
 from opentelemetry import trace
-from opentelemetry.context.context import Context
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.trace import Link, Span, SpanKind, Tracer
-from opentelemetry.util import types
+from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 
 
@@ -34,87 +31,20 @@ class _DynamicTracer(Tracer):
     def current_tracer(self) -> Tracer:
         return self._tracer
 
-    def start_span(
-        self,
-        name: str,
-        context: Context | None = None,
-        kind: SpanKind = SpanKind.INTERNAL,
-        attributes: types.Attributes = None,
-        links: Sequence[Link] | None = None,
-        start_time: int | None = None,
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
-    ) -> Span:
+    def start_span(self, *args: Any, **kwargs: Any) -> Span:
         """Start a span using the current tracer."""
-        return self.current_tracer.start_span(
-            name=name,
-            context=context,
-            kind=kind,
-            attributes=attributes,
-            links=links,
-            start_time=start_time,
-            record_exception=record_exception,
-            set_status_on_exception=set_status_on_exception,
-        )
+        return self.current_tracer.start_span(*args, **kwargs)
 
     @_agnosticcontextmanager
-    def start_as_current_span(
-        self,
-        name: str,
-        context: Context | None = None,
-        kind: SpanKind = SpanKind.INTERNAL,
-        attributes: types.Attributes = None,
-        links: Sequence[Link] | None = None,
-        start_time: int | None = None,
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
-        end_on_exit: bool = True,
-    ) -> Iterator[Span]:
+    def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
         """Start a span as current span using the current tracer."""
-        with self.current_tracer.start_as_current_span(
-            name=name,
-            context=context,
-            kind=kind,
-            attributes=attributes,
-            links=links,
-            start_time=start_time,
-            record_exception=record_exception,
-            set_status_on_exception=set_status_on_exception,
-            end_on_exit=end_on_exit,
-        ) as span:
+        with self.current_tracer.start_as_current_span(*args, **kwargs) as span:
             yield span
 
 
-tracer = _DynamicTracer("livekit-agents")
+tracer: Tracer = _DynamicTracer("livekit-agents")
 
 
 def set_tracer_provider(tracer_provider: TracerProvider) -> None:
+    assert isinstance(tracer, _DynamicTracer)
     tracer.set_provider(tracer_provider)
-
-
-def use_trace_langfuse(
-    langfuse_public_key: str | None = None,
-    langfuse_secret_key: str | None = None,
-    langfuse_host: str | None = None,
-) -> Tracer:
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-    langfuse_public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-    langfuse_secret_key = langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
-    langfuse_host = langfuse_host or os.getenv("LANGFUSE_HOST")
-
-    if not langfuse_public_key or not langfuse_secret_key or not langfuse_host:
-        raise ValueError("LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_HOST must be set")
-
-    langfuse_auth = base64.b64encode(
-        f"{langfuse_public_key}:{langfuse_secret_key}".encode()
-    ).decode()
-    os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{langfuse_host.rstrip('/')}/api/public/otel"
-    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {langfuse_auth}"
-
-    trace_provider = TracerProvider()
-    trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    tracer.set_provider(trace_provider)
-
-    return tracer

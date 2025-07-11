@@ -305,6 +305,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # trace
         self._user_speaking_span: trace.Span | None = None
         self._agent_speaking_span: trace.Span | None = None
+        self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
 
     @property
@@ -374,7 +375,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.generate_reply(user_input=user_input)
         return run_state
 
-    @tracer.start_as_current_span("agent_session_start")
+    @tracer.start_as_current_span("agent_session", end_on_exit=False)
     async def start(
         self,
         agent: Agent,
@@ -398,6 +399,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             self._root_span_context = otel_context.get_current()
+            self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_NAME, agent.label)
             current_span.set_attribute(
@@ -593,6 +595,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = None
 
             self._started = False
+            if self._session_span:
+                self._session_span.end()
+                self._session_span = None
             self.emit("close", CloseEvent(error=error, reason=reason))
 
             self._cancel_user_away_timer()
