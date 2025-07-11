@@ -142,13 +142,24 @@ class FunctionCall(BaseModel):
 
 class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    name: str = Field(default="")
     type: Literal["function_call_output"] = Field(default="function_call_output")
+    name: str = Field(default="")
     call_id: str
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
 
+
+""""
+class AgentHandoff(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    type: Literal["agent_handoff"] = Field(default="agent_handoff")
+    old_agent_id: str | None
+    new_agent_id: str
+    old_agent: Agent | None = Field(exclude=True)
+    new_agent: Agent | None = Field(exclude=True)
+    created_at: float = Field(default_factory=time.time)
+"""
 
 ChatItem = Annotated[
     Union[ChatMessage, FunctionCall, FunctionCallOutput], Field(discriminator="type")
@@ -295,6 +306,37 @@ class ChatContext:
         self._items[:] = new_items
         return self
 
+    def merge(
+        self,
+        other_chat_ctx: ChatContext,
+        *,
+        exclude_function_call: bool = False,
+        exclude_instructions: bool = False,
+    ) -> ChatContext:
+        """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
+        existing_ids = {item.id for item in self._items}
+
+        for item in other_chat_ctx.items:
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
+                continue
+
+            if (
+                exclude_instructions
+                and item.type == "message"
+                and item.role in ["system", "developer"]
+            ):
+                continue
+
+            if item.id not in existing_ids:
+                idx = self.find_insertion_index(created_at=item.created_at)
+                self._items.insert(idx, item)
+                existing_ids.add(item.id)
+
+        return self
+
     def to_dict(
         self,
         *,
@@ -416,6 +458,47 @@ class ChatContext:
     @property
     def readonly(self) -> bool:
         return False
+
+    def is_equivalent(self, other: ChatContext) -> bool:
+        """
+        Return True if `other` has the same sequence of items with matching
+        essential fields (IDs, types, and payload) as this context.
+
+        Comparison rules:
+          - Messages: compares the full `content` list, `role` and `interrupted`.
+          - Function calls: compares `name`, `call_id`, and `arguments`.
+          - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
+
+        Does not consider timestamps or other metadata.
+        """
+        if self is other:
+            return True
+
+        if len(self.items) != len(other.items):
+            return False
+
+        for a, b in zip(self.items, other.items):
+            if a.id != b.id or a.type != b.type:
+                return False
+
+            if a.type == "message" and b.type == "message":
+                if a.role != b.role or a.interrupted != b.interrupted or a.content != b.content:
+                    return False
+
+            elif a.type == "function_call" and b.type == "function_call":
+                if a.name != b.name or a.call_id != b.call_id or a.arguments != b.arguments:
+                    return False
+
+            elif a.type == "function_call_output" and b.type == "function_call_output":
+                if (
+                    a.name != b.name
+                    or a.call_id != b.call_id
+                    or a.output != b.output
+                    or a.is_error != b.is_error
+                ):
+                    return False
+
+        return True
 
 
 class _ReadOnlyChatContext(ChatContext):
