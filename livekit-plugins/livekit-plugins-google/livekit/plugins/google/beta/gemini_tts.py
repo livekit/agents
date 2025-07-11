@@ -54,6 +54,8 @@ DEFAULT_VOICE = "Kore"
 DEFAULT_SAMPLE_RATE = 24000  # not configurable
 NUM_CHANNELS = 1
 
+DEFAULT_INSTRUCTIONS = "Say the text with a proper tone, don't omit or add any words"
+
 
 @dataclass
 class _TTSOptions:
@@ -62,6 +64,7 @@ class _TTSOptions:
     vertexai: bool
     project: str | None
     location: str | None
+    instructions: str | None
 
 
 class TTS(tts.TTS):
@@ -74,6 +77,7 @@ class TTS(tts.TTS):
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Gemini TTS.
@@ -89,6 +93,7 @@ class TTS(tts.TTS):
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
             project (str, optional): The Google Cloud project to use (only for VertexAI).
             location (str, optional): The location to use for VertexAI API requests. Defaults to "us-central1".
+            instructions (str, optional): Control the style, tone, accent, and pace using prompts. See https://ai.google.dev/gemini-api/docs/speech-generation#controllable
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -133,6 +138,7 @@ class TTS(tts.TTS):
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
+            instructions=instructions if is_given(instructions) else DEFAULT_INSTRUCTIONS,
         )
 
         self._client = Client(
@@ -179,9 +185,13 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 ),
             )
+            input_text = self._input_text
+            if self._tts._opts.instructions is not None:
+                input_text = f'{self._tts._opts.instructions}:\n"{input_text}"'
+
             response = await self._tts._client.aio.models.generate_content(
                 model=self._tts._opts.model,
-                contents=self._input_text,
+                contents=input_text,
                 config=config,
             )
 
