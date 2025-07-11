@@ -826,11 +826,11 @@ class RealtimeSession(  # noqa: F811
 
             # TODO: seems not needed, tool_messages[id] is a str, function_ch is closed below?
             # if self._current_generation.response_id in self._current_generation.tool_messages:
-                # curr_gen = self._current_generation.tool_messages[
-                #     self._current_generation.response_id
-                # ]
-                # if not curr_gen.function_ch.closed:
-                #     curr_gen.function_ch.close()
+            #     curr_gen = self._current_generation.tool_messages[
+            #         self._current_generation.response_id
+            #     ]
+            #     if not curr_gen.function_ch.closed:
+            #         curr_gen.function_ch.close()
 
             if not self._current_generation.message_ch.closed:
                 self._current_generation.message_ch.close()
