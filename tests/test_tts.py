@@ -452,7 +452,7 @@ STREAM_TTS = [
     pytest.param(
         lambda: {
             "tts": tts.StreamAdapter(
-                tts=openai.TTS(), sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+                tts=openai.TTS(), sentence_tokenizer=tokenize.blingfire.SentenceTokenizer()
             ),
             "proxy-upstream": "api.openai.com:443",
         },

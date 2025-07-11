@@ -27,6 +27,13 @@ class _EndOfTurnInfo:
     transcription_delay: float
     end_of_utterance_delay: float
     transcript_confidence: float
+    last_speaking_time: float
+
+
+@dataclass
+class _PreemptiveGenerationInfo:
+    new_transcript: str
+    transcript_confidence: float
 
 
 class _TurnDetector(Protocol):
@@ -44,6 +51,7 @@ class RecognitionHooks(Protocol):
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
+    def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -267,16 +275,28 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._final_transcript_received.set()
 
-            if not self._speaking:
-                if not self._vad:
-                    # vad disabled, use stt timestamp
-                    # TODO: this would screw up transcription latency metrics
-                    # but we'll live with it for now.
-                    # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
-                    # and using that timestamp for _last_speaking_time
-                    self._last_speaking_time = time.time()
+            if not self._vad or self._last_speaking_time == 0:
+                # vad disabled, use stt timestamp
+                # TODO: this would screw up transcription latency metrics
+                # but we'll live with it for now.
+                # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
+                # and using that timestamp for _last_speaking_time
+                self._last_speaking_time = time.time()
 
-                if self._vad_base_turn_detection or self._user_turn_committed:
+            if self._vad_base_turn_detection or self._user_turn_committed:
+                self._hooks.on_preemptive_generation(
+                    _PreemptiveGenerationInfo(
+                        new_transcript=self._audio_transcript,
+                        transcript_confidence=(
+                            sum(self._final_transcript_confidence)
+                            / len(self._final_transcript_confidence)
+                            if self._final_transcript_confidence
+                            else 0
+                        ),
+                    )
+                )
+
+                if not self._speaking:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(chat_ctx)
 
@@ -295,6 +315,7 @@ class AudioRecognition:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             self._hooks.on_start_of_speech(ev)
             self._speaking = True
+            self._last_speaking_time = time.time() - ev.speech_duration
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -302,6 +323,7 @@ class AudioRecognition:
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._vad_graph.plot(ev.timestamp, ev.probability)
             self._hooks.on_vad_inference_done(ev)
+            self._last_speaking_time = time.time() - ev.silence_duration
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             self._hooks.on_end_of_speech(ev)
@@ -371,6 +393,7 @@ class AudioRecognition:
                     transcription_delay=transcription_delay,
                     end_of_utterance_delay=end_of_utterance_delay,
                     transcript_confidence=confidence_avg,
+                    last_speaking_time=last_speaking_time,
                 )
             )
             if committed:

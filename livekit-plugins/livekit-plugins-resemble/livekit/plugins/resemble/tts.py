@@ -40,7 +40,6 @@ from .log import logger
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
 DEFAULT_VOICE_UUID = "55592656"
-BUFFERED_WORDS_COUNT = 3
 
 
 @dataclass
@@ -89,7 +88,7 @@ class TTS(tts.TTS):
         self._api_key = api_key
 
         if tokenizer is None:
-            tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
+            tokenizer = tokenize.blingfire.SentenceTokenizer()
 
         if voice_uuid is None:
             voice_uuid = DEFAULT_VOICE_UUID

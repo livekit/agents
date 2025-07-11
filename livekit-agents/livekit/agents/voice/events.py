@@ -57,6 +57,17 @@ class RunContext(Generic[Userdata_T]):
     def userdata(self) -> Userdata_T:
         return self.session.userdata
 
+    def disallow_interruptions(self) -> None:
+        """Disable interruptions for this FunctionCall.
+
+        Delegates to the SpeechHandle.allow_interruptions setter,
+        which will raise a RuntimeError if the handle is already interrupted.
+
+        Raises:
+            RuntimeError: If the SpeechHandle is already interrupted.
+        """
+        self.speech_handle.allow_interruptions = False
+
 
 EventTypes = Literal[
     "user_state_changed",
@@ -156,6 +167,7 @@ class CloseReason(str, Enum):
     JOB_SHUTDOWN = "job_shutdown"
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
+    TASK_COMPLETED = "task_completed"
 
 
 class CloseEvent(BaseModel):

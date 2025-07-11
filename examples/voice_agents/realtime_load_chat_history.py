@@ -41,12 +41,17 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     agent = Agent(
         instructions="You are a helpful travel planner.",
-        llm=openai.realtime.RealtimeModel(),
+        llm=openai.realtime.RealtimeModel(modalities=["text"]),
+        # OpenAI realtime API may response in only text when text-based chat context is loaded
+        # so we recommend to use text modality with a TTS model when chat history is needed
+        # more details about this issue: https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
+        tts=openai.TTS(voice="alloy"),
         chat_ctx=chat_ctx,
     )
 
     await session.start(agent=agent, room=ctx.room)
 
+    logger.info("Generating reply...")
     session.interrupt()
     session.generate_reply()
 
