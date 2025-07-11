@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import heapq
+import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
-from ..llm.tool_context import StopResponse
+from ..llm.tool_context import StopResponse, ToolReplyMode
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -33,6 +35,7 @@ from .events import (
     UserInputTranscribedEvent,
 )
 from .generation import (
+    ScheduledToolTask,
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
@@ -42,6 +45,7 @@ from .generation import (
     perform_tool_executions,
     perform_tts_inference,
     remove_instructions,
+    schedule_async_tool_execution,
     update_instructions,
 )
 from .speech_handle import SpeechHandle
@@ -82,6 +86,7 @@ class AgentActivity(RecognitionHooks):
         self._main_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
+        self._scheduled_tool_tasks: set[asyncio.Task[Any]] = set()
 
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None
@@ -242,6 +247,7 @@ class AgentActivity(RecognitionHooks):
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        # TODO(brian): lock this method?
         chat_ctx = chat_ctx.copy(tools=self.tools)
 
         self._agent._chat_ctx = chat_ctx
@@ -458,6 +464,11 @@ class AgentActivity(RecognitionHooks):
             if self._main_atask is not None:
                 await utils.aio.cancel_and_wait(self._main_atask)
 
+            if len(self._scheduled_tool_tasks) > 0:
+                await asyncio.gather(
+                    *[utils.aio.cancel_and_wait(task) for task in self._scheduled_tool_tasks]
+                )
+
             self._agent._activity = None
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -545,6 +556,7 @@ class AgentActivity(RecognitionHooks):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        priority: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -623,7 +635,8 @@ class AgentActivity(RecognitionHooks):
             )
             task.add_done_callback(self._on_pipeline_reply_done)
 
-        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+        priority = priority if is_given(priority) else SpeechHandle.SPEECH_PRIORITY_NORMAL
+        self._schedule_speech(handle, priority)
         return handle
 
     def interrupt(self) -> asyncio.Future[None]:
@@ -1436,6 +1449,98 @@ class AgentActivity(RecognitionHooks):
                     msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
 
+        for scheduled_task in tool_output.scheduled_tool_tasks:
+            task = asyncio.create_task(
+                self._schedule_async_tool_task(scheduled_task, speech_handle),
+                name=f"scheduled_tool_task_{scheduled_task.fnc_call.name}",
+            )
+            tasks.append(task)
+
+            def _on_async_tool_task_done(_, *, task: asyncio.Task[None]) -> None:
+                self._scheduled_tool_tasks.discard(task)
+
+            task.add_done_callback(partial(_on_async_tool_task_done, task=task))
+
+    @utils.log_exceptions(logger=logger)
+    async def _schedule_async_tool_task(
+        self,
+        scheduled_task: ScheduledToolTask,
+        speech_handle: SpeechHandle,
+    ) -> None:
+        logger.info(
+            "scheduling long running tool",
+            extra={
+                "function": scheduled_task.fnc_call.name,
+                "speech_id": speech_handle.id,
+            },
+        )
+        py_out = await schedule_async_tool_execution(
+            tool_task=scheduled_task,
+            speech_handle=speech_handle,
+        )
+
+        sanitized_out = py_out.sanitize()
+        fnc_executed_ev = FunctionToolsExecutedEvent(
+            function_calls=[sanitized_out.fnc_call],
+            function_call_outputs=[sanitized_out.fnc_call_out],
+        )
+        self._session.emit("function_tools_executed", fnc_executed_ev)
+
+        # TODO(brian): should we allow user to run agent handoff in long running tools?
+        if sanitized_out.agent_task is not None:
+            logger.error(
+                "Unable to run AgentTask from the async tool execution",
+                extra={
+                    "function": sanitized_out.fnc_call.name,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            return
+
+        reply_mode: ToolReplyMode = (
+            scheduled_task.reply_mode if sanitized_out.reply_required else "silent"
+        )
+
+        content = json.dumps(
+            {
+                "id": scheduled_task.fnc_call.call_id,
+                "output": sanitized_out.fnc_call_out.output if sanitized_out.fnc_call_out else "",
+            },
+            indent=2,
+        )
+
+        logger.info(
+            "long running tool finished execution",
+            extra={
+                "function": scheduled_task.fnc_call.name,
+                "speech_id": speech_handle.id,
+                "reply_mode": reply_mode,
+                "content": content,
+            },
+        )
+
+        chat_ctx = self._agent._chat_ctx.copy()
+        # TODO(brian): allow user to customize this message?
+        chat_ctx.add_message(
+            role="user",
+            content=[
+                f"Long running tool {scheduled_task.fnc_call.name} finished execution with output:\n{content}"  # noqa: E501
+            ],
+        )
+
+        if reply_mode == "silent":
+            await self.update_chat_ctx(chat_ctx=chat_ctx)
+            return
+
+        if reply_mode == "when_idle":
+            self._generate_reply(chat_ctx=chat_ctx, priority=SpeechHandle.SPEECH_PRIORITY_LOW)
+            return
+
+        if reply_mode == "interrupt":
+            self.interrupt()
+            self._generate_reply(chat_ctx=chat_ctx, priority=SpeechHandle.SPEECH_PRIORITY_HIGH)
+            return
+
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
         self,
@@ -1741,6 +1846,18 @@ class AgentActivity(RecognitionHooks):
                     SpeechHandle.SPEECH_PRIORITY_NORMAL,
                     bypass_draining=True,
                 )
+
+        for scheduled_task in tool_output.scheduled_tool_tasks:
+            task = asyncio.create_task(
+                self._schedule_async_tool_task(scheduled_task, speech_handle),
+                name=f"scheduled_tool_task_{scheduled_task.fnc_call.name}",
+            )
+            tasks.append(task)
+
+            def _on_async_tool_task_done(_, *, task: asyncio.Task[None]) -> None:
+                self._scheduled_tool_tasks.discard(task)
+
+            task.add_done_callback(partial(_on_async_tool_task_done, task=task))
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
