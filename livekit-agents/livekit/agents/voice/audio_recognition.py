@@ -380,6 +380,12 @@ class AudioRecognition:
                         unlikely_threshold = await turn_detector.unlikely_threshold(
                             self._last_language
                         )
+                        if (
+                            unlikely_threshold is not None
+                            and end_of_turn_probability < unlikely_threshold
+                        ):
+                            endpointing_delay = self._max_endpointing_delay
+
                         eou_detection_span.set_attributes(
                             {
                                 trace_types.ATTR_CHAT_CTX: json.dumps(
@@ -391,14 +397,10 @@ class AudioRecognition:
                                 ),
                                 trace_types.ATTR_EOU_PROBABILITY: end_of_turn_probability,
                                 trace_types.ATTR_EOU_UNLIKELY_THRESHOLD: unlikely_threshold or 0,
+                                trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                                trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
                             }
                         )
-
-                    if (
-                        unlikely_threshold is not None
-                        and end_of_turn_probability < unlikely_threshold
-                    ):
-                        endpointing_delay = self._max_endpointing_delay
 
             extra_sleep = last_speaking_time + endpointing_delay - time.time()
             await asyncio.sleep(max(extra_sleep, 0))
@@ -427,8 +429,13 @@ class AudioRecognition:
                 )
             )
             if committed:
-                user_turn_span.set_attribute(
-                    trace_types.ATTR_USER_TRANSCRIPT, self._audio_transcript
+                user_turn_span.set_attributes(
+                    {
+                        trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
+                        trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
+                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay,
+                        trace_types.ATTR_END_OF_UTTERANCE_DELAY: end_of_utterance_delay,
+                    }
                 )
                 user_turn_span.end()
                 self._user_turn_span = None

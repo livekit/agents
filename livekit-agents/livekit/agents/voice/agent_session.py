@@ -906,7 +906,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span("agent_speaking")
+                self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._agent_speaking_span is not None:
+            self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
@@ -930,11 +932,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if state == "speaking" and self._user_speaking_span is None:
             self._user_speaking_span = tracer.start_span("user_speaking")
+            self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            end_time = (
-                int(last_speaking_time * 1_000_000_000) if last_speaking_time else time.time_ns()
-            )
-            self._user_speaking_span.end(end_time=end_time)
+            end_time = last_speaking_time or time.time()
+            self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
+            self._user_speaking_span.end(end_time=int(end_time * 1_000_000_000))  # nanoseconds
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":

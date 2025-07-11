@@ -150,6 +150,8 @@ class ChunkedStream(ABC):
         self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
+        self._tts_request_span: trace.Span | None = None
+
     @property
     def input_text(self) -> str:
         return self._input_text
@@ -193,6 +195,10 @@ class ChunkedStream(ABC):
             label=self._tts._label,
             streamed=False,
         )
+        if self._tts_request_span:
+            self._tts_request_span.set_attribute(
+                trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
+            )
         self._tts.emit("metrics_collected", metrics)
 
     async def collect(self) -> rtc.AudioFrame:
@@ -206,9 +212,9 @@ class ChunkedStream(ABC):
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
-    @tracer.start_as_current_span("tts_request")
+    @tracer.start_as_current_span("tts_request", end_on_exit=False)
     async def _main_task(self) -> None:
-        current_span = trace.get_current_span()
+        self._tts_request_span = current_span = trace.get_current_span()
         current_span.set_attributes(
             {
                 trace_types.ATTR_TTS_STREAMING: False,
@@ -267,6 +273,9 @@ class ChunkedStream(ABC):
         self._event_ch.close()
         await self._metrics_task
         await self._tee.aclose()
+        if self._tts_request_span:
+            self._tts_request_span.end()
+            self._tts_request_span = None
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
@@ -318,12 +327,14 @@ class SynthesizeStream(ABC):
         self._mtc_text = ""
         self._num_segments = 0
 
+        self._tts_request_span: trace.Span | None = None
+
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
-    @tracer.start_as_current_span("tts_request")
+    @tracer.start_as_current_span("tts_request", end_on_exit=False)
     async def _main_task(self) -> None:
-        current_span = trace.get_current_span()
+        self._tts_request_span = current_span = trace.get_current_span()
         current_span.set_attributes(
             {
                 trace_types.ATTR_TTS_STREAMING: True,
@@ -422,6 +433,10 @@ class SynthesizeStream(ABC):
                 label=self._tts._label,
                 streamed=True,
             )
+            if self._tts_request_span:
+                self._tts_request_span.set_attribute(
+                    trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
+                )
             self._tts.emit("metrics_collected", metrics)
 
             audio_duration = 0.0
@@ -492,6 +507,10 @@ class SynthesizeStream(ABC):
             await self._metrics_task
 
         await self._tee.aclose()
+
+        if self._tts_request_span:
+            self._tts_request_span.end()
+            self._tts_request_span = None
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
