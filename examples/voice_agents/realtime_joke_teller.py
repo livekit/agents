@@ -116,7 +116,7 @@ async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
         - title: Title of the result.
         - url: URL of the result.
         - body: Body of the result.
-    """
+    """  # noqa: E501
     try:
         results = g.text(query, max_results=max_results)
     except Exception as e:
@@ -128,7 +128,7 @@ async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
 
 
 @function_tool
-async def tell_joke(category: list[str] = ["Any"]) -> dict[str, Any]:
+async def tell_joke(category: list[str] | None = None) -> dict[str, Any]:
     """
     Tell a joke that pertains to the category of the user's request.
 
@@ -137,7 +137,7 @@ async def tell_joke(category: list[str] = ["Any"]) -> dict[str, Any]:
             Available categories are: Any, Misc, Programming, Dark, Pun, Spooky, Christmas
     """
     j = await Jokes()
-    joke = await j.get_joke(category=category)
+    joke = await j.get_joke(category=category if category is not None else ["Any"])
     if joke["type"] == "single":
         return {"joke": joke["joke"]}
     else:
@@ -156,7 +156,7 @@ Soon, all the clouds came together around Wispy, and together they made a gentle
 The flower perked up and bloomed beautifully, showing off its bright pink petals
 From that day on, Wispy learned that while it's nice to be independent, working together with friends can help accomplish wonderful things.
 He still loved floating alone sometimes, but he always knew his cloud friends were there when he needed them.
-"""
+"""  # noqa: E501
 
 
 class Assistant(Agent):

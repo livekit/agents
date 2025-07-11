@@ -516,7 +516,7 @@ class RealtimeSession(  # noqa: F811
                 self._chat_ctx.truncate(max_items=MAX_MESSAGES)
             init_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
-                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,
+                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
                 chat_ctx=self.chat_ctx,
                 tool_configuration=self._serialize_tool_config(),
@@ -823,12 +823,14 @@ class RealtimeSession(  # noqa: F811
                     curr_gen.audio_ch.close()
                 if not curr_gen.text_ch.closed:
                     curr_gen.text_ch.close()
-            if self._current_generation.response_id in self._current_generation.tool_messages:
-                curr_gen = self._current_generation.tool_messages[
-                    self._current_generation.response_id
-                ]
-                if not curr_gen.function_ch.closed:
-                    curr_gen.function_ch.close()
+
+            # TODO: seems not needed, tool_messages[id] is a str, function_ch is closed below?
+            # if self._current_generation.response_id in self._current_generation.tool_messages:
+            #     curr_gen = self._current_generation.tool_messages[
+            #         self._current_generation.response_id
+            #     ]
+            #     if not curr_gen.function_ch.closed:
+            #         curr_gen.function_ch.close()
 
             if not self._current_generation.message_ch.closed:
                 self._current_generation.message_ch.close()
@@ -1055,7 +1057,7 @@ class RealtimeSession(  # noqa: F811
                     "tool_use_id": item.call_id,
                     "tool_result": item.output
                     if not item.is_error
-                    else f"{{'error': '{item.error}'}}",
+                    else f"{{'error': '{item.output}'}}",
                 }
             )
 
