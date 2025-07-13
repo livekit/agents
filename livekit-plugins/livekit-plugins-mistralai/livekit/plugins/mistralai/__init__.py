@@ -2,6 +2,7 @@
 
 from livekit.agents import Plugin
 
+from .llm import LLM, LLMStream
 from .log import logger
 from .version import __version__
 
