@@ -118,7 +118,7 @@ class LLMStream(llm.LLMStream):
                 model=self._model,
                 **self._extra_kwargs,
             )
-            print("Streaming Start")
+
             async for chunk in async_response:
                 for choice in chunk.data.choices:
                     chat_chunk = self._parse_choice(chunk.data.id, choice)
