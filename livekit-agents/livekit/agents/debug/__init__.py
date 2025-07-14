@@ -1,9 +1,14 @@
+from . import trace_types
+from .otel_trace import set_tracer_provider, tracer
 from .tracing import Tracing, TracingGraph, TracingHandle
 
 __all__ = [
     "Tracing",
     "TracingGraph",
     "TracingHandle",
+    "tracer",
+    "trace_types",
+    "set_tracer_provider",
 ]
 
 # Cleanup docs of unexported modules

@@ -42,8 +42,12 @@ async def test_function_call():
         await sess.start(KellyAgent())
 
         result = await sess.run(user_input="What is the weather in San Francisco?")
-        result.expect.next_event().is_function_call(name="lookup_weather", arguments={"location": "San Francisco"})
-        result.expect.next_event().is_function_call_output(output="sunny with a temperature of 70 degrees.")
+        result.expect.next_event().is_function_call(
+            name="lookup_weather", arguments={"location": "San Francisco"}
+        )
+        result.expect.next_event().is_function_call_output(
+            output="sunny with a temperature of 70 degrees."
+        )
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
 
