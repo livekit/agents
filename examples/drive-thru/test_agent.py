@@ -7,7 +7,7 @@ from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.voice.run_result import mock_tools
 from livekit.plugins import openai
 
-from ..drivethru_agent import DriveThruAgent, new_userdata
+from .drivethru_agent import DriveThruAgent, new_userdata
 
 
 def _llm_model() -> llm.LLM:
