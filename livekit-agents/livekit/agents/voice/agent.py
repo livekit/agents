@@ -71,6 +71,14 @@ class Agent:
         self._activity: AgentActivity | None = None
 
     @property
+    def label(self) -> str:
+        """
+        Returns:
+            str: The label of the agent.
+        """
+        return f"{type(self).__module__}.{type(self).__name__}"
+
+    @property
     def instructions(self) -> str:
         """
         Returns:

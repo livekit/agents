@@ -3,14 +3,18 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import heapq
+import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..debug import trace_types, tracer
 from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import (
@@ -347,33 +351,50 @@ class AgentActivity(RecognitionHooks):
             if self._started:
                 return
 
-            self._agent._activity = self
-
-            if isinstance(self.llm, llm.LLM):
-                self.llm.on("metrics_collected", self._on_metrics_collected)
-                self.llm.on("error", self._on_error)
-                self.llm.prewarm()
-
-            if isinstance(self.stt, stt.STT):
-                self.stt.on("metrics_collected", self._on_metrics_collected)
-                self.stt.on("error", self._on_error)
-                self.stt.prewarm()
-
-            if isinstance(self.tts, tts.TTS):
-                self.tts.on("metrics_collected", self._on_metrics_collected)
-                self.tts.on("error", self._on_error)
-                self.tts.prewarm()
-
-            if isinstance(self.vad, vad.VAD):
-                self.vad.on("metrics_collected", self._on_metrics_collected)
-
-            await self._start_session()
-            self._started = True
-
-            self._on_enter_task = task = self._create_speech_task(
-                self._agent.on_enter(), name="AgentTask_on_enter"
+            start_span = tracer.start_span(
+                "start_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
-            _set_activity_task_info(task, inline_task=False)
+            try:
+                self._agent._activity = self
+
+                with trace.use_span(start_span, end_on_exit=False):
+                    if isinstance(self.llm, llm.LLM):
+                        self.llm.on("metrics_collected", self._on_metrics_collected)
+                        self.llm.on("error", self._on_error)
+                        self.llm.prewarm()
+
+                    if isinstance(self.stt, stt.STT):
+                        self.stt.on("metrics_collected", self._on_metrics_collected)
+                        self.stt.on("error", self._on_error)
+                        self.stt.prewarm()
+
+                    if isinstance(self.tts, tts.TTS):
+                        self.tts.on("metrics_collected", self._on_metrics_collected)
+                        self.tts.on("error", self._on_error)
+                        self.tts.prewarm()
+
+                    if isinstance(self.vad, vad.VAD):
+                        self.vad.on("metrics_collected", self._on_metrics_collected)
+
+                # don't use start_span for _start_session, avoid nested user/assistant turns
+                await self._start_session()
+                self._started = True
+
+                @tracer.start_as_current_span(
+                    "on_enter",
+                    context=trace.set_span_in_context(start_span),
+                    attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+                )
+                async def _traceable_on_enter() -> None:
+                    await self._agent.on_enter()
+
+                self._on_enter_task = task = self._create_speech_task(
+                    _traceable_on_enter(), name="AgentTask_on_enter"
+                )
+                _set_activity_task_info(task, inline_task=False)
+            finally:
+                start_span.end()
 
     async def _start_session(self) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
@@ -468,13 +489,22 @@ class AgentActivity(RecognitionHooks):
         )
         self._audio_recognition.start()
 
+    @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
         # `drain` must only be called by AgentSession
         # AgentSession makes sure there is always one agent available to the users.
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, self._agent.label)
+
+        @tracer.start_as_current_span(
+            "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
+        )
+        async def _traceable_on_exit() -> None:
+            await self._agent.on_exit()
 
         async with self._lock:
             self._on_exit_task = task = self._create_speech_task(
-                self._agent.on_exit(), name="AgentTask_on_exit"
+                _traceable_on_exit(), name="AgentTask_on_exit"
             )
             _set_activity_task_info(task, inline_task=False)
 
@@ -514,11 +544,19 @@ class AgentActivity(RecognitionHooks):
         # `resume` must only be called by AgentSession
 
         async with self._lock:
-            await self._start_session()
+            start_span = tracer.start_span(
+                "resume_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
+            )
+            try:
+                await self._start_session()
+            finally:
+                start_span.end()
 
     def _wake_up_scheduling_task(self) -> None:
         self._q_updated.set()
 
+    @tracer.start_as_current_span("pause_agent_activity")
     async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
         # `pause` must only be called by AgentSession
 
@@ -806,8 +844,8 @@ class AgentActivity(RecognitionHooks):
         )
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
-        # when force=True, we still allow to schedule a new speech even if `pause_speech_scheduling` is
-        # waiting for the schedule_task to drain.
+        # when force=True, we still allow to schedule a new speech even if
+        # `pause_speech_scheduling` is waiting for the schedule_task to drain.
         # This allows for tool responses to be generated before the AgentActivity is finalized.
 
         if self._scheduling_paused and not force:
@@ -851,7 +889,7 @@ class AgentActivity(RecognitionHooks):
                 last_playout_ts = time.time()
 
             # if we're draining/pasuing and there are no more speech tasks, we can exit.
-            # only speech tasks can bypass draining to create a tool response (see `_schedule_speech`)
+            # only speech tasks can bypass draining to create a tool response (see `_schedule_speech`)  # noqa: E501
 
             blocked_handles: list[SpeechHandle] = []
             for task in self._drain_blocked_tasks:
@@ -917,7 +955,7 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
 
-        # self.interrupt() isn't going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
+        # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
         try:
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
@@ -980,7 +1018,10 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("speaking")
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session._update_user_state("listening")
+        self._session._update_user_state(
+            "listening",
+            last_speaking_time=time.time() - ev.silence_duration,
+        )
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode in ("manual", "realtime_llm"):
@@ -1375,6 +1416,7 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
+    @tracer.start_as_current_span("assistant_turn")
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -1388,6 +1430,13 @@ class AgentActivity(RecognitionHooks):
         _tools_messages: Sequence[llm.ChatItem] | None = None,
     ) -> None:
         from .agent import ModelSettings
+
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+        if instructions is not None:
+            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
+        if new_message:
+            current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
         log_event("generation started", speech_id=speech_handle.id)
 
@@ -1409,7 +1458,7 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue
+        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
 
         tasks: list[asyncio.Task[Any]] = []
@@ -1427,6 +1476,7 @@ class AgentActivity(RecognitionHooks):
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
         if audio_output is not None:
+            await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
                 node=self._agent.tts_node,
                 input=tts_text_input,
@@ -1446,6 +1496,7 @@ class AgentActivity(RecognitionHooks):
         )
 
         if speech_handle.interrupted:
+            current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             await utils.aio.cancel_and_wait(*tasks)
             await text_tee.aclose()
             return
@@ -1484,7 +1535,8 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        # before executing tools, make sure we generated all the text (this ensure everything is kept ordered)
+        # before executing tools, make sure we generated all the text
+        # (this ensure everything is kept ordered)
         if text_forward_task:
             await speech_handle.wait_if_not_interrupted([text_forward_task])
 
@@ -1526,6 +1578,8 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
+        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
             for msg in _tools_messages:
@@ -1562,6 +1616,7 @@ class AgentActivity(RecognitionHooks):
                 if forwarded_text:
                     self._agent._chat_ctx.insert(copy_msg)
                     self._session._conversation_item_added(copy_msg)
+                current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
@@ -1573,6 +1628,9 @@ class AgentActivity(RecognitionHooks):
         if generated_msg:
             self._agent._chat_ctx.insert(generated_msg)
             self._session._conversation_item_added(generated_msg)
+            current_span.set_attribute(
+                trace_types.ATTR_RESPONSE_TEXT, generated_msg.text_content or ""
+            )
 
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
@@ -1580,7 +1638,6 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state("listening")
 
         log_event("playout completed", speech_id=speech_handle.id)
-
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await text_tee.aclose()
 
@@ -1712,6 +1769,7 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)
 
+    @tracer.start_as_current_span("realtime_assistant_turn")
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
@@ -1720,6 +1778,9 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
     ) -> None:
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
@@ -1739,6 +1800,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
+            current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
@@ -1747,6 +1809,7 @@ class AgentActivity(RecognitionHooks):
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
 
+        # read text and audio outputs
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
             outputs: list[tuple[str, _TextOutput | None, _AudioOutput | None]],
@@ -1831,6 +1894,23 @@ class AgentActivity(RecognitionHooks):
             )
         )
 
+        # read function calls
+        fnc_tee = utils.aio.itertools.tee(generation_ev.function_stream, 2)
+        fnc_stream, fnc_stream_for_tracing = fnc_tee
+        tees.append(fnc_tee)
+        function_calls: list[llm.FunctionCall] = []
+
+        async def _read_fnc_stream() -> None:
+            async for fnc in fnc_stream_for_tracing:
+                function_calls.append(fnc)
+
+        tasks.append(
+            asyncio.create_task(
+                _read_fnc_stream(),
+                name="AgentActivity.realtime_generation.read_fnc_stream",
+            )
+        )
+
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
 
@@ -1843,12 +1923,18 @@ class AgentActivity(RecognitionHooks):
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             tool_choice=model_settings.tool_choice,
-            function_stream=generation_ev.function_stream,
+            function_stream=fnc_stream,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        current_span.set_attribute(
+            trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
+            json.dumps([fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]),
+        )
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
@@ -1858,8 +1944,6 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            for tee in tees:
-                await tee.aclose()
 
             if len(message_outputs) > 0:
                 # there should be only one message
@@ -1900,9 +1984,13 @@ class AgentActivity(RecognitionHooks):
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)
+                    current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)
+
+            for tee in tees:
+                await tee.aclose()
             return
 
         if len(message_outputs) > 0:
@@ -1917,6 +2005,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.items.append(msg)
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
+            current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, msg.text_content or "")
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         for tee in tees:

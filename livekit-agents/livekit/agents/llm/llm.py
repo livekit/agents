@@ -7,12 +7,14 @@ from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
+from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
+from ..debug import trace_types, tracer
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..types import (
@@ -139,10 +141,14 @@ class LLMStream(ABC):
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
+        self._llm_request_span: trace.Span | None = None
+
     @abstractmethod
     async def _run(self) -> None: ...
 
+    @tracer.start_as_current_span("llm_request", end_on_exit=False)
     async def _main_task(self) -> None:
+        self._llm_request_span = trace.get_current_span()
         for i in range(self._conn_options.max_retry + 1):
             try:
                 return await self._run()
@@ -224,6 +230,10 @@ class LLMStream(ABC):
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
         )
+        if self._llm_request_span:
+            self._llm_request_span.set_attribute(
+                trace_types.ATTR_LLM_METRICS, metrics.model_dump_json()
+            )
         self._llm.emit("metrics_collected", metrics)
 
     @property
@@ -237,6 +247,9 @@ class LLMStream(ABC):
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._task)
         await self._metrics_task
+        if self._llm_request_span:
+            self._llm_request_span.end()
+            self._llm_request_span = None
 
     async def __anext__(self) -> ChatChunk:
         try:
