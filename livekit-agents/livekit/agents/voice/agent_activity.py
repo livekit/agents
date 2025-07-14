@@ -351,39 +351,50 @@ class AgentActivity(RecognitionHooks):
             if self._started:
                 return
 
-            self._agent._activity = self
-
-            if isinstance(self.llm, llm.LLM):
-                self.llm.on("metrics_collected", self._on_metrics_collected)
-                self.llm.on("error", self._on_error)
-                self.llm.prewarm()
-
-            if isinstance(self.stt, stt.STT):
-                self.stt.on("metrics_collected", self._on_metrics_collected)
-                self.stt.on("error", self._on_error)
-                self.stt.prewarm()
-
-            if isinstance(self.tts, tts.TTS):
-                self.tts.on("metrics_collected", self._on_metrics_collected)
-                self.tts.on("error", self._on_error)
-                self.tts.prewarm()
-
-            if isinstance(self.vad, vad.VAD):
-                self.vad.on("metrics_collected", self._on_metrics_collected)
-
-            await self._start_session()
-            self._started = True
-
-            @tracer.start_as_current_span(
-                "on_enter", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
+            start_span = tracer.start_span(
+                "start_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
-            async def _traceable_on_enter() -> None:
-                await self._agent.on_enter()
+            try:
+                self._agent._activity = self
 
-            self._on_enter_task = task = self._create_speech_task(
-                _traceable_on_enter(), name="AgentTask_on_enter"
-            )
-            _set_activity_task_info(task, inline_task=False)
+                with trace.use_span(start_span, end_on_exit=False):
+                    if isinstance(self.llm, llm.LLM):
+                        self.llm.on("metrics_collected", self._on_metrics_collected)
+                        self.llm.on("error", self._on_error)
+                        self.llm.prewarm()
+
+                    if isinstance(self.stt, stt.STT):
+                        self.stt.on("metrics_collected", self._on_metrics_collected)
+                        self.stt.on("error", self._on_error)
+                        self.stt.prewarm()
+
+                    if isinstance(self.tts, tts.TTS):
+                        self.tts.on("metrics_collected", self._on_metrics_collected)
+                        self.tts.on("error", self._on_error)
+                        self.tts.prewarm()
+
+                    if isinstance(self.vad, vad.VAD):
+                        self.vad.on("metrics_collected", self._on_metrics_collected)
+
+                # don't use start_span for _start_session, avoid nested user/assistant turns
+                await self._start_session()
+                self._started = True
+
+                @tracer.start_as_current_span(
+                    "on_enter",
+                    context=trace.set_span_in_context(start_span),
+                    attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+                )
+                async def _traceable_on_enter() -> None:
+                    await self._agent.on_enter()
+
+                self._on_enter_task = task = self._create_speech_task(
+                    _traceable_on_enter(), name="AgentTask_on_enter"
+                )
+                _set_activity_task_info(task, inline_task=False)
+            finally:
+                start_span.end()
 
     async def _start_session(self) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
@@ -478,9 +489,12 @@ class AgentActivity(RecognitionHooks):
         )
         self._audio_recognition.start()
 
+    @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
         # `drain` must only be called by AgentSession
         # AgentSession makes sure there is always one agent available to the users.
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, self._agent.label)
 
         @tracer.start_as_current_span(
             "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
@@ -530,11 +544,19 @@ class AgentActivity(RecognitionHooks):
         # `resume` must only be called by AgentSession
 
         async with self._lock:
-            await self._start_session()
+            start_span = tracer.start_span(
+                "resume_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
+            )
+            try:
+                await self._start_session()
+            finally:
+                start_span.end()
 
     def _wake_up_scheduling_task(self) -> None:
         self._q_updated.set()
 
+    @tracer.start_as_current_span("pause_agent_activity")
     async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
         # `pause` must only be called by AgentSession
 
@@ -822,8 +844,8 @@ class AgentActivity(RecognitionHooks):
         )
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
-        # when force=True, we still allow to schedule a new speech even if `pause_speech_scheduling` is
-        # waiting for the schedule_task to drain.
+        # when force=True, we still allow to schedule a new speech even if
+        # `pause_speech_scheduling` is waiting for the schedule_task to drain.
         # This allows for tool responses to be generated before the AgentActivity is finalized.
 
         if self._scheduling_paused and not force:
@@ -867,7 +889,7 @@ class AgentActivity(RecognitionHooks):
                 last_playout_ts = time.time()
 
             # if we're draining/pasuing and there are no more speech tasks, we can exit.
-            # only speech tasks can bypass draining to create a tool response (see `_schedule_speech`)
+            # only speech tasks can bypass draining to create a tool response (see `_schedule_speech`)  # noqa: E501
 
             blocked_handles: list[SpeechHandle] = []
             for task in self._drain_blocked_tasks:
@@ -1436,7 +1458,7 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue
+        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
 
         tasks: list[asyncio.Task[Any]] = []
@@ -1513,7 +1535,8 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        # before executing tools, make sure we generated all the text (this ensure everything is kept ordered)
+        # before executing tools, make sure we generated all the text
+        # (this ensure everything is kept ordered)
         if text_forward_task:
             await speech_handle.wait_if_not_interrupted([text_forward_task])
 
