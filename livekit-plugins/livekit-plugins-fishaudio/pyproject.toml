@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "FishAudio plugin for LiveKit Agents (STT and TTS)"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [{ name = "LiveKit" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
 classifiers = [
