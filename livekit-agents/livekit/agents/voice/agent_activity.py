@@ -869,6 +869,7 @@ class AgentActivity(RecognitionHooks):
                 # with perf_counter_ns(), collisions should be rare
                 pass
 
+        speech._mark_scheduled()
         self._wake_up_scheduling_task()
 
     @utils.log_exceptions(logger=logger)
@@ -1492,6 +1493,16 @@ class AgentActivity(RecognitionHooks):
                 tr_input = timed_texts
 
         await speech_handle.wait_if_not_interrupted(
+            [asyncio.ensure_future(speech_handle._wait_for_scheduled())]
+        )
+
+        if new_message is not None:
+            self._agent._chat_ctx.insert(new_message)
+            self._session._conversation_item_added(new_message)
+
+        self._session._update_agent_state("thinking")
+
+        await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
 
@@ -1500,12 +1511,6 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             await text_tee.aclose()
             return
-
-        self._session._update_agent_state("thinking")
-
-        if new_message is not None:
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
 
         reply_started_at = time.time()
 

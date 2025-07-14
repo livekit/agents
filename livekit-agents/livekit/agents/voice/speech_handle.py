@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from .. import llm, utils
 
-if TYPE_CHECKING:
-    pass
-
 
 class SpeechHandle:
     SPEECH_PRIORITY_LOW = 0
@@ -26,6 +23,7 @@ class SpeechHandle:
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
         self._generation_fut = asyncio.Future[None]()
+        self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
 
         # internal tasks used by this generation
@@ -167,6 +165,9 @@ class SpeechHandle:
     async def _wait_for_generation(self) -> None:
         await asyncio.shield(self._generation_fut)
 
+    async def _wait_for_scheduled(self) -> None:
+        await asyncio.shield(self._scheduled_fut)
+
     def _mark_generation_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._generation_fut.set_result(None)
@@ -176,3 +177,7 @@ class SpeechHandle:
             # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
             self._mark_generation_done()
+
+    def _mark_scheduled(self) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._scheduled_fut.set_result(None)
