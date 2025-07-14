@@ -1,5 +1,12 @@
-from . import _oai_api
-from .chat_context import ChatAudio, ChatContext, ChatImage, ChatMessage, ChatRole
+from .chat_context import (
+    ChatAudio,
+    ChatContent,
+    ChatContext,
+    ChatImage,
+    ChatMessage,
+    ChatRole,
+)
+from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
     USE_DOCSTRING,
     CalledFunction,
@@ -8,9 +15,19 @@ from .function_context import (
     FunctionContext,
     FunctionInfo,
     TypeInfo,
+    _create_ai_function_info,
     ai_callable,
 )
-from .llm import LLM, ChatChunk, Choice, ChoiceDelta, LLMStream
+from .llm import (
+    LLM,
+    ChatChunk,
+    Choice,
+    ChoiceDelta,
+    CompletionUsage,
+    LLMCapabilities,
+    LLMStream,
+    ToolChoice,
+)
 
 __all__ = [
     "LLM",
@@ -20,10 +37,12 @@ __all__ = [
     "ChatMessage",
     "ChatAudio",
     "ChatImage",
+    "ChatContent",
     "ChatContext",
     "ChoiceDelta",
     "Choice",
     "ChatChunk",
+    "CompletionUsage",
     "FunctionContext",
     "ai_callable",
     "TypeInfo",
@@ -32,5 +51,9 @@ __all__ = [
     "FunctionCallInfo",
     "CalledFunction",
     "USE_DOCSTRING",
-    "_oai_api",
+    "LLMCapabilities",
+    "FallbackAdapter",
+    "AvailabilityChangedEvent",
+    "ToolChoice",
+    "_create_ai_function_info",
 ]

@@ -23,6 +23,8 @@ from typing import Any, Callable, Dict, Literal, MutableSet, Union
 import httpx
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.llm import LLMCapabilities, ToolChoice
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from openai import AsyncAssistantEventHandler, AsyncClient
 from openai.types.beta.threads import Text, TextDelta
@@ -36,6 +38,7 @@ from openai.types.beta.threads.runs import (
 )
 from openai.types.file_object import FileObject
 
+from .._oai_api import build_oai_function_description
 from ..log import logger
 from ..models import ChatModels
 
@@ -96,6 +99,13 @@ class AssistantLLM(llm.LLM):
         base_url: str | None = None,
         on_file_uploaded: OnFileUploaded | None = None,
     ) -> None:
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=True,
+                requires_persistent_functions=False,
+            )
+        )
+
         test_ctx = llm.ChatContext()
         if not hasattr(test_ctx, "_metadata"):
             raise Exception(
@@ -163,10 +173,13 @@ class AssistantLLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         fnc_ctx: llm.FunctionContext | None = None,
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
+        | None = None,
     ):
         if n is not None:
             logger.warning("OpenAI Assistants does not support the 'n' parameter")
@@ -187,6 +200,7 @@ class AssistantLLM(llm.LLM):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             on_file_uploaded=self._on_file_uploaded,
+            conn_options=conn_options,
         )
 
     async def _register_tool_call(self, tool_call_id: str, run_id: str) -> None:
@@ -223,7 +237,7 @@ class AssistantLLMStream(llm.LLMStream):
             self,
             llm: AssistantLLM,
             llm_stream: AssistantLLMStream,
-            output_queue: asyncio.Queue[llm.ChatChunk | Exception | None],
+            event_ch: utils.aio.Chan[llm.ChatChunk],
             chat_ctx: llm.ChatContext,
             fnc_ctx: llm.FunctionContext | None = None,
         ):
@@ -231,17 +245,20 @@ class AssistantLLMStream(llm.LLMStream):
             self._llm = llm
             self._llm_stream = llm_stream
             self._chat_ctx = chat_ctx
-            self._output_queue = output_queue
+            self._event_ch = event_ch
             self._fnc_ctx = fnc_ctx
 
         async def on_text_delta(self, delta: TextDelta, snapshot: Text):
-            self._output_queue.put_nowait(
+            assert self.current_run is not None
+
+            self._event_ch.send_nowait(
                 llm.ChatChunk(
+                    request_id=self.current_run.id,
                     choices=[
                         llm.Choice(
                             delta=llm.ChoiceDelta(role="assistant", content=delta.value)
                         )
-                    ]
+                    ],
                 )
             )
 
@@ -255,6 +272,8 @@ class AssistantLLMStream(llm.LLMStream):
             self,
             tool_call: CodeInterpreterToolCall | FileSearchToolCall | FunctionToolCall,
         ) -> None:
+            assert self.current_run is not None
+
             if tool_call.type == "code_interpreter":
                 logger.warning("code interpreter tool call not yet implemented")
             elif tool_call.type == "file_search":
@@ -273,14 +292,15 @@ class AssistantLLMStream(llm.LLMStream):
 
                 self._llm_stream._function_calls_info.append(fnc)
                 chunk = llm.ChatChunk(
+                    request_id=self.current_run.id,
                     choices=[
                         llm.Choice(
                             delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc]),
                             index=0,
                         )
-                    ]
+                    ],
                 )
-                self._output_queue.put_nowait(chunk)
+                self._event_ch.send_nowait(chunk)
 
     def __init__(
         self,
@@ -292,9 +312,11 @@ class AssistantLLMStream(llm.LLMStream):
         fnc_ctx: llm.FunctionContext | None,
         temperature: float | None,
         on_file_uploaded: OnFileUploaded | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
-        self._llm = assistant_llm
+        super().__init__(
+            assistant_llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+        )
         self._client = client
         self._temperature = temperature
         self._on_file_uploaded = on_file_uploaded
@@ -303,14 +325,15 @@ class AssistantLLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
-        self._output_queue = asyncio.Queue[Union[llm.ChatChunk, Exception, None]]()
-        self._create_stream_task = asyncio.create_task(self._create_stream())
+        self._create_stream_task = asyncio.create_task(self._main_task())
         self._sync_openai_task = sync_openai_task
 
         # Running stream is used to ensure that we only have one stream running at a time
         self._done_future: asyncio.Future[None] = asyncio.Future()
 
-    async def _create_stream(self) -> None:
+    async def _run(self) -> None:
+        assert isinstance(self._llm, AssistantLLM)
+
         # This function's complexity is due to the fact that we need to sync chat_ctx messages with OpenAI.
         # OpenAI also does not allow us to modify messages while a stream is running. So we need to make sure streams run
         # sequentially. The strategy is as follows:
@@ -446,7 +469,7 @@ class AssistantLLMStream(llm.LLMStream):
 
             eh = AssistantLLMStream.EventHandler(
                 llm=self._llm,
-                output_queue=self._output_queue,
+                event_ch=self._event_ch,
                 chat_ctx=self._chat_ctx,
                 fnc_ctx=self._fnc_ctx,
                 llm_stream=self,
@@ -461,14 +484,12 @@ class AssistantLLMStream(llm.LLMStream):
             }
             if self._fnc_ctx:
                 kwargs["tools"] = [
-                    llm._oai_api.build_oai_function_description(f)
+                    build_oai_function_description(f)
                     for f in self._fnc_ctx.ai_functions.values()
                 ]
 
             async with self._client.beta.threads.runs.stream(**kwargs) as stream:
                 await stream.until_done()
-
-            await self._output_queue.put(None)
 
             # Populate the openai_message_id for the messages we added to OpenAI. Note, we do this after
             # sending None to close the iterator so that it is done in parellel with any users of
@@ -500,8 +521,6 @@ class AssistantLLMStream(llm.LLMStream):
                     # We don't need the LiveKit message id anymore
                     lk_msg_id_dict.pop(load_options.thread_id)
 
-        except Exception as e:
-            await self._output_queue.put(e)
         finally:
             self._done_future.set_result(None)
 
@@ -518,7 +537,7 @@ class AssistantLLMStream(llm.LLMStream):
             opts.resize_options = utils.images.ResizeOptions(
                 width=inference_width,
                 height=inference_height,
-                strategy="center_aspect_fit",
+                strategy="scale_aspect_fit",
             )
 
         encoded_data = utils.images.encode(frame, opts)
@@ -528,16 +547,6 @@ class AssistantLLMStream(llm.LLMStream):
         )
 
         return fileObj
-
-    async def __anext__(self):
-        item = await self._output_queue.get()
-        if item is None:
-            raise StopAsyncIteration
-
-        if isinstance(item, Exception):
-            raise item
-
-        return item
 
 
 def build_oai_message(msg: llm.ChatMessage):

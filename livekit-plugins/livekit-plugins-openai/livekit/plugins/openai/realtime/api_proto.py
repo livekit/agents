@@ -16,16 +16,26 @@ class FunctionToolChoice(TypedDict):
     name: str
 
 
-Voice = Literal["alloy", "echo", "shimmer"]
+Voice = Literal["alloy", "echo", "shimmer", "ash", "ballad", "coral", "sage", "verse"]
 ToolChoice = Union[Literal["auto", "none", "required"], FunctionToolChoice]
 Role = Literal["system", "assistant", "user", "tool"]
 GenerationFinishedReason = Literal["stop", "max_tokens", "content_filter", "interrupt"]
-AudioFormat = Literal["pcm16", "g711-ulaw", "g711-alaw"]
+AudioFormat = Literal["pcm16", "g711_ulaw", "g711_alaw"]
 InputTranscriptionModel = Literal["whisper-1"]
 Modality = Literal["text", "audio"]
 ResponseStatus = Literal[
     "in_progress", "completed", "incomplete", "cancelled", "failed"
 ]
+
+# https://platform.openai.com/docs/models/gp#gpt-4o-realtime
+OpenAIModel = Literal[
+    "gpt-4o-realtime-preview",
+    "gpt-4o-realtime-preview-2024-10-01",
+    "gpt-4o-realtime-preview-2024-12-17",
+    "gpt-4o-mini-realtime-preview",
+    "gpt-4o-mini-realtime-preview-2024-12-17",
+]
+DefaultOpenAIModel = "gpt-4o-realtime-preview"
 
 
 class TextContent(TypedDict):
@@ -59,6 +69,8 @@ class ContentPart(TypedDict):
 
 class InputAudioTranscription(TypedDict):
     model: InputTranscriptionModel | str
+    language: NotRequired[str]
+    prompt: NotRequired[str]
 
 
 class ServerVad(TypedDict):
@@ -66,6 +78,14 @@ class ServerVad(TypedDict):
     threshold: NotRequired[float]
     prefix_padding_ms: NotRequired[int]
     silence_duration_ms: NotRequired[int]
+    create_response: NotRequired[bool]
+
+
+class SemanticVad(TypedDict):
+    type: Literal["semantic_vad"]
+    eagerness: NotRequired[Literal["low", "medium", "high", "auto"]]
+    create_response: NotRequired[bool]
+    interrupt_response: NotRequired[bool]
 
 
 class FunctionTool(TypedDict):
@@ -141,10 +161,29 @@ ResponseStatusDetails = Union[
 ]
 
 
+class InputTokenDetails(TypedDict):
+    cached_tokens: int
+    text_tokens: int
+    audio_tokens: int
+    cached_tokens_details: CachedTokenDetails
+
+
+class CachedTokenDetails(TypedDict):
+    text_tokens: int
+    audio_tokens: int
+
+
+class OutputTokenDetails(TypedDict):
+    text_tokens: int
+    audio_tokens: int
+
+
 class Usage(TypedDict):
     total_tokens: int
     input_tokens: int
     output_tokens: int
+    input_token_details: InputTokenDetails
+    output_token_details: OutputTokenDetails
 
 
 class Resource:
@@ -159,7 +198,7 @@ class Resource:
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: ServerVad | None
+        turn_detection: Union[ServerVad, SemanticVad, None]
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
@@ -188,7 +227,7 @@ class ClientEvent:
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: ServerVad | None
+        turn_detection: Union[ServerVad, SemanticVad, None]
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
@@ -214,30 +253,42 @@ class ClientEvent:
         type: Literal["input_audio_buffer.clear"]
 
     class UserItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["user"]
         content: list[InputTextContent | InputAudioContent]
 
     class AssistantItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["assistant"]
         content: list[TextContent]
 
     class SystemItemCreate(TypedDict):
+        id: str | None
         type: Literal["message"]
         role: Literal["system"]
         content: list[InputTextContent]
 
     class FunctionCallOutputItemCreate(TypedDict):
+        id: str | None
         type: Literal["function_call_output"]
         call_id: str
         output: str
+
+    class FunctionCallItemCreate(TypedDict):
+        id: str | None
+        type: Literal["function_call"]
+        call_id: str
+        name: str
+        arguments: str
 
     ConversationItemCreateContent = Union[
         UserItemCreate,
         AssistantItemCreate,
         SystemItemCreate,
         FunctionCallOutputItemCreate,
+        FunctionCallItemCreate,
     ]
 
     class ConversationItemCreate(TypedDict):
@@ -266,6 +317,8 @@ class ClientEvent:
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
+        conversation: Literal["auto", "none"]
+        metadata: NotRequired[dict[str, str] | None]
         max_output_tokens: int | Literal["inf"]
 
     class ResponseCreate(TypedDict):
@@ -330,6 +383,7 @@ class ServerEvent:
     class ConversationItemCreated(TypedDict):
         event_id: str
         type: Literal["conversation.item.created"]
+        previous_item_id: str | None
         item: Resource.Item
 
     class ConversationItemInputAudioTranscriptionCompleted(TypedDict):

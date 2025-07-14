@@ -21,7 +21,7 @@ class TokenData:
 
 class SentenceTokenizer(ABC):
     @abstractmethod
-    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         pass
 
     @abstractmethod
@@ -62,7 +62,7 @@ class SentenceStream(ABC):
 
 class WordTokenizer(ABC):
     @abstractmethod
-    def tokenize(self, *, text: str, language: str | None = None) -> list[str]:
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         pass
 
     @abstractmethod

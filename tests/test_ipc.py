@@ -114,6 +114,7 @@ def _generate_fake_job() -> job.RunningJobInfo:
         url="fake_url",
         token="fake_token",
         accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
+        worker_id="fake_id",
     )
 
 
@@ -141,7 +142,7 @@ def _new_start_args(mp_ctx: BaseContext) -> _StartArgs:
 
 
 def _initialize_proc(proc: JobProcess) -> None:
-    start_args: _StartArgs = proc.start_arguments
+    start_args: _StartArgs = proc.user_arguments
 
     # incrementing isn't atomic (the lock should be reentrant by default)
     with start_args.initialize_counter.get_lock():
@@ -154,7 +155,7 @@ def _initialize_proc(proc: JobProcess) -> None:
 
 
 async def _job_entrypoint(job_ctx: JobContext) -> None:
-    start_args: _StartArgs = job_ctx.proc.start_arguments
+    start_args: _StartArgs = job_ctx.proc.user_arguments
 
     async def _job_shutdown() -> None:
         with start_args.shutdown_counter.get_lock():
@@ -196,6 +197,9 @@ async def test_proc_pool():
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
         close_timeout=20.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -210,21 +214,21 @@ async def test_proc_pool():
     exitcodes = []
 
     @pool.on("process_created")
-    def _process_created(proc: ipc.proc_job_executor.ProcJobExecutor):
+    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
         created_q.put_nowait(None)
-        proc.start_arguments = start_args
+        proc.user_arguments = start_args
 
     @pool.on("process_started")
-    def _process_started(proc: ipc.proc_job_executor.ProcJobExecutor):
+    def _process_started(proc: ipc.job_proc_executor.ProcJobExecutor):
         start_q.put_nowait(None)
         pids.append(proc.pid)
 
     @pool.on("process_ready")
-    def _process_ready(proc: ipc.proc_job_executor.ProcJobExecutor):
+    def _process_ready(proc: ipc.job_proc_executor.ProcJobExecutor):
         ready_q.put_nowait(None)
 
     @pool.on("process_closed")
-    def _process_closed(proc: ipc.proc_job_executor.ProcJobExecutor):
+    def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
@@ -272,6 +276,9 @@ async def test_slow_initialization():
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -285,12 +292,12 @@ async def test_slow_initialization():
     exitcodes = []
 
     @pool.on("process_created")
-    def _process_created(proc: ipc.proc_job_executor.ProcJobExecutor):
-        proc.start_arguments = start_args
+    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
+        proc.user_arguments = start_args
         start_q.put_nowait(None)
 
     @pool.on("process_closed")
-    def _process_closed(proc: ipc.proc_job_executor.ProcJobExecutor):
+    def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
         close_q.put_nowait(None)
         pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
@@ -316,18 +323,24 @@ def _create_proc(
     close_timeout: float,
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
-) -> tuple[ipc.proc_job_executor.ProcJobExecutor, _StartArgs]:
+) -> tuple[ipc.job_proc_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
     loop = asyncio.get_running_loop()
-    proc = ipc.proc_job_executor.ProcJobExecutor(
+    proc = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        ping_interval=2.5,
+        ping_timeout=10.0,
+        high_ping_threshold=1.0,
+        inference_executor=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
-    proc.start_arguments = start_args
+    proc.user_arguments = start_args
     return proc, start_args
 
 
@@ -341,9 +354,9 @@ async def test_shutdown_no_job():
 
     assert proc.exitcode == 0
     assert not proc.killed
-    assert (
-        start_args.shutdown_counter.value == 0
-    ), "shutdown_cb isn't called when there is no job"
+    assert start_args.shutdown_counter.value == 0, (
+        "shutdown_cb isn't called when there is no job"
+    )
 
 
 async def test_job_slow_shutdown():

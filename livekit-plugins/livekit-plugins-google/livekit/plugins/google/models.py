@@ -3,7 +3,15 @@ from typing import Literal
 # Speech to Text v2
 
 SpeechModels = Literal[
-    "long", "short", "telephony", "medical_dictation", "medical_conversation", "chirp"
+    "long",
+    "short",
+    "telephony",
+    "medical_dictation",
+    "medical_conversation",
+    "chirp",
+    "chirp_2",
+    "latest_long",
+    "latest_short",
 ]
 
 SpeechLanguages = Literal[
@@ -86,4 +94,9 @@ SpeechLanguages = Literal[
 
 Gender = Literal["male", "female", "neutral"]
 
-AudioEncoding = Literal["wav", "mp3", "ogg", "mulaw", "alaw", "linear16"]
+ChatModels = Literal[
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite-preview-02-05",
+    "gemini-2.0-pro-exp-02-05",
+    "gemini-1.5-pro",
+]

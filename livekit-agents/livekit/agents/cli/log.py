@@ -16,9 +16,20 @@ NOISY_LOGGERS = [
     "httpx",
     "httpcore",
     "openai",
-    "livekit",
     "watchfiles",
+    "anthropic",
+    "websockets.client",
+    "botocore",
+    "aiobotocore",
 ]
+
+
+def _silence_noisy_loggers() -> None:
+    for noisy_logger in NOISY_LOGGERS:
+        logger = logging.getLogger(noisy_logger)
+        if logger.level == logging.NOTSET:
+            logger.setLevel(logging.WARN)
+
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
@@ -209,10 +220,7 @@ def setup_logging(log_level: str, devmode: bool) -> None:
     root.addHandler(handler)
     root.setLevel(log_level)
 
-    for noisy_logger in NOISY_LOGGERS:
-        logger = logging.getLogger(noisy_logger)
-        if logger.level == logging.NOTSET:
-            logger.setLevel(logging.WARN)
+    _silence_noisy_loggers()
 
     from ..log import logger
 

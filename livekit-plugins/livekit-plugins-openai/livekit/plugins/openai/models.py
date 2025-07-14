@@ -1,8 +1,21 @@
 from typing import Literal
 
-WhisperModels = Literal["whisper-1"]
-TTSModels = Literal["tts-1", "tts-1-hd"]
-TTSVoices = Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+from openai.types import AudioModel
+
+STTModels = AudioModel
+TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
+TTSVoices = Literal[
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "onyx",
+    "nova",
+    "sage",
+    "shimmer",
+]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
     "gpt-4o",
@@ -45,6 +58,7 @@ TelnyxChatModels = Literal[
 CerebrasChatModels = Literal[
     "llama3.1-8b",
     "llama3.1-70b",
+    "llama-3.3-70b",
 ]
 
 PerplexityChatModels = Literal[
@@ -58,8 +72,8 @@ PerplexityChatModels = Literal[
 
 GroqChatModels = Literal[
     "llama-3.1-405b-reasoning",
-    "llama-3.1-70b-versatile",
     "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
     "llama3-groq-70b-8192-tool-use-preview",
     "llama3-groq-8b-8192-tool-use-preview",
     "llama-guard-3-8b",
@@ -70,9 +84,24 @@ GroqChatModels = Literal[
     "gemma2-9b-it",
 ]
 
+GroqAudioModels = Literal[
+    "whisper-large-v3", "distil-whisper-large-v3-en", "whisper-large-v3-turbo"
+]
+
 DeepSeekChatModels = Literal[
     "deepseek-coder",
     "deepseek-chat",
+]
+
+VertexModels = Literal[
+    "google/gemini-2.0-flash-exp",
+    "google/gemini-1.5-flash",
+    "google/gemini-1.5-pro",
+    "google/gemini-1.0-pro-vision",
+    "google/gemini-1.0-pro-vision-001",
+    "google/gemini-1.0-pro-002",
+    "google/gemini-1.0-pro-001",
+    "google/gemini-1.0-pro",
 ]
 
 TogetherChatModels = Literal[
@@ -129,6 +158,7 @@ TogetherChatModels = Literal[
     "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
     "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     "mistralai/Mistral-7B-Instruct-v0.1",
     "mistralai/Mistral-7B-Instruct-v0.2",
     "mistralai/Mistral-7B-Instruct-v0.3",

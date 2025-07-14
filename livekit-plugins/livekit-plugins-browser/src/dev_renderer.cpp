@@ -473,7 +473,7 @@ void DevRenderer::Run() {
         }
 
         // Render the browser tex
-        ImGui::Image((void*)(intptr_t)data.texture_id,
+        ImGui::Image((ImTextureID)(intptr_t)data.texture_id,
                      ImVec2((float)data.view_width, (float)data.view_height));
       }
       ImGui::End();

@@ -34,7 +34,10 @@ export OPENAI_API_KEY=<your OpenAI API key>
 
 ### Install requirments:
 
-`pip install -r requirements.txt`
+```
+pip install -r requirements.txt
+python minimal_assistant.py download-files
+```
 
 ### Run the agent worker:
 

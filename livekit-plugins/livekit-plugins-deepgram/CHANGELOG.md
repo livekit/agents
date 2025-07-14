@@ -1,5 +1,135 @@
 # livekit-plugins-deepgram
 
+## 0.7.4
+
+### Patch Changes
+
+- update to livekit python 1.0 - [`32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d`](https://github.com/livekit/agents/commit/32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.7.3
+
+### Patch Changes
+
+- support multilingual with Nova-3 model - [#1736](https://github.com/livekit/agents/pull/1736) ([@jeradf](https://github.com/jeradf))
+
+## 0.7.2
+
+### Patch Changes
+
+- Added optional parameter to opt out from deepgrams model improvement plan - [#1713](https://github.com/livekit/agents/pull/1713) ([@MatthiasGruba](https://github.com/MatthiasGruba))
+
+## 0.7.1
+
+### Patch Changes
+
+- add `nova-3-medical` to stt models - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
+- support numerals deepgram stt - [#1667](https://github.com/livekit/agents/pull/1667) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.7.0
+
+### Minor Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- added a tts.prewarm method to start the connection pool early. - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- update pool configuration for deepgram and cartesia - [#1605](https://github.com/livekit/agents/pull/1605) ([@jayeshp19](https://github.com/jayeshp19))
+
+- set mex session duration to 1 hour in deepgram connection pool - [#1582](https://github.com/livekit/agents/pull/1582) ([@jayeshp19](https://github.com/jayeshp19))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.20
+
+### Patch Changes
+
+- fix(deepgram): fix STT keyterm parameter - [#1535](https://github.com/livekit/agents/pull/1535) ([@wdhwg001](https://github.com/wdhwg001))
+
+- use connection pool for deepgram tts - [#1523](https://github.com/livekit/agents/pull/1523) ([@jayeshp19](https://github.com/jayeshp19))
+
+- remove update options from tts synthesis stream - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.6.19
+
+### Patch Changes
+
+- deepgram: support for Nova-3 keyterms - [#1484](https://github.com/livekit/agents/pull/1484) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.18
+
+### Patch Changes
+
+- chore(Deepgram STT): add nova-3 model to type literal - [#1464](https://github.com/livekit/agents/pull/1464) ([@chasemcdo](https://github.com/chasemcdo))
+
+## 0.6.17
+
+### Patch Changes
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.16
+
+### Patch Changes
+
+- fix: Ensure STT exceptions are being propagated - [#1291](https://github.com/livekit/agents/pull/1291) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.15
+
+### Patch Changes
+
+- added streaming audio decoder for compressed audio. - [#1236](https://github.com/livekit/agents/pull/1236) ([@davidzhao](https://github.com/davidzhao))
+
+- Support Deepgram TTS - [#1201](https://github.com/livekit/agents/pull/1201) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.6.14
+
+### Patch Changes
+
+- enable deepgram filler words by default to improve end of turn accuracy - [#1190](https://github.com/livekit/agents/pull/1190) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.13
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.12
+
+### Patch Changes
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- Added support for custom deepgram base url - [#1137](https://github.com/livekit/agents/pull/1137) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.6.11
+
+### Patch Changes
+
+- add PeriodicCollector utility for metrics - [#1094](https://github.com/livekit/agents/pull/1094) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.10
+
+### Patch Changes
+
+- fix Deepgram missing first word, disabled energy filter by default - [#1090](https://github.com/livekit/agents/pull/1090) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.9
+
+### Patch Changes
+
+- stt: reduce bandwidth usage by reducing sample_rate to 16khz - [#920](https://github.com/livekit/agents/pull/920) ([@theomonnom](https://github.com/theomonnom))
+
+- deepgram: send finalize each time we stop sending audio - [#1004](https://github.com/livekit/agents/pull/1004) ([@theomonnom](https://github.com/theomonnom))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.6.8
 
 ### Patch Changes

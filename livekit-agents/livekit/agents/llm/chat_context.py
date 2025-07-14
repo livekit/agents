@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
 from livekit import rtc
+from livekit.agents import utils
 
 from . import function_context
 
@@ -25,11 +26,59 @@ ChatRole = Literal["system", "user", "assistant", "tool"]
 
 @dataclass
 class ChatImage:
+    """
+    ChatImage is used to input images into the ChatContext on supported LLM providers / plugins.
+
+    You may need to consult your LLM provider's documentation on supported URL types.
+
+    ```python
+    # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
+    async for event in rtc.VideoStream(video_track):
+        chat_image = ChatImage(image=event.frame)
+        # this instance is now available for your ChatContext
+
+    # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
+    from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
+
+    image_bytes = encode(
+        event.frame,
+        EncodeOptions(
+            format="PNG",
+            resize_options=ResizeOptions(
+                width=512, height=512, strategy="scale_aspect_fit"
+            ),
+        ),
+    )
+    chat_image = ChatImage(
+        image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    )
+
+    # With an external URL
+    chat_image = ChatImage(image="https://example.com/image.jpg")
+    ```
+    """
+
     image: str | rtc.VideoFrame
+    """
+    Either a string URL or a VideoFrame object
+    """
     inference_width: int | None = None
+    """
+    Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
+    """
     inference_height: int | None = None
+    """
+    Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
+    """
+    inference_detail: Literal["auto", "high", "low"] = "auto"
+    """
+    Detail parameter for LLM provider, if supported.
+    
+    Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
+    """
     _cache: dict[Any, Any] = field(default_factory=dict, repr=False, init=False)
-    """_cache is used  by LLM implementations to store a processed version of the image
+    """
+    _cache is used internally by LLM implementations to store a processed version of the image
     for later use.
     """
 
@@ -45,7 +94,9 @@ ChatContent = Union[str, ChatImage, ChatAudio]
 @dataclass
 class ChatMessage:
     role: ChatRole
-    id: str | None = None  # used by the OAI realtime API
+    id: str = field(
+        default_factory=lambda: utils.shortuuid("item_")
+    )  # used by the OAI realtime API
     name: str | None = None
     content: ChatContent | list[ChatContent] | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
@@ -86,10 +137,15 @@ class ChatMessage:
 
     @staticmethod
     def create(
-        *, text: str = "", images: list[ChatImage] = [], role: ChatRole = "system"
+        *,
+        text: str = "",
+        images: list[ChatImage] = [],
+        role: ChatRole = "system",
+        id: str | None = None,
     ) -> "ChatMessage":
+        id = id or utils.shortuuid("item_")
         if len(images) == 0:
-            return ChatMessage(role=role, content=text)
+            return ChatMessage(role=role, content=text, id=id)
         else:
             content: list[ChatContent] = []
             if text:
@@ -98,7 +154,7 @@ class ChatMessage:
             if len(images) > 0:
                 content.extend(images)
 
-            return ChatMessage(role=role, content=content)
+            return ChatMessage(role=role, content=content, id=id)
 
     def copy(self):
         content = self.content
@@ -111,6 +167,7 @@ class ChatMessage:
 
         copied_msg = ChatMessage(
             role=self.role,
+            id=self.id,
             name=self.name,
             content=content,
             tool_calls=tool_calls,

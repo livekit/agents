@@ -1,5 +1,243 @@
 # livekit-plugins-openai
 
+## 0.12.4
+
+### Patch Changes
+
+- update to livekit python 1.0 - [`32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d`](https://github.com/livekit/agents/commit/32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.3
+
+### Patch Changes
+
+- openai: default to use_realtime=False - [#1783](https://github.com/livekit/agents/pull/1783) ([@davidzhao](https://github.com/davidzhao))
+
+- fix(openai): pass NotGiven to OpenAI when instructions are omitted - [#1834](https://github.com/livekit/agents/pull/1834) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.2
+
+### Patch Changes
+
+- fix: openai stt error when using detect language - [#1755](https://github.com/livekit/agents/pull/1755) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.12.1
+
+### Patch Changes
+
+- expose turn_detection options with openai STT - [#1726](https://github.com/livekit/agents/pull/1726) ([@davidzhao](https://github.com/davidzhao))
+
+- feat(OpenAI STT): add support for semantic_vad - [#1707](https://github.com/livekit/agents/pull/1707) ([@chasemcdo](https://github.com/chasemcdo))
+
+## 0.12.0
+
+### Minor Changes
+
+- support for streaming STT, new STT/TTS models - [#1701](https://github.com/livekit/agents/pull/1701) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- openai new STT model and voices - [#1691](https://github.com/livekit/agents/pull/1691) ([@lundin](https://github.com/lundin))
+
+- Make azure and openai take a timeout optionally. Also update the default timeout for Azure OpenAI to 5s from 10 minutes. - [#1674](https://github.com/livekit/agents/pull/1674) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.11.3
+
+### Patch Changes
+
+- Support more input transcription parameters for openai realtime - [#1637](https://github.com/livekit/agents/pull/1637) ([@adambenali](https://github.com/adambenali))
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.11.2
+
+### Patch Changes
+
+- version bump to 0.11.1 - [#1640](https://github.com/livekit/agents/pull/1640) ([@davidzhao](https://github.com/davidzhao))
+
+## 1.0.1
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+- fix multimodal agent interrupts itself when creating function call response - [#1585](https://github.com/livekit/agents/pull/1585) ([@longcw](https://github.com/longcw))
+
+- feat: add max_tokens option to LLM and LLMStream classes - [#1576](https://github.com/livekit/agents/pull/1576) ([@davidzhao](https://github.com/davidzhao))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
+## 1.0.0
+
+### Major Changes
+
+- feat: add max_tokens option to LLM and LLMStream classes - [#1545](https://github.com/livekit/agents/pull/1545) ([@dorlanpabon](https://github.com/dorlanpabon))
+
+## 0.11.0
+
+### Minor Changes
+
+- openai tts: switch to using Opus encoding - [#1494](https://github.com/livekit/agents/pull/1494) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.10.19
+
+### Patch Changes
+
+- fix: [openai] only send params when set - [#1474](https://github.com/livekit/agents/pull/1474) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix response create for openai realtime model - [#1469](https://github.com/livekit/agents/pull/1469) ([@longcw](https://github.com/longcw))
+
+## 0.10.18
+
+### Patch Changes
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.17
+
+### Patch Changes
+
+- gemini-realtime: fix input audio sample rate - [#1411](https://github.com/livekit/agents/pull/1411) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.16
+
+### Patch Changes
+
+- add generate_reply api for multimodal agent - [#1359](https://github.com/livekit/agents/pull/1359) ([@longcw](https://github.com/longcw))
+
+## 0.10.15
+
+### Patch Changes
+
+- support disabling server VAD for OpenAI realtime model - [#1347](https://github.com/livekit/agents/pull/1347) ([@longcw](https://github.com/longcw))
+
+## 0.10.14
+
+### Patch Changes
+
+- fix: revert from weakset to list in multimodal for maintaining sessions - [#1326](https://github.com/livekit/agents/pull/1326) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.13
+
+### Patch Changes
+
+- improved handling of LLM errors, do not retry if already began - [#1298](https://github.com/livekit/agents/pull/1298) ([@davidzhao](https://github.com/davidzhao))
+
+- make multimodal class generic and support gemini live api - [#1240](https://github.com/livekit/agents/pull/1240) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.12
+
+### Patch Changes
+
+- fix unknown `metadata` & `store` fields on OpenAI-like API - [#1276](https://github.com/livekit/agents/pull/1276) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.10.11
+
+### Patch Changes
+
+- Moved create_ai_function_info to function_context.py for better reusability and reduce repetation - [#1260](https://github.com/livekit/agents/pull/1260) ([@jayeshp19](https://github.com/jayeshp19))
+
+- add on_duplicate option for multimodal agent response create - [#1204](https://github.com/livekit/agents/pull/1204) ([@longcw](https://github.com/longcw))
+
+- Add support for OpenAI's "detail" parameter to ChatImage - [#1213](https://github.com/livekit/agents/pull/1213) ([@bcherry](https://github.com/bcherry))
+
+  Add support for data URLs on ChatImage in the Anthropic plugin.
+
+- filter out empty message for set chat ctx in realtime model - [#1245](https://github.com/livekit/agents/pull/1245) ([@longcw](https://github.com/longcw))
+
+- fix: correctly parse function argument types - [#1221](https://github.com/livekit/agents/pull/1221) ([@jayeshp19](https://github.com/jayeshp19))
+
+- add session_updated event for RealtimeSession - [#1253](https://github.com/livekit/agents/pull/1253) ([@longcw](https://github.com/longcw))
+
+- added llama 3.3 70b to model definitions - [#1233](https://github.com/livekit/agents/pull/1233) ([@davidzhao](https://github.com/davidzhao))
+
+- update default realtime model to gpt-4o-realtime-preview-2024-12-17 - [#1250](https://github.com/livekit/agents/pull/1250) ([@davidzhao](https://github.com/davidzhao))
+
+- Fix center_aspect_fit bug, add scale_aspect_fit and scale_aspect_fill resizing options. - [#1222](https://github.com/livekit/agents/pull/1222) ([@bcherry](https://github.com/bcherry))
+
+  Make scale_aspect_fit the new default resizing option for video frames.
+
+## 0.10.10
+
+### Patch Changes
+
+- add `google/gemini-2.0-flash-exp` as default model for vertex - [#1214](https://github.com/livekit/agents/pull/1214) ([@jayeshp19](https://github.com/jayeshp19))
+
+- emit error event for realtime model - [#1200](https://github.com/livekit/agents/pull/1200) ([@longcw](https://github.com/longcw))
+
+- fix: return structured output from func calls - [#1187](https://github.com/livekit/agents/pull/1187) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Handle optional func args in tool calls when set to `None` - [#1211](https://github.com/livekit/agents/pull/1211) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix: openai llm retries - [#1196](https://github.com/livekit/agents/pull/1196) ([@theomonnom](https://github.com/theomonnom))
+
+- Improvements to end of turn plugin, ensure STT language settings. - [#1195](https://github.com/livekit/agents/pull/1195) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: Handle optional func args in tool calls when set to `None` - [#1211](https://github.com/livekit/agents/pull/1211) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.9
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.10.8
+
+### Patch Changes
+
+- fix uncatched OAI errors - [#1158](https://github.com/livekit/agents/pull/1158) ([@theomonnom](https://github.com/theomonnom))
+
+- feat: stt retry & stt.FallbackAdapter - [#1114](https://github.com/livekit/agents/pull/1114) ([@theomonnom](https://github.com/theomonnom))
+
+- project id fix for google - [#1115](https://github.com/livekit/agents/pull/1115) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Add retries to recover from text mode to audio model for realtime API - [#1121](https://github.com/livekit/agents/pull/1121) ([@longcw](https://github.com/longcw))
+
+- Support for Python 3.13, relaxed Pillow version requirement for 10.x - [#1127](https://github.com/livekit/agents/pull/1127) ([@davidzhao](https://github.com/davidzhao))
+
+- support for custom tool use in LLMs - [#1102](https://github.com/livekit/agents/pull/1102) ([@jayeshp19](https://github.com/jayeshp19))
+
+- feat: tts retry & tts.FallbackAdapter - [#1074](https://github.com/livekit/agents/pull/1074) ([@theomonnom](https://github.com/theomonnom))
+
+- Add new OpenAI realtime voices - [#1116](https://github.com/livekit/agents/pull/1116) ([@bcherry](https://github.com/bcherry))
+
+- Expose multimodal agent metrics - [#1080](https://github.com/livekit/agents/pull/1080) ([@longcw](https://github.com/longcw))
+
+- feat: llm retry & llm.FallbackAdapter - [#1132](https://github.com/livekit/agents/pull/1132) ([@theomonnom](https://github.com/theomonnom))
+
+- vertex ai support with openai library - [#1084](https://github.com/livekit/agents/pull/1084) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.7
+
+### Patch Changes
+
+- fix realtime API audio format values - [#1092](https://github.com/livekit/agents/pull/1092) ([@longcw](https://github.com/longcw))
+
+- make ConversationItem.create and delete return a Future in Realtime model - [#1085](https://github.com/livekit/agents/pull/1085) ([@longcw](https://github.com/longcw))
+
+## 0.10.6
+
+### Patch Changes
+
+- Expose usage metrics for Realtime model - [#1036](https://github.com/livekit/agents/pull/1036) ([@yuyuma](https://github.com/yuyuma))
+
+- sync the Realtime API converstation items and add set_chat_ctx - [#1015](https://github.com/livekit/agents/pull/1015) ([@longcw](https://github.com/longcw))
+
+## 0.10.5
+
+### Patch Changes
+
+- fix: Azure realtime model does not accept null for max_response_output_tokens - [#927](https://github.com/livekit/agents/pull/927) ([@davidzhao](https://github.com/davidzhao))
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- Groq integration with Whisper-compatible STT endpoints - [#986](https://github.com/livekit/agents/pull/986) ([@jayeshp19](https://github.com/jayeshp19))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- openai: fix low timeouts - [#926](https://github.com/livekit/agents/pull/926) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.10.4
 
 ### Patch Changes

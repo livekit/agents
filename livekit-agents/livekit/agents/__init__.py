@@ -16,6 +16,7 @@ from . import (
     cli,
     ipc,
     llm,
+    metrics,
     multimodal,
     pipeline,
     stt,
@@ -26,11 +27,24 @@ from . import (
     vad,
     voice_assistant,
 )
-from ._constants import ATTRIBUTE_AGENT_STATE
-from ._exceptions import AssignmentTimeoutError
-from ._types import AgentState
+from ._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    AssignmentTimeoutError,
+)
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
 from .plugin import Plugin
+from .types import (
+    ATTRIBUTE_AGENT_STATE,
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    AgentState,
+    APIConnectOptions,
+    NotGiven,
+    NotGivenOr,
+)
 from .version import __version__
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
@@ -54,14 +68,24 @@ __all__ = [
     "tts",
     "tokenize",
     "llm",
+    "metrics",
     "transcription",
     "pipeline",
     "multimodal",
     "voice_assistant",
     "cli",
     "AssignmentTimeoutError",
+    "APIConnectionError",
+    "APIError",
+    "APIStatusError",
+    "APITimeoutError",
     "ATTRIBUTE_AGENT_STATE",
+    "APIConnectOptions",
+    "DEFAULT_API_CONNECT_OPTIONS",
     "AgentState",
+    "NotGiven",
+    "NOT_GIVEN",
+    "NotGivenOr",
 ]
 
 # Cleanup docs of unexported modules

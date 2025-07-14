@@ -1,2 +1,5 @@
 long.mp3 filter=lfs diff=lfs merge=lfs -text
 change-sophie.wav filter=lfs diff=lfs merge=lfs -text
+change-sophie.opus filter=lfs diff=lfs merge=lfs -text
+hearts.rgba filter=lfs diff=lfs merge=lfs -text
+hearts.jpg filter=lfs diff=lfs merge=lfs -text

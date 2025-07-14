@@ -48,26 +48,23 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1",
-        "livekit>=0.17.5",
-        "livekit-api~=0.6",
-        "livekit-protocol~=0.6",
+        "livekit>=1.0.8,<2",
+        "livekit-api>=1.0.2,<2",
+        "livekit-protocol>=1.0.3,<2",
         "protobuf>=3",
         "pyjwt>=2.0.0",
         "types-protobuf>=4,<5",
-        "watchfiles~=0.22",
-        "psutil~=5.9",
-        "aiohttp~=3.10",
-        "typing-extensions~=4.12",
+        "watchfiles>=0.22",
+        "psutil>=5.9",
+        "aiohttp>=3.10",
+        "typing-extensions>=4.12",
     ],
     extras_require={
         ':sys_platform=="win32"': [
             "colorama"
         ],  # fix logs color on windows (devmode only)
-        ':sys_platform!="win32"': [
-            "aiodns~=3.2"
-        ],  # use default aiohttp resolver on windows
-        "codecs": ["av>=11.0.0"],
-        "images": ["pillow~=10.3.0"],
+        "codecs": ["av>=12.0.0", "numpy>=1.26.0"],
+        "images": ["pillow>=10.3.0"],
     },
     package_data={"livekit.agents": ["py.typed"]},
     project_urls={

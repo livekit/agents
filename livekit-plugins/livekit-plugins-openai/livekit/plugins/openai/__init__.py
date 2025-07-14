@@ -16,7 +16,7 @@
 from . import beta, realtime
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
-from .models import TTSModels, TTSVoices, WhisperModels
+from .models import STTModels, TTSModels, TTSVoices
 from .stt import STT
 from .tts import TTS
 from .version import __version__
@@ -26,7 +26,7 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
-    "WhisperModels",
+    "STTModels",
     "beta",
     "TTSModels",
     "TTSVoices",

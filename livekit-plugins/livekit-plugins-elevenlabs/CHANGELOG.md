@@ -1,5 +1,119 @@
 # livekit-plugins-elevenlabs
 
+## 0.8.3
+
+### Patch Changes
+
+- update to livekit python 1.0 - [`32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d`](https://github.com/livekit/agents/commit/32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.8.2
+
+### Patch Changes
+
+- use 22.05khz by default for 11labs - [`a294d28c2af672a47f88f598f9fdb3fb13c39c38`](https://github.com/livekit/agents/commit/a294d28c2af672a47f88f598f9fdb3fb13c39c38) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.8.1
+
+### Patch Changes
+
+- Revert to using 'isFinal' in ElevenLabs for reliable audio packet completion detection - [#1676](https://github.com/livekit/agents/pull/1676) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.8.0
+
+### Minor Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- added a tts.prewarm method to start the connection pool early. - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- deprecated elevenlabs' optimize_stream_latency option - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- increase elevenlabs websocket connection timeout to default 300 seconds - [#1582](https://github.com/livekit/agents/pull/1582) ([@jayeshp19](https://github.com/jayeshp19))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
+- Added speed parameter for voices. - [#1574](https://github.com/livekit/agents/pull/1574) ([@MatthiasGruba](https://github.com/MatthiasGruba))
+
+  E.g.:
+
+  ```python
+  voice = Voice(
+      id="EXAVITQu4vr4xnSDxMaL",
+      name="Bella",
+      category="premade",
+      settings=VoiceSettings(
+          stability=0.71,
+          speed=1.2,
+          similarity_boost=0.5,
+          style=0.0,
+          use_speaker_boost=True,
+      ),
+  )
+
+  ```
+
+## 0.7.14
+
+### Patch Changes
+
+- use connection pool for elevenlabs websocket persistant connection - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
+- remove update options from tts synthesis stream - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.7.13
+
+### Patch Changes
+
+- 11labs: ensure websocket connection is closed properly - [#1468](https://github.com/livekit/agents/pull/1468) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.7.12
+
+### Patch Changes
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.7.11
+
+### Patch Changes
+
+- add latest model by 11labs - [#1396](https://github.com/livekit/agents/pull/1396) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.7.10
+
+### Patch Changes
+
+- Add language param to ElevenLabs TTS update_options - [#1333](https://github.com/livekit/agents/pull/1333) ([@cch41](https://github.com/cch41))
+
+## 0.7.9
+
+### Patch Changes
+
+- fix release - [#1176](https://github.com/livekit/agents/pull/1176) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.8
+
+### Patch Changes
+
+- feat: tts retry & tts.FallbackAdapter - [#1074](https://github.com/livekit/agents/pull/1074) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.7
+
+### Patch Changes
+
+- support language code in ElevenLabs TTS (#985) - [#1029](https://github.com/livekit/agents/pull/1029) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.7.6
+
+### Patch Changes
+
+- add update_options to TTS - [#922](https://github.com/livekit/agents/pull/922) ([@theomonnom](https://github.com/theomonnom))
+
+- pipelineagent: expose timing metrics & api errors wip - [#957](https://github.com/livekit/agents/pull/957) ([@theomonnom](https://github.com/theomonnom))
+
+- expose usage metrics - [#984](https://github.com/livekit/agents/pull/984) ([@theomonnom](https://github.com/theomonnom))
+
 ## 0.7.5
 
 ### Patch Changes
