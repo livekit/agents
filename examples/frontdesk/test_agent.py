@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from livekit.agents import AgentSession, llm, workflows
+from livekit.agents import AgentSession, beta, llm
 from livekit.plugins import openai
 
 from ..calendar_api import AvailableSlot, FakeCalendar
@@ -77,7 +77,7 @@ async def test_slot_scheduling() -> None:
         result.expect.next_event().is_function_call(
             name="schedule_appointment", arguments={"slot_id": slot_id}
         )
-        result.expect.next_event().is_agent_handoff(new_agent_type=workflows.GetEmailAgent)
+        result.expect.next_event().is_agent_handoff(new_agent_type=beta.workflows.GetEmailTask)
         await (
             result.expect.next_event()
             .is_message(role="assistant")

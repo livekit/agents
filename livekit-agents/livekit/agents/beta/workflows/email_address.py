@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
-from ..agent import AgentTask
+from ...voice.agent import AgentTask
 
 if TYPE_CHECKING:
-    from ..agent_session import TurnDetectionMode
+    from ...voice.agent_session import TurnDetectionMode
 
 EMAIL_REGEX = (
     r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
@@ -22,7 +22,7 @@ class GetEmailResult:
     email_address: str
 
 
-class GetEmailAgent(AgentTask[GetEmailResult]):
+class GetEmailTask(AgentTask[GetEmailResult]):
     def __init__(
         self,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
@@ -35,7 +35,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are only a single step in a broader system, responsible solely for capturing the user's email address.\n"
+                "You are only a single step in a broader system, responsible solely for capturing an email address.\n"
                 "Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:\n"
                 "- 'john dot doe at gmail dot com'\n"
                 "- 'susan underscore smith at yahoo dot co dot uk'\n"
