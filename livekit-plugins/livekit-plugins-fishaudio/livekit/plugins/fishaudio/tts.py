@@ -91,7 +91,7 @@ class ChunkedStream(tts.ChunkedStream):
             loop = asyncio.get_running_loop()
 
             def run_tts():
-                return list(self._ws.tts(tts_request, [self.input_text], backend="s1"))
+                return list(self._ws.tts(tts_request, [], backend="s1"))
 
             audio_chunks = await loop.run_in_executor(None, run_tts)
             output_emitter.initialize(
