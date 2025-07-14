@@ -81,6 +81,7 @@ class ChunkedStream(tts.ChunkedStream):
             tts_request = TTSRequest(
                 text=self.input_text,
                 reference_id=self._opts.reference_id,
+                format="wav",
                 temperature=self._opts.temperature,
                 top_p=self._opts.top_p,
             )
