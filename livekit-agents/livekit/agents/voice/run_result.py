@@ -382,7 +382,13 @@ class RunAssert:
         """
         __tracebackhide__ = True
         try:
-            ev = None
+            ev: (
+                ChatMessageAssert
+                | FunctionCallAssert
+                | FunctionCallOutputAssert
+                | AgentHandoffAssert
+                | None
+            ) = None
             if type == "message":
                 ev = self._current_event().is_message(role=role)
             elif type == "function_call":
