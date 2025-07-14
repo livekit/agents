@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from livekit.agents import llm, utils
+from livekit.agents import llm
 
 from ...log import logger
 
@@ -46,14 +46,12 @@ class _TurnTracker:
     def __init__(
         self,
         emit_fn: Callable[[str, Any], None],
-        streams_provider: Callable[
-            [], tuple[utils.aio.Chan[llm.MessageGeneration], utils.aio.Chan[llm.FunctionCall]]
-        ],
+        emit_generation_fn: Callable[[], None],
     ):
         self._emit = emit_fn
         self._turn_idx = 0
         self._curr_turn: _Turn | None = None
-        self._get_streams = streams_provider
+        self._emit_generation_fn = emit_generation_fn
 
     # --------------------------------------------------------
     #  PUBLIC ENTRY POINT
@@ -137,14 +135,7 @@ class _TurnTracker:
     def _maybe_emit_generation_created(self, turn: _Turn) -> None:
         if not turn.ev_generation_sent:
             turn.ev_generation_sent = True
-            msg_stream, fn_stream = self._get_streams()
-            logger.debug("Emitting generation event")
-            generation_ev = llm.GenerationCreatedEvent(
-                message_stream=msg_stream,
-                function_stream=fn_stream,
-                user_initiated=False,
-            )
-            self._emit("generation_created", generation_ev)
+            self._emit_generation_fn()
             turn.phase = _Phase.ASSISTANT_RESPONDING
 
 
