@@ -62,8 +62,10 @@ from .voice import (
     AgentStateChangedEvent,
     AgentTask,
     CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
     RunContext,
@@ -72,7 +74,6 @@ from .voice import (
     UserStateChangedEvent,
     avatar,
     io,
-    workflows,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -119,6 +120,7 @@ __all__ = [
     "ChatMessage",
     "ChatRole",
     "ChatContent",
+    "CloseReason",
     "ErrorEvent",
     "CloseEvent",
     "ConversationItemAddedEvent",
@@ -127,6 +129,7 @@ __all__ = [
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
     "MetricsCollectedEvent",
+    "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
     "StopResponse",
@@ -164,7 +167,6 @@ __all__ = [
     "utils",
     "vad",
     "voice",
-    "workflows",
 ]
 
 # Cleanup docs of unexported modules

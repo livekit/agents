@@ -33,6 +33,8 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: uv run pytest tests/test_agent_session.py
                   tests/test_tts_fallback.py
                   tests/test_stt_fallback.py
@@ -42,6 +44,7 @@ jobs:
                   tests/test_schema_gemini.py
                   tests/test_tokenizer.py
                   tests/test_workflows.py
+                  tests/test_evals.py
                   tests/test_transcription_filter.py
 
   tests:
@@ -72,6 +75,7 @@ jobs:
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
           CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}

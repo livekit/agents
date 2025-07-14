@@ -34,7 +34,7 @@ class _Turn:
     ev_trans_completed: bool = False
     ev_generation_sent: bool = False
 
-    def add_partial_text(self, text: str):
+    def add_partial_text(self, text: str) -> None:
         self.transcript.append(text)
 
     @property
@@ -58,7 +58,7 @@ class _TurnTracker:
     # --------------------------------------------------------
     #  PUBLIC ENTRY POINT
     # --------------------------------------------------------
-    def feed(self, event: dict):
+    def feed(self, event: dict) -> None:
         turn = self._ensure_turn()
         kind = _classify(event)
 
@@ -97,13 +97,13 @@ class _TurnTracker:
             self._curr_turn = _Turn(turn_id=self._turn_idx)
         return self._curr_turn
 
-    def _maybe_emit_input_started(self, turn: _Turn):
+    def _maybe_emit_input_started(self, turn: _Turn) -> None:
         if not turn.ev_input_started:
             turn.ev_input_started = True
             self._emit("input_speech_started", llm.InputSpeechStartedEvent())
             turn.phase = _Phase.USER_SPEAKING
 
-    def _maybe_emit_input_stopped(self, turn: _Turn):
+    def _maybe_emit_input_stopped(self, turn: _Turn) -> None:
         if not turn.ev_input_stopped:
             turn.ev_input_stopped = True
             self._emit(
@@ -111,7 +111,7 @@ class _TurnTracker:
             )
             turn.phase = _Phase.USER_FINISHED
 
-    def _emit_transcript_updated(self, turn: _Turn):
+    def _emit_transcript_updated(self, turn: _Turn) -> None:
         self._emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
@@ -121,7 +121,7 @@ class _TurnTracker:
             ),
         )
 
-    def _maybe_emit_transcript_completed(self, turn: _Turn):
+    def _maybe_emit_transcript_completed(self, turn: _Turn) -> None:
         if not turn.ev_trans_completed:
             turn.ev_trans_completed = True
             self._emit(
@@ -134,7 +134,7 @@ class _TurnTracker:
                 ),
             )
 
-    def _maybe_emit_generation_created(self, turn: _Turn):
+    def _maybe_emit_generation_created(self, turn: _Turn) -> None:
         if not turn.ev_generation_sent:
             turn.ev_generation_sent = True
             msg_stream, fn_stream = self._get_streams()

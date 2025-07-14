@@ -399,11 +399,16 @@ class ChatContext:
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
     @overload
+    def to_provider_format(
+        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
 
     def to_provider_format(
         self,
-        format: Literal["openai", "google", "aws", "anthropic"] | str,
+        format: Literal["openai", "google", "aws", "anthropic", "mistralai"] | str,
         *,
         inject_dummy_user_message: bool = True,
         **kwargs: Any,
@@ -426,6 +431,8 @@ class ChatContext:
             return _provider_format.aws.to_chat_ctx(self, **kwargs)
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
+        elif format == "mistralai":
+            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
@@ -451,6 +458,47 @@ class ChatContext:
     @property
     def readonly(self) -> bool:
         return False
+
+    def is_equivalent(self, other: ChatContext) -> bool:
+        """
+        Return True if `other` has the same sequence of items with matching
+        essential fields (IDs, types, and payload) as this context.
+
+        Comparison rules:
+          - Messages: compares the full `content` list, `role` and `interrupted`.
+          - Function calls: compares `name`, `call_id`, and `arguments`.
+          - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
+
+        Does not consider timestamps or other metadata.
+        """
+        if self is other:
+            return True
+
+        if len(self.items) != len(other.items):
+            return False
+
+        for a, b in zip(self.items, other.items):
+            if a.id != b.id or a.type != b.type:
+                return False
+
+            if a.type == "message" and b.type == "message":
+                if a.role != b.role or a.interrupted != b.interrupted or a.content != b.content:
+                    return False
+
+            elif a.type == "function_call" and b.type == "function_call":
+                if a.name != b.name or a.call_id != b.call_id or a.arguments != b.arguments:
+                    return False
+
+            elif a.type == "function_call_output" and b.type == "function_call_output":
+                if (
+                    a.name != b.name
+                    or a.call_id != b.call_id
+                    or a.output != b.output
+                    or a.is_error != b.is_error
+                ):
+                    return False
+
+        return True
 
 
 class _ReadOnlyChatContext(ChatContext):

@@ -27,10 +27,12 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from ..cli import cli
-from ..debug import tracing
+from ..debug import trace_types, tracer, tracing
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
@@ -255,8 +257,17 @@ class _JobProc:
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
+        @tracer.start_as_current_span("job_entrypoint")
+        async def _traceable_entrypoint(job_ctx: JobContext) -> None:
+            job = job_ctx.job
+            current_span = trace.get_current_span()
+            current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
+            current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
+            current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
+            await self._job_entrypoint_fnc(job_ctx)
+
         job_entry_task = asyncio.create_task(
-            self._job_entrypoint_fnc(self._job_ctx), name="job_user_entrypoint"
+            _traceable_entrypoint(self._job_ctx), name="job_user_entrypoint"
         )
 
         async def _warn_not_connected_task() -> None:
@@ -342,13 +353,7 @@ def thread_main(
             args.user_arguments,
         )
 
-        client = _ProcClient(
-            args.mp_cch,
-            None,
-            job_proc.initialize,
-            job_proc.entrypoint,
-        )
-
+        client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
         client.initialize()
         client.run()
     finally:

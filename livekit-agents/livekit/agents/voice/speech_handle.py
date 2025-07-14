@@ -3,12 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 from .. import llm, utils
-
-if TYPE_CHECKING:
-    pass
 
 
 class SpeechHandle:
@@ -26,6 +23,7 @@ class SpeechHandle:
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
         self._generation_fut = asyncio.Future[None]()
+        self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
 
         # internal tasks used by this generation
@@ -44,11 +42,10 @@ class SpeechHandle:
         self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
-    def create(
-        allow_interruptions: bool = True,
-    ) -> SpeechHandle:
+    def create(allow_interruptions: bool = True) -> SpeechHandle:
         return SpeechHandle(
-            speech_id=utils.shortuuid("speech_"), allow_interruptions=allow_interruptions
+            speech_id=utils.shortuuid("speech_"),
+            allow_interruptions=allow_interruptions,
         )
 
     @property
@@ -66,6 +63,27 @@ class SpeechHandle:
     @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
+
+    @allow_interruptions.setter
+    def allow_interruptions(self, value: bool) -> None:
+        """Allow or disallow interruptions on this SpeechHandle.
+
+        When set to False, the SpeechHandle will no longer accept any incoming
+        interruption requests until re-enabled. If the handle is already
+        interrupted, clearing interruptions is not allowed.
+
+        Args:
+            value (bool): True to allow interruptions, False to disallow.
+
+        Raises:
+            RuntimeError: If attempting to disable interruptions when already interrupted.
+        """
+        if self.interrupted and not value:
+            raise RuntimeError(
+                "Cannot set allow_interruptions to False, the SpeechHandle is already interrupted"
+            )
+
+        self._allow_interruptions = value
 
     @property
     def chat_items(self) -> list[llm.ChatItem]:
@@ -86,6 +104,10 @@ class SpeechHandle:
         if not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
+        self._cancel()
+        return self
+
+    def _cancel(self) -> SpeechHandle:
         if self.done():
             return self
 
@@ -143,6 +165,9 @@ class SpeechHandle:
     async def _wait_for_generation(self) -> None:
         await asyncio.shield(self._generation_fut)
 
+    async def _wait_for_scheduled(self) -> None:
+        await asyncio.shield(self._scheduled_fut)
+
     def _mark_generation_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._generation_fut.set_result(None)
@@ -152,3 +177,7 @@ class SpeechHandle:
             # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
             self._mark_generation_done()
+
+    def _mark_scheduled(self) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._scheduled_fut.set_result(None)

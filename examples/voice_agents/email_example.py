@@ -8,8 +8,8 @@ from livekit.agents import (
     JobContext,
     RunContext,
     WorkerOptions,
+    beta,
     cli,
-    workflows,
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -39,7 +39,7 @@ class MyAgent(Agent):
     async def register_for_event(self, context: RunContext):
         "Start the registration process for the event."
 
-        email_result = await workflows.GetEmailAgent()
+        email_result = await beta.workflows.GetEmailTask()
         email_address = email_result.email_address
 
         logger.info(f"User's email address: {email_address}")

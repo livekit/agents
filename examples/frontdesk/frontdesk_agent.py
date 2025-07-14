@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar
+from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -20,9 +20,9 @@ from livekit.agents import (
     RunContext,
     ToolError,
     WorkerOptions,
+    beta,
     cli,
     function_tool,
-    workflows,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -66,7 +66,7 @@ class FrontDeskAgent(Agent):
         self,
         ctx: RunContext[Userdata],
         slot_id: str,
-    ) -> str:
+    ) -> str | None:
         """
         Schedule an appointment at the given slot.
 
@@ -76,11 +76,21 @@ class FrontDeskAgent(Agent):
         if not (slot := self._slots_map.get(slot_id)):
             raise ToolError(f"error: slot {slot_id} was not found")
 
-        email_result = await workflows.GetEmailAgent(chat_ctx=self.chat_ctx)
+        email_result = await beta.workflows.GetEmailTask(chat_ctx=self.chat_ctx)
 
-        await ctx.userdata.cal.schedule_appointment(
-            start_time=slot.start_time, attendee_email=email_result.email_address
-        )
+        if ctx.speech_handle.interrupted:
+            return
+
+        ctx.disallow_interruptions()
+
+        try:
+            await ctx.userdata.cal.schedule_appointment(
+                start_time=slot.start_time, attendee_email=email_result.email_address
+            )
+        except SlotUnavailableError:
+            # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
+            # Tell the LLM this slot isn't available anymore
+            raise ToolError("This slot isn't available anymore") from None
 
         local = slot.start_time.astimezone(self.tz)
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
