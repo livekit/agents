@@ -20,9 +20,9 @@ from livekit.agents import (
     RunContext,
     ToolError,
     WorkerOptions,
+    beta,
     cli,
     function_tool,
-    workflows,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -76,7 +76,7 @@ class FrontDeskAgent(Agent):
         if not (slot := self._slots_map.get(slot_id)):
             raise ToolError(f"error: slot {slot_id} was not found")
 
-        email_result = await workflows.GetEmailAgent(chat_ctx=self.chat_ctx)
+        email_result = await beta.workflows.GetEmailTask(chat_ctx=self.chat_ctx)
 
         if ctx.speech_handle.interrupted:
             return

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 from .. import llm, utils
 

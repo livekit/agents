@@ -78,4 +78,4 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-        run: uv run pytest examples/${{matrix.example}}/evals/
+        run: uv run pytest examples/${{matrix.example}}/test_agent.py
