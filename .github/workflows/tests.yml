@@ -49,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, resemble, openai, mistralai, rime, speechify, hume, inworld]
+        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, resemble, openai, mistralai, rime, speechify, hume, inworld, fishaudio]
 
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}
@@ -96,6 +96,7 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+          FISHAUDIO_API_KEY: ${{ secrets.FISHAUDIO_API_KEY }}
         working-directory: tests
         run: make test
 
