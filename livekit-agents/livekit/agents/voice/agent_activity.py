@@ -1992,8 +1992,6 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            for tee in tees:
-                await tee.aclose()
 
             if len(message_outputs) > 0:
                 # there should be only one message
@@ -2038,6 +2036,9 @@ class AgentActivity(RecognitionHooks):
 
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)
+
+            for tee in tees:
+                await tee.aclose()
             return
 
         if len(message_outputs) > 0:

@@ -44,4 +44,3 @@ ATTR_END_OF_UTTERANCE_DELAY = "lk.end_of_utterance_delay"
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
-ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
