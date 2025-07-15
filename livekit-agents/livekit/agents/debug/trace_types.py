@@ -1,6 +1,5 @@
 # Import official OpenTelemetry semantic conventions
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
-from opentelemetry.semconv._incubating.attributes import error_attributes
 
 ATTR_SPEECH_ID = "lk.speech_id"
 ATTR_AGENT_LABEL = "lk.agent_label"

@@ -8,7 +8,7 @@ from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOp
 from livekit.agents.debug import set_tracer_provider
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("langfuse-trace-example")
@@ -42,7 +42,7 @@ def setup_langfuse(
     trace_provider = TracerProvider()
     trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     set_tracer_provider(trace_provider)
-    
+
     # Also set the global OpenTelemetry tracer provider for OpenAI instrumentation
     trace.set_tracer_provider(trace_provider)
 
