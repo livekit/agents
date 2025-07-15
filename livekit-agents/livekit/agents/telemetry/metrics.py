@@ -1,4 +1,7 @@
+import os
+
 import prometheus_client
+import psutil
 
 from .. import utils
 
@@ -15,22 +18,19 @@ CHILD_PROC_GAUGE = prometheus_client.Gauge(
     "lk_agents_child_process_count", "Total number of child processes", ["nodename"]
 )
 
-import os
-
-import psutil
 
 CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set_function(
     lambda: len(psutil.Process(os.getpid()).children(recursive=True))
 )
 
 
-def job_started():
+def job_started() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).inc()
 
 
-def job_ended():
+def job_ended() -> None:
     RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).dec()
 
 
-def proc_initialized(*, time_elapsed: float):
+def proc_initialized(*, time_elapsed: float) -> None:
     PROC_INITIALIZE_TIME.labels(nodename=utils.nodename()).observe(time_elapsed)

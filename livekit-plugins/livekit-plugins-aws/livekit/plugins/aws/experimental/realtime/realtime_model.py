@@ -239,6 +239,7 @@ class RealtimeModel(llm.RealtimeModel):
                 turn_detection=True,
                 user_transcription=True,
                 auto_tool_reply_generation=True,
+                audio_output=True,
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
@@ -1232,7 +1233,9 @@ class RealtimeSession(  # noqa: F811
     def interrupt(self) -> None:
         logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
+    def truncate(
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 
     @utils.log_exceptions(logger=logger)

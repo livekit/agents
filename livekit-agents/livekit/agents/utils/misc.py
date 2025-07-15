@@ -24,5 +24,5 @@ def is_given(obj: NotGivenOr[_T]) -> TypeGuard[_T]:
     return not isinstance(obj, NotGiven)
 
 
-def nodename():
+def nodename() -> str:
     return platform.node()
