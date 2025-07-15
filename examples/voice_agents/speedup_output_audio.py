@@ -100,8 +100,6 @@ async def entrypoint(ctx: JobContext):
         "room": ctx.room.name,
         "user_id": "your user_id",
     }
-    await ctx.connect()
-
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         llm=openai.LLM(model="gpt-4o-mini"),

@@ -64,8 +64,6 @@ class RawFunctionAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         # stt=openai.STT(),
         # llm=openai.LLM(),
