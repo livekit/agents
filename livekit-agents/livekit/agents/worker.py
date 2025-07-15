@@ -347,8 +347,17 @@ class Worker(utils.EventEmitter[EventTypes]):
             )
             return web.Response(body=body, content_type="application/json")
 
+        async def inference_health(_: Any) -> web.Response:
+            is_inference_process_running = self._inference_executor.is_inference_process_running()
+            status_code = 200 if is_inference_process_running else 404
+            return web.Response(
+                content_type="application/json",
+                status=status_code
+            )
+
         self._http_server.app.add_routes([web.get("/", health_check)])
         self._http_server.app.add_routes([web.get("/worker", worker)])
+        self._http_server.app.add_routes([web.get("/inference/health", inference_health)])
         self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
 
         self._conn_task: asyncio.Task[None] | None = None
