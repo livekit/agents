@@ -13,8 +13,7 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from .. import debug, llm, stt, tts, utils, vad
-from ..debug import trace_types, tracer
+from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import (
@@ -25,6 +24,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
+from ..telemetry import trace_types, tracer
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -61,11 +61,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-
-
-def log_event(event: str, **kwargs: Any) -> None:
-    debug.Tracing.log_event(event, kwargs)
-
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -718,12 +713,6 @@ class AgentActivity(RecognitionHooks):
             )
             allow_interruptions = NOT_GIVEN
 
-        log_event(
-            "generate_reply",
-            new_message=user_message.text_content if user_message else None,
-            instructions=instructions or None,
-        )
-
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
 
@@ -951,8 +940,6 @@ class AgentActivity(RecognitionHooks):
         self._session._on_error(error)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
-        log_event("input_speech_started")
-
         if self.vad is None:
             self._session._update_user_state("speaking")
 
@@ -966,8 +953,6 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
-        log_event("input_speech_stopped")
-
         if self.vad is None:
             self._session._update_user_state("listening")
 
@@ -978,7 +963,6 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
-        log_event("input_audio_transcription_completed")
         self._session.emit(
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final),
@@ -1058,10 +1042,6 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
-            log_event(
-                "speech interrupted by vad",
-                speech_id=self._current_speech.id,
-            )
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
@@ -1133,10 +1113,6 @@ class AgentActivity(RecognitionHooks):
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
-            log_event(
-                "skipping user input, speech scheduling is paused",
-                user_input=info.new_transcript,
-            )
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
@@ -1193,11 +1169,6 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": info.new_transcript},
                 )
                 return
-
-            log_event(
-                "speech interrupted, new user turn detected",
-                speech_id=self._current_speech.id,
-            )
 
             self._current_speech.interrupt()
             if self._rt_session is not None:
@@ -1439,8 +1410,6 @@ class AgentActivity(RecognitionHooks):
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
-        log_event("generation started", speech_id=speech_handle.id)
-
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
             self._session.output.transcription
@@ -1604,11 +1573,6 @@ class AgentActivity(RecognitionHooks):
                 playback_ev = await audio_output.wait_for_playout()
                 if audio_out is not None and audio_out.first_frame_fut.done():
                     # playback_ev is valid only if the first frame was already played
-                    log_event(
-                        "playout interrupted",
-                        playback_position=playback_ev.playback_position,
-                        speech_id=speech_handle.id,
-                    )
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
                 else:
@@ -1642,7 +1606,6 @@ class AgentActivity(RecognitionHooks):
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
-        log_event("playout completed", speech_id=speech_handle.id)
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await text_tee.aclose()
 
@@ -1655,10 +1618,6 @@ class AgentActivity(RecognitionHooks):
                 logger.warning(
                     "maximum number of function calls steps reached",
                     extra={"speech_id": speech_handle.id},
-                )
-                log_event(
-                    "maximum number of function calls steps reached",
-                    speech_id=speech_handle.id,
                 )
                 return
 
@@ -1788,8 +1747,6 @@ class AgentActivity(RecognitionHooks):
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
-
-        log_event("generation started", speech_id=speech_handle.id, realtime=True)
 
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
@@ -1961,11 +1918,6 @@ class AgentActivity(RecognitionHooks):
                     playback_position = playback_ev.playback_position
                     if audio_out is not None and audio_out.first_frame_fut.done():
                         # playback_ev is valid only if the first frame was already played
-                        log_event(
-                            "playout interrupted",
-                            playback_position=playback_ev.playback_position,
-                            speech_id=speech_handle.id,
-                        )
                         if playback_ev.synchronized_transcript is not None:
                             forwarded_text = playback_ev.synchronized_transcript
                     else:

@@ -15,6 +15,7 @@ from typing import Any
 
 import psutil
 
+from ..telemetry import metrics
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
 from ..utils.aio import duplex_unix
@@ -178,11 +179,13 @@ class SupervisedProc(ABC):
             else:
                 self._initialize_fut.set_result(None)
 
+            elapsed_time = time.perf_counter() - start_time
+            metrics.proc_initialized(time_elapsed=elapsed_time)
             logger.info(
                 "process initialized",
                 extra={
                     **self.logging_extra(),
-                    "elapsed_time": round(time.perf_counter() - start_time, 2),
+                    "elapsed_time": round(elapsed_time, 2),
                 },
             )
         except asyncio.TimeoutError:

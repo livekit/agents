@@ -32,7 +32,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from ..cli import cli
-from ..debug import trace_types, tracer, tracing
+from ..telemetry import trace_types, tracer
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
@@ -46,8 +46,6 @@ from .proto import (
     InitializeRequest,
     ShutdownRequest,
     StartJobRequest,
-    TracingRequest,
-    TracingResponse,
 )
 
 
@@ -181,30 +179,6 @@ class _JobProc:
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
 
-                if isinstance(msg, TracingRequest):
-                    if not self.has_running_job:
-                        logger.warning("tracing request received without running job")
-                        return
-
-                    try:
-                        job_ctx_token = _JobContextVar.set(self._job_ctx)
-                        tracing_tasks = []
-                        for callback in self._job_ctx._tracing_callbacks:
-                            tracing_tasks.append(
-                                asyncio.create_task(callback(), name="job_tracing_callback")
-                            )
-
-                        await asyncio.gather(*tracing_tasks)
-                        _JobContextVar.reset(job_ctx_token)
-                    except Exception:
-                        logger.exception("error while exeuting tracing tasks")
-
-                    await self._client.send(
-                        TracingResponse(
-                            request_id=msg.request_id,
-                            info=tracing.Tracing._get_job_handle(self._job_ctx.job.id)._export(),
-                        )
-                    )
 
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
