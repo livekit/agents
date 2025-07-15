@@ -89,10 +89,10 @@ class DataStreamAudioOutput(AudioOutput):
         # to allow for a clean close
         if self._start_atask is None:
             self._start_atask = asyncio.create_task(self._start_task())
-        else:
-            # TODO(theomonnom): what to do if start takes a while? 
-            # we want to avoid OOM & outdated speech?
-            await asyncio.shield(self._start_atask)
+
+        # TODO(theomonnom): what to do if start takes a while? 
+        # we want to avoid OOM & outdated speech?
+        await asyncio.shield(self._start_atask)
 
         await super().capture_frame(frame)
 
