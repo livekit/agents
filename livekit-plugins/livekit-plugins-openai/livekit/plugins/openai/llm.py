@@ -125,6 +125,22 @@ class LLM(llm.LLM):
 
         self._prewarm_task: asyncio.Task | None = None
 
+    @property
+    def model(self) -> str:
+        """Get the model name for this LLM instance."""
+        return str(self._opts.model)
+    
+    @property
+    def provider(self) -> str:
+        """Get the provider for this LLM instance."""
+        return self._provider_fmt
+    
+    @property
+    def has_opentelemetry_instrumentation(self) -> bool:
+        """Check if this plugin provides OpenTelemetry instrumentation."""
+        # return False
+        return True  # OpenAI plugin now has official OpenTelemetry instrumentation
+
     @staticmethod
     def with_azure(
         *,

@@ -23,6 +23,7 @@ load_dotenv()
 def setup_langfuse(
     host: str | None = None, public_key: str | None = None, secret_key: str | None = None
 ):
+    from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -41,6 +42,9 @@ def setup_langfuse(
     trace_provider = TracerProvider()
     trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     set_tracer_provider(trace_provider)
+    
+    # Also set the global OpenTelemetry tracer provider for OpenAI instrumentation
+    trace.set_tracer_provider(trace_provider)
 
 
 @function_tool
@@ -101,7 +105,7 @@ class Alloy(Agent):
 async def entrypoint(ctx: JobContext):
     setup_langfuse()  # set up the langfuse tracer
 
-    session = AgentSession(vad=silero.VAD.load())
+    session = AgentSession()
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
