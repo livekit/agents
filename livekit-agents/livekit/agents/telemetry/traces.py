@@ -70,7 +70,7 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     for item in chat_ctx.items:
         if item.type == "message" and (event_name := role_to_event.get(item.role)):
             # only support text content for now
-            events.append((event_name, {"content": item.text_content}))
+            events.append((event_name, {"content": item.text_content or ""}))
         elif item.type == "function_call":
             events.append(
                 (

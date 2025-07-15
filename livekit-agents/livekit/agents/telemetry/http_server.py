@@ -12,8 +12,8 @@ from prometheus_client import (
 from .. import utils
 
 
-async def metrics(_request: aiohttp.web_request.Request):
-    def _get_metrics():
+async def metrics(_request: aiohttp.web_request.Request) -> web.Response:
+    def _get_metrics() -> bytes:
         # registry = CollectorRegistry(auto_describe=True)
         # multiprocess.MultiProcessCollector(registry)
         return generate_latest()
