@@ -317,7 +317,8 @@ class Agent:
 
                 wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
 
-            async with wrapped_stt.stream() as stream:
+            conn_options = activity.session.conn_options.stt_conn_options
+            async with wrapped_stt.stream(conn_options=conn_options) as stream:
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
@@ -348,8 +349,9 @@ class Agent:
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
             activity_llm = activity.llm
 
+            conn_options = activity.session.conn_options.llm_conn_options
             async with activity_llm.chat(
-                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice
+                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
             ) as stream:
                 async for chunk in stream:
                     yield chunk
@@ -369,7 +371,8 @@ class Agent:
                     tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
                 )
 
-            async with wrapped_tts.stream() as stream:
+            conn_options = activity.session.conn_options.tts_conn_options
+            async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
                     async for chunk in text:

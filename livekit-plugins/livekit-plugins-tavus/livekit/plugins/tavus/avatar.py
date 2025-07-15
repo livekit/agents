@@ -11,6 +11,7 @@ from livekit.agents import (
     AgentSession,
     APIConnectOptions,
     NotGivenOr,
+    get_job_context,
     utils,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
@@ -40,7 +41,7 @@ class AvatarSession:
     ) -> None:
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
-
+        self.conversation_id: str | None = None
         self._persona_id = persona_id
         self._replica_id = replica_id
         self._api = TavusAPI(
@@ -77,6 +78,17 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
+        try:
+            job_ctx = get_job_context()
+            decoded = job_ctx.decode_token()
+            local_participant_identity = decoded["sub"]
+        except (RuntimeError, KeyError):
+            if not room.isconnected():
+                raise TavusException(
+                    "local participant identity not found in token, and room is not connected"
+                ) from None
+            local_participant_identity = room.local_participant.identity
+
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
@@ -84,22 +96,20 @@ class AvatarSession:
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity})
+            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
             .to_jwt()
         )
 
         logger.debug("starting avatar session")
-        await self._api.create_conversation(
+        self.conversation_id = await self._api.create_conversation(
             persona_id=self._persona_id,
             replica_id=self._replica_id,
             properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
         )
 
-        logger.debug("waiting for avatar agent to join the room")
-        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
-
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
             sample_rate=SAMPLE_RATE,
+            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
         )

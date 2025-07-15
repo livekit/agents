@@ -27,6 +27,7 @@ from livekit.plugins import (
     google,
     groq,
     hume,
+    inworld,
     lmnt,
     neuphonic,
     openai,
@@ -249,6 +250,13 @@ SYNTHESIZE_TTS = [
         },
         id="spitch",
     ),
+    pytest.param(
+        lambda: {
+            "tts": inworld.TTS(),
+            "proxy-upstream": "api.inworld.ai:443",
+        },
+        id="inworld",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -263,11 +271,18 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
     assert all(not event.is_final for event in audio_events[:-1]), (
         "expected all audio events to be non-final"
     )
-    assert all(0.05 < event.frame.duration < 0.25 for event in audio_events[:-1]), (
-        "expected all frames to have a duration between 50ms and 250ms"
-    )
+    # this test is no longer valid because we could flush in the middle of a synthesis
+    # assert all(0.05 < event.frame.duration < 0.25 for event in audio_events[:-2]), (
+    #     f"expected all frames to have a duration between 50ms and 250ms, got {[e.frame.duration for e in audio_events[:-1]]}"  # noqa: E501
+    # )
+    assert 0 < audio_events[-2].frame.duration < 0.25, (
+        f"expected second last frame to not be empty, got {audio_events[-2].frame.duration}"
+    )  # now we flush then end_input, the second last frame might be a non-full frame from flush
+
     assert audio_events[-1].is_final, "expected last audio event to be final"
-    assert 0 < audio_events[-1].frame.duration < 0.25, "expected last frame to not be empty"
+    assert 0 < audio_events[-1].frame.duration < 0.25, (
+        f"expected last frame to not be empty, got {audio_events[-1].frame.duration}"
+    )
 
     first_id = audio_events[0].request_id
     assert first_id, "expected to have a request_id"
@@ -429,12 +444,26 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": playai.TTS(),
+            "proxy-upstream": "api.play.ht:443",
+        },
+        id="playai",
+    ),
+    pytest.param(
+        lambda: {
             "tts": tts.StreamAdapter(
                 tts=openai.TTS(), sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             ),
             "proxy-upstream": "api.openai.com:443",
         },
         id="openai-stream-adapter",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": tts.StreamAdapter(tts=inworld.TTS()),
+            "proxy-upstream": "api.inworld.ai:443",
+        },
+        id="inworld-stream-adapter",
     ),
 ]
 
@@ -598,6 +627,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
     except asyncio.TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
+        print("closing tts_v")
         await tts_v.aclose()
 
 
@@ -661,6 +691,7 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
             f"expected 0 metrics collected events, got {metrics_collected_events.count}"
         )
     finally:
+        print("closing tts_v")
         await tts_v.aclose()
 
 
@@ -760,7 +791,7 @@ async def test_tts_audio_emitter(monkeypatch):
     )
     emitter_nostream.push(pcm_chunk)
     emitter_nostream.push(pcm_chunk)
-    emitter_nostream.flush()  # acts as final
+    emitter_nostream.end_input()  # acts as final
 
     # no end_input needed: flush() already closed in non-streaming
     await emitter_nostream.join()
@@ -916,7 +947,7 @@ async def test_tts_audio_emitter_wav(monkeypatch):
 
     # push one WAV blob, then flush() to mark final
     emitter2.push(wav_bytes)
-    emitter2.flush()
+    emitter2.end_input()
 
     await emitter2.join()
     rx2.close()

@@ -33,7 +33,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
-        self._started_fut = asyncio.Future[None]()
+        self._subscribed_fut = asyncio.Future[None]()
 
         # used to republish track on reconnection
         self._republish_task: asyncio.Task[None] | None = None
@@ -50,10 +50,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 track, self._publish_options
             )
             await self._publication.wait_for_subscription()
+            if not self._subscribed_fut.done():
+                self._subscribed_fut.set_result(None)
+
+    @property
+    def subscribed(self) -> asyncio.Future[None]:
+        return self._subscribed_fut
 
     async def start(self) -> None:
         await self._publish_track()
-        self._started_fut.set_result(None)
         self._room.on("reconnected", self._on_reconnected)
 
     async def aclose(self) -> None:
@@ -66,7 +71,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         await self._audio_source.aclose()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        await self._started_fut
+        await self._subscribed_fut
 
         await super().capture_frame(frame)
 

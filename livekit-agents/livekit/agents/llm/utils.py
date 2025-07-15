@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
+import sys
 import types
 from dataclasses import dataclass
 from typing import (
@@ -36,6 +38,9 @@ from .tool_context import (
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+
+THINK_TAG_START = "<think>"
+THINK_TAG_END = "</think>"
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -277,7 +282,7 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
-    """Create a Pydantic model from a function’s signature. (excluding context types)"""
+    """Create a Pydantic model from a function's signature. (excluding context types)"""
 
     from docstring_parser import parse_from_object
 
@@ -385,7 +390,12 @@ def _is_optional_type(hint: Any) -> bool:
         hint = get_args(hint)[0]
 
     origin = get_origin(hint)
-    return (origin is Union or origin is types.UnionType) and type(None) in get_args(hint)
+
+    is_union = origin is Union
+    if sys.version_info >= (3, 10):
+        is_union = is_union or origin is types.UnionType
+
+    return is_union and type(None) in get_args(hint)
 
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
@@ -394,3 +404,23 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
         key = field.alias if by_alias and field.alias else name
         result[key] = getattr(model, name)
     return result
+
+
+def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str | None:
+    if content is None:
+        return None
+
+    if thinking.is_set():
+        idx = content.find(THINK_TAG_END)
+        if idx >= 0:
+            thinking.clear()
+            content = content[idx + len(THINK_TAG_END) :]
+        else:
+            content = None
+    else:
+        idx = content.find(THINK_TAG_START)
+        if idx >= 0:
+            thinking.set()
+            content = content[idx + len(THINK_TAG_START) :]
+
+    return content

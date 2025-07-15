@@ -205,7 +205,7 @@ class ChunkedStream(ABC):
             try:
                 await self._run(output_emitter)
 
-                output_emitter.flush()
+                output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
@@ -310,7 +310,6 @@ class SynthesizeStream(ABC):
             try:
                 await self._run(output_emitter)
 
-                output_emitter.flush()
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
@@ -630,10 +629,7 @@ class AudioEmitter:
         if self._write_ch.closed:
             return
 
-        if self._streaming:
-            self._write_ch.send_nowait(self._FlushSegment())
-        else:
-            self.end_input()
+        self._write_ch.send_nowait(self._FlushSegment())
 
     def end_input(self) -> None:
         if not self._started:
@@ -675,6 +671,8 @@ class AudioEmitter:
                     return
                 elif segment_ctx.audio_duration > 0:
                     if frame is None:
+                        # NOTE: if end_input called after flush with no new audio frames pushed,
+                        # it will create a 0.01s empty frame to indicate the end of the segment
                         frame = rtc.AudioFrame(
                             data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
                             sample_rate=self._sample_rate,
@@ -818,8 +816,8 @@ class AudioEmitter:
                         if isinstance(data, AudioEmitter._FlushSegment):
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-
                             _flush_frame()
+
                         elif isinstance(data, AudioEmitter._EndSegment):
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
@@ -838,17 +836,18 @@ class AudioEmitter:
                                 format=self._mime_type,
                             )
                             decode_atask = asyncio.create_task(_decode_task())
-
                         audio_decoder.push(data)
-                    elif audio_decoder and decode_atask:
-                        if isinstance(data, AudioEmitter._FlushSegment):
+                    elif decode_atask:
+                        if isinstance(data, AudioEmitter._FlushSegment) and audio_decoder:
                             audio_decoder.end_input()
                             await decode_atask
                             _flush_frame()
+                            audio_decoder = None
 
-                        elif isinstance(data, AudioEmitter._EndSegment):
-                            audio_decoder.end_input()
-                            await decode_atask
+                        elif isinstance(data, AudioEmitter._EndSegment) and segment_ctx:
+                            if audio_decoder:
+                                audio_decoder.end_input()
+                                await decode_atask
                             _emit_frame(is_final=True)
                             dump_segment()
                             audio_decoder = segment_ctx = audio_byte_stream = last_frame = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -10,6 +11,7 @@ from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
+from livekit.agents.utils import hw
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
@@ -32,13 +34,19 @@ class _EUORunnerBase(_InferenceRunner):
 
     def _format_chat_ctx(self, chat_ctx: list[dict[str, Any]]) -> str:
         new_chat_ctx = []
+        last_msg: dict[str, Any] | None = None
         for msg in chat_ctx:
             content = msg["content"]
             if not content:
                 continue
 
-            msg["content"] = content
-            new_chat_ctx.append(msg)
+            # need to combine adjacent turns together to match training data
+            if last_msg and last_msg["role"] == msg["role"]:
+                last_msg["content"] += content
+            else:
+                msg["content"] = content
+                new_chat_ctx.append(msg)
+                last_msg = msg
 
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx,
@@ -65,8 +73,14 @@ class _EUORunnerBase(_InferenceRunner):
                 revision=self._model_revision,
                 local_files_only=True,
             )
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = max(
+                1, math.ceil(hw.get_cpu_monitor().cpu_count()) // 2
+            )
+            sess_options.inter_op_num_threads = 1
+            sess_options.add_session_config_entry("session.dynamic_block_base", "4")
             self._session = ort.InferenceSession(
-                local_path_onnx, providers=["CPUExecutionProvider"]
+                local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
@@ -125,25 +139,27 @@ class EOUModelBase(ABC):
         # if set, overrides the per-language threshold tuned for accuracy.
         # not recommended unless you're confident in the impact.
         unlikely_threshold: float | None = None,
+        load_languages: bool = True,
     ) -> None:
         self._model_type = model_type
         self._executor = inference_executor or get_job_context().inference_executor
-
-        config_fname = _download_from_hf_hub(
-            HG_MODEL,
-            "languages.json",
-            revision=MODEL_REVISIONS[self._model_type],
-            local_files_only=True,
-        )
-        with open(config_fname) as f:
-            self._languages = json.load(f)
-
         self._unlikely_threshold = unlikely_threshold
+        self._languages: dict[str, Any] = {}
+
+        if load_languages:
+            config_fname = _download_from_hf_hub(
+                HG_MODEL,
+                "languages.json",
+                revision=MODEL_REVISIONS[self._model_type],
+                local_files_only=True,
+            )
+            with open(config_fname) as f:
+                self._languages = json.load(f)
 
     @abstractmethod
     def _inference_method(self) -> str: ...
 
-    def unlikely_threshold(self, language: str | None) -> float | None:
+    async def unlikely_threshold(self, language: str | None) -> float | None:
         if language is None:
             return None
 
@@ -165,11 +181,8 @@ class EOUModelBase(ABC):
         else:
             return lang_data["threshold"]  # type: ignore
 
-    def supports_language(self, language: str | None) -> bool:
-        return self.unlikely_threshold(language) is not None
-
-    async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
-        return await self.predict_end_of_turn(chat_ctx)
+    async def supports_language(self, language: str | None) -> bool:
+        return await self.unlikely_threshold(language) is not None
 
     # our EOU model inference should be fast, 3 seconds is more than enough
     async def predict_end_of_turn(

@@ -68,6 +68,7 @@ class AvatarRunner:
             video_queue_size_ms=self._queue_size_ms,
         )
         self._forward_video_atask: asyncio.Task[None] | None = None
+        self._room_connected_fut = asyncio.Future[None]()
 
     @property
     def av_sync(self) -> rtc.AVSynchronizer:
@@ -80,6 +81,11 @@ class AvatarRunner:
         await self._audio_recv.start()
         self._audio_recv.on("clear_buffer", self._on_clear_buffer)
 
+        self._room.on("reconnected", self._on_reconnected)
+        self._room.on("connection_state_changed", self._on_connection_state_changed)
+        if self._room.isconnected():
+            self._room_connected_fut.set_result(None)
+
         if not self._lazy_publish:
             await self._publish_track()
 
@@ -87,10 +93,10 @@ class AvatarRunner:
         self._read_audio_atask = asyncio.create_task(self._read_audio())
         self._forward_video_atask = asyncio.create_task(self._forward_video())
 
-        self._room.on("reconnected", self._on_reconnected)
-
     async def _publish_track(self) -> None:
         async with self._lock:
+            await self._room_connected_fut
+
             audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
             audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
             self._audio_publication = await self._room.local_participant.publish_track(
@@ -167,8 +173,13 @@ class AvatarRunner:
             self._republish_atask.cancel()
         self._republish_atask = asyncio.create_task(self._publish_track())
 
+    def _on_connection_state_changed(self, _: rtc.ConnectionState) -> None:
+        if self._room.isconnected() and not self._room_connected_fut.done():
+            self._room_connected_fut.set_result(None)
+
     async def aclose(self) -> None:
         self._room.off("reconnected", self._on_reconnected)
+        self._room.off("connection_state_changed", self._on_connection_state_changed)
 
         if self._forward_video_atask:
             await aio.cancel_and_wait(self._forward_video_atask)

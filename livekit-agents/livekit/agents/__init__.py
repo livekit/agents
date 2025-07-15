@@ -61,8 +61,10 @@ from .voice import (
     AgentSession,
     AgentStateChangedEvent,
     CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
     RunContext,
@@ -72,7 +74,7 @@ from .voice import (
     avatar,
     io,
 )
-from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import (
     SimulateJobInfo,
@@ -117,6 +119,7 @@ __all__ = [
     "ChatMessage",
     "ChatRole",
     "ChatContent",
+    "CloseReason",
     "ErrorEvent",
     "CloseEvent",
     "ConversationItemAddedEvent",
@@ -125,6 +128,7 @@ __all__ = [
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
     "MetricsCollectedEvent",
+    "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
     "StopResponse",
@@ -148,6 +152,7 @@ __all__ = [
     "BackgroundAudioPlayer",
     "BuiltinAudioClip",
     "AudioConfig",
+    "PlayHandle",
     "SimulateJobInfo",
     "io",
     "avatar",

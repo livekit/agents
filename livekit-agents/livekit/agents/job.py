@@ -25,12 +25,15 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable
 
+import jwt
+
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
+from .cli import cli
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .types import NotGivenOr
+from .types import NOT_GIVEN, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -124,6 +127,9 @@ class JobContext:
         self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
 
+        self._connected = False
+        self._lock = asyncio.Lock()
+
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
 
@@ -152,6 +158,11 @@ class JobContext:
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
+        """Returns an LiveKitAPI for making API calls to LiveKit.
+
+        This property requires LIVEKIT_API_KEY and LIVEKIT_API_SECRET to be set in the environment.
+        If they are passed in WorkerOptions, it would not be able to satisfy this API.
+        """
         return api.LiveKitAPI(session=http_context.http_session())
 
     @property
@@ -263,21 +274,32 @@ class JobContext:
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
         """  # noqa: E501
-        room_options = rtc.RoomOptions(
-            e2ee=e2ee,
-            auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
-            rtc_config=rtc_config,
-        )
+        async with self._lock:
+            if self._connected:
+                return
 
-        await self._room.connect(self._info.url, self._info.token, options=room_options)
-        self._on_connect()
-        for p in self._room.remote_participants.values():
-            self._participant_available(p)
+            room_options = rtc.RoomOptions(
+                e2ee=e2ee,
+                auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
+                rtc_config=rtc_config,
+            )
 
-        _apply_auto_subscribe_opts(self._room, auto_subscribe)
+            await self._room.connect(self._info.url, self._info.token, options=room_options)
+            self._on_connect()
+            for p in self._room.remote_participants.values():
+                self._participant_available(p)
+
+            _apply_auto_subscribe_opts(self._room, auto_subscribe)
+            self._connected = True
 
     def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            logger.warning("job_ctx.delete_room() is not executed while in console mode")
+            fut = asyncio.Future[api.DeleteRoomResponse]()
+            fut.set_result(api.DeleteRoomResponse())
+            return fut
+
         task = asyncio.create_task(
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         )
@@ -307,6 +329,12 @@ class JobContext:
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
+            fut = asyncio.Future[api.SIPParticipantInfo]()
+            fut.set_result(api.SIPParticipantInfo())
+            return fut
+
         task = asyncio.create_task(
             self.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
@@ -344,6 +372,14 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            logger.warning(
+                "job_ctx.transfer_sip_participant() is not executed while in console mode"
+            )
+            fut = asyncio.Future[api.SIPParticipantInfo]()
+            fut.set_result(api.SIPParticipantInfo())
+            return fut
+
         if isinstance(participant, rtc.RemoteParticipant):
             assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
                 "Participant must be a SIP participant"
@@ -405,6 +441,13 @@ class JobContext:
             task.add_done_callback(
                 lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
+
+    def decode_token(self, api_secret: NotGivenOr[str] = NOT_GIVEN) -> dict[str, Any]:
+        options = {}
+        if not is_given(api_secret):
+            options["verify_signature"] = False
+            api_secret = ""
+        return jwt.decode(self._info.token, api_secret, options=options, algorithms=["HS256"])  # type: ignore
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

@@ -199,6 +199,7 @@ class LLM(llm.LLM):
             messages=messages,
             model=self._opts.model,
             stream=True,
+            timeout=conn_options.timeout,
             **extra,
         )
 

@@ -111,6 +111,7 @@ class ChatMessage(BaseModel):
     role: ChatRole
     content: list[ChatContent]
     interrupted: bool = False
+    transcript_confidence: float | None = None
     hash: bytes | None = None
     created_at: float = Field(default_factory=time.time)
 
@@ -201,7 +202,7 @@ class ChatContext:
 
     def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
         """Insert an item or list of items into the chat context by creation time."""
-        items = item if isinstance(item, list) else [item]
+        items = list(item) if isinstance(item, Sequence) else [item]
 
         for _item in items:
             idx = self.find_insertion_index(created_at=_item.created_at)
@@ -356,11 +357,16 @@ class ChatContext:
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
     @overload
+    def to_provider_format(
+        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
 
     def to_provider_format(
         self,
-        format: Literal["openai", "google", "aws", "anthropic"] | str,
+        format: Literal["openai", "google", "aws", "anthropic", "mistralai"] | str,
         *,
         inject_dummy_user_message: bool = True,
         **kwargs: Any,
@@ -383,6 +389,8 @@ class ChatContext:
             return _provider_format.aws.to_chat_ctx(self, **kwargs)
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
+        elif format == "mistralai":
+            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
