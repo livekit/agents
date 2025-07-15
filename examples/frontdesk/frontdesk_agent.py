@@ -153,9 +153,7 @@ class FrontDeskAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
-    timezone = "utc"
+    timezone = "UTC"
 
     if cal_api_key := os.getenv("CAL_API_KEY", None):
         logger.info("CAL_API_KEY detected, using cal.com calendar")
