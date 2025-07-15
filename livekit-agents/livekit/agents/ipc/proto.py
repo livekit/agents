@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import io
-import pickle
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from livekit.protocol import agent
 

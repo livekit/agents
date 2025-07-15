@@ -12,8 +12,8 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
-from ..telemetry import trace_types, tracer
 from ..log import logger
+from ..telemetry import trace_types, tracer
 from ..utils import aio
 from . import io
 from .agent import ModelSettings

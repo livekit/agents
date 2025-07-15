@@ -32,9 +32,9 @@ from opentelemetry import trace
 from livekit import rtc
 
 from ..cli import cli
-from ..telemetry import trace_types, tracer
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
+from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -178,7 +178,6 @@ class _JobProc:
 
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
-
 
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 

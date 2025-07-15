@@ -16,9 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 
 from .._exceptions import APIError
-from ..telemetry import trace_types, tracer
 from ..log import logger
 from ..metrics import TTSMetrics
+from ..telemetry import trace_types, tracer
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio, audio, codecs, log_exceptions
 

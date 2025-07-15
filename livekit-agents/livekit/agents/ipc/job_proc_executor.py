@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import multiprocessing as mp
 import socket
 from collections.abc import Awaitable
 from multiprocessing.context import BaseContext
 from typing import Any, Callable
 
-from ..telemetry import metrics
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
+from ..telemetry import metrics
 from ..utils import aio, log_exceptions, shortuuid
 from . import channel, proto
 from .inference_executor import InferenceExecutor

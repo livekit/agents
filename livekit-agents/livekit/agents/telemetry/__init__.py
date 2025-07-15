@@ -1,4 +1,4 @@
-from . import http_server, trace_types, metrics
+from . import http_server, metrics, trace_types
 from .traces import set_tracer_provider, tracer
 
 __all__ = [

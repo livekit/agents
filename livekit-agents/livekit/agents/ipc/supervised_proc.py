@@ -15,8 +15,8 @@ from typing import Any
 
 import psutil
 
-from ..telemetry import metrics
 from ..log import logger
+from ..telemetry import metrics
 from ..utils import aio, log_exceptions, time_ms
 from ..utils.aio import duplex_unix
 from . import channel, proto

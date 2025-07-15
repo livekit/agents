@@ -23,10 +23,10 @@ from livekit import rtc
 
 from .. import llm, stt, tts, utils, vad
 from ..cli import cli
-from ..telemetry import trace_types, tracer
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
+from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

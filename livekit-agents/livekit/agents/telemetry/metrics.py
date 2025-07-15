@@ -15,7 +15,10 @@ CHILD_PROC_GAUGE = prometheus_client.Gauge(
     "lk_agents_child_processes", "Total number of child processes", ["nodename"]
 )
 
-import psutil, os
+import os
+
+import psutil
+
 CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set_function(
     lambda: len(psutil.Process(os.getpid()).children(recursive=True))
 )

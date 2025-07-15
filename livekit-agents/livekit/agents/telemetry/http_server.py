@@ -6,9 +6,7 @@ import aiohttp.web_request
 from aiohttp import web
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
-    CollectorRegistry,
     generate_latest,
-    multiprocess,
 )
 
 from .. import utils

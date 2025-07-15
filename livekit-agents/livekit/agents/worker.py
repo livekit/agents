@@ -32,7 +32,6 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
-import psutil
 from aiohttp import web
 
 from livekit import api, rtc
