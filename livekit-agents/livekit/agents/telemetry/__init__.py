@@ -1,13 +1,11 @@
-from . import trace_types
-from .otel_trace import set_tracer_provider, tracer
-from .tracing import Tracing, TracingGraph, TracingHandle
+from . import http_server, metrics, trace_types
+from .traces import set_tracer_provider, tracer
 
 __all__ = [
-    "Tracing",
-    "TracingGraph",
-    "TracingHandle",
     "tracer",
+    "metrics",
     "trace_types",
+    "http_server",
     "set_tracer_provider",
 ]
 

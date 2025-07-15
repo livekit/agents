@@ -24,7 +24,6 @@ import multiprocessing as mp
 import os
 import sys
 import threading
-import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -38,9 +37,8 @@ from aiohttp import web
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
-from . import http_server, ipc, utils
+from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError
-from .debug import tracing
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -53,7 +51,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .types import NOT_GIVEN, NotGivenOr
-from .utils import is_given
+from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -226,6 +224,8 @@ class WorkerOptions:
 
     By default it uses "spawn" on all platforms, but "forkserver" on Linux.
     """
+    prometheus_port: NotGivenOr[int] = NOT_GIVEN
+    """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
@@ -348,41 +348,17 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         self._http_server.app.add_routes([web.get("/", health_check)])
         self._http_server.app.add_routes([web.get("/worker", worker)])
-        self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
+
+        self._prometheus_server: telemetry.http_server.HttpServer | None = None
+        if is_given(self._opts.prometheus_port):
+            self._prometheus_server = telemetry.http_server.HttpServer(
+                opts.host, self._opts.prometheus_port, loop=self._loop
+            )
 
         self._conn_task: asyncio.Task[None] | None = None
         self._load_task: asyncio.Task[None] | None = None
 
         self._worker_load: float = 0.0
-        self._worker_load_graph = tracing.Tracing.add_graph(
-            title="worker_load",
-            x_label="time",
-            y_label="load",
-            x_type="time",
-            y_range=(0, 1),
-            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
-        )
-
-        default_num_idle_processes = _WorkerEnvOption.getvalue(
-            self._opts.num_idle_processes, self._devmode
-        )
-        self._num_idle_target_graph = tracing.Tracing.add_graph(
-            title="num_idle_processes_target",
-            x_label="time",
-            y_label="target",
-            x_type="time",
-            y_range=(0, default_num_idle_processes),
-            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
-        )
-
-        self._num_idle_process_graph = tracing.Tracing.add_graph(
-            title="num_idle_processes",
-            x_label="time",
-            y_label="idle",
-            x_type="time",
-            y_range=(0, default_num_idle_processes),
-            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
-        )
 
     @property
     def worker_info(self) -> WorkerInfo:
@@ -415,6 +391,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             t.add_done_callback(self._tasks.discard)
 
         await self._http_server.start()
+
+        if self._prometheus_server:
+            await self._prometheus_server.start()
 
         self._proc_pool.on("process_started", _update_job_status)
         self._proc_pool.on("process_closed", _update_job_status)
@@ -461,12 +440,6 @@ class Worker(utils.EventEmitter[EventTypes]):
                             self._proc_pool.set_target_idle_processes(available_job)
                     else:
                         self._proc_pool.set_target_idle_processes(default_num_idle_processes)
-
-                self._num_idle_target_graph.plot(time.time(), self._proc_pool.target_idle_processes)
-                self._num_idle_process_graph.plot(
-                    time.time(), self._proc_pool._warmed_proc_queue.qsize()
-                )
-                self._worker_load_graph.plot(time.time(), self._worker_load)
 
         tasks = []
         self._load_task = asyncio.create_task(_load_task(), name="load_task")
@@ -602,6 +575,10 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await self._http_session.close()
         await self._http_server.aclose()
+
+        if self._prometheus_server:
+            await self._prometheus_server.aclose()
+
         await self._api.aclose()  # type: ignore
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -924,6 +901,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _update_worker_status(self) -> None:
         job_cnt = len(self.active_jobs)
+
         if self._draining:
             update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)
             msg = agent.WorkerMessage(update_worker=update)

@@ -5,8 +5,8 @@ import os
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, metrics
-from livekit.agents.debug import set_tracer_provider
 from livekit.agents.llm import function_tool
+from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -42,9 +42,9 @@ def setup_langfuse(
     trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     set_tracer_provider(trace_provider)
 
-    # (optional) use OpenAI OpenTelemetry instrumentation
-    # NOTE: This is not needed, the `llm_request` span already contains the trace for LLM calls.
-    # To install the dependency, run `pip install opentelemetry-instrumentation-openai` or `pip install opentelemetry-instrumentation-openai-v2`  # noqa: E501
+    # (optional) enable OpenAI OpenTelemetry instrumentation
+    # install deps: `pip install opentelemetry-instrumentation-openai` or `pip install opentelemetry-instrumentation-openai-v2`  # noqa: E501
+    # NOTE: This is not really needed, the `llm_request` span contains the trace for LLM calls.
 
     # from opentelemetry import trace
     # from opentelemetry.instrumentation.openai import OpenAIInstrumentor

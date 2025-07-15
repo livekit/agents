@@ -21,12 +21,12 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import debug, llm, stt, tts, utils, vad
+from .. import llm, stt, tts, utils, vad
 from ..cli import cli
-from ..debug import trace_types, tracer
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
+from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -39,7 +39,6 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
-    AgentEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -474,7 +473,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
 
                 if not self._job_context_cb_registered:
-                    job_ctx.add_tracing_callback(self._trace_chat_ctx)
                     job_ctx.add_shutdown_callback(
                         lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
                     )
@@ -513,14 +511,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         self._set_user_away_timer()
 
                 self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
-
-    async def _trace_chat_ctx(self) -> None:
-        if self._activity is None:
-            return  # can happen at startup
-
-        chat_ctx = self._activity.agent.chat_ctx
-        debug.Tracing.store_kv("chat_ctx", chat_ctx.to_dict(exclude_function_call=False))
-        debug.Tracing.store_kv("history", self.history.to_dict(exclude_function_call=False))
 
     async def drain(self) -> None:
         if self._activity is None:
@@ -611,13 +601,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
-
-    def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
-        # don't log VAD metrics as they are too verbose
-        if ev.type != "metrics_collected" or ev.metrics.type != "vad_metrics":
-            debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
-
-        return super().emit(event, ev)
 
     def update_options(self) -> None:
         pass

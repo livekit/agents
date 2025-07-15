@@ -17,10 +17,10 @@ from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
-from ..debug import trace_types, tracer
-from ..debug.otel_trace import _chat_ctx_to_otel_events
 from ..log import logger
 from ..metrics import LLMMetrics
+from ..telemetry import trace_types, tracer
+from ..telemetry.traces import _chat_ctx_to_otel_events
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

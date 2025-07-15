@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import json
 from collections.abc import Iterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import Attributes
+
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -56,7 +59,7 @@ def set_tracer_provider(tracer_provider: TracerProvider) -> None:
     tracer.set_provider(tracer_provider)
 
 
-def _chat_ctx_to_otel_events(chat_ctx: "ChatContext") -> list[tuple[str, Attributes]]:
+def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
     role_to_event = {
         "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
         "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
