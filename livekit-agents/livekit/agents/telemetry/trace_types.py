@@ -44,3 +44,19 @@ ATTR_END_OF_UTTERANCE_DELAY = "lk.end_of_utterance_delay"
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
+
+# OpenTelemetry GenAI attributes
+ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+
+# OpenTelemetry GenAI event names (for structured logging)
+EVENT_GEN_AI_SYSTEM_MESSAGE = "gen_ai.system.message"
+EVENT_GEN_AI_USER_MESSAGE = "gen_ai.user.message"
+EVENT_GEN_AI_ASSISTANT_MESSAGE = "gen_ai.assistant.message"
+EVENT_GEN_AI_TOOL_MESSAGE = "gen_ai.tool.message"
+EVENT_GEN_AI_CHOICE = "gen_ai.choice"
+
+# Platform-specific attributes
+ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"

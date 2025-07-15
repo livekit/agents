@@ -125,6 +125,11 @@ class LLM(llm.LLM):
 
         self._prewarm_task: asyncio.Task | None = None
 
+    @property
+    def model(self) -> str:
+        """Get the model name for this LLM instance."""
+        return str(self._opts.model)
+
     @staticmethod
     def with_azure(
         *,
