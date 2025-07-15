@@ -8,7 +8,7 @@ from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOp
 from livekit.agents.debug import set_tracer_provider
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai
+from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("langfuse-trace-example")
@@ -23,7 +23,6 @@ load_dotenv()
 def setup_langfuse(
     host: str | None = None, public_key: str | None = None, secret_key: str | None = None
 ):
-    from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -43,8 +42,16 @@ def setup_langfuse(
     trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     set_tracer_provider(trace_provider)
 
-    # Also set the global OpenTelemetry tracer provider for OpenAI instrumentation
-    trace.set_tracer_provider(trace_provider)
+    # (optional) use OpenAI OpenTelemetry instrumentation
+    # NOTE: This is not needed, the `llm_request` span already contains the trace for LLM calls.
+    # To install the dependency, run `pip install opentelemetry-instrumentation-openai` or `pip install opentelemetry-instrumentation-openai-v2`  # noqa: E501
+
+    # from opentelemetry import trace
+    # from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+
+    # trace.set_tracer_provider(trace_provider)  # set the global tracer provider
+    # instrumentor = OpenAIInstrumentor()
+    # instrumentor.instrument()
 
 
 @function_tool
@@ -105,7 +112,7 @@ class Alloy(Agent):
 async def entrypoint(ctx: JobContext):
     setup_langfuse()  # set up the langfuse tracer
 
-    session = AgentSession()
+    session = AgentSession(vad=silero.VAD.load())
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):

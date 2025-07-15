@@ -1,6 +1,3 @@
-# Import official OpenTelemetry semantic conventions
-from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
-
 ATTR_SPEECH_ID = "lk.speech_id"
 ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
@@ -48,23 +45,11 @@ ATTR_END_OF_UTTERANCE_DELAY = "lk.end_of_utterance_delay"
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
 
-# OpenTelemetry GenAI attributes - use only for direct LLM model interactions
-ATTR_GEN_AI_REQUEST_MODEL = gen_ai_attributes.GEN_AI_REQUEST_MODEL
-ATTR_GEN_AI_SYSTEM = gen_ai_attributes.GEN_AI_SYSTEM
-ATTR_GEN_AI_OPERATION_NAME = gen_ai_attributes.GEN_AI_OPERATION_NAME
-ATTR_GEN_AI_RESPONSE_ID = gen_ai_attributes.GEN_AI_RESPONSE_ID
-ATTR_GEN_AI_RESPONSE_MODEL = gen_ai_attributes.GEN_AI_RESPONSE_MODEL
-ATTR_GEN_AI_USAGE_INPUT_TOKENS = gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS
-ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS
-
-# OpenLLMetry standard attributes
-ATTR_LLM_USAGE_TOTAL_TOKENS = "llm.usage.total_tokens"
-ATTR_LLM_IS_STREAMING = "llm.is_streaming"
-
-# OpenLLMetry standard attributes - function/tool requests
-ATTR_LLM_REQUEST_FUNCTIONS_NAME = "llm.request.functions.{}.name"
-ATTR_LLM_REQUEST_FUNCTIONS_DESCRIPTION = "llm.request.functions.{}.description"
-ATTR_LLM_REQUEST_FUNCTIONS_PARAMETERS = "llm.request.functions.{}.parameters"
+# OpenTelemetry GenAI attributes
+ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 
 # OpenTelemetry GenAI event names (for structured logging)
 EVENT_GEN_AI_SYSTEM_MESSAGE = "gen_ai.system.message"

@@ -54,17 +54,6 @@ class OpenAIPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
-        # Initialize OpenAI OpenTelemetry instrumentation
-        try:
-            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-
-            instrumentor = OpenAIInstrumentor()
-            instrumentor.instrument()
-        except ImportError as e:
-            logger.warning("OpenAI OpenTelemetry instrumentation not available", exc_info=e)
-        except Exception as e:
-            logger.warning("Failed to initialize OpenAI OpenTelemetry instrumentation", exc_info=e)
-
 
 Plugin.register_plugin(OpenAIPlugin())
 

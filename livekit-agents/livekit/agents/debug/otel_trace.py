@@ -1,10 +1,16 @@
+import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
+from opentelemetry.util.types import Attributes
+from . import trace_types
+
+if TYPE_CHECKING:
+    from livekit.agents.llm import ChatContext
 
 
 class _DynamicTracer(Tracer):
@@ -48,3 +54,43 @@ tracer: Tracer = _DynamicTracer("livekit-agents")
 def set_tracer_provider(tracer_provider: TracerProvider) -> None:
     assert isinstance(tracer, _DynamicTracer)
     tracer.set_provider(tracer_provider)
+
+
+def _chat_ctx_to_otel_events(chat_ctx: "ChatContext") -> list[tuple[str, Attributes]]:
+    role_to_event = {
+        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
+        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+    }
+
+    events: list[tuple[str, Attributes]] = []
+    for item in chat_ctx.items:
+        if item.type == "message" and (event_name := role_to_event.get(item.role)):
+            # only support text content for now
+            events.append((event_name, {"content": item.text_content}))
+        elif item.type == "function_call":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            json.dumps(
+                                {
+                                    "function": {"name": item.name, "arguments": item.arguments},
+                                    "id": item.call_id,
+                                    "type": "function",
+                                }
+                            )
+                        ],
+                    },
+                )
+            )
+        elif item.type == "function_call_output":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
+                    {"content": item.output, "name": item.name, "id": item.call_id},
+                )
+            )
+    return events
