@@ -13,8 +13,7 @@ from pydantic import ValidationError
 
 from livekit import rtc
 
-from .. import debug, llm, utils
-from ..debug import trace_types, tracer
+from .. import llm, utils
 from ..llm import (
     ChatChunk,
     ChatContext,
@@ -28,6 +27,7 @@ from ..llm.tool_context import (
     is_raw_function_tool,
 )
 from ..log import logger
+from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
@@ -567,13 +567,6 @@ async def _execute_tools_task(
                     "speech_id": speech_handle.id,
                 },
             )
-            debug.Tracing.log_event(
-                "waiting for function call to finish before fully cancelling",
-                {
-                    "functions": names,
-                    "speech_id": speech_handle.id,
-                },
-            )
             await asyncio.gather(*tasks)
     finally:
         await utils.aio.cancel_and_wait(*tasks)
@@ -582,10 +575,6 @@ async def _execute_tools_task(
             logger.debug(
                 "tools execution completed",
                 extra={"speech_id": speech_handle.id},
-            )
-            debug.Tracing.log_event(
-                "tools execution completed",
-                {"speech_id": speech_handle.id},
             )
 
 

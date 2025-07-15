@@ -12,8 +12,8 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import llm, stt, utils, vad
-from ..debug import trace_types, tracer, tracing
 from ..log import logger
+from ..telemetry import trace_types, tracer
 from ..utils import aio
 from . import io
 from .agent import ModelSettings
@@ -96,14 +96,6 @@ class AudioRecognition:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._last_language: str | None = None
-        self._vad_graph = tracing.Tracing.add_graph(
-            title="vad",
-            x_label="time",
-            y_label="speech_probability",
-            x_type="time",
-            y_range=(0, 1),
-            max_data_points=int(30 * 30),
-        )
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
@@ -266,14 +258,6 @@ class AudioRecognition:
                 extra={"user_transcript": transcript, "language": self._last_language},
             )
 
-            tracing.Tracing.log_event(
-                "user transcript",
-                {
-                    "transcript": transcript,
-                    "buffered_transcript": self._audio_transcript,
-                },
-            )
-
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
@@ -329,7 +313,6 @@ class AudioRecognition:
                 self._end_of_turn_task.cancel()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
-            self._vad_graph.plot(ev.timestamp, ev.probability)
             self._hooks.on_vad_inference_done(ev)
             self._last_speaking_time = time.time() - ev.silence_duration
 
@@ -373,10 +356,6 @@ class AudioRecognition:
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
-                        tracing.Tracing.log_event(
-                            "end of user turn probability",
-                            {"probability": end_of_turn_probability},
-                        )
                         unlikely_threshold = await turn_detector.unlikely_threshold(
                             self._last_language
                         )
@@ -405,7 +384,6 @@ class AudioRecognition:
             extra_sleep = last_speaking_time + endpointing_delay - time.time()
             await asyncio.sleep(max(extra_sleep, 0))
 
-            tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
             confidence_avg = (
                 sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
                 if self._final_transcript_confidence

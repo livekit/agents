@@ -14,9 +14,9 @@ from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
-from ..debug import trace_types, tracer
 from ..log import logger
 from ..metrics import LLMMetrics
+from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
