@@ -86,7 +86,8 @@ class DataStreamAudioOutput(AudioOutput):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
         if not self._started:
-            # TODO(theomonnom): this class should be encapsuled somewhere else to allow for a clean close
+            # TODO(theomonnom): this class should be encapsuled somewhere else 
+            # to allow for a clean close
             if self._start_atask is None:
                 self._start_atask = asyncio.create_task(self._start_task())
 
