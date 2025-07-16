@@ -1905,7 +1905,7 @@ requires-dist = [
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "livekit", specifier = ">=1.0.9,<2" },
-    { name = "livekit-api", specifier = ">=1.0.2,<2" },
+    { name = "livekit-api", specifier = ">=1.0.3,<2" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
@@ -1958,7 +1958,7 @@ provides-extras = ["anthropic", "assemblyai", "aws", "azure", "baseten", "bey", 
 
 [[package]]
 name = "livekit-api"
-version = "1.0.2"
+version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1967,9 +1967,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ee/58/19b21a9bf9011a870be0aa7cccf9188f2ae644247d7da8f20935bbb2aa5b/livekit_api-1.0.2.tar.gz", hash = "sha256:5a6726a24761af046bdb4ae32b572d28df728a0e6824805d86783fa94c59574f", size = 14803 }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/cf/2476359a6eab73fab0e58ca0053887a9344db3ba7caca5a29913e270a86f/livekit_api-1.0.3.tar.gz", hash = "sha256:24ffd1f0a92fd91f1d9977034e317951259d0ec9d053c6315c1562ba699d4cc8", size = 14940 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/a3/d7eda9924316fcc0b9287ae671094f241c25fa13bc24f18e9c708e58d6b2/livekit_api-1.0.2-py3-none-any.whl", hash = "sha256:81ea2b330a7182c77f3cf307dfcff7df7d0d70524055bfb02be23ac8a45b8c6a", size = 17251 },
+    { url = "https://files.pythonhosted.org/packages/90/b3/ff1c47a553d8773281aef531fb660e296e811176390b887901e1bcd351ab/livekit_api-1.0.3-py3-none-any.whl", hash = "sha256:38eee0ba44e9bba7eb95d53d29a6ac56b89e32e6f90dfa11d2f65463db8f06c5", size = 17413 },
 ]
 
 [[package]]
@@ -2464,15 +2464,15 @@ requires-dist = [
 
 [[package]]
 name = "livekit-protocol"
-version = "1.0.1"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/1e/1ff940a3407dbde172c4c78431247c30a7f932abf2063aab1ef3c9234075/livekit_protocol-1.0.1.tar.gz", hash = "sha256:98619b02a09f2e27600d7639e4b3c4846f09c2b4fac3229dbfc20318d7d92bed", size = 55446 }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/75/ab0439ba2ce999e6212b32250ff8f0c93b56b0b3e95859c92052784b9d66/livekit_protocol-1.0.4.tar.gz", hash = "sha256:370477f7af376bbeb59ae3b26a052c1b93375abf1a69eb71c50b78bf73c70194", size = 56503 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/d6/362e267e74dd58cd3bb53877661898994bcc9bdb0bdbd0e4792bf814f338/livekit_protocol-1.0.1-py3-none-any.whl", hash = "sha256:0681c9d1be0c444345bbf0cf581c91a691a5c849ec6dbb26a29d9f6d6dd3e6b9", size = 65712 },
+    { url = "https://files.pythonhosted.org/packages/84/eb/88bc73fa434cb9cba85c7011bc40289205eb45784931226c9357f130796b/livekit_protocol-1.0.4-py3-none-any.whl", hash = "sha256:8359b3c7a3ebe1aa89c15db9e0128c3e2e95f3a49796941b04acf0b44310c4a0", size = 66823 },
 ]
 
 [[package]]
