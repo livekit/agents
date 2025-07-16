@@ -27,7 +27,6 @@ async def entrypoint(ctx: JobContext):
     anam_avatar = anam.AvatarSession(
         persona_config={
             "avatarId": avatar_id,
-            "maxSessionLengthSeconds": 600
         },
         api_key=anam_api_key,
     )
