@@ -112,6 +112,10 @@ class LLM(llm.LLM):
             additional_request_fields=additional_request_fields,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
     def chat(
         self,
         *,

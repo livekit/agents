@@ -128,7 +128,7 @@ class LLM(llm.LLM):
     @property
     def model(self) -> str:
         """Get the model name for this LLM instance."""
-        return str(self._opts.model)
+        return self._opts.model
 
     @staticmethod
     def with_azure(
