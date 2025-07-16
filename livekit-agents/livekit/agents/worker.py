@@ -334,7 +334,11 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         async def health_check(_: Any) -> web.Response:
-            return web.Response(text="OK")
+            is_inference_process_running = self._inference_executor.is_inference_process_running()
+            if is_inference_process_running:
+                return web.Response(text="OK")
+            else:
+                return web.Response(status=503, text="inference process not running")
 
         async def worker(_: Any) -> web.Response:
             body = json.dumps(
