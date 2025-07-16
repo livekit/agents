@@ -147,8 +147,9 @@ async def test_tts_recover() -> None:
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     with pytest.raises(APIConnectionError):
-        async for _ in fallback_adapter.synthesize("hello test"):
-            pass
+        async with fallback_adapter.synthesize("hello test") as stream:
+            async for _ in stream:
+                pass
 
         assert fake1.synthesize_ch.recv_nowait()
         assert fake2.synthesize_ch.recv_nowait()
@@ -162,8 +163,9 @@ async def test_tts_recover() -> None:
         await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake2).recv(), 1.0)
     ).available, "fake2 should have recovered"
 
-    async for _ in fallback_adapter.synthesize("hello test"):
-        pass
+    async with fallback_adapter.synthesize("hello test") as stream:
+        async for _ in stream:
+            pass
 
     assert fake1.synthesize_ch.recv_nowait()
     assert fake2.synthesize_ch.recv_nowait()
@@ -227,11 +229,12 @@ async def test_timeout():
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     with pytest.raises(APIConnectionError):
-        async for _ in fallback_adapter.synthesize(
+        async with fallback_adapter.synthesize(
             "hello test",
             conn_options=APIConnectOptions(timeout=0.1, max_retry=0),
-        ):
-            pass
+        ) as stream:
+            async for _ in stream:
+                pass
 
     assert fake1.synthesize_ch.recv_nowait()
     assert fake2.synthesize_ch.recv_nowait()
