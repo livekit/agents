@@ -7,7 +7,7 @@ This example demonstrates how to create a animated avatar using [Simli](https://
 * Update the environment:
 
 ```bash
-# Tavus Config
+# Simli Config
 export SIMLI_API_KEY="..."
 export SIMLI_FACE_ID="..."
 

@@ -34,7 +34,7 @@ class SimliConfig:
 
 
 class AvatarSession:
-    """A Tavus avatar session"""
+    """A Simli avatar session"""
 
     def __init__(
         self,
