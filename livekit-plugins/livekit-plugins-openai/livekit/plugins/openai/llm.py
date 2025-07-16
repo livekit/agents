@@ -123,8 +123,6 @@ class LLM(llm.LLM):
             ),
         )
 
-        self._prewarm_task: asyncio.Task | None = None
-
     @staticmethod
     def with_azure(
         *,
@@ -596,19 +594,6 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
         )
-
-    def prewarm(self) -> None:
-        async def _prewarm() -> None:
-            try:
-                await self._client.get("/", cast_to=str)
-            except Exception:
-                pass
-
-        self._prewarm_task = asyncio.create_task(_prewarm())
-
-    async def aclose(self) -> None:
-        if self._prewarm_task:
-            await aio.cancel_and_wait(self._prewarm_task)
 
 
 class LLMStream(llm.LLMStream):
