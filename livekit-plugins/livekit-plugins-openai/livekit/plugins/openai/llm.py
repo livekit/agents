@@ -33,7 +33,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import aio, is_given
+from livekit.agents.utils import is_given
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageParam,
