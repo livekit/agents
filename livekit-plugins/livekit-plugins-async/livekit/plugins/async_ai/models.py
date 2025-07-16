@@ -1,10 +1,6 @@
 from typing import Literal
 
-TTSEncoding = Literal[
-    "pcm_s16le",
-    "pcm_f32le",
-    "pcm_mulaw"
-]
+TTSEncoding = Literal["pcm_s16le", "pcm_f32le", "pcm_mulaw"]
 
 TTSModels = Literal["asyncflow_v2.0"]
 TTSLanguages = Literal["en"]

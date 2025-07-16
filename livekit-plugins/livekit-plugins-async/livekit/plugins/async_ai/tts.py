@@ -35,6 +35,7 @@ API_VERSION = "v1"
 
 BUFFERED_WORDS_COUNT = 10
 
+
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
@@ -118,11 +119,11 @@ class TTS(tts.TTS):
         )
 
         init_payload = {
-            "model_id":  self._opts.model,
-            "voice":     {"mode": "id", "id": self._opts.voice},
+            "model_id": self._opts.model,
+            "voice": {"mode": "id", "id": self._opts.voice},
             "output_format": {
-                "container":   "raw",
-                "encoding":    self._opts.encoding,
+                "container": "raw",
+                "encoding": self._opts.encoding,
                 "sample_rate": self._opts.sample_rate,
             },
         }
@@ -171,17 +172,18 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ):
         pass
+
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
 
         self._streams.clear()
         await self._pool.aclose()
-
 
 
 class SynthesizeStream(tts.SynthesizeStream):
