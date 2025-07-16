@@ -114,6 +114,10 @@ class LLM(llm.LLM):
             ),
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
     def chat(
         self,
         *,

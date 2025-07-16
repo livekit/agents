@@ -42,17 +42,6 @@ def setup_langfuse(
     trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     set_tracer_provider(trace_provider)
 
-    # (optional) enable OpenAI OpenTelemetry instrumentation
-    # install deps: `pip install opentelemetry-instrumentation-openai` or `pip install opentelemetry-instrumentation-openai-v2`  # noqa: E501
-    # NOTE: This is not really needed, the `llm_request` span contains the trace for LLM calls.
-
-    # from opentelemetry import trace
-    # from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-
-    # trace.set_tracer_provider(trace_provider)  # set the global tracer provider
-    # instrumentor = OpenAIInstrumentor()
-    # instrumentor.instrument()
-
 
 @function_tool
 async def lookup_weather(context: RunContext, location: str) -> str:

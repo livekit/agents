@@ -54,6 +54,10 @@ class LLM(llm.LLM):
         self._provider_fmt = _provider_fmt or "mistralai"
         self._client = Mistral(api_key=api_key or os.environ.get("MISTRAL_API_KEY"))
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
     def chat(
         self,
         *,
