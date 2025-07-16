@@ -54,5 +54,7 @@ async def entrypoint(ctx: JobContext):
             inactivity_task.cancel()
 
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
+
+
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
