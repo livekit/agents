@@ -68,7 +68,7 @@ class TTS(tts.TTS):
         """
         Create a new instance of Async TTS.
 
-        See https://docs.async.ai/text-to-speech-websocket-3477526w0 for more details 
+        See https://docs.async.ai/text-to-speech-websocket-3477526w0 for more details
             on the the Async API.
 
         Args:
@@ -77,9 +77,9 @@ class TTS(tts.TTS):
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str, optional): The voice ID.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 32000.
-            api_key (str, optional): The Async API key. If not provided, it will be 
+            api_key (str, optional): The Async API key. If not provided, it will be
                 read from the ASYNC_API_KEY environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp 
+            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp
                 ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.ai".
         """
@@ -152,7 +152,7 @@ class TTS(tts.TTS):
         """
         Update the Text-to-Speech (TTS) configuration options.
 
-        This method allows updating the TTS settings, including model type, language and voice. 
+        This method allows updating the TTS settings, including model type, language and voice.
         If any parameter is not provided, the existing value will be retained.
 
         Args:
