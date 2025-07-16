@@ -20,7 +20,7 @@ class OrderedCombo(BaseModel):
     drink_id: str
     drink_size: Literal["M", "L"] | None
     fries_size: Literal["M", "L"]
-    sauce_id: str
+    sauce_id: str | None
 
 
 class OrderedHappy(BaseModel):
@@ -29,7 +29,7 @@ class OrderedHappy(BaseModel):
     meal_id: str
     drink_id: str
     drink_size: Literal["S", "M", "L"] | None
-    sauce_id: str
+    sauce_id: str | None
 
 
 class OrderedRegular(BaseModel):
