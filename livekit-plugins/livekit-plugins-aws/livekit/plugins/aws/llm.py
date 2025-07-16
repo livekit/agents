@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import aioboto3  # type: ignore
-from botocore.config import Config
+from botocore.config import Config  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import (
