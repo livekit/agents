@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Union, cast
+from typing import Union, cast
 
 import aiohttp
 
@@ -68,7 +68,8 @@ class TTS(tts.TTS):
         """
         Create a new instance of Async TTS.
 
-        See https://docs.async.ai/text-to-speech-websocket-3477526w0 for more details on the the Async API.
+        See https://docs.async.ai/text-to-speech-websocket-3477526w0 for more details 
+            on the the Async API.
 
         Args:
             model (TTSModels, optional): The Async TTS model to use. Defaults to "asyncflow_v2.0".
@@ -76,10 +77,12 @@ class TTS(tts.TTS):
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str, optional): The voice ID.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 32000.
-            api_key (str, optional): The Async API key. If not provided, it will be read from the ASYNC_API_KEY environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+            api_key (str, optional): The Async API key. If not provided, it will be 
+                read from the ASYNC_API_KEY environment variable.
+            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp 
+                ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.ai".
-        """ 
+        """
 
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -90,7 +93,6 @@ class TTS(tts.TTS):
         if not async_api_key:
             raise ValueError("ASYNC_API_KEY must be set")
 
-        
         self._opts = _TTSOptions(
             model=model,
             language=language,
@@ -150,7 +152,8 @@ class TTS(tts.TTS):
         """
         Update the Text-to-Speech (TTS) configuration options.
 
-        This method allows updating the TTS settings, including model type, language and voice. If any parameter is not provided, the existing value will be retained.
+        This method allows updating the TTS settings, including model type, language and voice. 
+        If any parameter is not provided, the existing value will be retained.
 
         Args:
             model (TTSModels, optional): The Async TTS model to use. Defaults to "asyncflow_v2.0".
@@ -168,7 +171,6 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
-    
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ):
@@ -247,7 +249,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
-                    if data.get("final") and data["final"]==True:
+                    if data.get("final") and data["final"] is True:
                         output_emitter.end_input()
                         break
                 else:
