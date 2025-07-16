@@ -265,3 +265,38 @@ async def test_conv():
             .judge(llm, intent="must confirm a Big Mac Combo meal was added/ordered")
         )
         result.expect.no_more_events()
+
+
+@pytest.mark.asyncio
+async def test_unknown_item():
+    userdata = await new_userdata()
+
+    # remove the hamburger
+    userdata.regular_items = [item for item in userdata.regular_items if item.id != "hamburger"]
+
+    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+        agent = DriveThruAgent(userdata=userdata)
+        await sess.start(agent)
+
+        result = await sess.run(user_input="Can I get an hamburger? No meal")
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(
+                llm,
+                intent="should say a plain hamburger isn't something they have, or suggest something similar",
+            )
+        )
+        result.expect.no_more_events()
+
+    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+        agent = DriveThruAgent(userdata=userdata)
+        await sess.start(agent)
+
+        result = await sess.run(user_input="Can I get a redbull?")
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(llm, intent="should say they don't have a redbull")
+        )
+        result.expect.no_more_events()
