@@ -35,8 +35,6 @@ class MyAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     agent = AgentSession(
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),

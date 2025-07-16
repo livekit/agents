@@ -48,8 +48,6 @@ class FakeWebSearchAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     await session.start(FakeWebSearchAgent(), room=ctx.room)
 

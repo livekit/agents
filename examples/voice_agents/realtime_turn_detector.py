@@ -19,8 +19,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         allow_interruptions=True,
         turn_detection=MultilingualModel(),

@@ -37,8 +37,6 @@ class MyAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(turn_detection="manual")
     room_io = RoomIO(session, room=ctx.room)
     await room_io.start()

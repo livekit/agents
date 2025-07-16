@@ -70,8 +70,6 @@ async def _get_course_list_from_db() -> list[str]:
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     # Option 1: create tools when the agent is created
     courses = await _get_course_list_from_db()
 

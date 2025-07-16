@@ -107,9 +107,6 @@ async def entrypoint(ctx: JobContext):
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
-    # join the room when agent is ready
-    await ctx.connect()
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))

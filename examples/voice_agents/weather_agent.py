@@ -56,7 +56,6 @@ class WeatherAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
     # each log entry will include these fields
     ctx.log_context_fields = {
         "room_name": ctx.room.name,

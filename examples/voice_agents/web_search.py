@@ -48,8 +48,6 @@ async def search_web(ctx: RunContext[AppData], query: str):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     app_data = AppData(ddgs_client=DDGS())
 
     agent = Agent(instructions="You are a helpful assistant.", tools=[search_web])

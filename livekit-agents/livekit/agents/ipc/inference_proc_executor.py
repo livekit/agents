@@ -99,3 +99,6 @@ class InferenceProcExecutor(SupervisedProc):
         extra = super().logging_extra()
         extra["inference"] = True
         return extra
+
+    def is_alive(self) -> bool:
+        return self._proc.is_alive()

@@ -56,6 +56,10 @@ jobs:
         # mypy --install-types requires pip
         run: uv pip install pip
 
+      - name: Install types-requests for Python < 3.10 (conflicts with botocore)
+        if: matrix.python-version == '3.9'
+        run: uv pip install "types-requests<2.31.0.7"
+
       - name: Check Types
         run: uv run mypy --install-types --non-interactive
               -p livekit.agents

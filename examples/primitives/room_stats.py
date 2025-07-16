@@ -15,8 +15,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     await session.start(Agent(instructions="You are a helpful assistant"), room=ctx.room)
 

@@ -87,8 +87,6 @@ class MyAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     agent = AgentSession(
         vad=silero.VAD.load(),
         stt=deepgram.STT(),

@@ -82,8 +82,6 @@ async def entrypoint(ctx: JobContext):
             # noise_cancellation=noise_cancellation.BVC(),
         ),
     )
-
-    await ctx.connect()
     await session.generate_reply(instructions="ask the user how they are doing?")
 
 
