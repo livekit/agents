@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+import aiohttp
+
+from livekit import api, rtc
+from livekit.agents import (
+    NOT_GIVEN,
+    AgentSession,
+    NotGivenOr,
+    get_job_context,
+    utils,
+)
+from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
+
+from .log import logger
+
+SAMPLE_RATE = 16000
+_AVATAR_AGENT_IDENTITY = "simli-avatar-agent"
+_AVATAR_AGENT_NAME = "simli-avatar-agent"
+
+
+@dataclass
+class SimliConfig:
+    apiKey: str
+    faceId: str
+    syncAudio: bool = True
+    handleSilence: bool = True
+    maxSessionLength: int = 600
+    maxIdleTime: int = 30
+
+
+class AvatarSession:
+    """A Tavus avatar session"""
+
+    def __init__(
+        self,
+        *,
+        simli_config: SimliConfig,
+        api_url: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        self._http_session: aiohttp.ClientSession | None = None
+        self.conversation_id: str | None = None
+        self._simli_config = simli_config
+        self.api_url = api_url or "https://api.simli.ai"
+        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
+        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+        self._ensure_http_session()
+
+    def _ensure_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None:
+            self._http_session = utils.http_context.http_session()
+
+        return self._http_session
+
+    async def start(
+        self,
+        agent_session: AgentSession,
+        room: rtc.Room,
+        *,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
+        if not livekit_url or not livekit_api_key or not livekit_api_secret:
+            raise Exception(
+                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
+                "by arguments or environment variables"
+            )
+
+        try:
+            job_ctx = get_job_context()
+            decoded = job_ctx.decode_token()
+            local_participant_identity = decoded["sub"]
+        except (RuntimeError, KeyError):
+            if not room.isconnected():
+                raise Exception(
+                    "local participant identity not found in token, and room is not connected"
+                ) from None
+            local_participant_identity = room.local_participant.identity
+
+        livekit_token = (
+            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
+            .with_kind("agent")
+            .with_identity(self._avatar_participant_identity)
+            .with_name(self._avatar_participant_name)
+            .with_grants(api.VideoGrants(room_join=True, room=room.name))
+            # allow the avatar agent to publish audio and video on behalf of your local agent
+            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .to_jwt()
+        )
+
+        logger.debug("starting avatar session")
+        simli_session_token = await self._http_session.post(
+            f"{self.api_url}/startAudioToVideoSession", json=self._simli_config.__dict__
+        )
+        simli_session_token.raise_for_status()
+        (
+            await self._http_session.post(
+                f"{self.api_url}/StartLivekitAgentsSession",
+                json={
+                    "session_token": (await simli_session_token.json())["session_token"],
+                    "livekit_token": livekit_token,
+                    "livekit_url": livekit_url,
+                },
+            )
+        ).raise_for_status()
+        agent_session.output.audio = DataStreamAudioOutput(
+            room=room,
+            destination_identity=self._avatar_participant_identity,
+            sample_rate=SAMPLE_RATE,
+        )
