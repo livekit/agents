@@ -358,6 +358,10 @@ class SynthesizeStream(ABC):
         self._num_segments = 0
 
         self._tts_request_span: trace.Span | None = None
+        
+        # Langfuse integration for streaming
+        self._langfuse_client = self._tts._langfuse_client
+        self._collected_frames: list[rtc.AudioFrame] = []  # Store frames for Audio upload
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -392,6 +396,22 @@ class SynthesizeStream(ABC):
                         )
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
+                
+                # Upload to langfuse Storage after successful synthesis
+                if self._langfuse_client is not None and self._collected_frames:
+                    try:
+                        combined_frame = rtc.combine_audio_frames(self._collected_frames)
+                        wav_data = combined_frame.to_wav_bytes()
+                        
+                        upload_wav_to_langfuse_media(
+                            wav_data=wav_data,
+                            langfuse_client=self._langfuse_client
+                        )
+                        logger.info(f"TTS streaming audio uploaded to langfuse media")
+                    except Exception as e:
+                        logger.warning(f"Failed to upload TTS streaming audio to langfuse media: {e}")
+                        # Don't fail the entire TTS operation if blob upload fails
+                
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -409,6 +429,8 @@ class SynthesizeStream(ABC):
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
+                # Clear collected frames for retry
+                self._collected_frames.clear()
             finally:
                 await output_emitter.aclose()
 
@@ -430,7 +452,7 @@ class SynthesizeStream(ABC):
             self._started_time = time.perf_counter()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        """Task used to collect metrics"""
+        """Task used to collect metrics and store frames for Audio upload"""
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
@@ -481,6 +503,9 @@ class SynthesizeStream(ABC):
             audio_duration += ev.frame.duration
             request_id = ev.request_id
             segment_id = ev.segment_id
+            
+            # Store frames for Audio upload
+            self._collected_frames.append(ev.frame)
 
             if ev.is_final:
                 _emit_metrics()
