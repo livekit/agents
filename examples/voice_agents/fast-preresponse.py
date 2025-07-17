@@ -72,8 +72,6 @@ class PreResponseAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         stt=deepgram.STT(),
         tts=openai.TTS(),

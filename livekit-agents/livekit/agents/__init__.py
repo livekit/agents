@@ -75,7 +75,7 @@ from .voice import (
     avatar,
     io,
 )
-from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import (
     SimulateJobInfo,
@@ -154,6 +154,7 @@ __all__ = [
     "BackgroundAudioPlayer",
     "BuiltinAudioClip",
     "AudioConfig",
+    "PlayHandle",
     "SimulateJobInfo",
     "io",
     "avatar",

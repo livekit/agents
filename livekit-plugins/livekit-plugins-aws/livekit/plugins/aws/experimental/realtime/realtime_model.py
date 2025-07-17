@@ -356,6 +356,7 @@ class RealtimeSession(  # noqa: F811
             aws_credentials_identity_resolver=Boto3CredentialsResolver(),
             http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
             http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
+            user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
         )
         self._bedrock_client = BedrockRuntimeClient(config=config)
 

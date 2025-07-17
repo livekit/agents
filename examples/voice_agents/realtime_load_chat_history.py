@@ -13,8 +13,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     chat_history = [
         {
             "role": "assistant",

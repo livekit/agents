@@ -13,8 +13,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
