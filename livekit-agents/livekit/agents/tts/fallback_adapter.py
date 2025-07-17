@@ -80,9 +80,21 @@ class FallbackAdapter(
 
         num_channels = tts[0].num_channels
 
+        non_streaming_tts = [t for t in tts if not t.capabilities.streaming]
+        if non_streaming_tts:
+            from ..tokenize import basic
+            from ..tts import StreamAdapter
+
+            tts = [
+                StreamAdapter(tts=t, sentence_tokenizer=basic.SentenceTokenizer())
+                if not t.capabilities.streaming
+                else t
+                for t in tts
+            ]
+
         super().__init__(
             capabilities=TTSCapabilities(
-                streaming=all(t.capabilities.streaming for t in tts),
+                streaming=True,
             ),
             sample_rate=sample_rate,
             num_channels=num_channels,
