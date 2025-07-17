@@ -103,7 +103,7 @@ class CalComCalendar(Calendar):
 
         try:
             self._http_session = http_context.http_session()
-        except:
+        except RuntimeError:
             self._http_session = aiohttp.ClientSession()
 
         self._logger = logging.getLogger("cal.com")
@@ -114,7 +114,7 @@ class CalComCalendar(Calendar):
         ) as resp:
             resp.raise_for_status()
             username = (await resp.json())["data"]["username"]
-            self._logger.info("using cal.com username: %s" % username)
+            self._logger.info(f"using cal.com username: {username}")
 
         query = urlencode({"username": username})
         async with self._http_session.get(
