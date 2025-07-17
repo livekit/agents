@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from datetime import date, datetime, time as dt_time
 from typing import TYPE_CHECKING, Any, Literal
 
 from aiohttp import web
@@ -10,6 +12,19 @@ from .. import job
 
 if TYPE_CHECKING:
     from ..worker import Worker
+
+
+class DatetimeJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that can handle datetime objects."""
+
+    def default(self, o: Any) -> Any:
+        if isinstance(o, (date, datetime, dt_time)):
+            return o.isoformat()
+        try:
+            return super().default(o)
+        except TypeError:
+            # If we can't serialize it, convert to string as fallback
+            return str(o)
 
 
 class TracingGraph:
@@ -164,7 +179,7 @@ def _create_tracing_app(w: Worker) -> web.Application:
             ]
         }
 
-        return web.json_response(data)
+        return web.json_response(data, dumps=lambda obj: json.dumps(obj, cls=DatetimeJSONEncoder))
 
     async def runner(request: web.Request) -> web.Response:
         runner_id = request.query.get("id")
@@ -177,14 +192,17 @@ def _create_tracing_app(w: Worker) -> web.Application:
             return web.Response(status=404)
 
         info = await asyncio.wait_for(runner.tracing_info(), timeout=5.0)  # proc could be stuck
-        return web.json_response({"tracing": info})
+        return web.json_response(
+            {"tracing": info}, dumps=lambda obj: json.dumps(obj, cls=DatetimeJSONEncoder)
+        )
 
     async def worker(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "id": w.id,
                 "tracing": Tracing.with_handle("global")._export(),
-            }
+            },
+            dumps=lambda obj: json.dumps(obj, cls=DatetimeJSONEncoder),
         )
 
     app = web.Application()
