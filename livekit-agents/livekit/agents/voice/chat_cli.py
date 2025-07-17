@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING, Literal
 
 import click
+from livekit.agents.voice.recorder_io.recorder_io import RecorderIO
 import numpy as np
 
 from livekit import rtc
@@ -188,7 +189,15 @@ class ChatCLI:
 
         self._main_atask: asyncio.Task[None] | None = None
 
+        audio_out = (
+            self._transcript_syncer.audio_output if self._transcript_syncer else self._audio_sink
+        )
+        self._recorder_io = RecorderIO(agent_session=agent_session)
+        self._input_io = self._recorder_io.record_input(_AudioInput(self))
+        self._output_io = self._recorder_io.record_output(next_in_chain=audio_out)
+
     async def start(self) -> None:
+        await self._recorder_io.start()
         self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
 
     @log_exceptions(logger=logger)
@@ -269,7 +278,7 @@ class ChatCLI:
                 blocksize=2400,
             )
             self._input_stream.start()
-            self._session.input.audio = _AudioInput(self)
+            self._session.input.audio = self._input_io
         elif self._input_stream is not None:
             self._input_stream.stop()
             self._input_stream.close()
@@ -290,11 +299,7 @@ class ChatCLI:
                 blocksize=2400,  # 100ms
             )
             self._output_stream.start()
-            self._session.output.audio = (
-                self._transcript_syncer.audio_output
-                if self._transcript_syncer
-                else self._audio_sink
-            )
+            self._session.output.audio = self._output_io
         elif self._output_stream is not None:
             self._output_stream.close()
             self._output_stream = None
