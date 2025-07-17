@@ -24,6 +24,7 @@ from livekit.plugins import (
     cartesia,
     deepgram,
     elevenlabs,
+    fishaudio,
     google,
     groq,
     hume,
@@ -256,6 +257,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": fishaudio.TTS(),
+            "proxy-upstream": "api.fish.audio:443",
+        },
+        id="fishaudio",
     ),
 ]
 

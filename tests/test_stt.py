@@ -16,6 +16,7 @@ from livekit.plugins import (
     azure,
     deepgram,
     fal,
+    fishaudio,
     google,
     openai,
     silero,
@@ -87,6 +88,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: azure.STT(), id="azure"),
     pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
     pytest.param(lambda: spitch.STT(), id="spitch"),
+    pytest.param(lambda: fishaudio.STT(), id="fishaudio"),
 ]
 
 
