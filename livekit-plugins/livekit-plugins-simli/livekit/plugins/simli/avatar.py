@@ -25,12 +25,18 @@ _AVATAR_AGENT_NAME = "simli-avatar-agent"
 
 @dataclass
 class SimliConfig:
-    apiKey: str
+    api_key: str
     faceId: str
     syncAudio: bool = True
     handleSilence: bool = True
     maxSessionLength: int = 600
     maxIdleTime: int = 30
+
+    def create_json(self):
+        dict = self.__dict__
+        dict["apiKey"] = self.api_key
+        del dict["api_key"]
+        return dict
 
 
 class AvatarSession:
@@ -100,7 +106,7 @@ class AvatarSession:
 
         logger.debug("starting avatar session")
         simli_session_token = await self._http_session.post(
-            f"{self.api_url}/startAudioToVideoSession", json=self._simli_config.__dict__
+            f"{self.api_url}/startAudioToVideoSession", json=self._simli_config.create_json()
         )
         simli_session_token.raise_for_status()
         (
