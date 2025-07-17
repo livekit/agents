@@ -27,9 +27,10 @@ ATTR_FUNCTION_TOOL_IS_ERROR = "lk.function_tool.is_error"
 ATTR_FUNCTION_TOOL_OUTPUT = "lk.function_tool.output"
 
 # tts node
-ATTR_TTS_INPUT_TEXT = "lk.input_text"
+ATTR_TTS_INPUT_TEXT = "input.value"
 ATTR_TTS_STREAMING = "lk.tts.streaming"
 ATTR_TTS_LABEL = "lk.tts.label"
+ATTR_TTS_BLOB_URL = "lk.tts.blob_url"
 
 # eou detection
 ATTR_EOU_PROBABILITY = "lk.eou.probability"

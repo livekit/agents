@@ -50,6 +50,8 @@ dependencies = [
     "opentelemetry-sdk>=1.34.1",
     "opentelemetry-exporter-otlp>=1.34.1",
     "prometheus-client>=0.22",
+    "azure-storage-blob>=12.25.1",
+    "langfuse>=3.2.1",
 ]
 
 [project.optional-dependencies]

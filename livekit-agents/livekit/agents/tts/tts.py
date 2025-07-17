@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
+import base64
+from datetime import datetime, timezone
 import os
 import time
 from abc import ABC, abstractmethod
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
+from ..utils.cloud.langfuse_sdk_uplaod import upload_wav_to_langfuse_media
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
@@ -79,6 +81,13 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        try:
+            from langfuse import get_client
+            self._langfuse_client = get_client()
+        except Exception as e:
+            logger.warning(f"Failed to initialize Langfuse client, Langfuse will not be used: {e}")
+            self._langfuse_client = None
+    
 
     @property
     def label(self) -> str:
@@ -112,7 +121,8 @@ class TTS(
         """Pre-warm connection to the TTS service"""
         pass
 
-    async def aclose(self) -> None: ...
+    async def aclose(self) -> None:
+        """Close TTS resources"""
 
     async def __aenter__(self) -> TTS:
         return self
@@ -150,7 +160,9 @@ class ChunkedStream(ABC):
         self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
+        self._langfuse_client = self._tts._langfuse_client
         self._tts_request_span: trace.Span | None = None
+        self._collected_frames: list[rtc.AudioFrame] = []  # Store frames for Audio upload
 
     @property
     def input_text(self) -> str:
@@ -165,7 +177,7 @@ class ChunkedStream(ABC):
         return self._synthesize_task.exception()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        """Task used to collect metrics"""
+        """Task used to collect metrics and store frames for Audio upload"""
 
         start_time = time.perf_counter()
         audio_duration = 0.0
@@ -178,6 +190,8 @@ class ChunkedStream(ABC):
                 ttfb = time.perf_counter() - start_time
 
             audio_duration += ev.frame.duration
+            # Store frames for Audio upload
+            self._collected_frames.append(ev.frame)
 
         duration = time.perf_counter() - start_time
 
@@ -235,6 +249,22 @@ class ChunkedStream(ABC):
                     raise APIError("no audio frames were pushed")
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
+                
+                # Upload to langfuse Storage after successful synthesis
+                if self._langfuse_client is not None:
+                    try:
+                        combined_frame = rtc.combine_audio_frames(self._collected_frames)
+                        wav_data = combined_frame.to_wav_bytes()
+                        
+                        upload_wav_to_langfuse_media(
+                            wav_data=wav_data,
+                            langfuse_client=self._langfuse_client
+                        )
+                        logger.info(f"TTS audio uploaded langfuse media")
+                    except Exception as e:
+                        logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
+                        # Don't fail the entire TTS operation if blob upload fails
+                
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -327,7 +357,13 @@ class SynthesizeStream(ABC):
         self._mtc_text = ""
         self._num_segments = 0
 
+        self._langfuse_client = self._tts._langfuse_client
         self._tts_request_span: trace.Span | None = None
+        
+        # Audio collection for langfuse upload (optimized for streaming)
+        self._collected_frames_per_segment: dict[str, list[rtc.AudioFrame]] = {}
+        self._current_segment_frames: list[rtc.AudioFrame] = []
+        self._current_segment_id: str = ""
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -362,6 +398,11 @@ class SynthesizeStream(ABC):
                         )
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
+                
+                # Upload any remaining segment frames to langfuse after successful synthesis
+                if self._langfuse_client is not None:
+                    await self._upload_remaining_segments()
+                
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -377,10 +418,51 @@ class SynthesizeStream(ABC):
                     )
 
                 await asyncio.sleep(retry_interval)
-                # Reset the flag when retrying
+                # Reset the flag when retrying - also clear collected frames
                 self._current_attempt_has_error = False
+                self._collected_frames_per_segment.clear()
+                self._current_segment_frames.clear()
             finally:
                 await output_emitter.aclose()
+
+    async def _upload_remaining_segments(self) -> None:
+        """Upload any remaining audio segments to langfuse storage"""
+        try:
+            # Upload current segment if it has frames
+            if self._current_segment_frames and self._current_segment_id:
+                await self._upload_segment_audio(self._current_segment_id, self._current_segment_frames)
+            
+            # Upload any other collected segments
+            for segment_id, frames in self._collected_frames_per_segment.items():
+                if frames:  # Only upload if there are frames
+                    await self._upload_segment_audio(segment_id, frames)
+                    
+        except Exception as e:
+            logger.warning(f"Failed to upload remaining TTS segments to langfuse media: {e}")
+        finally:
+            # Clear all collected frames to free memory
+            self._collected_frames_per_segment.clear()
+            self._current_segment_frames.clear()
+
+    async def _upload_segment_audio(self, segment_id: str, frames: list[rtc.AudioFrame]) -> None:
+        """Upload a single segment's audio to langfuse storage"""
+        if not frames:
+            return
+            
+        try:
+            combined_frame = rtc.combine_audio_frames(frames)
+            wav_data = combined_frame.to_wav_bytes()
+            
+            # Create a more descriptive filename for streaming segments
+            segment_suffix = f"_seg_{segment_id}" if segment_id else ""
+            
+            upload_wav_to_langfuse_media(
+                wav_data=wav_data,
+                langfuse_client=self._langfuse_client
+            )
+            logger.info(f"TTS streaming audio segment{segment_suffix} uploaded to langfuse media")
+        except Exception as e:
+            logger.warning(f"Failed to upload TTS segment {segment_id} to langfuse media: {e}")
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
@@ -400,7 +482,7 @@ class SynthesizeStream(ABC):
             self._started_time = time.perf_counter()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        """Task used to collect metrics"""
+        """Task used to collect metrics and frames for audio upload"""
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
@@ -444,16 +526,44 @@ class SynthesizeStream(ABC):
             request_id = ""
             self._started_time = 0
 
+        async def _upload_completed_segment() -> None:
+            """Upload completed segment and clear frames to optimize memory"""
+            if self._langfuse_client is not None and self._current_segment_frames and self._current_segment_id:
+                try:
+                    await self._upload_segment_audio(self._current_segment_id, self._current_segment_frames)
+                    # Clear frames after successful upload to save memory
+                    self._current_segment_frames.clear()
+                except Exception as e:
+                    # Store frames for retry if upload fails
+                    self._collected_frames_per_segment[self._current_segment_id] = self._current_segment_frames.copy()
+                    self._current_segment_frames.clear()
+                    logger.warning(f"Failed to upload segment {self._current_segment_id}, will retry later: {e}")
+
         async for ev in event_aiter:
             if ttfb == -1.0:
                 ttfb = time.perf_counter() - self._started_time
 
             audio_duration += ev.frame.duration
             request_id = ev.request_id
-            segment_id = ev.segment_id
+            
+            # Handle segment changes for optimized frame collection
+            if segment_id != ev.segment_id:
+                # Upload previous segment if we're switching to a new one
+                if segment_id and self._current_segment_frames:
+                    await _upload_completed_segment()
+                
+                # Start new segment
+                segment_id = ev.segment_id
+                self._current_segment_id = segment_id
+                self._current_segment_frames = []
+
+            # Collect frames for current segment
+            self._current_segment_frames.append(ev.frame)
 
             if ev.is_final:
                 _emit_metrics()
+                # Upload the final segment
+                await _upload_completed_segment()
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
