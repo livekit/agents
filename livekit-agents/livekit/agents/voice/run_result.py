@@ -163,7 +163,7 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
-        if all([handle.done() for handle in self._handles]):
+        if all(handle.done() for handle in self._handles):
             self._mark_done()
 
     def _mark_done(self) -> None:

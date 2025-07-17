@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from livekit.agents import AgentSession, ChatContext, llm
-from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.voice.run_result import mock_tools
 from livekit.plugins import openai
 
@@ -139,7 +138,7 @@ async def test_unavailable_item() -> None:
                 .is_message(role="assistant")
                 .judge(llm, intent="should inform the user that the coca cola is unavailable")
             )
-        except:
+        except AssertionError:
             result.expect.next_event().is_function_call(
                 name="order_regular_item", arguments={"item_id": "coca_cola", "size": "L"}
             )
