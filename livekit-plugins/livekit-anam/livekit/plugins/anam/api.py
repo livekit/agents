@@ -12,12 +12,11 @@ from livekit.agents import (
     NotGivenOr,
 )
 
-from livekit.plugins.anam.avatar import PersonaConfig
 
 from .log import logger
+from .types import PersonaConfig
+from .errors import AnamException
 
-class AnamException(Exception):
-    """Custom exception for Anam API errors."""
 
 DEFAULT_API_URL = "https://api.anam.ai"
 
@@ -79,7 +78,8 @@ class AnamAPI:
         payload = {
             "personaConfig": {
                 "type": "ephemeral", 
-                **persona_config.__dict__,
+                "name": persona_config.name,
+                "avatarId": persona_config.avatarId,
                 "llmId": "CUSTOMER_CLIENT_V1"
             },
         }
@@ -87,7 +87,7 @@ class AnamAPI:
             "livekitUrl": livekit_url,
             "livekitToken": livekit_token,
         }
-
+        print("self._api_key",self._api_key)
         headers = {
             "Authorization": f"Bearer {self._api_key}", # Use API Key here
             "Content-Type": "application/json",

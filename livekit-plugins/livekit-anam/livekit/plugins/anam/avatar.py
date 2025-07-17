@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
 import aiohttp
@@ -20,19 +19,14 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .log import logger
-from .api import AnamAPI, AnamException
+from .api import AnamAPI
+from .types import PersonaConfig
+from .errors import AnamException
 
 
 SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "anam-avatar-agent"
 _AVATAR_AGENT_NAME = "anam-avatar-agent"
-
-
-@dataclass
-class PersonaConfig:
-    """Configuration for Anam avatar persona"""
-    name: str
-    avatarId: str
 
 
 class AvatarSession:
