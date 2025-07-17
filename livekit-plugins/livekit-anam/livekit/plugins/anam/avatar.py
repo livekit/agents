@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Literal
+from dataclasses import dataclass
+from typing import Any, Dict, Literal, Optional
 
 import aiohttp
 
@@ -26,13 +27,21 @@ SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "anam-avatar-agent"
 _AVATAR_AGENT_NAME = "anam-avatar-agent"
 
+
+@dataclass
+class PersonaConfig:
+    """Configuration for Anam avatar persona"""
+    name: str
+    avatarId: str
+
+
 class AvatarSession:
     """A Anam avatar session"""
 
     def __init__(
         self,
         *,
-        persona_config: NotGivenOr[Dict[str, Any]] = NOT_GIVEN,
+        persona_config: NotGivenOr[PersonaConfig] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
@@ -47,7 +56,8 @@ class AvatarSession:
 
         if persona_config is NOT_GIVEN:
             raise AnamException("persona_config must be set for ephemeral avatar")
-        self._persona_config = persona_config or {}
+        
+        self._persona_config: PersonaConfig = persona_config  # type: ignore
 
         api_url_val = api_url if api_url is not NOT_GIVEN else os.getenv("ANAM_API_URL")
         api_key_val = api_key if api_key is not NOT_GIVEN else os.getenv("ANAM_API_KEY")
@@ -113,10 +123,9 @@ class AvatarSession:
             api_url=self._api_url,
             conn_options=self._conn_options,
         ) as anam_api:
-            persona_config = self._persona_config
 
             session_token = await anam_api.create_session_token(
-                persona_config=persona_config,
+                persona_config=self._persona_config,
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
             )

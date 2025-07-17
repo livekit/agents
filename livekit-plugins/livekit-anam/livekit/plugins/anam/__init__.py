@@ -13,12 +13,13 @@
 # limitations under the License.
 
 from .api import AnamException
-from .avatar import AvatarSession
+from .avatar import AvatarSession, PersonaConfig
 from .version import __version__
 
 __all__ = [
     "AnamException",
     "AvatarSession",
+    "PersonaConfig",
     "__version__",
 ]
 

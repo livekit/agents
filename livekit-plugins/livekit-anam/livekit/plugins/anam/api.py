@@ -12,6 +12,8 @@ from livekit.agents import (
     NotGivenOr,
 )
 
+from livekit.plugins.anam.avatar import PersonaConfig
+
 from .log import logger
 
 class AnamException(Exception):
@@ -64,7 +66,7 @@ class AnamAPI:
 
     async def create_session_token(
         self,
-        persona_config: Dict[str, Any],
+        persona_config: PersonaConfig,
         livekit_url: str,
         livekit_token: str
     ) -> str:
@@ -77,7 +79,7 @@ class AnamAPI:
         payload = {
             "personaConfig": {
                 "type": "ephemeral", 
-                **persona_config,
+                **persona_config.__dict__,
                 "llmId": "CUSTOMER_CLIENT_V1"
             },
         }
