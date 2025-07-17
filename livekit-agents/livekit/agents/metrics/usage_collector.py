@@ -16,7 +16,7 @@ class UsageSummary:
 
 class UsageCollector:
     def __init__(self) -> None:
-        self._summary = UsageSummary(0, 0, 0, 0, 0.0)
+        self._summary = UsageSummary(0, 0, 0, 0, 0.0, 0.0)
 
     def __call__(self, metrics: AgentMetrics) -> None:
         self.collect(metrics)
