@@ -26,17 +26,21 @@ _AVATAR_AGENT_NAME = "simli-avatar-agent"
 @dataclass
 class SimliConfig:
     api_key: str
-    faceId: str
-    syncAudio: bool = True
-    handleSilence: bool = True
-    maxSessionLength: int = 600
-    maxIdleTime: int = 30
+    face_id: str
+    sync_audio: bool = True
+    handle_silence: bool = True
+    max_session_length: int = 600
+    max_idle_time: int = 30
 
     def create_json(self):
-        dict = self.__dict__
-        dict["apiKey"] = self.api_key
-        del dict["api_key"]
-        return dict
+        result = {}
+        result["apiKey"] = self.api_key
+        result["faceId"] = self.face_id
+        result["syncAudio"] = self.sync_audio
+        result["handleSilence"] = self.handle_silence
+        result["maxSessionLength"] = self.max_session_length
+        result["maxIdleTime"] = self.max_idle_time
+        return result
 
 
 class AvatarSession:
