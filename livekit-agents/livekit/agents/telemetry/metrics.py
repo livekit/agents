@@ -12,7 +12,9 @@ PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     buckets=[0.1, 0.5, 1, 2, 5, 10],
 )
 
-RUNNING_JOB_GAUGE = prometheus_client.Gauge("lk_agents_active_job_count", "Active jobs", ["nodename"])
+RUNNING_JOB_GAUGE = prometheus_client.Gauge(
+    "lk_agents_active_job_count", "Active jobs", ["nodename"]
+)
 
 CHILD_PROC_GAUGE = prometheus_client.Gauge(
     "lk_agents_child_process_count", "Total number of child processes", ["nodename"]
