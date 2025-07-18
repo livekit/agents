@@ -71,11 +71,11 @@ class RecorderIO:
             await asyncio.shield(self._close_fut)
             self._started = False
 
-    def record_input(self, audio_input: io.AudioInput) -> "RecorderAudioInput":
+    def record_input(self, audio_input: io.AudioInput) -> RecorderAudioInput:
         self._in_record = RecorderAudioInput(recording_io=self, audio_input=audio_input)
         return self._in_record
 
-    def record_output(self, audio_output: io.AudioOutput) -> "RecorderAudioOutput":
+    def record_output(self, audio_output: io.AudioOutput) -> RecorderAudioOutput:
         self._out_record = RecorderAudioOutput(
             recording_io=self, audio_output=audio_output, write_fnc=self._write_cb
         )
