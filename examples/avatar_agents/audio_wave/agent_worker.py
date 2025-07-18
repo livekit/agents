@@ -36,7 +36,11 @@ class AvatarConnectionInfo:
 async def launch_avatar_worker(
     ctx: JobContext, avatar_dispatcher_url: str, avatar_identity: str
 ) -> None:
-    """Send a request to the avatar service for it to join the room"""
+    """
+    Send a request to the avatar service for it to join the room
+
+    This function should be wrapped in a avatar plugin.
+    """
 
     # read the agent identity from the token
     try:

@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import sys
-from collections.abc import AsyncGenerator, AsyncIterator, Generator
+import time
+from collections import deque
+from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Optional, Union
 
@@ -9,7 +11,6 @@ import numpy as np
 
 from livekit import rtc
 from livekit.agents import utils
-from livekit.agents.cli.log import setup_logging
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -27,18 +28,20 @@ logger = logging.getLogger("avatar-example")
 class AudioWaveGenerator(VideoGenerator):
     def __init__(self, options: AvatarOptions):
         self._options = options
-        self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]] = asyncio.Queue()
-
+        self._audio_queue = asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]]()
         self._audio_resampler: Optional[rtc.AudioResampler] = None
 
-        # NOTE: Audio frames and video frames have different frequencies,
-        #       so we accumulate audio samples in a buffer before
-        #       generating corresponding video frames
-        self._audio_buffer = np.zeros((0, self._options.audio_channels), dtype=np.int16)
-        self._audio_samples_per_frame = int(
-            self._options.audio_sample_rate / self._options.video_fps
+        self._canvas = np.zeros((options.video_height, options.video_width, 4), dtype=np.uint8)
+        self._canvas.fill(255)
+        self._wave_visualizer = WaveformVisualizer(sample_rate=options.audio_sample_rate)
+
+        # Use a AudioByteStream to chunk the audio frames to expected frame size
+        self._audio_buffer = utils.audio.AudioByteStream(
+            sample_rate=options.audio_sample_rate,
+            num_channels=options.audio_channels,
+            samples_per_channel=options.audio_sample_rate // options.video_fps,
         )
-        self._av_sync: Optional[rtc.AVSynchronizer] = None
+        self._frame_ts: deque[float] = deque(maxlen=options.video_fps)
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Process and queue audio frames, handling resampling if needed.
@@ -80,7 +83,7 @@ class AudioWaveGenerator(VideoGenerator):
                 self._audio_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        self._reset_audio_buffer()
+        self._audio_buffer.flush()
 
     def __aiter__(
         self,
@@ -90,101 +93,58 @@ class AudioWaveGenerator(VideoGenerator):
     async def _stream_impl(
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
-        # initialize background canvas
-        background = np.zeros(
-            (self._options.video_height, self._options.video_width, 4),
-            dtype=np.uint8,
-        )
-        background.fill(255)
-
-        wave_visualizer = WaveformVisualizer(sample_rate=self._options.audio_sample_rate)
-
-        def _generate_idle_frame() -> rtc.VideoFrame:
-            idle_frame = background.copy()
-            fps = self._av_sync.actual_fps if self._av_sync else None
-            wave_visualizer.draw(
-                idle_frame,
-                audio_samples=np.zeros((1, self._options.audio_channels)),
-                fps=fps,
-            )
-            return self._np_to_video_frame(idle_frame)
-
-        def _generate_active_frames(
-            audio_frame: rtc.AudioFrame | AudioSegmentEnd,
-        ) -> Generator[tuple[rtc.VideoFrame, rtc.AudioFrame], None, None]:
-            samples_per_frame = self._audio_samples_per_frame
-
-            if isinstance(audio_frame, rtc.AudioFrame):
-                audio_samples = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
-                    -1, audio_frame.num_channels
-                )  # (n_samples, n_channels)
-            else:
-                # fill the buffer with zeros if the buffer is not multiple of samples_per_frame
-                n_fill_samples = (
-                    (samples_per_frame - len(self._audio_buffer) % samples_per_frame)
-                    if len(self._audio_buffer) > 0
-                    else 0
-                )
-                audio_samples = np.zeros(
-                    [n_fill_samples, self._audio_buffer.shape[1]],
-                    dtype=self._audio_buffer.dtype,
-                )
-            self._audio_buffer = np.concatenate([self._audio_buffer, audio_samples], axis=0)
-
-            # generate video frames with audio in buffer
-            while len(self._audio_buffer) >= samples_per_frame:
-                sub_samples = self._audio_buffer[:samples_per_frame]
-                self._audio_buffer = self._audio_buffer[samples_per_frame:]
-
-                canvas = background.copy()
-                fps = self._av_sync.actual_fps if self._av_sync else None
-                wave_visualizer.draw(canvas, sub_samples, fps=fps)
-                video_frame = self._np_to_video_frame(canvas)
-                sub_audio_frame = rtc.AudioFrame(
-                    data=sub_samples.tobytes(),
-                    sample_rate=self._options.audio_sample_rate,
-                    num_channels=sub_samples.shape[1],
-                    samples_per_channel=sub_samples.shape[0],
-                )
-                yield video_frame, sub_audio_frame
-
         while True:
             try:
                 # timeout has to be shorter than the frame interval to avoid starvation
                 frame = await asyncio.wait_for(
                     self._audio_queue.get(), timeout=0.5 / self._options.video_fps
                 )
+                self._audio_queue.task_done()
             except asyncio.TimeoutError:
                 # generate frame without audio (e.g. silence state)
-                if self._av_sync and self._av_sync._video_queue.qsize() > 1:
-                    # skip if there are already video frames in the queue
-                    continue
-                video_frame = _generate_idle_frame()
-                yield video_frame
-                await asyncio.sleep(0)
+                yield self._generate_frame(None)
+                self._frame_ts.append(time.time())
                 continue
 
-            for video_frame, audio_frame in _generate_active_frames(frame):
+            if isinstance(frame, rtc.AudioFrame):
+                audio_frames = self._audio_buffer.push(frame.data)
+            else:
+                audio_frames = self._audio_buffer.flush()
+
+            for audio_frame in audio_frames:
+                video_frame = self._generate_frame(audio_frame)
                 yield video_frame
                 yield audio_frame
+                self._frame_ts.append(time.time())
 
             if isinstance(frame, AudioSegmentEnd):
-                yield frame
-                self._reset_audio_buffer()
+                # send the AudioSegmentEnd back to notify the playback finished
+                yield AudioSegmentEnd()
 
-    def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
-        self._av_sync = av_sync
+    def _generate_frame(self, audio_frame: rtc.AudioFrame | None) -> rtc.VideoFrame:
+        canvas = self._canvas.copy()
 
-    def _reset_audio_buffer(self) -> None:
-        self._audio_buffer = np.zeros((0, self._options.audio_channels), dtype=np.int16)
+        if audio_frame is None:
+            # idle frame, no audio
+            audio_data = np.zeros((1, self._options.audio_channels))
+        else:
+            audio_data = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
+                -1, audio_frame.num_channels
+            )
 
-    def _np_to_video_frame(self, image: np.ndarray) -> rtc.VideoFrame:
-        return rtc.VideoFrame(
-            width=image.shape[1],
-            height=image.shape[0],
+        self._wave_visualizer.draw(canvas, audio_samples=audio_data, fps=self._get_fps())
+        video_frame = rtc.VideoFrame(
+            width=canvas.shape[1],
+            height=canvas.shape[0],
             type=rtc.VideoBufferType.RGBA,
-            data=image.tobytes(),
+            data=canvas.tobytes(),
         )
+        return video_frame
+
+    def _get_fps(self) -> float | None:
+        if len(self._frame_ts) < 2:
+            return None
+        return (len(self._frame_ts) - 1) / (self._frame_ts[-1] - self._frame_ts[0])
 
 
 @utils.log_exceptions(logger=logger)
@@ -194,6 +154,7 @@ async def main(api_url: str, api_token: str):
     await room.connect(api_url, api_token)
     should_stop = asyncio.Event()
 
+    # stop when disconnect from the room or the agent disconnects
     @room.on("participant_disconnected")
     def _on_participant_disconnected(participant: rtc.RemoteParticipant):
         if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
@@ -217,7 +178,6 @@ async def main(api_url: str, api_token: str):
     runner = AvatarRunner(
         room, audio_recv=DataStreamAudioReceiver(room), video_gen=video_gen, options=avatar_options
     )
-
     try:
         await runner.start()
 
@@ -230,28 +190,19 @@ async def main(api_url: str, api_token: str):
     finally:
         await utils.aio.cancel_and_wait(*tasks)
         await runner.aclose()
+        await room.disconnect()
         logger.info("avatar runner stopped")
 
 
 if __name__ == "__main__":
-    import sys
-    from argparse import ArgumentParser
+    import os
 
-    def parse_args():
-        """Parse command line arguments"""
-        parser = ArgumentParser()
-        parser.add_argument("--url", required=True, help="LiveKit server URL")
-        parser.add_argument("--token", required=True, help="Token for joining room")
-        parser.add_argument("--room", help="Room name")
-        parser.add_argument(
-            "--log-level",
-            default="DEBUG",
-            choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-            help="Log level",
-        )
-        return parser.parse_args()
+    from livekit.agents.cli.log import setup_logging
 
-    args = parse_args()
-    setup_logging(args.log_level, devmode=True, console=True)
+    setup_logging("DEBUG", devmode=True, console=True)
 
-    asyncio.run(main(args.url, args.token))
+    livekit_url = os.getenv("LIVEKIT_URL")
+    livekit_token = os.getenv("LIVEKIT_TOKEN")
+    assert livekit_url and livekit_token, "LIVEKIT_URL and LIVEKIT_TOKEN must be set"
+
+    asyncio.run(main(livekit_url, livekit_token))

@@ -95,7 +95,7 @@ class AvatarRunner:
 
     async def wait_for_complete(self) -> None:
         if not self._read_audio_atask or not self._forward_video_atask:
-            raise RuntimeError("please call start() first")
+            raise RuntimeError("AvatarRunner not started")
 
         await asyncio.gather(
             self._read_audio_atask,
