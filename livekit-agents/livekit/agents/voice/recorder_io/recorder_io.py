@@ -208,10 +208,10 @@ class RecorderIO:
                 max_len = max(len_left, len_right)
                 stereo_slice = stereo_buf[:, :max_len]
 
-                frame = av.AudioFrame.from_ndarray(stereo_slice, format="fltp", layout="stereo")
-                frame.sample_rate = self._sample_rate
+                av_frame = av.AudioFrame.from_ndarray(stereo_slice, format="fltp", layout="stereo")
+                av_frame.sample_rate = self._sample_rate
 
-                for packet in stream.encode(frame):
+                for packet in stream.encode(av_frame):
                     container.mux(packet)
 
             for packet in stream.encode(None):
