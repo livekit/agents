@@ -4,18 +4,21 @@ import asyncio
 import sys
 import threading
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 import click
-from livekit.agents.voice.recorder_io.recorder_io import RecorderIO
 import numpy as np
 
 from livekit import rtc
 
+from ..cli import cli
+from ..job import get_job_context
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
 from .agent_session import AgentSession
+from .recorder_io import RecorderIO
 from .transcription import TranscriptSynchronizer
 
 if TYPE_CHECKING:
@@ -197,7 +200,17 @@ class ChatCLI:
         self._output_io = self._recorder_io.record_output(audio_out)
 
     async def start(self) -> None:
-        await self._recorder_io.start()
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.record:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            filename = f"console_{timestamp}.ogg"
+            await self._recorder_io.start(output_path=filename)
+
+        try:
+            job_ctx = get_job_context()
+            job_ctx.add_shutdown_callback(self._recorder_io.aclose)
+        except RuntimeError:
+            pass  # ignore
+
         self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
 
     @log_exceptions(logger=logger)

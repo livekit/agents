@@ -1,20 +1,23 @@
-from collections.abc import AsyncIterator
-from typing import Callable, Any
-from livekit import rtc
-import av
-from livekit.agents.voice.agent_session import AgentSession
-import numpy as np
-import threading
 import asyncio
-import ctypes
-import time
+import contextlib
 import queue
+import threading
+from collections.abc import AsyncIterator
+from typing import Any, Callable
 
-from ...utils import aio
-from .. import io
+import av
+import numpy as np
+
+from livekit import rtc
+from livekit.agents.voice.agent_session import AgentSession
+
 from ...log import logger
+from .. import io
 
 # the recorder currently assume the input is a continous uninterrupted audio stream
+
+
+WRITE_INTERVAL = 2.5
 
 
 class RecorderIO:
@@ -23,49 +26,79 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        self._in_record: RecorderAudioInput | None = None
+        self._out_record: RecorderAudioOutput | None = None
+
         self._in_q = queue.Queue[list[rtc.AudioFrame] | None]()
         self._out_q = queue.Queue[list[rtc.AudioFrame] | None]()
         self._session = agent_session
-
         self._sample_rate = sample_rate
+        self._started = False
+        self._loop = loop or asyncio.get_event_loop()
+        self._lock = asyncio.Lock()
+        self._close_fut: asyncio.Future[None] = self._loop.create_future()
 
-    async def start(self) -> None:
-        self._forward_atask = asyncio.create_task(self._forward_task())
+    async def start(self, *, output_path: str) -> None:
+        async with self._lock:
+            if self._started:
+                return
 
-        thread = threading.Thread(target=self._encode_thread)
-        thread.start()
+            if not self._in_record or not self._out_record:
+                raise RuntimeError(
+                    "RecorderIO not properly initialized: both `record_input()` and `record_output()` "
+                    "must be called before starting the recorder."
+                )
 
-        # TODO: remove hacky
-        @self._session.on("close")
-        def test():
-            self._in_q.put_nowait(None)
-            self._out_q.put_nowait(None)
+            self._output_path = output_path
+            self._started = True
+            self._close_fut = self._loop.create_future()
+            self._forward_atask = asyncio.create_task(self._forward_task())
 
-            thread.join()
+            thread = threading.Thread(target=self._encode_thread, daemon=True)
+            thread.start()
 
     async def aclose(self) -> None:
-        pass
+        async with self._lock:
+            if not self._started:
+                return
+
+            self._in_q.put_nowait(None)
+            self._out_q.put_nowait(None)
+            await asyncio.shield(self._close_fut)
+            self._started = False
 
     def record_input(self, audio_input: io.AudioInput) -> "RecorderAudioInput":
-        self._in_record = RecorderAudioInput(audio_input)
+        self._in_record = RecorderAudioInput(recording_io=self, audio_input=audio_input)
         return self._in_record
 
     def record_output(self, audio_output: io.AudioOutput) -> "RecorderAudioOutput":
         self._out_record = RecorderAudioOutput(
-            next_in_chain=audio_output, sample_rate=None, write_fnc=self._on_output_write
+            recording_io=self, audio_output=audio_output, write_fnc=self._write_cb
         )
         return self._out_record
 
-    def _on_output_write(self, buf: list[rtc.AudioFrame]):
+    @property
+    def recording(self) -> bool:
+        return self._started
+
+    def _write_cb(self, buf: list[rtc.AudioFrame]):
+        assert self._in_record is not None
+
         input_buf = self._in_record.take_buf()
         self._in_q.put_nowait(input_buf)
         self._out_q.put_nowait(buf)
 
     async def _forward_task(self) -> None:
+        assert self._in_record is not None
+        assert self._out_record is not None
+
+        # Forward the input audio to the encoder every 5s.
         while True:
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(WRITE_INTERVAL)
             if self._out_record.has_pending_data:
+                # if the output is currenetly playing audio, wait for it to stay in sync
                 continue  # always wait for the complete output
 
             input_buf = self._in_record.take_buf()
@@ -76,7 +109,7 @@ class RecorderIO:
         GROW_FACTOR = 1.5
         INV_INT16 = 1.0 / 32768.0
 
-        container = av.open("test.ogg", mode="w", format="ogg")
+        container = av.open(self._output_path, mode="w", format="ogg")
         stream: av.AudioStream = container.add_stream(
             "opus", rate=self._sample_rate, layout="stereo"
         )  # type: ignore
@@ -182,12 +215,15 @@ class RecorderIO:
             for packet in stream.encode(None):
                 container.mux(packet)
 
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._close_fut.set_result, None)
+
 
 class RecorderAudioInput(io.AudioInput):
-    def __init__(self, audio_input: io.AudioInput) -> None:
+    def __init__(self, *, recording_io: RecorderIO, audio_input: io.AudioInput) -> None:
         super().__init__()
-        self._audio_input = audio_input
-        self._lock = threading.Lock()
+        self.__audio_input = audio_input
+        self.__recording_io = recording_io
         self.__acc_frames: list[rtc.AudioFrame] = []
 
     def take_buf(self) -> list[rtc.AudioFrame]:
@@ -199,8 +235,11 @@ class RecorderAudioInput(io.AudioInput):
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
-        frame = await self._audio_input.__anext__()
-        self.__acc_frames.append(frame)
+        frame = await self.__audio_input.__anext__()
+
+        if self.__recording_io.recording:
+            self.__acc_frames.append(frame)
+
         return frame
 
     def on_attached(self) -> None: ...
@@ -212,11 +251,12 @@ class RecorderAudioOutput(io.AudioOutput):
     def __init__(
         self,
         *,
-        next_in_chain: io.AudioOutput | None = None,
-        sample_rate: int | None = None,
+        recording_io: RecorderIO,
+        audio_output: io.AudioOutput | None = None,
         write_fnc: Callable[[list[rtc.AudioFrame]], Any],
     ) -> None:
-        super().__init__(next_in_chain=next_in_chain, sample_rate=sample_rate)
+        super().__init__(next_in_chain=audio_output, sample_rate=None)
+        self.__recording_io = recording_io
         self.__write = write_fnc
         self.__acc_frames: list[rtc.AudioFrame] = []
 
@@ -236,6 +276,9 @@ class RecorderAudioOutput(io.AudioOutput):
             interrupted=interrupted,
             synchronized_transcript=synchronized_transcript,
         )
+
+        if not self.__recording_io.recording:
+            return
 
         buf = []
         acc_dur = 0.0
@@ -262,7 +305,9 @@ class RecorderAudioOutput(io.AudioOutput):
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
-        self.__acc_frames.append(frame)
+
+        if self.__recording_io.recording:
+            self.__acc_frames.append(frame)
 
         if self._next_in_chain:
             await self._next_in_chain.capture_frame(frame)
