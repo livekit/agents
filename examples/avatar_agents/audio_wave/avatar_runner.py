@@ -36,7 +36,7 @@ class AudioWaveGenerator(VideoGenerator):
         self._wave_visualizer = WaveformVisualizer(sample_rate=options.audio_sample_rate)
 
         # Use a AudioByteStream to chunk the audio frames to expected frame size
-        self._audio_buffer = utils.audio.AudioByteStream(
+        self._audio_bstream = utils.audio.AudioByteStream(
             sample_rate=options.audio_sample_rate,
             num_channels=options.audio_channels,
             samples_per_channel=options.audio_sample_rate // options.video_fps,
@@ -83,7 +83,7 @@ class AudioWaveGenerator(VideoGenerator):
                 self._audio_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        self._audio_buffer.flush()
+        self._audio_bstream.flush()
 
     def __aiter__(
         self,
@@ -107,9 +107,9 @@ class AudioWaveGenerator(VideoGenerator):
                 continue
 
             if isinstance(frame, rtc.AudioFrame):
-                audio_frames = self._audio_buffer.push(frame.data)
+                audio_frames = self._audio_bstream.push(frame.data)
             else:
-                audio_frames = self._audio_buffer.flush()
+                audio_frames = self._audio_bstream.flush()
 
             for audio_frame in audio_frames:
                 video_frame = self._generate_frame(audio_frame)
