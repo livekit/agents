@@ -33,8 +33,8 @@ class RecorderIO:
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
-        self._in_q = queue.Queue[list[rtc.AudioFrame] | None]()
-        self._out_q = queue.Queue[list[rtc.AudioFrame] | None]()
+        self._in_q: queue.Queue[list[rtc.AudioFrame] | None] = queue.Queue()
+        self._out_q: queue.Queue[list[rtc.AudioFrame] | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
         self._started = False
@@ -85,7 +85,7 @@ class RecorderIO:
     def recording(self) -> bool:
         return self._started
 
-    def _write_cb(self, buf: list[rtc.AudioFrame]):
+    def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
         assert self._in_record is not None
 
         input_buf = self._in_record.take_buf()
@@ -122,7 +122,7 @@ class RecorderIO:
         capacity = self._sample_rate * 6  # 6s, 1ch
         stereo_buf = np.zeros((2, capacity), dtype=np.float32)
 
-        def remix_and_resample(frames: list[rtc.AudioFrame], channel_idx: int):
+        def remix_and_resample(frames: list[rtc.AudioFrame], channel_idx: int) -> int:
             total_samples = sum(f.samples_per_channel * f.num_channels for f in frames)
 
             nonlocal capacity, stereo_buf
@@ -321,7 +321,5 @@ class RecorderAudioOutput(io.AudioOutput):
             self._next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
-
         if self._next_in_chain:
             self._next_in_chain.clear_buffer()
