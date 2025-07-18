@@ -237,7 +237,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        json = _to_cartesia_options(self._opts)
+        json = _to_cartesia_options(self._opts, streaming=False)
         json["transcript"] = self._input_text
 
         try:
@@ -292,7 +292,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             context_id = utils.shortuuid()
-            base_pkt = _to_cartesia_options(self._opts)
+            base_pkt = _to_cartesia_options(self._opts, streaming=True)
             async for ev in self._sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = context_id
@@ -378,7 +378,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
 
 
-def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
+def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any]:
     voice: dict[str, Any] = {}
     if isinstance(opts.voice, str):
         voice["mode"] = "id"
@@ -397,7 +397,7 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
     if voice_controls:
         voice["__experimental_controls"] = voice_controls
 
-    return {
+    options: dict[str, Any] = {
         "model_id": opts.model,
         "voice": voice,
         "output_format": {
@@ -406,5 +406,7 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
             "sample_rate": opts.sample_rate,
         },
         "language": opts.language,
-        "add_timestamps": opts.word_timestamps,
     }
+    if streaming:
+        options["add_timestamps"] = opts.word_timestamps
+    return options
