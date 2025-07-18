@@ -194,7 +194,7 @@ class ChatCLI:
         )
         self._recorder_io = RecorderIO(agent_session=agent_session)
         self._input_io = self._recorder_io.record_input(_AudioInput(self))
-        self._output_io = self._recorder_io.record_output(next_in_chain=audio_out)
+        self._output_io = self._recorder_io.record_output(audio_out)
 
     async def start(self) -> None:
         await self._recorder_io.start()

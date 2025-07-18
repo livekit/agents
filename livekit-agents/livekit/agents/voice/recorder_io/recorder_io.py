@@ -12,6 +12,7 @@ import queue
 
 from ...utils import aio
 from .. import io
+from ...log import logger
 
 # the recorder currently assume the input is a continous uninterrupted audio stream
 
@@ -19,17 +20,18 @@ from .. import io
 class RecorderIO:
     def __init__(
         self,
+        *,
         agent_session: AgentSession,
+        sample_rate: int = 48000,
     ) -> None:
         self._in_q = queue.Queue[list[rtc.AudioFrame] | None]()
         self._out_q = queue.Queue[list[rtc.AudioFrame] | None]()
-
         self._session = agent_session
+
+        self._sample_rate = sample_rate
 
     async def start(self) -> None:
         self._forward_atask = asyncio.create_task(self._forward_task())
-
-
 
         thread = threading.Thread(target=self._encode_thread)
         thread.start()
@@ -41,7 +43,6 @@ class RecorderIO:
             self._out_q.put_nowait(None)
 
             thread.join()
-            
 
     async def aclose(self) -> None:
         pass
@@ -50,11 +51,9 @@ class RecorderIO:
         self._in_record = RecorderAudioInput(audio_input)
         return self._in_record
 
-    def record_output(
-        self, next_in_chain: io.AudioOutput | None = None, sample_rate: int | None = None
-    ) -> "RecorderAudioOutput":
+    def record_output(self, audio_output: io.AudioOutput) -> "RecorderAudioOutput":
         self._out_record = RecorderAudioOutput(
-            next_in_chain=next_in_chain, sample_rate=sample_rate, write_fnc=self._on_output_write
+            next_in_chain=audio_output, sample_rate=None, write_fnc=self._on_output_write
         )
         return self._out_record
 
@@ -74,81 +73,114 @@ class RecorderIO:
             self._out_q.put_nowait([])
 
     def _encode_thread(self) -> None:
-        f = open("test.ogg", "wb")
-        container = av.open(f, mode="w", format="ogg")
-        stream: av.AudioStream = container.add_stream("opus", rate=48000, layout="stereo")  # type: ignore
+        GROW_FACTOR = 1.5
+        INV_INT16 = 1.0 / 32768.0
+
+        container = av.open("test.ogg", mode="w", format="ogg")
+        stream: av.AudioStream = container.add_stream(
+            "opus", rate=self._sample_rate, layout="stereo"
+        )  # type: ignore
 
         in_resampler: rtc.AudioResampler | None = None
         out_resampler: rtc.AudioResampler | None = None
 
-        while True:
-            input_buf = self._in_q.get()
-            output_buf = self._out_q.get()
+        capacity = self._sample_rate * 6  # 6s, 1ch
+        stereo_buf = np.zeros((2, capacity), dtype=np.float32)
 
-            if input_buf is None or output_buf is None:
-                break
+        def remix_and_resample(frames: list[rtc.AudioFrame], channel_idx: int):
+            total_samples = sum(f.samples_per_channel * f.num_channels for f in frames)
 
-            # resample at the same sample_rate of the file output
-            if in_resampler is None and len(input_buf):
-                in_resampler = rtc.AudioResampler(
-                    input_rate=input_buf[0].sample_rate,
-                    output_rate=48000,
-                    num_channels=input_buf[0].num_channels,
+            nonlocal capacity, stereo_buf
+            if total_samples > capacity:
+                while capacity < total_samples:
+                    capacity = int(capacity * GROW_FACTOR)
+
+                stereo_buf.resize((2, capacity), refcheck=False)
+
+            pos = 0
+            dest = stereo_buf[channel_idx]
+            for f in frames:
+                count = f.samples_per_channel * f.num_channels
+                arr_i16 = np.frombuffer(f.data, dtype=np.int16, count=count).reshape(
+                    -1, f.num_channels
                 )
+                slice_ = dest[pos : pos + f.samples_per_channel]
+                np.sum(arr_i16, axis=1, dtype=np.float32, out=slice_)
+                slice_ *= INV_INT16 / f.num_channels
+                pos += f.samples_per_channel
 
-            if out_resampler is None and len(output_buf):
-                out_resampler = rtc.AudioResampler(
-                    input_rate=output_buf[0].sample_rate,
-                    output_rate=48000,
-                    num_channels=output_buf[0].num_channels,
-                )
+            return pos
 
-            input_resampled = []
-            for frame in input_buf:
-                assert in_resampler is not None
-                input_resampled.extend(in_resampler.push(frame))
+        with container:
+            while True:
+                input_buf = self._in_q.get()
+                output_buf = self._out_q.get()
 
-            output_resampled = []
-            for frame in output_buf:
-                assert out_resampler is not None
-                output_resampled.extend(out_resampler.push(frame))
+                if input_buf is None or output_buf is None:
+                    break
 
-            if output_buf:
-                assert out_resampler is not None
-                output_resampled.extend(out_resampler.flush())
+                # lazy creation of the resamplers
+                if in_resampler is None and len(input_buf):
+                    input_rate, num_channels = input_buf[0].sample_rate, input_buf[0].num_channels
+                    in_resampler = rtc.AudioResampler(
+                        input_rate=input_rate,
+                        output_rate=self._sample_rate,
+                        num_channels=num_channels,
+                    )
 
-            def frames_to_mono_array(frames: list[rtc.AudioFrame]) -> np.ndarray:
-                arrays: list[np.ndarray] = []
-                for f in frames:
-                    arr = np.frombuffer(f.data, dtype=np.int16)
-                    arr = arr.reshape(-1, f.num_channels)
-                    mono = arr.mean(axis=1).astype(np.int16)
-                    arrays.append(mono)
-                return np.concatenate(arrays) if arrays else np.zeros(0, dtype=np.int16)
+                if out_resampler is None and len(output_buf):
+                    input_rate, num_channels = output_buf[0].sample_rate, output_buf[0].num_channels
+                    out_resampler = rtc.AudioResampler(
+                        input_rate=input_rate,
+                        output_rate=self._sample_rate,
+                        num_channels=num_channels,
+                    )
 
-            left = frames_to_mono_array(input_resampled)
-            right = frames_to_mono_array(output_resampled)
+                input_resampled = []
+                for frame in input_buf:
+                    assert in_resampler is not None
+                    input_resampled.extend(in_resampler.push(frame))
 
-            max_len = max(left.shape[0], right.shape[0])
-            if left.shape[0] < max_len:
-                left = np.pad(left, (max_len - left.shape[0], 0))
-            if right.shape[0] < max_len:
-                right = np.pad(right, (max_len - right.shape[0], 0))
+                output_resampled = []
+                for frame in output_buf:
+                    assert out_resampler is not None
+                    output_resampled.extend(out_resampler.push(frame))
 
-            stereo = np.stack((left, right), axis=0)
+                if output_buf:
+                    assert out_resampler is not None
+                    # the output is sent per-segment. Always flush when the playback is done
+                    output_resampled.extend(out_resampler.flush())
 
-            frame = av.AudioFrame.from_ndarray(stereo, format="s16p", layout="stereo")
-            frame.sample_rate = 48000
-            for packet in stream.encode(frame):
+                len_left = remix_and_resample(input_resampled, 0)
+                len_right = remix_and_resample(output_resampled, 1)
+
+                if len_left != len_right:
+                    diff = abs(len_right - len_left)
+                    if len_left < len_right:
+                        logger.warning(
+                            f"Input is shorter by {diff} samples; silence has been prepended to "
+                            "align the input channel. The resulting recording may not accurately "
+                            "reflect the original audio."
+                        )
+                        stereo_buf[0, diff : diff + len_left] = stereo_buf[0, :len_left]
+                        stereo_buf[0, :diff] = 0.0
+                        len_left = len_right
+                    else:
+                        stereo_buf[1, diff : diff + len_right] = stereo_buf[1, :len_right]
+                        stereo_buf[1, :diff] = 0.0
+                        len_right = len_left
+
+                max_len = max(len_left, len_right)
+                stereo_slice = stereo_buf[:, :max_len]
+
+                frame = av.AudioFrame.from_ndarray(stereo_slice, format="fltp", layout="stereo")
+                frame.sample_rate = self._sample_rate
+
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+
+            for packet in stream.encode(None):
                 container.mux(packet)
-                f.flush()
-
-        for packet in stream.encode(None):
-            container.mux(packet)
-            f.flush()
-
-        container.close()
-        f.close()
 
 
 class RecorderAudioInput(io.AudioInput):
