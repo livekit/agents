@@ -36,9 +36,20 @@ class AvatarConnectionInfo:
 async def launch_avatar_worker(
     ctx: JobContext, avatar_dispatcher_url: str, avatar_identity: str
 ) -> None:
-    """Wait for worker participant to join and start streaming"""
-    # create a token for the avatar worker
-    agent_identity = ctx.room.local_participant.identity
+    """Send a request to the avatar service for it to join the room"""
+
+    # read the agent identity from the token
+    try:
+        decoded = ctx.decode_token()
+        agent_identity = decoded["sub"]
+    except (RuntimeError, KeyError):
+        if not ctx.room.isconnected():
+            raise RuntimeError(
+                "local participant identity not found in token, and room is not connected"
+            ) from None
+        agent_identity = ctx.room.local_participant.identity
+
+    # create a token for the avatar to join the room
     token = (
         api.AccessToken()
         .with_identity(avatar_identity)
@@ -56,12 +67,6 @@ async def launch_avatar_worker(
         response.raise_for_status()
     logger.info("Avatar handshake completed")
 
-    # wait for the remote participant to join
-    await ctx.wait_for_participant(
-        identity=avatar_identity, kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
-    )
-    logger.info("Avatar runner joined")
-
 
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     agent = Agent(instructions="Talk to me!")
@@ -72,11 +77,13 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         # tts=cartesia.TTS(),
     )
 
-    # wait for the participant to join the room and the avatar worker to connect
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
-
-    # connect the output audio to the avatar runner
-    session.output.audio = DataStreamAudioOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
+    session.output.audio = DataStreamAudioOutput(
+        ctx.room,
+        destination_identity=AVATAR_IDENTITY,
+        # (optional) wait for the avatar to publish video track before generating a reply
+        wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+    )
 
     # start agent with room input and room text output
     await session.start(
@@ -90,6 +97,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
 
     @session.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
+        # the avatar should notify when the audio playback is finished
         logger.info(
             "playback_finished",
             extra={
@@ -103,11 +111,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--avatar-url", type=str, default="http://localhost:8089/launch")
     args, remaining_args = parser.parse_known_args()
-    print(sys.argv, remaining_args)
     sys.argv = sys.argv[:1] + remaining_args
 
-    # WorkerType.ROOM is the default worker type which will create an agent for every room.
-    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.  # noqa: E501
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=partial(entrypoint, avatar_dispatcher_url=args.avatar_url),

@@ -8,6 +8,8 @@ from typing import Optional, Union
 import numpy as np
 
 from livekit import rtc
+from livekit.agents import utils
+from livekit.agents.cli.log import setup_logging
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -185,69 +187,50 @@ class AudioWaveGenerator(VideoGenerator):
         )
 
 
-async def main(room: rtc.Room):
-    """Main application logic for the avatar worker"""
-    runner: AvatarRunner | None = None
-    stop_event = asyncio.Event()
+@utils.log_exceptions(logger=logger)
+async def main(api_url: str, api_token: str):
+    # connect to the room
+    room = rtc.Room()
+    await room.connect(api_url, api_token)
+    should_stop = asyncio.Event()
+
+    @room.on("participant_disconnected")
+    def _on_participant_disconnected(participant: rtc.RemoteParticipant):
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            logging.info(f"Agent {participant.identity} disconnected, stopping worker")
+            should_stop.set()
+
+    @room.on("disconnected")
+    def _on_disconnected():
+        logging.info("Room disconnected, stopping worker")
+        should_stop.set()
+
+    # define the avatar options and start the runner
+    avatar_options = AvatarOptions(
+        video_width=1280,
+        video_height=720,
+        video_fps=30,
+        audio_sample_rate=24000,
+        audio_channels=1,
+    )
+    video_gen = AudioWaveGenerator(avatar_options)
+    runner = AvatarRunner(
+        room, audio_recv=DataStreamAudioReceiver(room), video_gen=video_gen, options=avatar_options
+    )
 
     try:
-        # Initialize and start worker
-        avatar_options = AvatarOptions(
-            video_width=1280,
-            video_height=720,
-            video_fps=30,
-            audio_sample_rate=24000,
-            audio_channels=1,
-        )
-        video_gen = AudioWaveGenerator(avatar_options)
-        runner = AvatarRunner(
-            room,
-            audio_recv=DataStreamAudioReceiver(room),
-            video_gen=video_gen,
-            options=avatar_options,
-        )
-        video_gen.set_av_sync(runner.av_sync)
         await runner.start()
 
-        # Set up disconnect handler
-        async def handle_disconnect(participant: rtc.RemoteParticipant):
-            if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
-                logging.info("Agent %s disconnected, stopping worker...", participant.identity)
-                stop_event.set()
-
-        room.on(
-            "participant_disconnected",
-            lambda p: asyncio.create_task(handle_disconnect(p)),
-        )
-        room.on("disconnected", lambda _: stop_event.set())
-
-        # Wait until stopped
-        await stop_event.wait()
-
-    except Exception as e:
-        logging.error("Unexpected error: %s", e)
-        raise
+        # run until stopped or the runner is complete/failed
+        tasks = [
+            asyncio.create_task(runner.wait_for_complete()),
+            asyncio.create_task(should_stop.wait()),
+        ]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        if runner:
-            await runner.aclose()
-
-
-async def run_service(url: str, token: str):
-    """Run the avatar worker service"""
-    room = rtc.Room()
-    try:
-        # Connect to LiveKit room
-        logging.info("Connecting to %s", url)
-        await room.connect(url, token)
-        logging.info("Connected to room %s", room.name)
-
-        # Run main application logic
-        await main(room)
-    except rtc.ConnectError as e:
-        logging.error("Failed to connect to room: %s", e)
-        raise
-    finally:
-        await room.disconnect()
+        await utils.aio.cancel_and_wait(*tasks)
+        await runner.aclose()
+        logger.info("avatar runner stopped")
 
 
 if __name__ == "__main__":
@@ -262,28 +245,13 @@ if __name__ == "__main__":
         parser.add_argument("--room", help="Room name")
         parser.add_argument(
             "--log-level",
-            default="INFO",
+            default="DEBUG",
             choices=["DEBUG", "INFO", "WARNING", "ERROR"],
             help="Log level",
         )
         return parser.parse_args()
 
-    def setup_logging(room: Optional[str], level: str):
-        """Set up logging configuration"""
-        log_format = "%(asctime)s - %(levelname)s - %(message)s"
-        if room:
-            log_format = f"[{room}] {log_format}"
-
-        logging.basicConfig(level=getattr(logging, level.upper()), format=log_format)
-
     args = parse_args()
-    setup_logging(args.room, args.log_level)
-    try:
-        asyncio.run(run_service(args.url, args.token))
-    except KeyboardInterrupt:
-        logging.info("Received interrupt signal, shutting down...")
-    except Exception as e:
-        logging.error("Fatal error: %s", e)
-        sys.exit(1)
-    finally:
-        logging.info("Shutting down...")
+    setup_logging(args.log_level, devmode=True, console=True)
+
+    asyncio.run(main(args.url, args.token))
