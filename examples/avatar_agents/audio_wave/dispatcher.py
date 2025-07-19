@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -59,20 +60,15 @@ class WorkerLauncher:
                 worker.process.kill()
 
         # Launch new worker process
-        cmd = [
-            sys.executable,
-            str(THIS_DIR / "avatar_runner.py"),
-            "--url",
-            connection_info.url,
-            "--token",
-            connection_info.token,
-            "--room",
-            connection_info.room_name,
-        ]
+        cmd = [sys.executable, str(THIS_DIR / "avatar_runner.py")]
+        env = os.environ.copy()
+        env["LIVEKIT_URL"] = connection_info.url
+        env["LIVEKIT_TOKEN"] = connection_info.token
+        env["LIVEKIT_ROOM"] = connection_info.room_name
 
         try:
             room_name = connection_info.room_name
-            process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
+            process = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, env=env)
             self.workers[room_name] = WorkerLauncher.WorkerInfo(
                 room_name=room_name, process=process
             )
