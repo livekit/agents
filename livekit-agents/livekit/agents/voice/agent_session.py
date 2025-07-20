@@ -400,7 +400,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
-            current_span.set_attribute(trace_types.ATTR_AGENT_NAME, agent.label)
+            current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
             current_span.set_attribute(
                 trace_types.ATTR_SESSION_OPTIONS, json.dumps(asdict(self._opts))
             )
