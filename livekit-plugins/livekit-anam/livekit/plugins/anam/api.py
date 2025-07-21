@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -97,7 +97,7 @@ class AnamAPI:
     async def start_engine_session(
         self,
         session_token: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Starts the engine session using a previously created session token.
 
@@ -116,8 +116,8 @@ class AnamAPI:
         return await self._post("/v1/engine/session", {}, headers)
 
     async def _post(
-        self, endpoint: str, payload: Dict[str, Any], headers: Dict[str, str]
-    ) -> Dict[str, Any]:
+        self, endpoint: str, payload: dict[str, Any], headers: dict[str, str]
+    ) -> dict[str, Any]:
         """
         Internal method to make a POST request with retry logic.
         """
