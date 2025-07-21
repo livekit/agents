@@ -22,11 +22,13 @@ async def entrypoint(ctx: JobContext):
     if not anam_api_key:
         raise ValueError("ANAM_API_KEY is not set")
 
-    anam_avatar_id = os.getenv("ANAM_AVATAR_ID", "30fa96d0-26c4-4e55-94a0-517025942e18")
+    anam_avatar_id = os.getenv("ANAM_AVATAR_ID")
+    if not anam_api_key:
+        raise ValueError("ANAM_AVATAR_ID is not set")
 
     anam_avatar = anam.AvatarSession(
         persona_config=anam.PersonaConfig(
-            name="Cara",
+            name="avatar",
             avatarId=anam_avatar_id,
         ),
         api_key=anam_api_key,
