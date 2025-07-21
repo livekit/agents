@@ -41,7 +41,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
 )
 from .events import (
-    AgentInterruptionResumedEvent,
+    AgentSpeechResumeEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -1045,7 +1045,7 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
-            self._current_speech.interrupt(by_user_speech=True)
+            self._current_speech.interrupt(from_user=True)
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1168,7 +1168,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 return
 
-            self._current_speech.interrupt(by_user_speech=True)
+            self._current_speech.interrupt(from_user=True)
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
@@ -1383,11 +1383,11 @@ class AgentActivity(RecognitionHooks):
                 speech_handle._chat_items.append(msg)
                 self._session._conversation_item_added(msg)
 
-            if speech_handle.interrupted_by_user_turn:
-                self._session._set_agent_resume_timer(
-                    AgentInterruptionResumedEvent(
-                        old_speech_source="say",
-                        old_instructions=None,
+            if speech_handle.interrupted_by_user:
+                self._session._schedule_speech_resume(
+                    AgentSpeechResumeEvent(
+                        speech_id=speech_handle.id,
+                        instructions=None,
                         forwarded_text=forwarded_text,
                     )
                 )
@@ -1598,13 +1598,11 @@ class AgentActivity(RecognitionHooks):
                     self._session._conversation_item_added(copy_msg)
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-            if speech_handle.interrupted_by_user_turn:
-                self._session._set_agent_resume_timer(
-                    AgentInterruptionResumedEvent(
-                        old_speech_source=(
-                            "generate_reply" if not _tools_messages else "tool_response"
-                        ),
-                        old_instructions=instructions,
+            if speech_handle.interrupted_by_user:
+                self._session._schedule_speech_resume(
+                    AgentSpeechResumeEvent(
+                        speech_id=speech_handle.id,
+                        instructions=instructions,
                         forwarded_text=forwarded_text,
                     )
                 )
@@ -1967,11 +1965,11 @@ class AgentActivity(RecognitionHooks):
                     self._session._conversation_item_added(msg)
                     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-                if speech_handle.interrupted_by_user_turn:
-                    self._session._set_agent_resume_timer(
-                        AgentInterruptionResumedEvent(
-                            old_speech_source="generate_reply",
-                            old_instructions=instructions,
+                if speech_handle.interrupted_by_user:
+                    self._session._schedule_speech_resume(
+                        AgentSpeechResumeEvent(
+                            speech_id=speech_handle.id,
+                            instructions=instructions,
                             forwarded_text=forwarded_text,
                         )
                     )

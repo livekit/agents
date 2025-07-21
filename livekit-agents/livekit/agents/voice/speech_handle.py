@@ -25,7 +25,7 @@ class SpeechHandle:
         self._generation_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
-        self._interrupted_by_user_speech: bool = False
+        self._interrupted_by_user: bool = False
 
         # internal tasks used by this generation
         self._tasks: list[asyncio.Task] = []
@@ -62,8 +62,8 @@ class SpeechHandle:
         return self._interrupt_fut.done()
 
     @property
-    def interrupted_by_user_turn(self) -> bool:
-        return self.interrupted and self._interrupted_by_user_speech
+    def interrupted_by_user(self) -> bool:
+        return self.interrupted and self._interrupted_by_user
 
     @property
     def allow_interruptions(self) -> bool:
@@ -97,7 +97,7 @@ class SpeechHandle:
     def done(self) -> bool:
         return self._done_fut.done()
 
-    def interrupt(self, *, by_user_speech: bool = False) -> SpeechHandle:
+    def interrupt(self, *, from_user: bool = False) -> SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:
@@ -110,7 +110,7 @@ class SpeechHandle:
             raise RuntimeError("This generation handle does not allow interruptions")
 
         if self._cancel():
-            self._interrupted_by_user_speech = by_user_speech
+            self._interrupted_by_user = from_user
         return self
 
     def _cancel(self) -> bool:

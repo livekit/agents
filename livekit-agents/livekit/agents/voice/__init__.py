@@ -3,7 +3,7 @@ from .agent_session import AgentSession, VoiceActivityVideoSampler
 from .chat_cli import ChatCLI
 from .events import (
     AgentEvent,
-    AgentInterruptionResumedEvent,
+    AgentSpeechResumeEvent,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
@@ -38,7 +38,7 @@ __all__ = [
     "UserStateChangedEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
-    "AgentInterruptionResumedEvent",
+    "AgentSpeechResumeEvent",
 ]
 
 # Cleanup docs of unexported modules
