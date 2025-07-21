@@ -61,15 +61,6 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
         if args.simulate_job and args.reload_count == 0:
             loop.create_task(worker.simulate_job(args.simulate_job))
 
-        if args.devmode:
-            logger.info(
-                f"{_esc(1)}see tracing information at http://localhost:{worker.worker_info.http_port}/debug{_esc(0)}"
-            )
-        else:
-            logger.info(
-                f"see tracing information at http://localhost:{worker.worker_info.http_port}/debug"
-            )
-
     try:
 
         def _signal_handler() -> None:
