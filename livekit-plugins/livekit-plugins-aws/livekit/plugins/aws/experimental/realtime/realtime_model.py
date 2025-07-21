@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
@@ -35,7 +36,6 @@ from smithy_core.aio.interfaces.identity import IdentityResolver
 from livekit import rtc
 from livekit.agents import (
     APIStatusError,
-    ToolError,
     llm,
     utils,
 )
@@ -239,6 +239,7 @@ class RealtimeModel(llm.RealtimeModel):
                 turn_detection=True,
                 user_transcription=True,
                 auto_tool_reply_generation=True,
+                audio_output=True,
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
@@ -310,10 +311,10 @@ class RealtimeSession(  # noqa: F811
         self._audio_input_task = None
         self._stream_response = None
         self._bedrock_client = None
+        self._pending_tools: set[str] = set()
         self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
-        self._tool_type_map: dict[str, str] = {}
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._tools_ready = asyncio.get_running_loop().create_future()
         self._instructions_ready = asyncio.get_running_loop().create_future()
@@ -343,14 +344,8 @@ class RealtimeSession(  # noqa: F811
         }
         self._turn_tracker = _TurnTracker(
             cast(Callable[[str, Any], None], self.emit),
-            streams_provider=self._current_generation_streams,
+            cast(Callable[[], None], self.emit_generation_event),
         )
-
-    def _current_generation_streams(
-        self,
-    ) -> tuple[utils.aio.Chan[llm.MessageGeneration], utils.aio.Chan[llm.FunctionCall]]:
-        assert self._current_generation is not None, "current_generation is None"
-        return (self._current_generation.message_ch, self._current_generation.function_ch)
 
     @utils.log_exceptions(logger=logger)
     def _initialize_client(self) -> None:
@@ -361,6 +356,7 @@ class RealtimeSession(  # noqa: F811
             aws_credentials_identity_resolver=Boto3CredentialsResolver(),
             http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
             http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
+            user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
         )
         self._bedrock_client = BedrockRuntimeClient(config=config)
 
@@ -428,7 +424,6 @@ class RealtimeSession(  # noqa: F811
                     input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
                         "parameters"
                     ]
-                    self._tool_type_map[name] = "FunctionTool"
                 elif llm.tool_context.is_raw_function_tool(f):
                     description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
                         "description"
@@ -436,14 +431,13 @@ class RealtimeSession(  # noqa: F811
                     input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
                         "parameters"
                     ]
-                    self._tool_type_map[name] = "RawFunctionTool"
                 else:
                     continue
 
                 tool = Tool(
                     toolSpec=ToolSpec(
                         name=name,
-                        description=description or "",
+                        description=description or "No description provided",
                         inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),  # type: ignore
                     )
                 )
@@ -524,7 +518,7 @@ class RealtimeSession(  # noqa: F811
                 self._chat_ctx.truncate(max_items=MAX_MESSAGES)
             init_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
-                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,
+                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
                 chat_ctx=self.chat_ctx,
                 tool_configuration=self._serialize_tool_config(),
@@ -553,7 +547,7 @@ class RealtimeSession(  # noqa: F811
         return self
 
     @utils.log_exceptions(logger=logger)
-    def _emit_generation_event(self) -> None:
+    def emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers."""
         logger.debug("Emitting generation event")
         assert self._current_generation is not None, "current_generation is None"
@@ -612,11 +606,10 @@ class RealtimeSession(  # noqa: F811
         """Handle text_output_content_start for both user and assistant roles."""
         log_event_data(event_data)
         role = event_data["event"]["contentStart"]["role"]
+        self._create_response_generation()
 
         # note: does not work if you emit llm.GCE too early (for some reason)
         if role == "USER":
-            self._create_response_generation()
-
             assert self._current_generation is not None, "current_generation is None"
 
             content_id = event_data["event"]["contentStart"]["contentId"]
@@ -744,34 +737,38 @@ class RealtimeSession(  # noqa: F811
         ):
             args = event_data["event"]["toolUse"]["content"]
             self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
-                    call_id=tool_use_id,
-                    name=tool_name,
-                    arguments=args,
+                llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
+            )
+            self._pending_tools.add(tool_use_id)
+
+            # performing these acrobatics in order to release the deadlock
+            # LiveKit will not accept a new generation until the previous one is closed
+            # the issue is that audio data cannot be generated until toolResult is received
+            # however, toolResults only arrive after update_chat_ctx() is invoked
+            # which will only occur after agent speech has completed
+            # therefore we introduce an artificial turn to trigger update_chat_ctx()
+            # TODO: this is messy-- investigate if there is a better way to handle this
+            curr_gen = self._current_generation.messages[self._current_generation.response_id]
+            curr_gen.audio_ch.close()
+            curr_gen.text_ch.close()
+            self._current_generation.message_ch.close()
+            self._current_generation.message_ch = utils.aio.Chan()
+            self._current_generation.function_ch.close()
+            self._current_generation.function_ch = utils.aio.Chan()
+            msg_gen = _MessageGeneration(
+                message_id=self._current_generation.response_id,
+                text_ch=utils.aio.Chan(),
+                audio_ch=utils.aio.Chan(),
+            )
+            self._current_generation.messages[self._current_generation.response_id] = msg_gen
+            self._current_generation.message_ch.send_nowait(
+                llm.MessageGeneration(
+                    message_id=msg_gen.message_id,
+                    text_stream=msg_gen.text_ch,
+                    audio_stream=msg_gen.audio_ch,
                 )
             )
-
-            # note: may need to inject RunContext here...
-            tool_type = self._tool_type_map[tool_name]
-            if tool_type == "FunctionTool":
-                tool_result = await self.tools.function_tools[tool_name](**json.loads(args))
-            elif tool_type == "RawFunctionTool":
-                tool_result = await self.tools.function_tools[tool_name](json.loads(args))
-            else:
-                raise ValueError(f"Unknown tool type: {tool_type}")
-            logger.debug(f"TOOL ARGS: {args}\nTOOL RESULT: {tool_result}")
-
-            # Sonic only accepts Structured Output for tool results
-            # therefore, must JSON stringify ToolError
-            if isinstance(tool_result, ToolError):
-                logger.warning(f"TOOL ERROR: {tool_name} {tool_result.message}")
-                tool_result = {"error": tool_result.message}
-            self._tool_results_ch.send_nowait(
-                {
-                    "tool_use_id": tool_use_id,
-                    "tool_result": tool_result,
-                }
-            )
+            self.emit_generation_event()
 
     async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
         log_event_data(event_data)
@@ -828,6 +825,14 @@ class RealtimeSession(  # noqa: F811
                     curr_gen.audio_ch.close()
                 if not curr_gen.text_ch.closed:
                     curr_gen.text_ch.close()
+
+            # TODO: seems not needed, tool_messages[id] is a str, function_ch is closed below?
+            # if self._current_generation.response_id in self._current_generation.tool_messages:
+            #     curr_gen = self._current_generation.tool_messages[
+            #         self._current_generation.response_id
+            #     ]
+            #     if not curr_gen.function_ch.closed:
+            #         curr_gen.function_ch.close()
 
             if not self._current_generation.message_ch.closed:
                 self._current_generation.message_ch.close()
@@ -918,7 +923,6 @@ class RealtimeSession(  # noqa: F811
 
                     else:
                         logger.error(f"Validation error: {ve}")
-                        request_id = ve.split(" ")[0].split("=")[1]
                         self.emit(
                             "error",
                             llm.RealtimeModelError(
@@ -927,7 +931,7 @@ class RealtimeSession(  # noqa: F811
                                 error=APIStatusError(
                                     message=ve.message,
                                     status_code=400,
-                                    request_id=request_id,
+                                    request_id="",
                                     body=ve,
                                     retryable=False,
                                 ),
@@ -1040,6 +1044,25 @@ class RealtimeSession(  # noqa: F811
             logger.debug(f"Chat context updated: {self._chat_ctx.items}")
             self._chat_ctx_ready.set_result(True)
 
+        # for each function tool, send the result to aws
+        for item in chat_ctx.items:
+            if item.type != "function_call_output":
+                continue
+
+            if item.call_id not in self._pending_tools:
+                continue
+
+            logger.debug(f"function call output: {item}")
+            self._pending_tools.discard(item.call_id)
+            self._tool_results_ch.send_nowait(
+                {
+                    "tool_use_id": item.call_id,
+                    "tool_result": item.output
+                    if not item.is_error
+                    else f"{{'error': '{item.output}'}}",
+                }
+            )
+
     async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
         """Send tool_result back to Bedrock, grouped under tool_use_id."""
         tool_content_name = str(uuid.uuid4())
@@ -1118,6 +1141,19 @@ class RealtimeSession(  # noqa: F811
                     val = self._tool_results_ch.recv_nowait()
                     tool_result = val["tool_result"]
                     tool_use_id = val["tool_use_id"]
+                    if not isinstance(tool_result, str):
+                        tool_result = json.dumps(tool_result)
+                    else:
+                        try:
+                            json.loads(tool_result)
+                        except json.JSONDecodeError:
+                            try:
+                                tool_result = json.dumps(ast.literal_eval(tool_result))
+                            except Exception:
+                                # return the original value
+                                pass
+
+                    logger.debug(f"Sending tool result: {tool_result}")
                     await self._send_tool_events(tool_use_id, tool_result)
 
                 except utils.aio.channel.ChanEmpty:
@@ -1198,7 +1234,9 @@ class RealtimeSession(  # noqa: F811
     def interrupt(self) -> None:
         logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
+    def truncate(
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 
     @utils.log_exceptions(logger=logger)

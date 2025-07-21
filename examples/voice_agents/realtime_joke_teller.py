@@ -10,12 +10,19 @@ There is an event loop that waits for a participant to join the room
 and then starts the agent session. The agent session is closed when the participant leaves.
 
 Try asking the agent to tell a joke about a specific category!
+
+Note: install the required dependencies
+```
+uv pip install jokeapi ddgs
+```
 """
 
 import asyncio
 import random
+from dataclasses import dataclass
 from typing import Any
 
+from ddgs import DDGS
 from dotenv import load_dotenv
 from jokeapi import Jokes
 
@@ -26,6 +33,7 @@ from livekit.agents import (
     AutoSubscribe,
     RoomInputOptions,
     RoomOutputOptions,
+    RunContext,
     ToolError,
     llm,
 )
@@ -35,6 +43,7 @@ from livekit.plugins import aws
 
 load_dotenv()
 
+g = DDGS()
 
 weather_schema = {
     "name": "get_weather",
@@ -55,6 +64,12 @@ weather_schema = {
 }
 
 
+@dataclass
+class MySessionInfo:
+    user_name: str | None = None
+    age: int | None = None
+
+
 # example of how to create a RawFunctionTool
 @function_tool(raw_schema=weather_schema)
 async def get_weather(raw_arguments: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +83,7 @@ async def get_weather(raw_arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 # example of how to create a FunctionTool
+# note that if raw_schema is absent, you should be providing a docstring
 @function_tool
 async def get_median_home_price(location: str) -> dict[str, Any]:
     """
@@ -84,27 +100,44 @@ async def get_median_home_price(location: str) -> dict[str, Any]:
 
 
 # example of how to handle a tool call that returns a ToolError
+# note: if you want the model to gracefully handle the error, return a dict with an "error" key
 @function_tool
-async def search_web(query: str) -> dict[str, Any]:
+async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
     """
-    Search the web for information about a given query.
+    Search the web using DuckDuckGo search engine for information about a given query.
 
     Args:
         query (str): The query to search for.
-    """
-    return ToolError("No results found")
+        max_results (int): The maximum number of results to return.
+
+    Returns:
+        dict[str, Any]: A dictionary containing the search results.
+        The keys are the index of the result and the values are another dictionary with the following keys:
+        - title: Title of the result.
+        - url: URL of the result.
+        - body: Body of the result.
+    """  # noqa: E501
+    try:
+        results = g.text(query, max_results=max_results)
+    except Exception as e:
+        return ToolError(f"Error searching the web: {e}")
+    d = {str(i): res for i, res in enumerate(results)}
+    for v in d.values():
+        v["url"] = v.pop("href")
+    return d
 
 
 @function_tool
-async def tell_joke(category: list[str] = None) -> dict[str, Any]:
+async def tell_joke(category: list[str] | None = None) -> dict[str, Any]:
     """
     Tell a joke that pertains to the category of the user's request.
 
     Args:
         category (list[str]): The category of joke to tell.
+            Available categories are: Any, Misc, Programming, Dark, Pun, Spooky, Christmas
     """
     j = await Jokes()
-    joke = await j.get_joke(category=category)
+    joke = await j.get_joke(category=category if category is not None else ["Any"])
     if joke["type"] == "single":
         return {"joke": joke["joke"]}
     else:
@@ -112,20 +145,18 @@ async def tell_joke(category: list[str] = None) -> dict[str, Any]:
 
 
 story = """
-There was once an old man and old woman who were not blessed with little ones.
-The home seemed bare, with no children to skitter through the kitchen,
-make pillow castles, or laugh in the four corners of the cottage.
-The garden felt wintry, with no bright legs dangling from the branches of the trees.
-
-"Old man", said the old woman.
-"I yearn for a son. There is a log in the yard. Will you carve it into a boy for us?"
-The old man carved the log into the shape of a boy. It was strong, brown, and solidly built.
-The old woman wept with happiness when she saw it. She kissed the tip of its nose and
-placed it in the same cradle she herself had slept in as a child.
-The next day, the log was gone. In its place was a soft, curled, sleeping little human.
-It had turned into a real boy.
-His mother called him Ivaysk-- Little Stick.
-"""
+High up in the sky lived a small, fluffy cloud named Wispy.
+Unlike the other clouds that loved to bunch together, Wispy enjoyed floating alone and watching the world below.
+One day, he noticed a tiny flower in a garden that looked very thirsty.
+"Oh dear," thought Wispy, "that poor flower needs some water!"
+Wispy tried his best to make himself rain, but he was too small to make more than a few drops.
+The other clouds saw him struggling and felt sorry for him.
+"Need some help?" asked a big, friendly cloud named Thunder.
+Soon, all the clouds came together around Wispy, and together they made a gentle rain shower that gave the flower exactly what it needed.
+The flower perked up and bloomed beautifully, showing off its bright pink petals
+From that day on, Wispy learned that while it's nice to be independent, working together with friends can help accomplish wonderful things.
+He still loved floating alone sometimes, but he always knew his cloud friends were there when he needed them.
+"""  # noqa: E501
 
 
 class Assistant(Agent):
@@ -140,6 +171,14 @@ class Assistant(Agent):
             tools=tools,
             chat_ctx=chat_ctx,
         )
+
+    # example of how to use the RunContext to fetch userdata
+    @function_tool
+    async def get_user_name_and_age(self, context: RunContext[MySessionInfo]) -> dict[str, Any]:
+        """
+        Get the user name and age for the current session.
+        """
+        return {"user_name": context.userdata.user_name, "age": context.userdata.age}
 
 
 async def entrypoint(ctx: agents.JobContext):
@@ -176,7 +215,7 @@ async def entrypoint(ctx: agents.JobContext):
                 llm=aws.realtime.RealtimeModel(
                     # example of how to set tool_choice
                     tool_choice="auto",
-                    max_tokens=2048,
+                    max_tokens=10_000,
                 )
             )
             await session.start(

@@ -48,7 +48,10 @@ class DataStreamAudioOutput(AudioOutput):
         self._started = False
         self._lock = asyncio.Lock()
 
-    async def start(self) -> None:
+        self._start_atask: asyncio.Task | None = None
+
+    @utils.log_exceptions(logger=logger)
+    async def _start_task(self) -> None:
         async with self._lock:
             if self._started:
                 return
@@ -82,8 +85,14 @@ class DataStreamAudioOutput(AudioOutput):
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
-        if not self._started:
-            await self.start()
+        # TODO(theomonnom): this class should be encapsuled somewhere else
+        # to allow for a clean close
+        if self._start_atask is None:
+            self._start_atask = asyncio.create_task(self._start_task())
+
+        # TODO(theomonnom): what to do if start takes a while?
+        # we want to avoid OOM & outdated speech?
+        await asyncio.shield(self._start_atask)
 
         await super().capture_frame(frame)
 

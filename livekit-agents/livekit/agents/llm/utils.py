@@ -81,6 +81,9 @@ class DiffOps:
     to_create: list[
         tuple[str | None, str]
     ]  # (previous_item_id, id), if previous_item_id is None, add to the root
+    to_update: list[
+        tuple[str | None, str]
+    ]  # (previous_item_id, id), the items with the same id but different content
 
 
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
@@ -89,25 +92,29 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
     old_ids = [m.id for m in old_ctx.items]
     new_ids = [m.id for m in new_ctx.items]
+
     lcs_ids = set(_compute_lcs(old_ids, new_ids))
+    old_ctx_by_id = {item.id: item for item in old_ctx.items}
 
     to_remove = [msg.id for msg in old_ctx.items if msg.id not in lcs_ids]
     to_create: list[tuple[str | None, str]] = []
+    to_update: list[tuple[str | None, str]] = []
 
-    last_id_in_sequence: str | None = None
+    prev_id: str | None = None  # None means root
     for new_msg in new_ctx.items:
-        if new_msg.id in lcs_ids:
-            last_id_in_sequence = new_msg.id
-        else:
-            if last_id_in_sequence is None:
-                prev_id = None  # root
-            else:
-                prev_id = last_id_in_sequence
-
+        if new_msg.id not in lcs_ids:
             to_create.append((prev_id, new_msg.id))
-            last_id_in_sequence = new_msg.id
+        else:
+            # check if the content is different
+            old_msg = old_ctx_by_id[new_msg.id]
+            if new_msg.type == "message" and old_msg.type == "message":
+                if new_msg.text_content != old_msg.text_content:
+                    to_update.append((prev_id, new_msg.id))
+                # TODO: check other content types
 
-    return DiffOps(to_remove=to_remove, to_create=to_create)
+        prev_id = new_msg.id
+
+    return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
 def is_context_type(ty: type) -> bool:

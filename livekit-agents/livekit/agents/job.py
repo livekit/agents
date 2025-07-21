@@ -110,7 +110,6 @@ class JobContext:
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
-        self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
             tuple[
                 JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK,
@@ -217,15 +216,6 @@ class JobContext:
                 information like job ID, trace information, or worker metadata.
         """
         self._log_fields = fields
-
-    def add_tracing_callback(
-        self,
-        callback: Callable[[], Coroutine[None, None, None]],
-    ) -> None:
-        """
-        Add a callback to be called when the job is about to receive a new tracing request.
-        """
-        self._tracing_callbacks.append(callback)
 
     def add_shutdown_callback(
         self,

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import aioboto3  # type: ignore
+from botocore.config import Config  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import (
@@ -111,6 +112,10 @@ class LLM(llm.LLM):
             top_p=top_p,
             additional_request_fields=additional_request_fields,
         )
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
 
     def chat(
         self,
@@ -205,7 +210,8 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            async with self._session.client("bedrock-runtime") as client:
+            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+            async with self._session.client("bedrock-runtime", config=config) as client:
                 response = await client.converse_stream(**self._opts)
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
