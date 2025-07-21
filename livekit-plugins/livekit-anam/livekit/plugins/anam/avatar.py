@@ -33,7 +33,7 @@ class AvatarSession:
     def __init__(
         self,
         *,
-        persona_config: NotGivenOr[PersonaConfig] = NOT_GIVEN,
+        persona_config: PersonaConfig,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
@@ -45,11 +45,7 @@ class AvatarSession:
         self.session_id: str | None = None
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-
-        if persona_config is NOT_GIVEN:
-            raise AnamException("persona_config must be set for ephemeral avatar")
-
-        self._persona_config: PersonaConfig = persona_config  # type: ignore
+        self._persona_config: PersonaConfig = persona_config
 
         api_url_val = api_url if api_url is not NOT_GIVEN else os.getenv("ANAM_API_URL")
         api_key_val = api_key if api_key is not NOT_GIVEN else os.getenv("ANAM_API_KEY")
