@@ -16,13 +16,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from ..utils.cloud.langfuse_sdk_uplaod import upload_wav_to_langfuse_media
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio, audio, codecs, log_exceptions
+
+# Conditional import for audio tracing
+lk_audio_trace = os.getenv("LK_AUDIO_TRACE", "false").lower() == "true"
+if lk_audio_trace:
+    from ..utils.cloud.langfuse_sdk_uplaod import upload_wav_to_langfuse_media
 
 if TYPE_CHECKING:
     from ..voice.io import TimedString
@@ -81,11 +85,16 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
-        try:
-            from langfuse import get_client
-            self._langfuse_client = get_client()
-        except Exception as e:
-            logger.warning(f"Failed to initialize Langfuse client, Langfuse will not be used: {e}")
+        
+        # Initialize Langfuse client only if audio tracing is enabled
+        if lk_audio_trace:
+            try:
+                from langfuse import get_client
+                self._langfuse_client = get_client()
+            except Exception as e:
+                logger.warning(f"Failed to initialize Langfuse client, Langfuse will not be used: {e}")
+                self._langfuse_client = None
+        else:
             self._langfuse_client = None
     
 
@@ -160,9 +169,15 @@ class ChunkedStream(ABC):
         self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
-        self._langfuse_client = self._tts._langfuse_client
+        # Initialize audio tracing variables only if enabled
+        if lk_audio_trace:
+            self._langfuse_client = self._tts._langfuse_client
+            self._collected_frames: list[rtc.AudioFrame] = []  # Store frames for Audio upload
+        else:
+            self._langfuse_client = None
+            self._collected_frames = None
+        
         self._tts_request_span: trace.Span | None = None
-        self._collected_frames: list[rtc.AudioFrame] = []  # Store frames for Audio upload
 
     @property
     def input_text(self) -> str:
@@ -190,8 +205,9 @@ class ChunkedStream(ABC):
                 ttfb = time.perf_counter() - start_time
 
             audio_duration += ev.frame.duration
-            # Store frames for Audio upload
-            self._collected_frames.append(ev.frame)
+            # Store frames for Audio upload only if audio tracing is enabled
+            if lk_audio_trace and self._collected_frames is not None:
+                self._collected_frames.append(ev.frame)
 
         duration = time.perf_counter() - start_time
 
@@ -250,17 +266,19 @@ class ChunkedStream(ABC):
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 
-                # Upload to langfuse Storage after successful synthesis
-                if self._langfuse_client is not None:
+                # Upload to langfuse Storage after successful synthesis only if audio tracing is enabled
+                if lk_audio_trace and self._langfuse_client is not None and self._collected_frames:
                     try:
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
                         wav_data = combined_frame.to_wav_bytes()
                         
-                        upload_wav_to_langfuse_media(
-                            wav_data=wav_data,
-                            langfuse_client=self._langfuse_client
-                        )
-                        logger.info(f"TTS audio uploaded langfuse media")
+                        # Import is conditional, so we need to check if it's available
+                        if 'upload_wav_to_langfuse_media' in globals():
+                            upload_wav_to_langfuse_media(
+                                wav_data=wav_data,
+                                langfuse_client=self._langfuse_client
+                            )
+                            logger.info(f"TTS audio uploaded langfuse media")
                     except Exception as e:
                         logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
@@ -359,9 +377,13 @@ class SynthesizeStream(ABC):
 
         self._tts_request_span: trace.Span | None = None
         
-        # Langfuse integration for streaming
-        self._langfuse_client = self._tts._langfuse_client
-        self._collected_frames: list[rtc.AudioFrame] = []  # Store frames for Audio upload
+        # Langfuse integration for streaming only if audio tracing is enabled
+        if lk_audio_trace:
+            self._langfuse_client = self._tts._langfuse_client
+            self._collected_frames: list[rtc.AudioFrame] = []  # Store frames for Audio upload
+        else:
+            self._langfuse_client = None
+            self._collected_frames = None
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -397,17 +419,19 @@ class SynthesizeStream(ABC):
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 
-                # Upload to langfuse Storage after successful synthesis
-                if self._langfuse_client is not None and self._collected_frames:
+                # Upload to langfuse Storage after successful synthesis only if audio tracing is enabled
+                if lk_audio_trace and self._langfuse_client is not None and self._collected_frames:
                     try:
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
                         wav_data = combined_frame.to_wav_bytes()
                         
-                        upload_wav_to_langfuse_media(
-                            wav_data=wav_data,
-                            langfuse_client=self._langfuse_client
-                        )
-                        logger.info(f"TTS streaming audio uploaded to langfuse media")
+                        # Import is conditional, so we need to check if it's available
+                        if 'upload_wav_to_langfuse_media' in globals():
+                            upload_wav_to_langfuse_media(
+                                wav_data=wav_data,
+                                langfuse_client=self._langfuse_client
+                            )
+                            logger.info(f"TTS streaming audio uploaded to langfuse media")
                     except Exception as e:
                         logger.warning(f"Failed to upload TTS streaming audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
@@ -429,8 +453,9 @@ class SynthesizeStream(ABC):
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
-                # Clear collected frames for retry
-                self._collected_frames.clear()
+                # Clear collected frames for retry only if audio tracing is enabled
+                if lk_audio_trace and self._collected_frames is not None:
+                    self._collected_frames.clear()
             finally:
                 await output_emitter.aclose()
 
@@ -504,8 +529,9 @@ class SynthesizeStream(ABC):
             request_id = ev.request_id
             segment_id = ev.segment_id
             
-            # Store frames for Audio upload
-            self._collected_frames.append(ev.frame)
+            # Store frames for Audio upload only if audio tracing is enabled
+            if lk_audio_trace and self._collected_frames is not None:
+                self._collected_frames.append(ev.frame)
 
             if ev.is_final:
                 _emit_metrics()
