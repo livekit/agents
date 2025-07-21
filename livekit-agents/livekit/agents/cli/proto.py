@@ -22,6 +22,7 @@ class CliArgs:
 
     console: bool = False
     # whether to run the worker in console mode (console subcommand
+    record: bool = False
 
     # register the worker to the worker pool
     register: bool = True
