@@ -33,25 +33,12 @@ class AvatarConnectionInfo:
     """Token for avatar worker to join"""
 
 
-async def launch_avatar_worker(
-    ctx: JobContext, avatar_dispatcher_url: str, avatar_identity: str
-) -> None:
+async def launch_avatar(ctx: JobContext, avatar_dispatcher_url: str, avatar_identity: str) -> None:
     """
     Send a request to the avatar service for it to join the room
 
     This function should be wrapped in a avatar plugin.
     """
-
-    # read the agent identity from the token
-    try:
-        decoded = ctx.decode_token()
-        agent_identity = decoded["sub"]
-    except (RuntimeError, KeyError):
-        if not ctx.room.isconnected():
-            raise RuntimeError(
-                "local participant identity not found in token, and room is not connected"
-            ) from None
-        agent_identity = ctx.room.local_participant.identity
 
     # create a token for the avatar to join the room
     token = (
@@ -60,7 +47,7 @@ async def launch_avatar_worker(
         .with_name("Avatar Runner")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
         .with_kind("agent")
-        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity})
+        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.token_details().identity})
         .to_jwt()
     )
 
@@ -81,7 +68,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         # tts=cartesia.TTS(),
     )
 
-    await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
+    await launch_avatar(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
     session.output.audio = DataStreamAudioOutput(
         ctx.room,
         destination_identity=AVATAR_IDENTITY,

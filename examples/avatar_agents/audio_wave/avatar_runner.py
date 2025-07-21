@@ -35,7 +35,7 @@ class AudioWaveGenerator(VideoGenerator):
         self._canvas.fill(255)
         self._wave_visualizer = WaveformVisualizer(sample_rate=options.audio_sample_rate)
 
-        # Use a AudioByteStream to chunk the audio frames to expected frame size
+        # use AudioByteStream to chunk the audio frames to expected frame size
         self._audio_bstream = utils.audio.AudioByteStream(
             sample_rate=options.audio_sample_rate,
             num_channels=options.audio_channels,
@@ -43,41 +43,14 @@ class AudioWaveGenerator(VideoGenerator):
         )
         self._frame_ts: deque[float] = deque(maxlen=options.video_fps)
 
+    # -- VideoGenerator abstract methods --
+
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
-        """Process and queue audio frames, handling resampling if needed.
-
-        Args:
-            frame: Either an AudioFrame to process or AudioFlushSentinel to flush
-        """
-        if isinstance(frame, AudioSegmentEnd):
-            if self._audio_resampler is not None:
-                # flush the resampler and queue any remaining frames
-                for resampled_frame in self._audio_resampler.flush():
-                    await self._audio_queue.put(resampled_frame)
-            await self._audio_queue.put(frame)
-            return
-
-        # initialize resampler if needed
-        needs_resampling = (
-            frame.sample_rate != self._options.audio_sample_rate
-            or frame.num_channels != self._options.audio_channels
-        )
-
-        if needs_resampling and self._audio_resampler is None:
-            self._audio_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=self._options.audio_sample_rate,
-                num_channels=self._options.audio_channels,
-            )
-
-        if self._audio_resampler is not None:
-            for resampled_frame in self._audio_resampler.push(frame):
-                await self._audio_queue.put(resampled_frame)
-        else:
-            # no resampling needed, queue directly
-            await self._audio_queue.put(frame)
+        """Called by the runner to push audio frames to the generator."""
+        await self._audio_queue.put(frame)
 
     def clear_buffer(self) -> None:
+        """Called by the runner to clear the audio buffer"""
         while not self._audio_queue.empty():
             try:
                 self._audio_queue.get_nowait()
@@ -88,9 +61,20 @@ class AudioWaveGenerator(VideoGenerator):
     def __aiter__(
         self,
     ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
-        return self._stream_impl()
+        """
+        Generate a continuous stream of video and audio frames.
 
-    async def _stream_impl(
+        Notes:
+            - When the audio buffer is empty, idle (silent) video frames are produced.
+            - Frame streaming speed is automatically paced to match the `video_fps` option.
+            - When an `AudioSegmentEnd` is encountered, it is yielded to notify the runner
+              that playback of the current audio segment is complete.
+        """
+        return self._video_generation_impl()
+
+    # -- End of VideoGenerator abstract methods --
+
+    async def _video_generation_impl(
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         while True:
@@ -106,19 +90,40 @@ class AudioWaveGenerator(VideoGenerator):
                 self._frame_ts.append(time.time())
                 continue
 
+            audio_frames: list[rtc.AudioFrame] = []
             if isinstance(frame, rtc.AudioFrame):
-                audio_frames = self._audio_bstream.push(frame.data)
-            else:
-                audio_frames = self._audio_bstream.flush()
+                # resample audio if needed
+                if not self._audio_resampler and (
+                    frame.sample_rate != self._options.audio_sample_rate
+                    or frame.num_channels != self._options.audio_channels
+                ):
+                    self._audio_resampler = rtc.AudioResampler(
+                        input_rate=frame.sample_rate,
+                        output_rate=self._options.audio_sample_rate,
+                        num_channels=self._options.audio_channels,
+                    )
 
+                if self._audio_resampler:
+                    for f in self._audio_resampler.push(frame):
+                        audio_frames += self._audio_bstream.push(f.data)
+                else:
+                    audio_frames += self._audio_bstream.push(frame.data)
+            else:
+                if self._audio_resampler:
+                    for f in self._audio_resampler.flush():
+                        audio_frames += self._audio_bstream.push(f.data)
+
+                audio_frames += self._audio_bstream.flush()
+
+            # generate video frames
             for audio_frame in audio_frames:
                 video_frame = self._generate_frame(audio_frame)
                 yield video_frame
                 yield audio_frame
                 self._frame_ts.append(time.time())
 
+            # send the AudioSegmentEnd back to notify the playback finished
             if isinstance(frame, AudioSegmentEnd):
-                # send the AudioSegmentEnd back to notify the playback finished
                 yield AudioSegmentEnd()
 
     def _generate_frame(self, audio_frame: rtc.AudioFrame | None) -> rtc.VideoFrame:
