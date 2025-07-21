@@ -82,7 +82,6 @@ class AnamAPI:
             "livekitUrl": livekit_url,
             "livekitToken": livekit_token,
         }
-        print("self._api_key", self._api_key)
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",
