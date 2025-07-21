@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, WorkerType, cli
 from livekit.plugins import anam, openai
 
-
 logger = logging.getLogger("anam-avatar-example")
 logger.setLevel(logging.INFO)
 
@@ -41,6 +40,7 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
     session.generate_reply(instructions="say hello to the user")
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))

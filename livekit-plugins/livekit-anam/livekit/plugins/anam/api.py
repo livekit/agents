@@ -1,24 +1,22 @@
 import asyncio
 import os
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Optional
 
 import aiohttp
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    NotGivenOr,
 )
 
-
+from .errors import AnamException
 from .log import logger
 from .types import PersonaConfig
-from .errors import AnamException
-
 
 DEFAULT_API_URL = "https://api.anam.ai"
+
 
 class AnamAPI:
     """
@@ -64,10 +62,7 @@ class AnamAPI:
             await self._session.close()
 
     async def create_session_token(
-        self,
-        persona_config: PersonaConfig,
-        livekit_url: str,
-        livekit_token: str
+        self, persona_config: PersonaConfig, livekit_url: str, livekit_token: str
     ) -> str:
         """
         Creates a session token to authorize starting an engine session.
@@ -77,24 +72,23 @@ class AnamAPI:
         """
         payload = {
             "personaConfig": {
-                "type": "ephemeral", 
+                "type": "ephemeral",
                 "name": persona_config.name,
                 "avatarId": persona_config.avatarId,
-                "llmId": "CUSTOMER_CLIENT_V1"
+                "llmId": "CUSTOMER_CLIENT_V1",
             },
         }
         payload["environment"] = {
             "livekitUrl": livekit_url,
             "livekitToken": livekit_token,
         }
-        print("self._api_key",self._api_key)
+        print("self._api_key", self._api_key)
         headers = {
-            "Authorization": f"Bearer {self._api_key}", # Use API Key here
+            "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",
         }
         response_data = await self._post("/v1/auth/session-token", payload, headers)
 
-        
         session_token = response_data.get("sessionToken")
         if not session_token:
             raise AnamException("Failed to retrieve sessionToken from API response.")
@@ -116,12 +110,14 @@ class AnamAPI:
             The session details, including sessionId and engine host info.
         """
         headers = {
-            "Authorization": f"Bearer {session_token}", # Use Session Token here
+            "Authorization": f"Bearer {session_token}",  # Use Session Token here
             "Content-Type": "application/json",
         }
         return await self._post("/v1/engine/session", {}, headers)
 
-    async def _post(self, endpoint: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
+    async def _post(
+        self, endpoint: str, payload: Dict[str, Any], headers: Dict[str, str]
+    ) -> Dict[str, Any]:
         """
         Internal method to make a POST request with retry logic.
         """
@@ -153,7 +149,7 @@ class AnamAPI:
                         raise APIConnectionError(f"Failed to connect to Anam API at {url}") from e
                     await asyncio.sleep(self._conn_options.retry_interval)
         finally:
-            if not self._session: # if we created the session, we close it
+            if not self._session:  # if we created the session, we close it
                 await session.close()
-        
+
         raise APIConnectionError("Failed to call Anam API after all retries.")

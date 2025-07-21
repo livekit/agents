@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Literal, Optional
 
 import aiohttp
 
@@ -18,11 +17,10 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .log import logger
 from .api import AnamAPI
-from .types import PersonaConfig
 from .errors import AnamException
-
+from .log import logger
+from .types import PersonaConfig
 
 SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "anam-avatar-agent"
@@ -50,7 +48,7 @@ class AvatarSession:
 
         if persona_config is NOT_GIVEN:
             raise AnamException("persona_config must be set for ephemeral avatar")
-        
+
         self._persona_config: PersonaConfig = persona_config  # type: ignore
 
         api_url_val = api_url if api_url is not NOT_GIVEN else os.getenv("ANAM_API_URL")
@@ -58,8 +56,7 @@ class AvatarSession:
 
         if not api_url_val or not api_key_val:
             raise AnamException(
-                "ANAM_API_URL and ANAM_API_KEY must be set "
-                "by arguments or environment variables"
+                "ANAM_API_URL and ANAM_API_KEY must be set by arguments or environment variables"
             )
 
         self._api_url = api_url_val
@@ -102,9 +99,10 @@ class AvatarSession:
 
         livekit_token = (
             api.AccessToken(
-                api_key=livekit_api_key, 
+                api_key=livekit_api_key,
                 api_secret=livekit_api_secret,
-            ).with_kind("agent")
+            )
+            .with_kind("agent")
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
@@ -117,7 +115,6 @@ class AvatarSession:
             api_url=self._api_url,
             conn_options=self._conn_options,
         ) as anam_api:
-
             session_token = await anam_api.create_session_token(
                 persona_config=self._persona_config,
                 livekit_url=livekit_url,
