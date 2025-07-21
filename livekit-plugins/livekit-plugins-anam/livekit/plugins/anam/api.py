@@ -1,5 +1,4 @@
 import asyncio
-import os
 from typing import Any, Optional
 
 import aiohttp
@@ -27,8 +26,8 @@ class AnamAPI:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_url: str = DEFAULT_API_URL,
+        api_key: str,
+        api_url: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         session: Optional[aiohttp.ClientSession] = None,
@@ -43,10 +42,7 @@ class AnamAPI:
             conn_options: Connection options for the aiohttp session.
             session: An optional existing aiohttp.ClientSession to use for requests.
         """
-        self._api_key = api_key or os.getenv("ANAM_API_KEY")
-        if not self._api_key:
-            raise AnamException("ANAM_API_KEY must be provided or set as an environment variable.")
-
+        self._api_key = api_key
         self._api_url = api_url
         self._conn_options = conn_options
         self._session = session

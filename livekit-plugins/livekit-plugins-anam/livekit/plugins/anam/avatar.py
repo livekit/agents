@@ -17,7 +17,7 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import AnamAPI
+from .api import DEFAULT_API_URL, AnamAPI
 from .errors import AnamException
 from .log import logger
 from .types import PersonaConfig
@@ -47,13 +47,12 @@ class AvatarSession:
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._persona_config: PersonaConfig = persona_config
 
-        api_url_val = api_url if api_url is not NOT_GIVEN else os.getenv("ANAM_API_URL")
+        api_url_val = api_url if api_url is not NOT_GIVEN else os.getenv(
+            "ANAM_API_URL", DEFAULT_API_URL)
         api_key_val = api_key if api_key is not NOT_GIVEN else os.getenv("ANAM_API_KEY")
 
-        if not api_url_val or not api_key_val:
-            raise AnamException(
-                "ANAM_API_URL and ANAM_API_KEY must be set by arguments or environment variables"
-            )
+        if not api_key_val:
+            raise AnamException("ANAM_API_KEY must be set by arguments or environment variables")
 
         self._api_url = api_url_val
         self._api_key = api_key_val
