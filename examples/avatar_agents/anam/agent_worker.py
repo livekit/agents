@@ -4,8 +4,8 @@ import os
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, WorkerType, cli
-from livekit.plugins import openai
-from livekit.plugins import anam
+from livekit.plugins import anam, openai
+
 
 logger = logging.getLogger("anam-avatar-example")
 logger.setLevel(logging.INFO)
