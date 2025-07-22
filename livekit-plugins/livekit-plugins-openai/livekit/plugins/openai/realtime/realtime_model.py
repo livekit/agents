@@ -302,6 +302,7 @@ class RealtimeModel(llm.RealtimeModel):
             conn_options=conn_options,
         )
         self._http_session = http_session
+        self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
     @classmethod
@@ -449,7 +450,11 @@ class RealtimeModel(llm.RealtimeModel):
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
-            self._http_session = utils.http_context.http_session()
+            try:
+                self._http_session = utils.http_context.http_session()
+            except RuntimeError:
+                self._http_session = aiohttp.ClientSession()
+                self._http_session_owned = True
 
         return self._http_session
 
@@ -458,7 +463,9 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions.add(sess)
         return sess
 
-    async def aclose(self) -> None: ...
+    async def aclose(self) -> None:
+        if self._http_session_owned and self._http_session:
+            await self._http_session.close()
 
 
 def process_base_url(
