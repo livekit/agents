@@ -1,8 +1,10 @@
 import logging
+
 from dotenv import load_dotenv
-from livekit.agents import JobContext, WorkerOptions, cli, AutoSubscribe
-from livekit.plugins import rime
+
 from livekit import rtc
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit.plugins import rime
 
 """
 This script demonstrates text-to-speech capabilities using Rime's TTS service with LiveKit.
@@ -40,18 +42,17 @@ async def entrypoint(ctx: JobContext) -> None:
         # Initialize LiveKit connection with no auto-subscription
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
         await ctx.wait_for_participant()
-        logger.info(
-            "Connected to LiveKit room successfully And participant joined")
+        logger.info("Connected to LiveKit room successfully And participant joined")
         # Initialize Rime TTS with specific voice and generation parameters
         # For available models: https://docs.rime.ai/api-reference/models
         # For available voices: https://docs.rime.ai/api-reference/voices
         tts = rime.TTS(
-            model="arcana",          # The TTS model to use
-            speaker="astra",         # Voice ID to use for synthesis
-            temperature=0.5,         # Controls speech randomness
+            model="arcana",  # The TTS model to use
+            speaker="astra",  # Voice ID to use for synthesis
+            temperature=0.5,  # Controls speech randomness
             repetition_penalty=1.5,  # Prevents repetitive patterns
-            top_p=1.0,              # Controls sound diversity
-            max_tokens=5000,         # Maximum tokens for generation
+            top_p=1.0,  # Controls sound diversity
+            max_tokens=5000,  # Maximum tokens for generation
         )
 
         logger.info("TTS initialized successfully")
@@ -68,9 +69,7 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("Audio track published successfully")
 
         # Sample text to demonstrate TTS capabilities
-        text = (
-            """Hi! I'm using Rime's Arcana model with the Astra voice. I can speak naturally with different tones, paces, and emotions. Want to try other voices like Luna, Celeste, or Orion?"""
-        )
+        text = """Hi! I'm using Rime's Arcana model with the Astra voice. I can speak naturally with different tones, paces, and emotions. Want to try other voices like Luna, Celeste, or Orion?"""
 
         # Stream synthesized audio
         logger.info("Starting audio synthesis...")
