@@ -18,7 +18,7 @@ import os
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
@@ -360,17 +360,17 @@ def _create_speech_recognizer(
     if is_given(config.profanity):
         speech_config.set_profanity(config.profanity)
 
-    auto_detect_source_language_config = None
-    if config.language and len(config.language) >= 1:
-        auto_detect_source_language_config = (
+    kwargs: dict[str, Any] = {}
+    if config.language and len(config.language) > 1:
+        kwargs["auto_detect_source_language_config"] = (
             speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
         )
+    elif config.language and len(config.language) == 1:
+        kwargs["language"] = config.language[0]
 
     audio_config = speechsdk.audio.AudioConfig(stream=stream)
     speech_recognizer = speechsdk.SpeechRecognizer(
-        speech_config=speech_config,
-        audio_config=audio_config,
-        auto_detect_source_language_config=auto_detect_source_language_config,
+        speech_config=speech_config, audio_config=audio_config, **kwargs
     )
 
     return speech_recognizer
