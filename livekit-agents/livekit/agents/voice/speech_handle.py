@@ -174,7 +174,7 @@ class SpeechHandle:
             self._chat_items.append(item)
 
     def _authorize_generation(self) -> None:
-        fut = asyncio.Future()
+        fut = asyncio.Future[None]()
         self._generations.append(fut)
         self._authorize_event.set()
 
