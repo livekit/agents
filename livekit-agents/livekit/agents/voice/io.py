@@ -251,6 +251,9 @@ class AgentInput:
         self._video_enabled = True
 
     def set_audio_enabled(self, enable: bool) -> None:
+        if enable and not self._audio_stream:
+            logger.warning("Cannot enable audio input when it's not set")
+
         if enable == self._audio_enabled:
             return
 
@@ -265,6 +268,9 @@ class AgentInput:
             self._audio_stream.on_detached()
 
     def set_video_enabled(self, enable: bool) -> None:
+        if enable and not self._video_stream:
+            logger.warning("Cannot enable video input when it's not set")
+
         if enable == self._video_enabled:
             return
 
@@ -324,6 +330,9 @@ class AgentOutput:
         self._transcription_enabled = True
 
     def set_video_enabled(self, enabled: bool) -> None:
+        if enabled and not self._video_sink:
+            logger.warning("Cannot enable video output when it's not set")
+
         if enabled == self._video_enabled:
             return
 
@@ -338,6 +347,9 @@ class AgentOutput:
             self._video_sink.on_detached()
 
     def set_audio_enabled(self, enabled: bool) -> None:
+        if enabled and not self._audio_sink:
+            logger.warning("Cannot enable audio output when it's not set")
+
         if enabled == self._audio_enabled:
             return
 
@@ -352,6 +364,9 @@ class AgentOutput:
             self._audio_sink.on_detached()
 
     def set_transcription_enabled(self, enabled: bool) -> None:
+        if enabled and not self._transcription_sink:
+            logger.warning("Cannot enable transcription output when it's not set")
+
         if enabled == self._transcription_enabled:
             return
 
