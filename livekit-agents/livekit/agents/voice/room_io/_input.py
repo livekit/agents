@@ -143,7 +143,6 @@ class _ParticipantInputStream(Generic[T], ABC):
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
-            print(event.frame)
             await self._data_ch.send(cast(T, event.frame))
 
         logger.debug("stream closed", extra=extra)
