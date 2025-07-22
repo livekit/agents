@@ -74,9 +74,9 @@ class RunContext(Generic[Userdata_T]):
         """Waits for the speech playout corresponding to this function call step.
 
         Unlike `SpeechHandle.wait_for_playout`, which waits for the full
-        assistant turn to complete (including post-function processing),
-        this method only waits for the speech output associated with this
-        function call step to finish playing."""
+        assistant turn to complete (including all function tools),
+        this method only waits for the assistant's spoken response prior running
+        this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
 
