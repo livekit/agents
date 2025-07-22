@@ -41,7 +41,7 @@ class RunContext(Generic[Userdata_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
 
-        self._initial_step_idx = speech_handle.num_steps
+        self._initial_step_idx = speech_handle.num_steps - 1
 
     @property
     def session(self) -> AgentSession[Userdata_T]:

@@ -30,7 +30,7 @@ class SpeechHandle:
         # internal tasks used by this generation
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
-        self._num_steps = 0
+        self._num_steps = 1
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
