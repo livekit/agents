@@ -143,6 +143,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
+            print(event.frame)
             await self._data_ch.send(cast(T, event.frame))
 
         logger.debug("stream closed", extra=extra)
@@ -224,7 +225,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
             noise_cancellation=self._noise_cancellation,
-            # frame_size_ms=50,  # TODO: support frame_size_ms when BVC is enabled
+            frame_size_ms=50,
         )
 
     @override
