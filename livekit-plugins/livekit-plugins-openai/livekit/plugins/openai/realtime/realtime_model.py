@@ -1557,11 +1557,17 @@ class RealtimeSession(
             return
 
         if event.response.status == "failed":
+            if event.response.status_details and hasattr(event.response.status_details, "error"):
+                error_type = getattr(event.response.status_details.error, "type", "unknown")
+                error_body = event.response.status_details.error
+                message = f"OpenAI Realtime API response failed with error type: {error_type}"
+            else:
+                error_body = None
+                message = "OpenAI Realtime API response failed with unknown error"
             self._emit_error(
                 APIError(
-                    message="OpenAI Realtime API response failed with error type: "
-                    f" {event.response.status_details.error.type}",
-                    body=event.response.status_details.error,
+                    message=message,
+                    body=error_body,
                     retryable=True,
                 ),
                 # all possible faulures undocumented by openai,
