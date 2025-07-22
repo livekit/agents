@@ -117,7 +117,7 @@ class SpeechHandle:
         return self
 
     async def wait_for_playout(self) -> None:
-        await asyncio.shield(self._done_fut)
+        await asyncio.shield(self._generation_fut)
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await_impl() -> SpeechHandle:
