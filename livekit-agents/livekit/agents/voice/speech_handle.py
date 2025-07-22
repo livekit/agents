@@ -25,6 +25,8 @@ class SpeechHandle:
         self._generation_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
+
+        # indicate if the speech was interrupted by a user turn
         self._interrupted_by_user: bool = False
 
         # internal tasks used by this generation
@@ -62,10 +64,6 @@ class SpeechHandle:
         return self._interrupt_fut.done()
 
     @property
-    def interrupted_by_user(self) -> bool:
-        return self.interrupted and self._interrupted_by_user
-
-    @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
@@ -97,7 +95,7 @@ class SpeechHandle:
     def done(self) -> bool:
         return self._done_fut.done()
 
-    def interrupt(self, *, from_user: bool = False) -> SpeechHandle:
+    def interrupt(self) -> SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:
@@ -109,20 +107,17 @@ class SpeechHandle:
         if not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
-        if self._cancel():
-            self._interrupted_by_user = from_user
+        self._cancel()
         return self
 
-    def _cancel(self) -> bool:
+    def _cancel(self) -> SpeechHandle:
         if self.done():
-            return False
+            return self
 
-        try:
+        with contextlib.suppress(asyncio.InvalidStateError):
             self._interrupt_fut.set_result(None)
-        except asyncio.InvalidStateError:
-            return False
 
-        return True
+        return self
 
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._done_fut)

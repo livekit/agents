@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
+    AgentFalseInterruptedEvent,
     AgentSession,
-    AgentSpeechResumeEvent,
     JobContext,
     WorkerOptions,
     cli,
@@ -32,8 +32,8 @@ async def entrypoint(ctx: JobContext):
         speech_resume_delay=3.0,
     )
 
-    @session.on("agent_speech_resume")
-    def _agent_speech_resume(ev: AgentSpeechResumeEvent):
+    @session.on("agent_false_interrupted")
+    def _agent_false_interrupted(ev: AgentFalseInterruptedEvent):
         logger.info(
             "Resuming agent from interruption",
             extra={"instructions": ev.instructions, "forwarded_text": ev.forwarded_text},

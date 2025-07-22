@@ -39,7 +39,7 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
-    AgentSpeechResumeEvent,
+    AgentFalseInterruptedEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -306,7 +306,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # used to resume the interrupted speech
         self._speech_resume_timer: asyncio.TimerHandle | None = None
-        self._speech_resume_event: AgentSpeechResumeEvent | None = None
+        self._speech_resume_event: AgentFalseInterruptedEvent | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -968,7 +968,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
-    def _schedule_speech_resume(self, ev: AgentSpeechResumeEvent) -> None:
+    def _schedule_speech_resume(self, ev: AgentFalseInterruptedEvent) -> None:
         if self._opts.speech_resume_delay is None:
             return
 
@@ -976,7 +976,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._agent_state != "listening" or self._user_state != "listening":
                 return
 
-            self.emit("agent_speech_resume", ev)
+            self.emit("agent_false_interrupted", ev)
             self._speech_resume_timer = None
 
         self._cancel_speech_resume()
