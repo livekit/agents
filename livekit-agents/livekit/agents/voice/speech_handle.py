@@ -125,7 +125,7 @@ class SpeechHandle:
                 raise RuntimeError(
                     f"cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{info.function_call.name}` that owns this SpeechHandle. "
                     "This creates a circular wait: the speech handle is waiting for the function tool to complete, "
-                    "while the function tool is simultaneously waiting for the speech handle.\n\n"
+                    "while the function tool is simultaneously waiting for the speech handle.\n"
                     "To wait for the assistant’s spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead."
                 )
 
