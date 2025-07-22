@@ -186,9 +186,9 @@ class _JobProc:
 
     def _start_job(self, msg: StartJobRequest) -> None:
         if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
-            from .mock_room import MockRoom
+            from .mock_room import create_mock_room
 
-            self._room = cast(rtc.Room, MockRoom)
+            self._room = cast(rtc.Room, create_mock_room())
         else:
             self._room = rtc.Room()
 
