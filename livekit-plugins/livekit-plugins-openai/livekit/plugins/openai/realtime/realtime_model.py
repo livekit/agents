@@ -1552,6 +1552,8 @@ class RealtimeSession(
 
         For example this method will emit an error if we receive a "failed" status, e.g.
         with type "invalid_request_error" due to code "inference_rate_limit_exceeded".
+
+        In other failures it will emit a debug level log.
         """
         if event.response.status == "completed":
             return
@@ -1575,7 +1577,7 @@ class RealtimeSession(
                 recoverable=True,
             )
         elif event.response.status in {"cancelled", "incomplete"}:
-            logger.warning(
+            logger.debug(
                 "OpenAI Realtime API response done but not complete with status: %s",
                 event.response.status,
                 extra={
