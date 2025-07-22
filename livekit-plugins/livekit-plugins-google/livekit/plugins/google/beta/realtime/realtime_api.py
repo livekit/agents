@@ -786,6 +786,10 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
 
+        # emit input_speech_started event before starting a new generation
+        # to interrupt the previous audio playout if any
+        self._handle_input_speech_started()
+
         response_id = utils.shortuuid("GR_")
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
@@ -882,6 +886,9 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation or self._current_generation._done:
             return
 
+        # emit input_speech_stopped event after the generation is done
+        self._handle_input_speech_stopped()
+
         gen = self._current_generation
 
         # The only way we'd know that the transcription is complete is by when they are
@@ -925,6 +932,14 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+
+    def _handle_input_speech_stopped(self) -> None:
+        self.emit(
+            "input_speech_stopped",
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=self._realtime_model.capabilities.user_transcription
+            ),
+        )
 
     def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> None:
         if not self._current_generation:
