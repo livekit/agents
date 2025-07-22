@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import cache
 from typing import Any
 
 
@@ -530,5 +531,11 @@ presents project projects reci-procity re-cog-ni-zance ref-or-ma-tion
 ret-ri-bu-tion ta-ble
 """
 
-hyphenator = Hyphenator(PATTERNS, EXCEPTIONS)
-hyphenate_word = hyphenator.hyphenate_word
+
+@cache
+def _get_hyphenator() -> Hyphenator:
+    return Hyphenator(PATTERNS, EXCEPTIONS)
+
+
+def hyphenate_word(word: str) -> list[str]:
+    return _get_hyphenator().hyphenate_word(word)
