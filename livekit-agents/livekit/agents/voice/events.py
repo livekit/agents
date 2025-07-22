@@ -41,6 +41,8 @@ class RunContext(Generic[Userdata_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
 
+        self._initial_step_idx = speech_handle.num_steps
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -67,6 +69,15 @@ class RunContext(Generic[Userdata_T]):
             RuntimeError: If the SpeechHandle is already interrupted.
         """
         self.speech_handle.allow_interruptions = False
+
+    async def wait_for_playout(self) -> None:
+        """Waits for the speech playout corresponding to this function call step.
+
+        Unlike `SpeechHandle.wait_for_playout`, which waits for the full
+        assistant turn to complete (including post-function processing),
+        this method only waits for the speech output associated with this
+        function call step to finish playing."""
+        await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
 
 EventTypes = Literal[
