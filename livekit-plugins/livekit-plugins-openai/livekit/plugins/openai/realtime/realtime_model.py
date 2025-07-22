@@ -1545,6 +1545,40 @@ class RealtimeSession(
             ),
         )
         self.emit("metrics_collected", metrics)
+        self._handle_response_done_but_not_complete(event)
+
+    def _handle_response_done_but_not_complete(self, event: ResponseDoneEvent) -> None:
+            """Handle response done but not complete, i.e. cancelled, incomplete or failed.
+
+            For example this method will emit an error if we receive a "failed" status, e.g.
+            with type "invalid_request_error" due to code "inference_rate_limit_exceeded".
+            """
+            if event.response.status == "completed":
+                return
+
+            if event.response.status == "failed":
+                self._emit_error(
+                    APIError(
+                        message="OpenAI Realtime API response failed with error type: "
+                        f" {event.response.status_details.error.type}",
+                        body=event.response.status_details.error,
+                        retryable=True,
+                    ),
+                    # all possible faulures undocumented by openai,
+                    # so we assume optimistically all retryable/recoverable
+                    recoverable=True,
+                )
+            elif event.response.status in {"cancelled", "incomplete"}:
+                logger.warning(
+                    "OpenAI Realtime API response done but not complete with status: %s",
+                    event.response.status,
+                    extra={
+                        "event_id": event.response.id,
+                        "event_response_status": event.response.status,
+                    },
+                )
+            else:
+                logger.debug("Unknown response status: %s", event.response.status)
 
     def _handle_error(self, event: ErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):
