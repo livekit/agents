@@ -119,7 +119,7 @@ class PreConnectAudioHandler:
             # check if we need to decode opus
             is_opus = False
             if reader.info.mime_type:
-                # JS sends "mime_type" as "audio/opus", RN sends it as "audio/webm;codecs=opus"
+                # JS may send "mime_type" as "audio/opus" or "audio/webm;codecs=opus"
                 is_opus = (
                     reader.info.mime_type == "audio/opus" or "codecs=opus" in reader.info.mime_type
                 )
