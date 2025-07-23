@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -45,8 +46,8 @@ class SimliConfig:
     max_session_length: int = 600
     max_idle_time: int = 30
 
-    def create_json(self):
-        result = {}
+    def create_json(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         result["apiKey"] = self.api_key
         result["faceId"] = f"{self.face_id}/{self.emotion_id}"
         result["syncAudio"] = True
@@ -122,12 +123,12 @@ class AvatarSession:
         )
 
         logger.debug("starting avatar session")
-        simli_session_token = await self._http_session.post(
+        simli_session_token = await self._ensure_http_session().post(
             f"{self.api_url}/startAudioToVideoSession", json=self._simli_config.create_json()
         )
         simli_session_token.raise_for_status()
         (
-            await self._http_session.post(
+            await self._ensure_http_session().post(
                 f"{self.api_url}/StartLivekitAgentsSession",
                 json={
                     "session_token": (await simli_session_token.json())["session_token"],
