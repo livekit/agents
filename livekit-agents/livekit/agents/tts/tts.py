@@ -37,6 +37,7 @@ lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 async def _upload_to_langfuse_async(
     wav_data: bytes, 
     langfuse_client, 
+    current_span,
     operation_type: str = "TTS"
 ) -> None:
     """Async wrapper for Langfuse upload to avoid blocking main thread"""
@@ -49,7 +50,8 @@ async def _upload_to_langfuse_async(
                 None,
                 upload_wav_to_langfuse_media,
                 wav_data,
-                langfuse_client
+                langfuse_client,
+                current_span
             )
             logger.info(f"{operation_type} audio uploaded to langfuse media (async)")
     except Exception as e:
@@ -200,6 +202,7 @@ class ChunkedStream(ABC):
             self._langfuse_client = None
             self._collected_frames = None
         
+        self._upload_task = None
         self._tts_request_span: trace.Span | None = None
 
     @property
@@ -297,9 +300,10 @@ class ChunkedStream(ABC):
                         wav_data = combined_frame.to_wav_bytes()
                         
                         # Start upload task without awaiting it (fire and forget)
-                        asyncio.create_task(_upload_to_langfuse_async(
+                        self._upload_task = asyncio.create_task(_upload_to_langfuse_async(
                             wav_data=wav_data,
                             langfuse_client=self._langfuse_client,
+                            current_span=current_span,
                             operation_type="TTS"
                         ))
                     except Exception as e:
@@ -344,6 +348,9 @@ class ChunkedStream(ABC):
         await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
         await self._metrics_task
+        
+        if self._upload_task is not None:
+            await self._upload_task
         await self._tee.aclose()
         if self._tts_request_span:
             self._tts_request_span.end()
@@ -399,6 +406,7 @@ class SynthesizeStream(ABC):
         self._mtc_text = ""
         self._num_segments = 0
 
+        self._upload_task = None
         self._tts_request_span: trace.Span | None = None
         
         # Langfuse integration for streaming only if audio tracing is enabled
@@ -450,9 +458,10 @@ class SynthesizeStream(ABC):
                         wav_data = combined_frame.to_wav_bytes()
                         
                         # Start upload task without awaiting it (fire and forget)
-                        asyncio.create_task(_upload_to_langfuse_async(
+                        self._upload_task = asyncio.create_task(_upload_to_langfuse_async(
                             wav_data=wav_data,
                             langfuse_client=self._langfuse_client,
+                            current_span=current_span,
                             operation_type="TTS Streaming"
                         ))
                     except Exception as e:
@@ -609,6 +618,9 @@ class SynthesizeStream(ABC):
 
         if self._metrics_task is not None:
             await self._metrics_task
+
+        if self._upload_task is not None:
+            await self._upload_task
 
         await self._tee.aclose()
 
