@@ -367,9 +367,7 @@ class _ParticipantStreamTranscriptionOutput:
             logger.warning("failed to publish transcription", exc_info=e)
 
     async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
-        attributes = {
-            ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
-        }
+        attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 

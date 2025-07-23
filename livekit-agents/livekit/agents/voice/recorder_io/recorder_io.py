@@ -72,7 +72,7 @@ class RecorderIO:
             self._started = False
 
     def record_input(self, audio_input: io.AudioInput) -> RecorderAudioInput:
-        self._in_record = RecorderAudioInput(recording_io=self, audio_input=audio_input)
+        self._in_record = RecorderAudioInput(recording_io=self, source=audio_input)
         return self._in_record
 
     def record_output(self, audio_output: io.AudioOutput) -> RecorderAudioOutput:
@@ -222,9 +222,9 @@ class RecorderIO:
 
 
 class RecorderAudioInput(io.AudioInput):
-    def __init__(self, *, recording_io: RecorderIO, audio_input: io.AudioInput) -> None:
-        super().__init__(label="RecorderIO")
-        self.__audio_input = audio_input
+    def __init__(self, *, recording_io: RecorderIO, source: io.AudioInput) -> None:
+        super().__init__(label="RecorderIO", source=source)
+        self.__audio_input = source
         self.__recording_io = recording_io
         self.__acc_frames: list[rtc.AudioFrame] = []
 

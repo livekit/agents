@@ -532,19 +532,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             def _collect_chain(out: io.TextOutput | io.VideoOutput | io.AudioOutput | None):
                 return [] if out is None else [out] + _collect_chain(out.next_in_chain)
 
-            audio_input = _collect_source(self.input.audio)
-            video_input = _collect_source(self.input.video)
+            audio_input = _collect_source(self.input.audio)[::-1]
+            video_input = _collect_source(self.input.video)[::-1]
 
             audio_output = _collect_chain(self.output.audio)
             video_output = _collect_chain(self.output.video)
-            transcription_output = _collect_chain(self.output.transcription)
+            transcript_output = _collect_chain(self.output.transcription)
 
-            print(audio_input)
-            print(video_input)
+            logger.debug(
+                "using audio io: %s -> `AgentSession` -> %s",
+                " -> ".join([f"`{out.label}`" for out in audio_input]) or "(none)",
+                " -> ".join([f"`{out.label}`" for out in audio_output]) or "(none)",
+            )
 
-            print(audio_output)
-            print(video_output)
-            print(transcription_output)
+            logger.debug(
+                "using transcript io: `AgentSession` -> %s",
+                " -> ".join([f"`{out.label}`" for out in transcript_output]) or "(none)",
+            )
+
+            if video_input or video_output:
+                logger.debug(
+                    "using video io: %s > `AgentSession` > %s",
+                    " -> ".join([f"`{out.label}`" for out in video_input]) or "(none)",
+                    " -> ".join([f"`{out.label}`" for out in video_output]) or "(none)",
+                )
 
     async def drain(self) -> None:
         if self._activity is None:
