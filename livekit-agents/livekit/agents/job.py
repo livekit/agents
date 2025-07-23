@@ -433,16 +433,8 @@ class JobContext:
                 lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
 
-    def decode_token(self, api_secret: NotGivenOr[str] = NOT_GIVEN) -> dict[str, Any]:
-        options = {}
-        if not is_given(api_secret):
-            options["verify_signature"] = False
-            api_secret = ""
-        return jwt.decode(self._info.token, api_secret, options=options, algorithms=["HS256"])  # type: ignore
-
     def token_details(self) -> Claims:
-        claims = self.decode_token()
-        return api.TokenVerifier.decode_claims(claims)
+        return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
