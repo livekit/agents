@@ -85,7 +85,7 @@ EventTypes = Literal[
     "agent_state_changed",
     "user_input_transcribed",
     "conversation_item_added",
-    "agent_false_interrupted",
+    "agent_false_interruption",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -120,9 +120,9 @@ class UserInputTranscribedEvent(BaseModel):
 
 
 class AgentFalseInterruptedEvent(BaseModel):
-    type: Literal["agent_false_interrupted"] = "agent_false_interrupted"
+    type: Literal["agent_false_interruption"] = "agent_false_interruption"
     speech_id: str
-    forwarded_text: str
+    message: ChatMessage
     instructions: str | None = None
     created_at: float = Field(default_factory=time.time)
 

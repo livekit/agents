@@ -1379,21 +1379,19 @@ class AgentActivity(RecognitionHooks):
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
 
+            msg = self._agent._chat_ctx.add_message(
+                role="assistant",
+                content=forwarded_text,
+                interrupted=speech_handle.interrupted,
+            )
             if forwarded_text:
-                msg = self._agent._chat_ctx.add_message(
-                    role="assistant",
-                    content=forwarded_text,
-                    interrupted=speech_handle.interrupted,
-                )
                 speech_handle._chat_items.append(msg)
                 self._session._conversation_item_added(msg)
 
             if speech_handle._interrupted_by_user:
-                self._session._schedule_speech_resume(
+                self._session._schedule_agent_false_interruption(
                     AgentFalseInterruptedEvent(
-                        speech_id=speech_handle.id,
-                        instructions=None,
-                        forwarded_text=forwarded_text,
+                        speech_id=speech_handle.id, instructions=None, message=msg
                     )
                 )
 
@@ -1594,21 +1592,19 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
+            copy_msg = generated_msg.model_copy()
+            copy_msg.content = [forwarded_text]
+            copy_msg.interrupted = True
             if generated_msg:
-                copy_msg = generated_msg.model_copy()
-                copy_msg.content = [forwarded_text]
-                copy_msg.interrupted = True
                 if forwarded_text:
                     self._agent._chat_ctx.insert(copy_msg)
                     self._session._conversation_item_added(copy_msg)
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if speech_handle._interrupted_by_user:
-                self._session._schedule_speech_resume(
+                self._session._schedule_agent_false_interruption(
                     AgentFalseInterruptedEvent(
-                        speech_id=speech_handle.id,
-                        instructions=instructions,
-                        forwarded_text=forwarded_text,
+                        speech_id=speech_handle.id, instructions=instructions, message=copy_msg
                     )
                 )
 
@@ -1957,25 +1953,22 @@ class AgentActivity(RecognitionHooks):
                         audio_end_ms=int(playback_position * 1000),
                         audio_transcript=forwarded_text,
                     )
-
+                msg = llm.ChatMessage(
+                    role="assistant",
+                    content=[forwarded_text],
+                    id=msg_id,
+                    interrupted=True,
+                )
                 if forwarded_text:
-                    msg = llm.ChatMessage(
-                        role="assistant",
-                        content=[forwarded_text],
-                        id=msg_id,
-                        interrupted=True,
-                    )
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)
                     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
                 if speech_handle._interrupted_by_user:
-                    self._session._schedule_speech_resume(
+                    self._session._schedule_agent_false_interruption(
                         AgentFalseInterruptedEvent(
-                            speech_id=speech_handle.id,
-                            instructions=instructions,
-                            forwarded_text=forwarded_text,
+                            speech_id=speech_handle.id, instructions=instructions, message=msg
                         )
                     )
 

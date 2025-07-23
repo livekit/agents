@@ -29,14 +29,14 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(),
         tts=cartesia.TTS(),
-        speech_resume_delay=3.0,
+        agent_false_interruption_timeout=3.0,
     )
 
-    @session.on("agent_false_interrupted")
-    def _agent_false_interrupted(ev: AgentFalseInterruptedEvent):
+    @session.on("agent_false_interruption")
+    def _agent_false_interruption(ev: AgentFalseInterruptedEvent):
         logger.info(
             "Resuming agent from interruption",
-            extra={"instructions": ev.instructions, "forwarded_text": ev.forwarded_text},
+            extra={"instructions": ev.instructions, "forwarded_text": ev.message.text_content},
         )
         session.generate_reply(instructions=ev.instructions or NOT_GIVEN)
 
