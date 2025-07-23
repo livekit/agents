@@ -25,8 +25,6 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable
 
-import jwt
-
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
@@ -34,7 +32,7 @@ from livekit.protocol import agent, models
 from .cli import cli
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .types import NOT_GIVEN, NotGivenOr
+from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
