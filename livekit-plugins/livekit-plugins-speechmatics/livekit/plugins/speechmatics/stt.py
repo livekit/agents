@@ -390,6 +390,8 @@ class SpeechStream(stt.RecognizeStream):
 
         # Create the WebSocket URL
         url = sanitize_url(self._connection_settings.url, self._transcription_config.language)
+
+        # Connect to the WebSocket
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
