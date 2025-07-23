@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .api import AnamException
-from .avatar import AvatarSession, PersonaConfig
+from .avatar import AvatarSession
+from .errors import AnamException
+from .types import PersonaConfig
 from .version import __version__
 
 __all__ = [
