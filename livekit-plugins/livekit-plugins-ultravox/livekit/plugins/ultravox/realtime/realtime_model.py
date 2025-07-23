@@ -474,14 +474,7 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     async def _send_task(self) -> None:
         """Task for sending messages to Ultravox WebSocket."""
-
-        # system message should be ignored
-        should_ignore_first_message = True
         async for msg in self._msg_ch:
-            if should_ignore_first_message:
-                should_ignore_first_message = False
-                continue
-
             try:
                 if isinstance(msg, dict):
                     msg_dict = msg
