@@ -48,7 +48,7 @@ class SimliConfig:
     def create_json(self):
         result = {}
         result["apiKey"] = self.api_key
-        result["faceId"] = self.face_id
+        result["faceId"] = f"{self.face_id}/{self.emotion_id}"
         result["syncAudio"] = True
         result["handleSilence"] = True
         result["maxSessionLength"] = self.max_session_length
