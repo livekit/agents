@@ -1592,13 +1592,16 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
-            copy_msg = generated_msg.model_copy()
-            copy_msg.content = [forwarded_text]
-            copy_msg.interrupted = True
+            copy_msg: llm.ChatMessage | None = None
             if generated_msg:
+                copy_msg = generated_msg.model_copy()
+                copy_msg.content = [forwarded_text]
+                copy_msg.interrupted = True
+
                 if forwarded_text:
                     self._agent._chat_ctx.insert(copy_msg)
                     self._session._conversation_item_added(copy_msg)
+
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if speech_handle._interrupted_by_user:
