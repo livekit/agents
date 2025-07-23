@@ -39,12 +39,14 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
+    AgentFalseInterruptedEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
 )
@@ -74,6 +76,7 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
+    agent_false_interruption_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool
     preemptive_generation: bool
@@ -153,6 +156,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
+        agent_false_interruption_timeout: float | None = 4.0,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: bool = False,
         preemptive_generation: bool = False,
@@ -214,6 +218,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
+            agent_false_interruption_timeout (float, optional): If set, emit an
+                `agent_false_interruption` event after this amount of time if
+                the user is silent and no user transcript is detected after
+                the interruption. Set to ``None`` to disable. Default ``4.0`` s.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
@@ -253,6 +261,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            agent_false_interruption_timeout=agent_false_interruption_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
@@ -294,6 +303,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+
+        # used to emit the agent false interruption event
+        self._false_interruption_timer: asyncio.TimerHandle | None = None
+        self._false_interrupted_event: AgentFalseInterruptedEvent | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -591,6 +604,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self.emit("close", CloseEvent(error=error, reason=reason))
 
             self._cancel_user_away_timer()
+            self._cancel_agent_false_interruption()
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
@@ -900,6 +914,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
+        if state != "listening":
+            self._cancel_agent_false_interruption()
+
         old_state = self._agent_state
         self._agent_state = state
         self.emit(
@@ -927,6 +944,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
+        # pause the false interruption timer if user is speaking and recreate it after user stops
+        if state == "speaking" and self._false_interruption_timer:
+            ev = self._false_interrupted_event
+            self._cancel_agent_false_interruption()
+            self._false_interrupted_event = ev
+        elif state == "listening" and self._false_interrupted_event:
+            self._schedule_agent_false_interruption(self._false_interrupted_event)
+
         old_state = self._user_state
         self._user_state = state
         self.emit(
@@ -934,9 +959,38 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             UserStateChangedEvent(old_state=old_state, new_state=state),
         )
 
+    def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        self.emit("user_input_transcribed", ev)
+        if ev.is_final:
+            # fully cancel the false interruption event if user transcript arrives
+            self._cancel_agent_false_interruption()
+
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    def _schedule_agent_false_interruption(self, ev: AgentFalseInterruptedEvent) -> None:
+        if self._opts.agent_false_interruption_timeout is None:
+            return
+
+        def _emit_event() -> None:
+            if self._agent_state != "listening" or self._user_state != "listening":
+                return
+
+            self.emit("agent_false_interruption", ev)
+            self._false_interruption_timer = None
+
+        self._cancel_agent_false_interruption()
+        self._false_interruption_timer = self._loop.call_later(
+            self._opts.agent_false_interruption_timeout, _emit_event
+        )
+        self._false_interrupted_event = ev
+
+    def _cancel_agent_false_interruption(self) -> None:
+        if self._false_interruption_timer is not None:
+            self._false_interruption_timer.cancel()
+            self._false_interruption_timer = None
+        self._false_interrupted_event = None
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

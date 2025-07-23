@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .avatar import AvatarSession
-from .errors import AnamException
-from .types import PersonaConfig
+"""Simli virtual avatar plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/avatar/simli/ for more information.
+"""
+
+from .avatar import AvatarSession, SimliConfig
 from .version import __version__
 
 __all__ = [
-    "AnamException",
+    "Exception",
     "AvatarSession",
-    "PersonaConfig",
     "__version__",
+    "SimliConfig",
 ]
 
 from livekit.agents import Plugin
@@ -29,9 +32,9 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class AnamPlugin(Plugin):
+class SimliPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(AnamPlugin())
+Plugin.register_plugin(SimliPlugin())

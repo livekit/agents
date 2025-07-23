@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 import aiohttp
 
 from livekit import api, rtc
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     AgentSession,
-    APIConnectOptions,
     NotGivenOr,
     get_job_context,
     utils,
@@ -17,46 +16,64 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import DEFAULT_API_URL, AnamAPI
-from .errors import AnamException
 from .log import logger
-from .types import PersonaConfig
 
-SAMPLE_RATE = 24000
-_AVATAR_AGENT_IDENTITY = "anam-avatar-agent"
-_AVATAR_AGENT_NAME = "anam-avatar-agent"
+SAMPLE_RATE = 16000
+_AVATAR_AGENT_IDENTITY = "simli-avatar-agent"
+_AVATAR_AGENT_NAME = "simli-avatar-agent"
+
+
+@dataclass
+class SimliConfig:
+    """
+    Args:
+        api_key (str): Simli API Key
+        face_id (str): Simli Face ID
+        emotion_id (str):
+            Emotion ID for Trinity Faces, defaults to happy_0.
+            See https://docs.simli.com/emotions
+        max_session_length (int):
+            Absolute maximum session duration, avatar will disconnect after this time
+            even if it's speaking.
+        max_idle_time (int):
+            Maximum duration the avatar is not speaking for before the avatar disconnects.
+    """
+
+    api_key: str
+    face_id: str
+    emotion_id: str = "92f24a0c-f046-45df-8df0-af7449c04571"
+    max_session_length: int = 600
+    max_idle_time: int = 30
+
+    def create_json(self):
+        result = {}
+        result["apiKey"] = self.api_key
+        result["faceId"] = f"{self.face_id}/{self.emotion_id}"
+        result["syncAudio"] = True
+        result["handleSilence"] = True
+        result["maxSessionLength"] = self.max_session_length
+        result["maxIdleTime"] = self.max_idle_time
+        return result
 
 
 class AvatarSession:
-    """A Anam avatar session"""
+    """A Simli avatar session"""
 
     def __init__(
         self,
         *,
-        persona_config: PersonaConfig,
+        simli_config: SimliConfig,
         api_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._http_session: aiohttp.ClientSession | None = None
-        self._conn_options = conn_options
-        self.session_id: str | None = None
+        self.conversation_id: str | None = None
+        self._simli_config = simli_config
+        self.api_url = api_url or "https://api.simli.ai"
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._persona_config: PersonaConfig = persona_config
-
-        api_url_val = (
-            api_url if utils.is_given(api_url) else os.getenv("ANAM_API_URL", DEFAULT_API_URL)
-        )
-        api_key_val = api_key if utils.is_given(api_key) else os.getenv("ANAM_API_KEY")
-
-        if not api_key_val:
-            raise AnamException("ANAM_API_KEY must be set by arguments or environment variables")
-
-        self._api_url = api_url_val
-        self._api_key = api_key_val
+        self._ensure_http_session()
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -77,24 +94,24 @@ class AvatarSession:
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise AnamException(
+            raise Exception(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
                 "by arguments or environment variables"
             )
 
         try:
             job_ctx = get_job_context()
-            local_participant_identity = job_ctx.token_details().identity
-        except RuntimeError as e:
+            decoded = job_ctx.decode_token()
+            local_participant_identity = decoded["sub"]
+        except (RuntimeError, KeyError):
             if not room.isconnected():
-                raise AnamException("failed to get local participant identity") from e
+                raise Exception(
+                    "local participant identity not found in token, and room is not connected"
+                ) from None
             local_participant_identity = room.local_participant.identity
 
         livekit_token = (
-            api.AccessToken(
-                api_key=livekit_api_key,
-                api_secret=livekit_api_secret,
-            )
+            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
@@ -103,25 +120,24 @@ class AvatarSession:
             .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
             .to_jwt()
         )
-        async with AnamAPI(
-            api_key=self._api_key, api_url=self._api_url, conn_options=self._conn_options
-        ) as anam_api:
-            session_token = await anam_api.create_session_token(
-                persona_config=self._persona_config,
-                livekit_url=livekit_url,
-                livekit_token=livekit_token,
-            )
-            logger.debug("Anam session token created successfully.")
 
-            logger.debug("Starting Anam engine session...")
-            session_details = await anam_api.start_engine_session(
-                session_token=session_token,
+        logger.debug("starting avatar session")
+        simli_session_token = await self._http_session.post(
+            f"{self.api_url}/startAudioToVideoSession", json=self._simli_config.create_json()
+        )
+        simli_session_token.raise_for_status()
+        (
+            await self._http_session.post(
+                f"{self.api_url}/StartLivekitAgentsSession",
+                json={
+                    "session_token": (await simli_session_token.json())["session_token"],
+                    "livekit_token": livekit_token,
+                    "livekit_url": livekit_url,
+                },
             )
-            self.session_id = session_details.get("sessionId")
-
+        ).raise_for_status()
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
             sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
         )
