@@ -12,7 +12,9 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
+    ChatContext,
 )
+from livekit.agents import llm
 from livekit.agents.voice.events import (
     ConversationItemAddedEvent,
     FunctionToolsExecutedEvent,
@@ -70,6 +72,24 @@ async def get_time_raw(
         The current time in the given time zone.
     """
     return datetime.now(timezone.utc).isoformat()
+
+
+# Simple mock knowledge base for RAG demonstration
+KNOWLEDGE_BASE = {
+    "weather": "Today's weather is sunny with a temperature of 72°F (22°C).",
+    "business hours": "Our business hours are Monday-Friday 9AM-5PM, Saturday 10AM-3PM, closed Sundays.",
+    "support": "For technical support, please call 1-800-HELP or email support@company.com.",
+    "pricing": "Our basic plan is $10/month, premium is $25/month, and enterprise pricing starts at $100/month.",
+}
+
+
+async def mock_rag_lookup(query: str) -> str:
+    """Simple mock RAG function that looks up relevant information."""
+    query_lower = query.lower()
+    for key, value in KNOWLEDGE_BASE.items():
+        if key in query_lower:
+            return value
+    return "I don't have specific information about that topic in my knowledge base."
 
 
 async def entrypoint(ctx: JobContext) -> None:

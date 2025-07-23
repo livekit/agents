@@ -98,6 +98,11 @@ class RealtimeModel(llm.RealtimeModel):
     """Real-time language model using Ultravox.
 
     Connects to Ultravox's WebSocket API for streaming STT, LLM, and TTS.
+    
+    Supports dynamic context injection via deferred messages:
+    - System messages are injected as <instruction> tags without triggering responses
+    - User messages are sent as regular text messages
+    - Enables RAG integration and mid-conversation context updates
     """
 
     def __init__(
@@ -280,9 +285,37 @@ class RealtimeSession(
             logger.warning("Ultravox does not support dynamic tool choice updates")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        """Update the chat context. Since we execute tools directly, this is a no-op."""
-        logger.info(f"[ultravox] update_chat_ctx called with {len(chat_ctx.items)} items (no-op)")
-        pass
+        """Update chat context using Ultravox deferred messages.
+        
+        System messages are sent as deferred instructions using the <instruction> pattern.
+        User messages are sent as regular text messages.
+        Assistant messages are skipped (managed by Ultravox internally).
+        Function calls/results are handled via the existing tool mechanism.
+        
+        Args:
+            chat_ctx: The updated chat context to inject
+        """
+        logger.info(f"[ultravox] Injecting context with {len(chat_ctx.items)} items")
+        
+        for item in chat_ctx.items:
+            if item.role == "system" and item.content:
+                # System messages become deferred instructions
+                content_text = item.text_content() if hasattr(item, 'text_content') else str(item.content)
+                logger.debug(f"[ultravox] Injecting system instruction: {content_text[:100]}...")
+                self._send_client_event(InputTextMessageEvent(
+                    text=f"<instruction>{content_text}</instruction>",
+                    defer_response=True
+                ))
+            elif item.role == "user" and item.content:
+                # User messages sent normally  
+                content_text = item.text_content() if hasattr(item, 'text_content') else str(item.content)
+                logger.debug(f"[ultravox] Injecting user message: {content_text[:100]}...")
+                self._send_client_event(InputTextMessageEvent(
+                    text=content_text,
+                    defer_response=False
+                ))
+            # Skip assistant messages (handled by Ultravox)
+            # Skip function calls (handled by existing tool mechanism)
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         """Update the available tools."""
