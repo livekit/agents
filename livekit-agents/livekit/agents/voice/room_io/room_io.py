@@ -103,6 +103,9 @@ class RoomOutputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
+    transcription_speed_factor: float = 1.0
+    """Speed factor of transcription synchronization with audio output.
+    Only effective if `sync_transcription` is True."""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
@@ -218,6 +221,7 @@ class RoomIO:
                 self._tr_synchronizer = TranscriptSynchronizer(
                     next_in_chain_audio=audio_output,
                     next_in_chain_text=self._agent_tr_output,
+                    speed=self._output_options.transcription_speed_factor,
                 )
 
         # -- set the room event handlers --
