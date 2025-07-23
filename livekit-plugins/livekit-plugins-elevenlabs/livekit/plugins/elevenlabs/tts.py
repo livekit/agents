@@ -480,7 +480,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("error"):
                     raise APIError(message=data["error"])
                 else:
-                    raise APIError("unexpected 11labs message {data}")
+                    raise APIError(f"unexpected 11labs message {data}")
 
         tasks = [
             asyncio.create_task(send_task()),

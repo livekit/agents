@@ -302,6 +302,7 @@ class RealtimeModel(llm.RealtimeModel):
             conn_options=conn_options,
         )
         self._http_session = http_session
+        self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
     @classmethod
@@ -449,7 +450,11 @@ class RealtimeModel(llm.RealtimeModel):
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
-            self._http_session = utils.http_context.http_session()
+            try:
+                self._http_session = utils.http_context.http_session()
+            except RuntimeError:
+                self._http_session = aiohttp.ClientSession()
+                self._http_session_owned = True
 
         return self._http_session
 
@@ -458,7 +463,9 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions.add(sess)
         return sess
 
-    async def aclose(self) -> None: ...
+    async def aclose(self) -> None:
+        if self._http_session_owned and self._http_session:
+            await self._http_session.close()
 
 
 def process_base_url(
@@ -1445,6 +1452,48 @@ class RealtimeSession(
             ),
         )
         self.emit("metrics_collected", metrics)
+        self._handle_response_done_but_not_complete(event)
+
+    def _handle_response_done_but_not_complete(self, event: ResponseDoneEvent) -> None:
+        """Handle response done but not complete, i.e. cancelled, incomplete or failed.
+
+        For example this method will emit an error if we receive a "failed" status, e.g.
+        with type "invalid_request_error" due to code "inference_rate_limit_exceeded".
+
+        In other failures it will emit a debug level log.
+        """
+        if event.response.status == "completed":
+            return
+
+        if event.response.status == "failed":
+            if event.response.status_details and hasattr(event.response.status_details, "error"):
+                error_type = getattr(event.response.status_details.error, "type", "unknown")
+                error_body = event.response.status_details.error
+                message = f"OpenAI Realtime API response failed with error type: {error_type}"
+            else:
+                error_body = None
+                message = "OpenAI Realtime API response failed with unknown error"
+            self._emit_error(
+                APIError(
+                    message=message,
+                    body=error_body,
+                    retryable=True,
+                ),
+                # all possible faulures undocumented by openai,
+                # so we assume optimistically all retryable/recoverable
+                recoverable=True,
+            )
+        elif event.response.status in {"cancelled", "incomplete"}:
+            logger.debug(
+                "OpenAI Realtime API response done but not complete with status: %s",
+                event.response.status,
+                extra={
+                    "event_id": event.response.id,
+                    "event_response_status": event.response.status,
+                },
+            )
+        else:
+            logger.debug("Unknown response status: %s", event.response.status)
 
     def _handle_error(self, event: ErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):

@@ -151,7 +151,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
-        min_endpointing_delay: float = 0.5,
+        min_endpointing_delay: float = 0.4,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -206,7 +206,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
-                Default ``0.5`` s.
+                Default ``0.4`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``6.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.

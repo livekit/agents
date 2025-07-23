@@ -1047,7 +1047,7 @@ class AgentActivity(RecognitionHooks):
 
             self._current_speech.interrupt()
             if self._current_speech.interrupted:
-                self._current_speech._interrupted_by_user = True
+                self._current_speech._mark_interrupted_by_user()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1172,7 +1172,7 @@ class AgentActivity(RecognitionHooks):
 
             self._current_speech.interrupt()
             if self._current_speech.interrupted:
-                self._current_speech._interrupted_by_user = True
+                self._current_speech._mark_interrupted_by_user()
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
