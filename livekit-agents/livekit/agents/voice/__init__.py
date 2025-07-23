@@ -1,8 +1,9 @@
-from .agent import Agent, InlineTask, ModelSettings
+from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, VoiceActivityVideoSampler
 from .chat_cli import ChatCLI
 from .events import (
     AgentEvent,
+    AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
@@ -23,7 +24,7 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "InlineTask",
+    "AgentTask",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",
@@ -37,6 +38,7 @@ __all__ = [
     "UserStateChangedEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
+    "AgentFalseInterruptionEvent",
 ]
 
 # Cleanup docs of unexported modules

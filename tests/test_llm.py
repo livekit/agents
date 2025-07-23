@@ -10,7 +10,7 @@ import pytest
 
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import anthropic, aws, google, openai
+from livekit.plugins import anthropic, aws, google, mistralai, openai
 from livekit.rtc import VideoBufferType, VideoFrame
 
 
@@ -87,6 +87,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     pytest.param(lambda: google.LLM(), id="google"),
     pytest.param(lambda: google.LLM(vertexai=True), id="google-vertexai"),
     pytest.param(lambda: aws.LLM(), id="aws"),
+    pytest.param(lambda: mistralai.LLM(), id="mistralai"),
 ]
 
 

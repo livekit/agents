@@ -69,6 +69,7 @@ class BackgroundAudioPlayer:
         thinking_sound: NotGivenOr[
             AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
+        stream_timeout_ms: int = 200,
     ) -> None:
         """
         Initializes the BackgroundAudio component with optional ambient and thinking sounds.
@@ -98,7 +99,9 @@ class BackgroundAudioPlayer:
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
-        self._audio_mixer = rtc.AudioMixer(48000, 1, blocksize=4800, capacity=1)
+        self._audio_mixer = rtc.AudioMixer(
+            48000, 1, blocksize=4800, capacity=1, stream_timeout_ms=stream_timeout_ms
+        )
         self._publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
 
@@ -283,9 +286,10 @@ class BackgroundAudioPlayer:
                 await cancel_and_wait(self._republish_task)
 
             await cancel_and_wait(self._mixer_atask)
+            self._mixer_atask = None
 
-            await self._audio_source.aclose()
             await self._audio_mixer.aclose()
+            await self._audio_source.aclose()
 
             if self._agent_session:
                 self._agent_session.off("agent_state_changed", self._agent_state_changed)
@@ -355,11 +359,12 @@ class BackgroundAudioPlayer:
             self._audio_mixer.add_stream(gen)
             await play_handle.wait_for_playout()  # wait for playout or interruption
         finally:
-            if play_handle._stop_fut.done():
-                self._audio_mixer.remove_stream(gen)
-                await gen.aclose()
+            self._audio_mixer.remove_stream(gen)
+            play_handle._mark_playout_done()
 
-            play_handle._mark_playout_done()  # the task could be cancelled
+            await asyncio.sleep(0)
+            if play_handle._stop_fut.done():
+                await gen.aclose()
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:

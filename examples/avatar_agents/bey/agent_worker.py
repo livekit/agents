@@ -13,8 +13,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
@@ -27,6 +25,8 @@ async def entrypoint(ctx: JobContext):
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
     )
+
+    session.generate_reply(instructions="say hello to the user")
 
 
 if __name__ == "__main__":
