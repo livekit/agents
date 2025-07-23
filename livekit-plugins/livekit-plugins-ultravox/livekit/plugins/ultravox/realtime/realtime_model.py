@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
 import aiohttp
+from pydantic import ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
@@ -241,7 +242,7 @@ class RealtimeSession(
         self._closed = False
         self._closing = False
         # indicates if the underlying session should end
-        self._ws_session_should_close = asyncio.Event()
+        self._session_should_close = asyncio.Event()
         self._ws_session_lock = asyncio.Lock()
 
 
@@ -780,8 +781,13 @@ class RealtimeSession(
             # Convert back to dict with proper types
             return validated_params.model_dump()
             
+        except ValidationError as e:
+            logger.warning(f"[ultravox] parameter validation failed for {tool.__name__}: {e}")
+            logger.info(f"[ultravox] falling back to raw parameters: {raw_params}")
+            # Fallback to raw parameters if validation fails - the tool itself should handle invalid values
+            return raw_params
         except Exception as e:
-            logger.error(f"[ultravox] error converting parameters for {tool}: {e}", exc_info=True)
+            logger.error(f"[ultravox] error converting parameters for {tool.__name__}: {e}", exc_info=True)
             # Fallback to raw parameters if conversion fails
             return raw_params
 
