@@ -85,7 +85,6 @@ EventTypes = Literal[
     "agent_state_changed",
     "user_input_transcribed",
     "conversation_item_added",
-    "agent_false_interruption",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -116,14 +115,6 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
-    created_at: float = Field(default_factory=time.time)
-
-
-class AgentFalseInterruptedEvent(BaseModel):
-    type: Literal["agent_false_interruption"] = "agent_false_interruption"
-    speech_id: str
-    message: ChatMessage
-    instructions: str | None = None
     created_at: float = Field(default_factory=time.time)
 
 
@@ -202,7 +193,6 @@ AgentEvent = Annotated[
         UserInputTranscribedEvent,
         UserStateChangedEvent,
         AgentStateChangedEvent,
-        AgentFalseInterruptedEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,

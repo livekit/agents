@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
     "click~=8.1",
     "livekit>=1.0.12,<2",
-    "livekit-api>=1.0.4,<2",
+    "livekit-api>=1.0.3,<2",
     "livekit-protocol~=1.0",
     "livekit-blingfire~=1.0",
     "protobuf>=3",
@@ -89,8 +89,7 @@ sarvam = ["livekit-plugins-sarvam>=1.2.1"]
 spitch = ["livekit-plugins-spitch>=1.2.1"]
 inworld = ["livekit-plugins-inworld>=1.2.1"]
 hedra = ["livekit-plugins-hedra>=1.2.1"]
-anam = ["livekit-plugins-anam>=1.2.1"]
-simli = ["livekit-plugins-simli>=1.2.1"]
+
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
