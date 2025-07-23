@@ -25,10 +25,23 @@ _AVATAR_AGENT_NAME = "simli-avatar-agent"
 
 @dataclass
 class SimliConfig:
+    """
+    Args:
+        api_key (str): Simli API Key
+        face_id (str): Simli Face ID
+        emotion_id (str):
+            Emotion ID for Trinity Faces, defaults to happy_0.
+            See https://docs.simli.com/emotions
+        max_session_length (int):
+            Absolute maximum session duration, avatar will disconnect after this time
+            even if it's speaking.
+        max_idle_time (int):
+            Maximum duration the avatar is not speaking for before the avatar disconnects.
+    """
+
     api_key: str
     face_id: str
-    sync_audio: bool = True
-    handle_silence: bool = True
+    emotion_id: str = "92f24a0c-f046-45df-8df0-af7449c04571"
     max_session_length: int = 600
     max_idle_time: int = 30
 
@@ -36,8 +49,8 @@ class SimliConfig:
         result = {}
         result["apiKey"] = self.api_key
         result["faceId"] = self.face_id
-        result["syncAudio"] = self.sync_audio
-        result["handleSilence"] = self.handle_silence
+        result["syncAudio"] = True
+        result["handleSilence"] = True
         result["maxSessionLength"] = self.max_session_length
         result["maxIdleTime"] = self.max_idle_time
         return result
