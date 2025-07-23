@@ -468,7 +468,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     start_times_ms = start_times_ms[-len(text_buffer) :]
                     durations_ms = durations_ms[-len(text_buffer) :]
 
-                if data.get("audio"):
+                if data.get("audio") is not None:
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("isFinal"):
