@@ -573,6 +573,9 @@ class RealtimeSession(
         gen.function_ch.close()
         gen.message_ch.close()
         gen._done = True
+        
+        # Emit metrics for interrupted/completed generation
+        self._emit_generation_metrics(interrupted=True)
 
     def _handle_ultravox_event(self, event: UltravoxEventType) -> None:
         """Handle incoming Ultravox events and map them to LiveKit events."""
@@ -612,8 +615,17 @@ class RealtimeSession(
 
             msg_gen = self._current_generation
 
+            # Handle incremental transcript updates (delta)
+            if event.delta:
+                # Set first token timestamp on first text delta
+                if msg_gen._first_token_timestamp is None:
+                    msg_gen._first_token_timestamp = time.time()
+                    logger.debug("[ultravox] first text token received")
+                msg_gen.text_ch.send_nowait(event.delta)
+            
+            # Handle final transcript 
             if event.final:
-                if event.text:
+                if event.text and not event.delta:  # Only send full text if no delta was sent
                     msg_gen.text_ch.send_nowait(event.text)
                 msg_gen.text_ch.close()
                 msg_gen.audio_ch.close()
@@ -625,12 +637,7 @@ class RealtimeSession(
             return
 
         self._current_generation._completed_timestamp = time.time()
-        request_id = self._current_generation.response_id
-        created_timestamp = self._current_generation._created_timestamp
-        first_token_timestamp = self._current_generation._first_token_timestamp
-        ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
-        duration = self._current_generation._completed_timestamp - created_timestamp
-
+        
         if not self._current_generation.text_ch.closed:
             self._current_generation.text_ch.close()
         if not self._current_generation.audio_ch.closed:
@@ -638,18 +645,36 @@ class RealtimeSession(
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
-        self._current_generation = None
+        
+        # Emit metrics for completed generation
+        self._emit_generation_metrics(interrupted=False)
 
+    @utils.log_exceptions(logger=logger)
+    def _emit_generation_metrics(self, interrupted: bool = False) -> None:
+        """Emit RealtimeModelMetrics for the current generation."""
+        if self._current_generation is None:
+            return
+            
+        gen = self._current_generation
+        current_time = time.time()
+        completed_timestamp = gen._completed_timestamp or current_time
+        created_timestamp = gen._created_timestamp
+        first_token_timestamp = gen._first_token_timestamp
+        
+        # Calculate timing metrics
+        ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
+        duration = completed_timestamp - created_timestamp
+        
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
-            request_id=request_id,
+            request_id=gen.response_id,
             ttft=ttft,
             duration=duration,
-            cancelled=False,
+            cancelled=interrupted,
             label=self._realtime_model._label,
-            input_tokens=0,
+            input_tokens=0,  # Ultravox doesn't provide token counts
             output_tokens=0,
-            total_tokens=0,
+            total_tokens=0, 
             tokens_per_second=0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=0,
@@ -664,7 +689,12 @@ class RealtimeSession(
                 image_tokens=0,
             ),
         )
+        
+        logger.info(f"[ultravox] emitting metrics: ttft={ttft:.3f}s, duration={duration:.3f}s, interrupted={interrupted}")
         self.emit("metrics_collected", metrics)
+        
+        # Clear the current generation after emitting metrics  
+        self._current_generation = None
 
     def _handle_state_event(self, event: StateEvent) -> None:
         """Handle state events from Ultravox."""
@@ -775,6 +805,10 @@ class RealtimeSession(
     def _handle_audio_data(self, audio_data: bytes) -> None:
         """Handle binary audio data from Ultravox."""
         try:
+            if self._current_generation and self._current_generation._first_token_timestamp is None:
+                self._current_generation._first_token_timestamp = time.time()
+                logger.debug("[ultravox] first audio token received")
+                
             frame = rtc.AudioFrame(
                 data=audio_data,
                 sample_rate=self._opts.output_sample_rate,
