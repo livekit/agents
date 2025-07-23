@@ -1,6 +1,5 @@
 import logging
 import re
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -32,7 +31,7 @@ class TextSegmenter:
     """Utility class for segmenting text into natural chunks for TTS processing."""
 
     @staticmethod
-    def sentence_segmentation(text: str) -> List[str]:
+    def sentence_segmentation(text: str) -> list[str]:
         """
         Segments text into natural sentences.
 
@@ -40,7 +39,7 @@ class TextSegmenter:
             text (str): Input text to be segmented
 
         Returns:
-            List[str]: List of segmented sentences
+            list[str]: List of segmented sentences
         """
         # Clean up text by replacing smart quotes and removing asterisks
         text = text.replace("\u2018", "'").replace("\u2019", "'").replace("*", "")
@@ -70,11 +69,11 @@ async def stream_text_chunks():
 
     # Example text demonstrating various sentence structures and punctuation
     text = """
-    Welcome to the Rime Text-to-Speech demonstration! This example shows how to properly segment text 
-    for natural-sounding speech synthesis. We handle various punctuation marks, including commas, 
-    periods, and question marks. Have you noticed how the voice maintains proper intonation? This is 
-    achieved through careful text segmentation. The TTS engine processes each segment independently, 
-    ensuring optimal timing and natural flow. Would you like to try different voices like Astra, Luna, 
+    Welcome to the Rime Text-to-Speech demonstration! This example shows how to properly segment text\
+    for natural-sounding speech synthesis. We handle various punctuation marks, including commas,\
+    periods, and question marks. Have you noticed how the voice maintains proper intonation? This is\
+    achieved through careful text segmentation. The TTS engine processes each segment independently,\
+    ensuring optimal timing and natural flow. Would you like to try different voices like Astra, Luna,\
     or Celeste? Each voice has its own unique characteristics!
     """
 
