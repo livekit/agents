@@ -266,23 +266,35 @@ class ChunkedStream(ABC):
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 
+                start = time.perf_counter()
                 # Upload to langfuse Storage after successful synthesis only if audio tracing is enabled
                 if lk_audio_trace and self._langfuse_client is not None and self._collected_frames:
                     try:
+                        start_combined_frame = time.perf_counter()
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
+                        end_combined_frame = time.perf_counter()
+                        logger.info(f"***TTS audio combined frame in {end_combined_frame - start_combined_frame} seconds***")
+                        start_wav_data = time.perf_counter()
                         wav_data = combined_frame.to_wav_bytes()
+                        end_wav_data = time.perf_counter()
+                        logger.info(f"***TTS audio wav data in {end_wav_data - start_wav_data} seconds***")
                         
                         # Import is conditional, so we need to check if it's available
                         if 'upload_wav_to_langfuse_media' in globals():
+                            start_upload = time.perf_counter()
                             upload_wav_to_langfuse_media(
                                 wav_data=wav_data,
                                 langfuse_client=self._langfuse_client
                             )
+                            end_upload = time.perf_counter()
+                            logger.info(f"***TTS audio uploaded langfuse media in {end_upload - start_upload} seconds***")  
+
                             logger.info(f"TTS audio uploaded langfuse media")
                     except Exception as e:
                         logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
-                
+                end = time.perf_counter()
+                logger.info(f"***TTS audio uploaded langfuse media in {end - start} seconds***")
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
