@@ -93,6 +93,15 @@ class AvatarRunner:
         self._read_audio_atask = asyncio.create_task(self._read_audio())
         self._forward_video_atask = asyncio.create_task(self._forward_video())
 
+    async def wait_for_complete(self) -> None:
+        if not self._read_audio_atask or not self._forward_video_atask:
+            raise RuntimeError("AvatarRunner not started")
+
+        await asyncio.gather(
+            self._read_audio_atask,
+            self._forward_video_atask,
+        )
+
     async def _publish_track(self) -> None:
         async with self._lock:
             await self._room_connected_fut
@@ -132,7 +141,10 @@ class AvatarRunner:
                     self._audio_playing = False
                     self._playback_position = 0.0
                     if asyncio.iscoroutine(notify_task):
-                        await notify_task
+                        # avoid blocking the video forwarding
+                        task = asyncio.create_task(notify_task)
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
                 continue
 
             if not self._video_publication:
@@ -181,6 +193,7 @@ class AvatarRunner:
         self._room.off("reconnected", self._on_reconnected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
 
+        await self._audio_recv.aclose()
         if self._forward_video_atask:
             await aio.cancel_and_wait(self._forward_video_atask)
         if self._read_audio_atask:
