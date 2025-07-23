@@ -223,7 +223,7 @@ class RecorderIO:
 
 class RecorderAudioInput(io.AudioInput):
     def __init__(self, *, recording_io: RecorderIO, audio_input: io.AudioInput) -> None:
-        super().__init__()
+        super().__init__(label="RecorderIO")
         self.__audio_input = audio_input
         self.__recording_io = recording_io
         self.__acc_frames: list[rtc.AudioFrame] = []
@@ -257,7 +257,7 @@ class RecorderAudioOutput(io.AudioOutput):
         audio_output: io.AudioOutput | None = None,
         write_fnc: Callable[[list[rtc.AudioFrame]], Any],
     ) -> None:
-        super().__init__(next_in_chain=audio_output, sample_rate=None)
+        super().__init__(label="RecorderIO", next_in_chain=audio_output, sample_rate=None)
         self.__recording_io = recording_io
         self.__write = write_fnc
         self.__acc_frames: list[rtc.AudioFrame] = []
@@ -311,15 +311,15 @@ class RecorderAudioOutput(io.AudioOutput):
         if self.__recording_io.recording:
             self.__acc_frames.append(frame)
 
-        if self._next_in_chain:
-            await self._next_in_chain.capture_frame(frame)
+        if self.next_in_chain:
+            await self.next_in_chain.capture_frame(frame)
 
     def flush(self) -> None:
         super().flush()
 
-        if self._next_in_chain:
-            self._next_in_chain.flush()
+        if self.next_in_chain:
+            self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        if self._next_in_chain:
-            self._next_in_chain.clear_buffer()
+        if self.next_in_chain:
+            self.next_in_chain.clear_buffer()

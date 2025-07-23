@@ -525,6 +525,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
 
+            # log used IO
+            def _collect_source(inp: io.AudioInput | io.VideoInput | None):
+                return [] if inp is None else [inp] + _collect_source(inp.source)
+
+            def _collect_chain(out: io.TextOutput | io.VideoOutput | io.AudioOutput | None):
+                return [] if out is None else [out] + _collect_chain(out.next_in_chain)
+
+            audio_input = _collect_source(self.input.audio)
+            video_input = _collect_source(self.input.video)
+
+            audio_output = _collect_chain(self.output.audio)
+            video_output = _collect_chain(self.output.video)
+            transcription_output = _collect_chain(self.output.transcription)
+
+            print(audio_input)
+            print(video_input)
+
+            print(audio_output)
+            print(video_output)
+            print(transcription_output)
+
     async def drain(self) -> None:
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
