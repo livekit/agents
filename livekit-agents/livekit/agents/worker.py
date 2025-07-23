@@ -377,7 +377,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         if self._opts.multiprocessing_context == "forkserver":
-            plugin_packages = [p.package for p in Plugin.registered_plugins]
+            plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
             logger.info("preloading plugins", extra={"packages": plugin_packages})
             self._mp_ctx.set_forkserver_preload(plugin_packages)
 

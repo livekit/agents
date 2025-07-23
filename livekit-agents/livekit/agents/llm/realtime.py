@@ -4,6 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -77,6 +78,17 @@ class RealtimeModel:
 
     @abstractmethod
     async def aclose(self) -> None: ...
+
+    async def __aenter__(self) -> RealtimeModel:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 EventTypes = Literal[

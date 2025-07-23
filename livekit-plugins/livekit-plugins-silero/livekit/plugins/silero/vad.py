@@ -60,7 +60,7 @@ class VAD(agents.vad.VAD):
         cls,
         *,
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.55,
+        min_silence_duration: float = 0.4,
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,

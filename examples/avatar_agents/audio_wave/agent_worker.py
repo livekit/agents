@@ -60,6 +60,8 @@ async def launch_avatar(ctx: JobContext, avatar_dispatcher_url: str, avatar_iden
 
 
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
+    await ctx.connect()
+
     agent = Agent(instructions="Talk to me!")
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(),
