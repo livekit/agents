@@ -84,7 +84,7 @@ class AvatarSession:
 
         try:
             job_ctx = get_job_context()
-            local_participant_identity = job_ctx.token_details().identity
+            local_participant_identity = job_ctx.token_claims().identity
         except RuntimeError as e:
             if not room.isconnected():
                 raise AnamException("failed to get local participant identity") from e

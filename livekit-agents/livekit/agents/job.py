@@ -431,7 +431,7 @@ class JobContext:
                 lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
 
-    def token_details(self) -> Claims:
+    def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
 

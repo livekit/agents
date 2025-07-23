@@ -282,7 +282,7 @@ class DataStreamAudioReceiver(AudioReceiver):
                         raise
                     retry_count += 1
                     logger.warning("failed to notify the agent playback finished, retrying...")
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.1)
 
     @utils.log_exceptions(logger=logger)
     async def _recv_task(self) -> None:
