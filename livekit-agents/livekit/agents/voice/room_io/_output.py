@@ -427,7 +427,9 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
     ) -> None:
         super().__init__(label="RoomIO", next_in_chain=next_in_chain)
 
-        self.__outputs = [
+        self.__outputs: list[
+            _ParticipantLegacyTranscriptionOutput | _ParticipantStreamTranscriptionOutput
+        ] = [
             _ParticipantLegacyTranscriptionOutput(
                 room=room,
                 is_delta_stream=is_delta_stream,

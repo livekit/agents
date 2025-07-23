@@ -193,8 +193,8 @@ class ChatCLI:
 
         self._main_atask: asyncio.Task[None] | None = None
 
-        self._input_audio = _AudioInput(self)
-        self._output_audio = (
+        self._input_audio: io.AudioInput = _AudioInput(self)
+        self._output_audio: io.AudioOutput = (
             self._transcript_syncer.audio_output if self._transcript_syncer else self._audio_sink
         )
 

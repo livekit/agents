@@ -33,7 +33,7 @@ class DataStreamAudioOutput(AudioOutput):
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
     ):
-        super().__init__(next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(label="DataStreamIO", next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._destination_identity = destination_identity
         self._wait_remote_track = wait_remote_track
