@@ -34,6 +34,29 @@ if TYPE_CHECKING:
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
 
+async def _upload_to_langfuse_async(
+    wav_data: bytes, 
+    langfuse_client, 
+    operation_type: str = "TTS"
+) -> None:
+    """Async wrapper for Langfuse upload to avoid blocking main thread"""
+    try:
+        # Import is conditional, so we need to check if it's available
+        if 'upload_wav_to_langfuse_media' in globals():
+            # Run the upload in a thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                upload_wav_to_langfuse_media,
+                wav_data,
+                langfuse_client
+            )
+            logger.info(f"{operation_type} audio uploaded to langfuse media (async)")
+    except Exception as e:
+        logger.warning(f"Failed to upload {operation_type} audio to langfuse media (async): {e}")
+        # Don't fail the entire TTS operation if blob upload fails
+
+
 @dataclass
 class SynthesizedAudio:
     frame: rtc.AudioFrame
@@ -266,35 +289,24 @@ class ChunkedStream(ABC):
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 
-                start = time.perf_counter()
+                start_upload = time.perf_counter()
                 # Upload to langfuse Storage after successful synthesis only if audio tracing is enabled
                 if lk_audio_trace and self._langfuse_client is not None and self._collected_frames:
                     try:
-                        start_combined_frame = time.perf_counter()
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
-                        end_combined_frame = time.perf_counter()
-                        logger.info(f"***TTS audio combined frame in {end_combined_frame - start_combined_frame} seconds***")
-                        start_wav_data = time.perf_counter()
                         wav_data = combined_frame.to_wav_bytes()
-                        end_wav_data = time.perf_counter()
-                        logger.info(f"***TTS audio wav data in {end_wav_data - start_wav_data} seconds***")
                         
-                        # Import is conditional, so we need to check if it's available
-                        if 'upload_wav_to_langfuse_media' in globals():
-                            start_upload = time.perf_counter()
-                            upload_wav_to_langfuse_media(
-                                wav_data=wav_data,
-                                langfuse_client=self._langfuse_client
-                            )
-                            end_upload = time.perf_counter()
-                            logger.info(f"***TTS audio uploaded langfuse media in {end_upload - start_upload} seconds***")  
-
-                            logger.info(f"TTS audio uploaded langfuse media")
+                        # Start upload task without awaiting it (fire and forget)
+                        asyncio.create_task(_upload_to_langfuse_async(
+                            wav_data=wav_data,
+                            langfuse_client=self._langfuse_client,
+                            operation_type="TTS"
+                        ))
                     except Exception as e:
                         logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
-                end = time.perf_counter()
-                logger.info(f"***TTS audio uploaded langfuse media in {end - start} seconds***")
+                end_upload = time.perf_counter()
+                logger.info(f"***TTS audio upload block completed in {end_upload - start_upload} seconds***")
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -437,15 +449,14 @@ class SynthesizeStream(ABC):
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
                         wav_data = combined_frame.to_wav_bytes()
                         
-                        # Import is conditional, so we need to check if it's available
-                        if 'upload_wav_to_langfuse_media' in globals():
-                            upload_wav_to_langfuse_media(
-                                wav_data=wav_data,
-                                langfuse_client=self._langfuse_client
-                            )
-                            logger.info(f"TTS streaming audio uploaded to langfuse media")
+                        # Start upload task without awaiting it (fire and forget)
+                        asyncio.create_task(_upload_to_langfuse_async(
+                            wav_data=wav_data,
+                            langfuse_client=self._langfuse_client,
+                            operation_type="TTS Streaming"
+                        ))
                     except Exception as e:
-                        logger.warning(f"Failed to upload TTS streaming audio to langfuse media: {e}")
+                        logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
                 
                 return
