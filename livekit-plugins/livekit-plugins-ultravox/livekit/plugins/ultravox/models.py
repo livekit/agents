@@ -105,8 +105,49 @@ Voices = Literal[
 
 Models = Literal[
     "fixie-ai/ultravox",
+    "fixie-ai/ultravox-gemma3-27b-preview",
+    "fixie-ai/ultravox-llama3.3-70b", 
+    "fixie-ai/ultravox-qwen3-32b-preview",
     "fixie-ai/ultravox-8B",
     "fixie-ai/ultravox-v0_5-llama-3_3-70b",
     "fixie-ai/ultravox-v0_5-llama-3_1-8b",
     "fixie-ai/ultravox-v0_5-llama-3_2-1b",
 ]
+
+# Available models from API response
+AVAILABLE_MODELS = [
+    "fixie-ai/ultravox",
+    "fixie-ai/ultravox-gemma3-27b-preview",
+    "fixie-ai/ultravox-llama3.3-70b",
+    "fixie-ai/ultravox-qwen3-32b-preview",
+]
+
+# Available voices from API response (partial list from the 102 total)
+AVAILABLE_VOICES = [
+    "Mark", "Saavi-English-Indian", "Tiago-Portuguese", "Paulo-Portuguese", "Carter",
+    "Cassidy-English", "Mark2", "David-English-British", "Alex-Spanish", "Amrut-English-Indian",
+    "Chinmay-English-Indian", "Riya-Rao-English-Indian", "Anika-English-Indian", "Mark-Slow",
+    "Muyiwa-English", "Elilhiz-English", "Monika-English-Indian", "Raju-English-Indian",
+    "Francisco-Portuguese", "Haytham-Arabic-Egyptian", "Amr-Arabic-Egyptian", "Flavia-Spanish",
+    "Carolina-Spanish", "Miquel-Spanish", "Victor-Spanish", "Keren-Brazilian-Portuguese",
+    "Srivi - Tamil", "Peter - Slovak", "Ciprian - Romanian", "Aurora - Finnish",
+    "Stefanos - Greek", "Julian - Bulgarian", "Huyen - Vietnamese", "Trung Caha - Vietnamese",
+    "Ramaa - Tamil", "Corina - Romanian", "Magyar - Hungarian", "Christoffer - Finnish",
+    "Mathias - Danish", "Denisa - Czech", "Adam - Czech", "Bea - Polish", "Pawel - Polish",
+    "Emma-Norwegian", "Johannes-Norwegian", "linny", "Steve-English-Australian", "Emily-English",
+    "Tanya-English", "Aaron-English", "Conversationalist-English", "Hugo-French", "Andrea-Spanish",
+    "Damian-Spanish", "Muskaan-Hindi-Urdu", "Anjali-Hindi-Urdu", "Krishna-Hindi-Urdu",
+    "Cristina-Romanian", "Antonia-Romanian", "Salma-Arabic", "Raed-Arabic", "Ben-German",
+    "Frida - German", "Marcin-Polish", "Hanna-Polish", "Dakota Flash V2", "Coco-French",
+    "Gabriel-French", "Daniel-Dutch", "Chelsea", "Vira-Ukrainian", "Dmytro-Ukrainian",
+    "Cicek-Turkish", "Doga-Turkish", "Tatiana-Spanish", "Mauricio-Spanish", "Felix-Russian",
+    "Rosa-Portuguese", "Samuel-Portuguese", "Morioki-Japanese", "Asahi-Japanese", "Nadia-Russian",
+    "Linda-Italian", "Giovanni-Italian", "Riya-Hindi-Urdu", "Aakash-Hindi", "Susi-German",
+    "Alize-French", "Nicolas-French", "Ruth-Dutch", "Sana-Arabic", "HerrGruber-German",
+    "Sanna-Swedish", "Adam-Swedish", "Anas-Arabic", "Martin-Chinese", "Oliver",
+    "Maya-Chinese", "Jessica", "terrence",
+]
+
+# Safe defaults
+DEFAULT_MODEL = "fixie-ai/ultravox"
+DEFAULT_VOICE = "Mark"

@@ -32,7 +32,7 @@ from livekit.agents.metrics.base import RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.ultravox.log import logger
-from livekit.plugins.ultravox.models import Models, Voices
+from livekit.plugins.ultravox.models import Models, Voices, AVAILABLE_MODELS, AVAILABLE_VOICES, DEFAULT_MODEL, DEFAULT_VOICE
 
 from .events import (
     CallStartedEvent,
@@ -56,6 +56,30 @@ NUM_CHANNELS = 1
 ULTRAVOX_BASE_URL = "https://api.ultravox.ai/api"
 lk_ultravox_debug = os.getenv("LK_ULTRAVOX_DEBUG", "false").lower() == "true"
 
+def _validate_model(requested_model: str) -> str:
+    """Validate model and fallback to default if not available."""
+    if requested_model in AVAILABLE_MODELS:
+        if requested_model == DEFAULT_MODEL:
+            logger.info(f"[ultravox] Using default model: {requested_model}")
+        else:
+            logger.info(f"[ultravox] Using requested model: {requested_model}")
+        return requested_model
+    else:
+        logger.warning(f"[ultravox] Model '{requested_model}' not available, falling back to: {DEFAULT_MODEL}")
+        return DEFAULT_MODEL
+
+def _validate_voice(requested_voice: str) -> str:
+    """Validate voice and fallback to default if not available."""
+    if requested_voice in AVAILABLE_VOICES:
+        if requested_voice == DEFAULT_VOICE:
+            logger.info(f"[ultravox] Using default voice: {requested_voice}")
+        else:
+            logger.info(f"[ultravox] Using requested voice: {requested_voice}")
+        return requested_voice
+    else:
+        logger.warning(f"[ultravox] Voice '{requested_voice}' not available, falling back to: {DEFAULT_VOICE}")
+        return DEFAULT_VOICE
+
 
 @dataclass
 class _UltravoxOptions:
@@ -69,6 +93,12 @@ class _UltravoxOptions:
     input_sample_rate: int
     output_sample_rate: int
     client_buffer_size_ms: int
+    temperature: float | None
+    language_hint: str | None
+    max_duration: str | None
+    time_exceeded_message: str | None
+    enable_greeting_prompt: bool
+    first_speaker: str | None
 
 
 @dataclass
@@ -116,6 +146,12 @@ class RealtimeModel(llm.RealtimeModel):
         input_sample_rate: int = INPUT_SAMPLE_RATE,
         output_sample_rate: int = OUTPUT_SAMPLE_RATE,
         client_buffer_size_ms: int = 60,
+        temperature: float | None = None,
+        language_hint: str | None = None,
+        max_duration: str | None = None,
+        time_exceeded_message: str | None = None,
+        enable_greeting_prompt: bool = True,
+        first_speaker: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Initialize the Ultravox RealtimeModel.
@@ -138,6 +174,18 @@ class RealtimeModel(llm.RealtimeModel):
             Output audio sample rate.
         client_buffer_size_ms : int
             Size of the client-side audio buffer in milliseconds.
+        temperature : float, optional
+            Controls response randomness (0.0-1.0). Lower values are more deterministic.
+        language_hint : str, optional
+            Language hint for better multilingual support (e.g., 'en', 'es', 'fr').
+        max_duration : str, optional
+            Maximum call duration (e.g., '30m', '1h'). Call ends when exceeded.
+        time_exceeded_message : str, optional
+            Message to play when max duration is reached.
+        enable_greeting_prompt : bool
+            Whether to enable greeting prompt if no initial message. Default True.
+        first_speaker : str, optional
+            Who speaks first ('FIRST_SPEAKER_AGENT' or 'FIRST_SPEAKER_UNSPECIFIED'). If not set, model decides.
         http_session : aiohttp.ClientSession, optional
             HTTP session to use for requests.
         """
@@ -161,15 +209,25 @@ class RealtimeModel(llm.RealtimeModel):
                 "Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
             )
 
+        # Validate and potentially fallback model and voice
+        validated_model = _validate_model(model_id)
+        validated_voice = _validate_voice(voice)
+        
         self._opts = _UltravoxOptions(
-            model_id=model_id,
-            voice=voice,
+            model_id=validated_model,
+            voice=validated_voice,
             api_key=ultravox_api_key,
             base_url=base_url or ULTRAVOX_BASE_URL,
             system_prompt=system_prompt,
             input_sample_rate=input_sample_rate,
             output_sample_rate=output_sample_rate,
             client_buffer_size_ms=client_buffer_size_ms,
+            temperature=temperature,
+            language_hint=language_hint,
+            max_duration=max_duration,
+            time_exceeded_message=time_exceeded_message,
+            enable_greeting_prompt=enable_greeting_prompt,
+            first_speaker=first_speaker,
         )
 
         self._http_session = http_session
@@ -452,7 +510,18 @@ class RealtimeSession(
             "Content-Type": "application/json",
         }
 
+        # Build query parameters
+        query_params = {}
+        if not self._realtime_model._opts.enable_greeting_prompt:
+            query_params["enableGreetingPrompt"] = "false"
+        
+        # Construct URL with query parameters
         create_call_url = f"{self._realtime_model._opts.base_url.rstrip('/')}/calls"
+        if query_params:
+            query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
+            create_call_url += f"?{query_string}"
+        
+        # Build payload with core parameters
         payload = {
             "systemPrompt": self._realtime_model._opts.system_prompt,
             "model": self._realtime_model._opts.model_id,
@@ -466,6 +535,18 @@ class RealtimeSession(
             },
             "selectedTools": self._prepare_tools(self._tools.function_tools.values()),
         }
+        
+        # Add optional parameters only if specified
+        if self._realtime_model._opts.temperature is not None:
+            payload["temperature"] = self._realtime_model._opts.temperature
+        if self._realtime_model._opts.language_hint is not None:
+            payload["languageHint"] = self._realtime_model._opts.language_hint
+        if self._realtime_model._opts.max_duration is not None:
+            payload["maxDuration"] = self._realtime_model._opts.max_duration
+        if self._realtime_model._opts.time_exceeded_message is not None:
+            payload["timeExceededMessage"] = self._realtime_model._opts.time_exceeded_message
+        if self._realtime_model._opts.first_speaker is not None:
+            payload["firstSpeaker"] = self._realtime_model._opts.first_speaker
 
         try:
             http_session = self._realtime_model._ensure_http_session()
