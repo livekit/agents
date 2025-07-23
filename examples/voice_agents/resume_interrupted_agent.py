@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
-    AgentFalseInterruptedEvent,
+    AgentFalseInterruptionEvent,
     AgentSession,
     JobContext,
     WorkerOptions,
@@ -33,7 +33,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     @session.on("agent_false_interruption")
-    def _agent_false_interruption(ev: AgentFalseInterruptedEvent):
+    def _agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info(
             "Resuming agent from interruption",
             extra={"instructions": ev.instructions, "forwarded_text": ev.message.text_content},

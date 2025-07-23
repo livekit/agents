@@ -119,7 +119,7 @@ class UserInputTranscribedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class AgentFalseInterruptedEvent(BaseModel):
+class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     speech_id: str
     message: ChatMessage
@@ -202,7 +202,7 @@ AgentEvent = Annotated[
         UserInputTranscribedEvent,
         UserStateChangedEvent,
         AgentStateChangedEvent,
-        AgentFalseInterruptedEvent,
+        AgentFalseInterruptionEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,

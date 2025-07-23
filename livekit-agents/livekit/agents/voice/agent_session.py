@@ -39,7 +39,7 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
-    AgentFalseInterruptedEvent,
+    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -306,7 +306,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # used to emit the agent false interruption event
         self._false_interruption_timer: asyncio.TimerHandle | None = None
-        self._false_interrupted_event: AgentFalseInterruptedEvent | None = None
+        self._false_interrupted_event: AgentFalseInterruptionEvent | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -1005,7 +1005,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
-    def _schedule_agent_false_interruption(self, ev: AgentFalseInterruptedEvent) -> None:
+    def _schedule_agent_false_interruption(self, ev: AgentFalseInterruptionEvent) -> None:
         if self._opts.agent_false_interruption_timeout is None:
             return
 
