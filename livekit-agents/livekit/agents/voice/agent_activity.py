@@ -1592,6 +1592,7 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
+            copy_msg: llm.ChatMessage | None = None
             if generated_msg:
                 copy_msg = generated_msg.model_copy()
                 copy_msg.content = [forwarded_text]
@@ -1603,12 +1604,12 @@ class AgentActivity(RecognitionHooks):
 
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-                if speech_handle._interrupted_by_user:
-                    self._session._schedule_agent_false_interruption(
-                        AgentFalseInterruptedEvent(
-                            speech_id=speech_handle.id, instructions=instructions, message=copy_msg
-                        )
+            if speech_handle._interrupted_by_user:
+                self._session._schedule_agent_false_interruption(
+                    AgentFalseInterruptedEvent(
+                        speech_id=speech_handle.id, instructions=instructions, message=copy_msg
                     )
+                )
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")

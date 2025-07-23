@@ -122,7 +122,7 @@ class UserInputTranscribedEvent(BaseModel):
 class AgentFalseInterruptedEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     speech_id: str
-    message: ChatMessage
+    message: ChatMessage | None
     instructions: str | None = None
     created_at: float = Field(default_factory=time.time)
 
