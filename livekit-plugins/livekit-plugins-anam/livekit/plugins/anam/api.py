@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -30,7 +32,7 @@ class AnamAPI:
         api_url: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        session: Optional[aiohttp.ClientSession] = None,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
         Initializes the AnamAPI client.
@@ -48,12 +50,14 @@ class AnamAPI:
         self._session = session
         self._own_session = session is None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> AnamAPI:
         if self._own_session:
             self._session = aiohttp.ClientSession()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
+    ) -> None:
         if self._own_session and self._session:
             await self._session.close()
 
@@ -84,7 +88,7 @@ class AnamAPI:
         }
         response_data = await self._post("/v1/auth/session-token", payload, headers)
 
-        session_token = response_data.get("sessionToken")
+        session_token: str | None = response_data.get("sessionToken")
         if not session_token:
             raise AnamException("Failed to retrieve sessionToken from API response.")
         return session_token
@@ -134,7 +138,7 @@ class AnamAPI:
                                 status_code=response.status,
                                 body=text,
                             )
-                        return await response.json()
+                        return await response.json()  # type: ignore
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     logger.warning(
                         f"API request to {url} failed on attempt {attempt + 1}",

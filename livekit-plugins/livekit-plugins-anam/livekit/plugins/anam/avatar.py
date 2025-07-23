@@ -48,9 +48,9 @@ class AvatarSession:
         self._persona_config: PersonaConfig = persona_config
 
         api_url_val = (
-            api_url if api_url is not NOT_GIVEN else os.getenv("ANAM_API_URL", DEFAULT_API_URL)
+            api_url if utils.is_given(api_url) else os.getenv("ANAM_API_URL", DEFAULT_API_URL)
         )
-        api_key_val = api_key if api_key is not NOT_GIVEN else os.getenv("ANAM_API_KEY")
+        api_key_val = api_key if utils.is_given(api_key) else os.getenv("ANAM_API_KEY")
 
         if not api_key_val:
             raise AnamException("ANAM_API_KEY must be set by arguments or environment variables")
@@ -107,9 +107,7 @@ class AvatarSession:
             .to_jwt()
         )
         async with AnamAPI(
-            api_key=self._api_key,
-            api_url=self._api_url,
-            conn_options=self._conn_options,
+            api_key=self._api_key, api_url=self._api_url, conn_options=self._conn_options
         ) as anam_api:
             session_token = await anam_api.create_session_token(
                 persona_config=self._persona_config,
