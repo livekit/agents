@@ -1,11 +1,12 @@
 import logging
 import re
-from dotenv import load_dotenv
 from typing import List
+
+from dotenv import load_dotenv
+
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import rime
-
 
 """
 This script demonstrates text-to-speech capabilities using Rime's TTS service with LiveKit.
