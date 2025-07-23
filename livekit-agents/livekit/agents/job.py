@@ -26,12 +26,10 @@ from enum import Enum, unique
 from typing import Any, Callable
 
 import jwt
-from google.protobuf.json_format import ParseDict
 
 from livekit import api, rtc
-from livekit.api.access_token import Claims, SIPGrants, VideoGrants, camel_to_snake
+from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
-from livekit.protocol.room import RoomConfiguration
 
 from .cli import cli
 from .ipc.inference_executor import InferenceExecutor
@@ -444,36 +442,7 @@ class JobContext:
 
     def token_details(self) -> Claims:
         claims = self.decode_token()
-
-        if video_dict := claims.get("video"):
-            video_dict = {camel_to_snake(k): v for k, v in video_dict.items()}
-            video_dict = {
-                k: v for k, v in video_dict.items() if k in VideoGrants.__dataclass_fields__
-            }
-            claims["video"] = VideoGrants(**video_dict)
-
-        if sip_dict := claims.get("sip"):
-            sip_dict = {camel_to_snake(k): v for k, v in sip_dict.items()}
-            sip_dict = {k: v for k, v in sip_dict.items() if k in SIPGrants.__dataclass_fields__}
-            claims["sip"] = SIPGrants(**sip_dict)
-
-        if room_config := claims.get("roomConfig"):
-            claims["roomConfig"] = ParseDict(
-                room_config, RoomConfiguration(), ignore_unknown_fields=True
-            )
-
-        return Claims(
-            identity=claims.get("sub", ""),
-            name=claims.get("name", ""),
-            kind=claims.get("kind", ""),
-            metadata=claims.get("metadata", ""),
-            video=claims.get("video"),
-            sip=claims.get("sip"),
-            attributes=claims.get("attributes"),
-            sha256=claims.get("sha256"),
-            room_preset=claims.get("roomPreset"),
-            room_config=claims.get("roomConfig"),
-        )
+        return api.TokenVerifier.decode_claims(claims)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
