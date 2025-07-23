@@ -456,6 +456,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
 
+                if data.get("error"):
+                    raise APIError(message=data["error"])
+
                 if alignment := data.get("alignment"):
                     # 11labs aligns timestamps at the character level
                     text_buffer += "".join(alignment["chars"])
@@ -477,8 +480,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                     output_emitter.end_input()
                     return  # 11labs only allow one segment per connection
-                elif data.get("error"):
-                    raise APIError(message=data["error"])
                 else:
                     raise APIError(f"unexpected 11labs message {data}")
 
