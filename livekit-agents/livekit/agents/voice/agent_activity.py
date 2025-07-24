@@ -41,6 +41,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
 )
 from .events import (
+    AgentFalseInterruptionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -381,6 +382,7 @@ class AgentActivity(RecognitionHooks):
                     context=trace.set_span_in_context(start_span),
                     attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
                 )
+                @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
                     await self._agent.on_enter()
 
@@ -494,6 +496,7 @@ class AgentActivity(RecognitionHooks):
         @tracer.start_as_current_span(
             "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
         )
+        @utils.log_exceptions(logger=logger)
         async def _traceable_on_exit() -> None:
             await self._agent.on_exit()
 
@@ -504,6 +507,8 @@ class AgentActivity(RecognitionHooks):
             _set_activity_task_info(task, inline_task=False)
 
             self._cancel_preemptive_generation()
+
+            await self._on_exit_task
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
@@ -957,16 +962,15 @@ class AgentActivity(RecognitionHooks):
             self._session._update_user_state("listening")
 
         if ev.user_transcription_enabled:
-            self._session.emit(
-                "user_input_transcribed",
-                UserInputTranscribedEvent(transcript="", is_final=False),
+            self._session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="", is_final=False)
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
-        self._session.emit(
-            "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final),
+        self._session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
         )
+
         if ev.is_final:
             msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
             self._agent._chat_ctx.items.append(msg)
@@ -1046,14 +1050,15 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.interrupt()
 
             self._current_speech.interrupt()
+            if self._current_speech.interrupted:
+                self._current_speech._mark_interrupted_by_user()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
-        self._session.emit(
-            "user_input_transcribed",
+        self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 transcript=ev.alternatives[0].text,
                 is_final=False,
@@ -1066,8 +1071,7 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
-        self._session.emit(
-            "user_input_transcribed",
+        self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 transcript=ev.alternatives[0].text,
                 is_final=True,
@@ -1171,6 +1175,9 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._current_speech.interrupt()
+            if self._current_speech.interrupted:
+                self._current_speech._mark_interrupted_by_user()
+
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
@@ -1280,6 +1287,7 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
+        speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             return
@@ -1376,14 +1384,19 @@ class AgentActivity(RecognitionHooks):
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
 
+            msg = self._agent._chat_ctx.add_message(
+                role="assistant",
+                content=forwarded_text,
+                interrupted=speech_handle.interrupted,
+            )
             if forwarded_text:
-                msg = self._agent._chat_ctx.add_message(
-                    role="assistant",
-                    content=forwarded_text,
-                    interrupted=speech_handle.interrupted,
-                )
                 speech_handle._chat_items.append(msg)
                 self._session._conversation_item_added(msg)
+
+            if speech_handle._interrupted_by_user:
+                self._session._schedule_agent_false_interruption(
+                    AgentFalseInterruptionEvent(extra_instructions=None, message=msg)
+                )
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
@@ -1461,9 +1474,13 @@ class AgentActivity(RecognitionHooks):
             ):
                 tr_input = timed_texts
 
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_scheduled())]
-        )
+        wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
+        await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
+        if speech_handle.interrupted:
+            current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
+            await text_tee.aclose()
+            return
 
         if new_message is not None:
             self._agent._chat_ctx.insert(new_message)
@@ -1474,6 +1491,7 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
+        speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -1578,14 +1596,22 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
+            copy_msg: llm.ChatMessage | None = None
             if generated_msg:
                 copy_msg = generated_msg.model_copy()
                 copy_msg.content = [forwarded_text]
                 copy_msg.interrupted = True
+
                 if forwarded_text:
                     self._agent._chat_ctx.insert(copy_msg)
                     self._session._conversation_item_added(copy_msg)
+
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+            if speech_handle._interrupted_by_user:
+                self._session._schedule_agent_false_interruption(
+                    AgentFalseInterruptionEvent(extra_instructions=instructions, message=copy_msg)
+                )
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
@@ -1724,6 +1750,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
+                instructions=instructions,
             )
         finally:
             # reset tool_choice value
@@ -1741,6 +1768,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle: SpeechHandle,
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
+        instructions: str | None = None,
     ) -> None:
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -1930,18 +1958,22 @@ class AgentActivity(RecognitionHooks):
                         audio_end_ms=int(playback_position * 1000),
                         audio_transcript=forwarded_text,
                     )
-
+                msg = llm.ChatMessage(
+                    role="assistant",
+                    content=[forwarded_text],
+                    id=msg_id,
+                    interrupted=True,
+                )
                 if forwarded_text:
-                    msg = llm.ChatMessage(
-                        role="assistant",
-                        content=[forwarded_text],
-                        id=msg_id,
-                        interrupted=True,
-                    )
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)
                     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+                if speech_handle._interrupted_by_user:
+                    self._session._schedule_agent_false_interruption(
+                        AgentFalseInterruptionEvent(extra_instructions=instructions, message=msg)
+                    )
 
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)

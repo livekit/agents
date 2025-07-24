@@ -456,6 +456,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
 
+                if data.get("error"):
+                    raise APIError(message=data["error"])
+
                 if alignment := data.get("alignment"):
                     # 11labs aligns timestamps at the character level
                     text_buffer += "".join(alignment["chars"])
@@ -468,7 +471,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     start_times_ms = start_times_ms[-len(text_buffer) :]
                     durations_ms = durations_ms[-len(text_buffer) :]
 
-                if data.get("audio"):
+                if data.get("audio") is not None:
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("isFinal"):
@@ -477,10 +480,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                     output_emitter.end_input()
                     return  # 11labs only allow one segment per connection
-                elif data.get("error"):
-                    raise APIError(message=data["error"])
                 else:
-                    raise APIError("unexpected 11labs message {data}")
+                    raise APIError(f"unexpected 11labs message {data}")
 
         tasks = [
             asyncio.create_task(send_task()),

@@ -10,7 +10,7 @@ from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput
 
 class FakeAudioInput(AudioInput):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(label="FakeIO")
         self._audio_ch = utils.aio.Chan[rtc.AudioFrame]()
         self._sample_rate = 16000
 
@@ -36,7 +36,7 @@ class FakeAudioOutput(AudioOutput):
     def __init__(
         self, *, next_in_chain: AudioOutput | None = None, sample_rate: int | None = None
     ) -> None:
-        super().__init__(next_in_chain=next_in_chain, sample_rate=sample_rate)
+        super().__init__(label="FakeIO", next_in_chain=next_in_chain, sample_rate=sample_rate)
         self._start_time = 0.0
         self._pushed_duration = 0.0
         self._flush_handle: asyncio.TimerHandle | None = None
@@ -84,7 +84,7 @@ class FakeAudioOutput(AudioOutput):
 
 class FakeTextOutput(TextOutput):
     def __init__(self, *, next_in_chain: TextOutput | None = None) -> None:
-        super().__init__(next_in_chain=next_in_chain)
+        super().__init__(label="FakeIO", next_in_chain=next_in_chain)
         self._pushed_text = ""
         self._messages: list[str] = []
 

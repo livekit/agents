@@ -43,6 +43,7 @@ stt = GladiaSTT(
     sample_rate=16000,                          # Audio sample rate in Hz
     bit_depth=16,                               # Audio bit depth
     channels=1,                                 # Number of audio channels
+    region="eu-west"                            # Specify Region to use for the Gladia API
     encoding="wav/pcm",                         # Audio encoding format
     energy_filter=True,                         # Enable voice activity detection
     translation_enabled=True,

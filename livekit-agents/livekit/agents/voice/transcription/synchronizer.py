@@ -482,7 +482,11 @@ class _SyncedAudioOutput(io.AudioOutput):
     def __init__(
         self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.AudioOutput
     ) -> None:
-        super().__init__(next_in_chain=next_in_chain, sample_rate=next_in_chain.sample_rate)
+        super().__init__(
+            label="TranscriptSynchronizer",
+            next_in_chain=next_in_chain,
+            sample_rate=next_in_chain.sample_rate,
+        )
         self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._capturing = False
@@ -571,7 +575,7 @@ class _SyncedTextOutput(io.TextOutput):
     def __init__(
         self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput
     ) -> None:
-        super().__init__(next_in_chain=next_in_chain)
+        super().__init__(label="TranscriptSynchronizer", next_in_chain=next_in_chain)
         self._next_in_chain: io.TextOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._capturing = False

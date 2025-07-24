@@ -22,14 +22,18 @@ class SpeechHandle:
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
-        self._generation_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
+
+        self._generations: list[asyncio.Future[None]] = []
+
+        # indicate if the speech was interrupted by a user turn
+        self._interrupted_by_user: bool = False
 
         # internal tasks used by this generation
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
-        self._num_steps = 0
+        self._num_steps = 1
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
@@ -107,16 +111,27 @@ class SpeechHandle:
         self._cancel()
         return self
 
-    def _cancel(self) -> SpeechHandle:
-        if self.done():
-            return self
-
-        with contextlib.suppress(asyncio.InvalidStateError):
-            self._interrupt_fut.set_result(None)
-
-        return self
-
     async def wait_for_playout(self) -> None:
+        """Waits for the entire assistant turn to complete playback.
+
+        This method waits until the assistant has fully finished speaking,
+        including any finalization steps beyond initial response generation.
+        This is appropriate to call when you want to ensure the speech output
+        has entirely played out, including any tool calls and response follow-ups."""
+
+        # raise an error to avoid developer mistakes
+        from .agent import _get_activity_task_info
+
+        if task := asyncio.current_task():
+            info = _get_activity_task_info(task)
+            if info and info.function_call and info.speech_handle == self:
+                raise RuntimeError(
+                    f"cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{info.function_call.name}` that owns this SpeechHandle. "
+                    "This creates a circular wait: the speech handle is waiting for the function tool to complete, "
+                    "while the function tool is simultaneously waiting for the speech handle.\n"
+                    "To wait for the assistant’s spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead."
+                )
+
         await asyncio.shield(self._done_fut)
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
@@ -139,6 +154,15 @@ class SpeechHandle:
         ]
         await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
 
+    def _cancel(self) -> SpeechHandle:
+        if self.done():
+            return self
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._interrupt_fut.set_result(None)
+
+        return self
+
     def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)
 
@@ -153,7 +177,8 @@ class SpeechHandle:
             self._chat_items.append(item)
 
     def _authorize_generation(self) -> None:
-        self._generation_fut = asyncio.Future()
+        fut = asyncio.Future[None]()
+        self._generations.append(fut)
         self._authorize_event.set()
 
     def _clear_authorization(self) -> None:
@@ -162,15 +187,21 @@ class SpeechHandle:
     async def _wait_for_authorization(self) -> None:
         await self._authorize_event.wait()
 
-    async def _wait_for_generation(self) -> None:
-        await asyncio.shield(self._generation_fut)
+    async def _wait_for_generation(self, step_idx: int = -1) -> None:
+        if not self._generations:
+            raise RuntimeError("cannot use wait_for_generation: no active generation is running.")
+
+        await asyncio.shield(self._generations[step_idx])
 
     async def _wait_for_scheduled(self) -> None:
         await asyncio.shield(self._scheduled_fut)
 
     def _mark_generation_done(self) -> None:
+        if not self._generations:
+            raise RuntimeError("cannot use mark_generation_done: no active generation is running.")
+
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._generation_fut.set_result(None)
+            self._generations[-1].set_result(None)
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -181,3 +212,6 @@ class SpeechHandle:
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._scheduled_fut.set_result(None)
+
+    def _mark_interrupted_by_user(self) -> None:
+        self._interrupted_by_user = True

@@ -212,6 +212,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
         )
+        AudioInput.__init__(self, label="RoomIO")
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._noise_cancellation = noise_cancellation
@@ -224,7 +225,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
             noise_cancellation=self._noise_cancellation,
-            # frame_size_ms=50,  # TODO: support frame_size_ms when BVC is enabled
+            frame_size_ms=50,
         )
 
     @override
@@ -315,6 +316,7 @@ class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], Vide
                 rtc.TrackSource.SOURCE_SCREENSHARE,
             ],
         )
+        VideoInput.__init__(self, label="RoomIO")
 
     @override
     def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
