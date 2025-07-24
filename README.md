@@ -119,6 +119,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 
 Documentation on the framework and how to use it can be found [here](https://docs.livekit.io/agents)
 
+You can also [Ask LiveKit Agents Guru](https://gurubase.io/g/livekit-agents), it is a LiveKit Agents focused AI to answer your questions.
+
 ## Example agents
 
 | Description                                                           | Demo Link                                      | Code Link                                                                                                     |
