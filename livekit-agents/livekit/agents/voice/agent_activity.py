@@ -382,6 +382,7 @@ class AgentActivity(RecognitionHooks):
                     context=trace.set_span_in_context(start_span),
                     attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
                 )
+                @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
                     await self._agent.on_enter()
 
@@ -495,6 +496,7 @@ class AgentActivity(RecognitionHooks):
         @tracer.start_as_current_span(
             "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
         )
+        @utils.log_exceptions(logger=logger)
         async def _traceable_on_exit() -> None:
             await self._agent.on_exit()
 
@@ -505,6 +507,8 @@ class AgentActivity(RecognitionHooks):
             _set_activity_task_info(task, inline_task=False)
 
             self._cancel_preemptive_generation()
+
+            await self._on_exit_task
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
