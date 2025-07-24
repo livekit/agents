@@ -1384,12 +1384,14 @@ class AgentActivity(RecognitionHooks):
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
 
-            msg = self._agent._chat_ctx.add_message(
-                role="assistant",
-                content=forwarded_text,
-                interrupted=speech_handle.interrupted,
-            )
+            msg: llm.ChatMessage | None = None
             if forwarded_text:
+                msg = self._agent._chat_ctx.add_message(
+                    role="assistant",
+                    content=forwarded_text,
+                    interrupted=speech_handle.interrupted,
+                )
+
                 speech_handle._chat_items.append(msg)
                 self._session._conversation_item_added(msg)
 
@@ -1958,13 +1960,15 @@ class AgentActivity(RecognitionHooks):
                         audio_end_ms=int(playback_position * 1000),
                         audio_transcript=forwarded_text,
                     )
-                msg = llm.ChatMessage(
-                    role="assistant",
-                    content=[forwarded_text],
-                    id=msg_id,
-                    interrupted=True,
-                )
+
+                msg: llm.ChatMessage | None = None
                 if forwarded_text:
+                    msg = llm.ChatMessage(
+                        role="assistant",
+                        content=[forwarded_text],
+                        id=msg_id,
+                        interrupted=True,
+                    )
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)
