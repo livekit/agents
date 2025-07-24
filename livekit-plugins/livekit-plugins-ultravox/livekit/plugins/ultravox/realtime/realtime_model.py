@@ -32,12 +32,20 @@ from livekit.agents.metrics.base import RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.ultravox.log import logger
-from livekit.plugins.ultravox.models import Models, Voices, AVAILABLE_MODELS, AVAILABLE_VOICES, DEFAULT_MODEL, DEFAULT_VOICE
+from livekit.plugins.ultravox.models import (
+    AVAILABLE_MODELS,
+    AVAILABLE_VOICES,
+    DEFAULT_MODEL,
+    DEFAULT_VOICE,
+    Models,
+    Voices,
+)
 
 from .events import (
     CallStartedEvent,
     ClientToolInvocationEvent,
     ClientToolResultEvent,
+    DebugEvent,
     InputTextMessageEvent,
     PingEvent,
     PlaybackClearBufferEvent,
@@ -56,6 +64,7 @@ NUM_CHANNELS = 1
 ULTRAVOX_BASE_URL = "https://api.ultravox.ai/api"
 lk_ultravox_debug = os.getenv("LK_ULTRAVOX_DEBUG", "false").lower() == "true"
 
+
 def _validate_model(requested_model: str) -> str:
     """Validate model and fallback to default if not available."""
     if requested_model in AVAILABLE_MODELS:
@@ -65,8 +74,11 @@ def _validate_model(requested_model: str) -> str:
             logger.info(f"[ultravox] Using requested model: {requested_model}")
         return requested_model
     else:
-        logger.warning(f"[ultravox] Model '{requested_model}' not available, falling back to: {DEFAULT_MODEL}")
+        logger.warning(
+            f"[ultravox] Model '{requested_model}' not available, falling back to: {DEFAULT_MODEL}"
+        )
         return DEFAULT_MODEL
+
 
 def _validate_voice(requested_voice: str) -> str:
     """Validate voice and fallback to default if not available."""
@@ -77,7 +89,9 @@ def _validate_voice(requested_voice: str) -> str:
             logger.info(f"[ultravox] Using requested voice: {requested_voice}")
         return requested_voice
     else:
-        logger.warning(f"[ultravox] Voice '{requested_voice}' not available, falling back to: {DEFAULT_VOICE}")
+        logger.warning(
+            f"[ultravox] Voice '{requested_voice}' not available, falling back to: {DEFAULT_VOICE}"
+        )
         return DEFAULT_VOICE
 
 
@@ -128,7 +142,7 @@ class RealtimeModel(llm.RealtimeModel):
     """Real-time language model using Ultravox.
 
     Connects to Ultravox's WebSocket API for streaming STT, LLM, and TTS.
-    
+
     Supports dynamic context injection via deferred messages:
     - System messages are injected as <instruction> tags without triggering responses
     - User messages are sent as regular text messages
@@ -212,7 +226,7 @@ class RealtimeModel(llm.RealtimeModel):
         # Validate and potentially fallback model and voice
         validated_model = _validate_model(model_id)
         validated_voice = _validate_voice(voice)
-        
+
         self._opts = _UltravoxOptions(
             model_id=validated_model,
             voice=validated_voice,
@@ -308,7 +322,6 @@ class RealtimeSession(
         self._session_should_close = asyncio.Event()
         self._ws_session_lock = asyncio.Lock()
 
-
     async def _close_active_ws_session(self) -> None:
         async with self._ws_session_lock:
             if self._ws:
@@ -344,34 +357,38 @@ class RealtimeSession(
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Update chat context using Ultravox deferred messages.
-        
+
         System messages are sent as deferred instructions using the <instruction> pattern.
         User messages are sent as regular text messages.
         Assistant messages are skipped (managed by Ultravox internally).
         Function calls/results are handled via the existing tool mechanism.
-        
+
         Args:
             chat_ctx: The updated chat context to inject
         """
         logger.info(f"[ultravox] Injecting context with {len(chat_ctx.items)} items")
-        
+
         for item in chat_ctx.items:
             if item.role == "system" and item.content:
                 # System messages become deferred instructions
-                content_text = item.text_content() if hasattr(item, 'text_content') else str(item.content)
+                content_text = (
+                    item.text_content() if hasattr(item, "text_content") else str(item.content)
+                )
                 logger.debug(f"[ultravox] Injecting system instruction: {content_text[:100]}...")
-                self._send_client_event(InputTextMessageEvent(
-                    text=f"<instruction>{content_text}</instruction>",
-                    defer_response=True
-                ))
+                self._send_client_event(
+                    InputTextMessageEvent(
+                        text=f"<instruction>{content_text}</instruction>", defer_response=True
+                    )
+                )
             elif item.role == "user" and item.content:
-                # User messages sent normally  
-                content_text = item.text_content() if hasattr(item, 'text_content') else str(item.content)
+                # User messages sent normally
+                content_text = (
+                    item.text_content() if hasattr(item, "text_content") else str(item.content)
+                )
                 logger.debug(f"[ultravox] Injecting user message: {content_text[:100]}...")
-                self._send_client_event(InputTextMessageEvent(
-                    text=content_text,
-                    defer_response=False
-                ))
+                self._send_client_event(
+                    InputTextMessageEvent(text=content_text, defer_response=False)
+                )
             # Skip assistant messages (handled by Ultravox)
             # Skip function calls (handled by existing tool mechanism)
 
@@ -514,13 +531,13 @@ class RealtimeSession(
         query_params = {}
         if not self._realtime_model._opts.enable_greeting_prompt:
             query_params["enableGreetingPrompt"] = "false"
-        
+
         # Construct URL with query parameters
         create_call_url = f"{self._realtime_model._opts.base_url.rstrip('/')}/calls"
         if query_params:
             query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
             create_call_url += f"?{query_string}"
-        
+
         # Build payload with core parameters
         payload = {
             "systemPrompt": self._realtime_model._opts.system_prompt,
@@ -535,7 +552,7 @@ class RealtimeSession(
             },
             "selectedTools": self._prepare_tools(self._tools.function_tools.values()),
         }
-        
+
         # Add optional parameters only if specified
         if self._realtime_model._opts.temperature is not None:
             payload["temperature"] = self._realtime_model._opts.temperature
@@ -688,7 +705,7 @@ class RealtimeSession(
         gen.function_ch.close()
         gen.message_ch.close()
         gen._done = True
-        
+
         # Emit metrics for interrupted/completed generation
         self._emit_generation_metrics(interrupted=True)
 
@@ -706,6 +723,8 @@ class RealtimeSession(
             self._handle_playback_clear_buffer_event(event)
         elif isinstance(event, CallStartedEvent):
             pass
+        elif isinstance(event, DebugEvent):
+            self._handle_debug_event(event)
         else:
             logger.warning(f"Unhandled Ultravox event: {event}")
 
@@ -737,8 +756,8 @@ class RealtimeSession(
                     msg_gen._first_token_timestamp = time.time()
                     logger.debug("[ultravox] first text token received")
                 msg_gen.text_ch.send_nowait(event.delta)
-            
-            # Handle final transcript 
+
+            # Handle final transcript
             if event.final:
                 if event.text and not event.delta:  # Only send full text if no delta was sent
                     msg_gen.text_ch.send_nowait(event.text)
@@ -752,7 +771,7 @@ class RealtimeSession(
             return
 
         self._current_generation._completed_timestamp = time.time()
-        
+
         if not self._current_generation.text_ch.closed:
             self._current_generation.text_ch.close()
         if not self._current_generation.audio_ch.closed:
@@ -760,7 +779,7 @@ class RealtimeSession(
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
-        
+
         # Emit metrics for completed generation
         self._emit_generation_metrics(interrupted=False)
 
@@ -769,17 +788,17 @@ class RealtimeSession(
         """Emit RealtimeModelMetrics for the current generation."""
         if self._current_generation is None:
             return
-            
+
         gen = self._current_generation
         current_time = time.time()
         completed_timestamp = gen._completed_timestamp or current_time
         created_timestamp = gen._created_timestamp
         first_token_timestamp = gen._first_token_timestamp
-        
+
         # Calculate timing metrics
         ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = completed_timestamp - created_timestamp
-        
+
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
             request_id=gen.response_id,
@@ -789,7 +808,7 @@ class RealtimeSession(
             label=self._realtime_model._label,
             input_tokens=0,  # Ultravox doesn't provide token counts
             output_tokens=0,
-            total_tokens=0, 
+            total_tokens=0,
             tokens_per_second=0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=0,
@@ -804,11 +823,13 @@ class RealtimeSession(
                 image_tokens=0,
             ),
         )
-        
-        logger.info(f"[ultravox] emitting metrics: ttft={ttft:.3f}s, duration={duration:.3f}s, interrupted={interrupted}")
+
+        logger.info(
+            f"[ultravox] emitting metrics: ttft={ttft:.3f}s, duration={duration:.3f}s, interrupted={interrupted}"
+        )
         self.emit("metrics_collected", metrics)
-        
-        # Clear the current generation after emitting metrics  
+
+        # Clear the current generation after emitting metrics
         self._current_generation = None
 
     def _handle_state_event(self, event: StateEvent) -> None:
@@ -823,19 +844,21 @@ class RealtimeSession(
 
     def _handle_tool_invocation_event(self, event: ClientToolInvocationEvent) -> None:
         """Handle tool invocation events from Ultravox."""
-        logger.info(f"[ultravox] executing tool directly: {event.tool_name} with params {event.parameters}")
-        
+        logger.info(
+            f"[ultravox] executing tool directly: {event.tool_name} with params {event.parameters}"
+        )
+
         # Emit FunctionCall to maintain framework compatibility
         function_call = llm.FunctionCall(
             call_id=event.invocation_id,
             name=event.tool_name,
             arguments=json.dumps(event.parameters),
         )
-        
+
         if self._current_generation is None:
             self._start_new_generation()
         self._current_generation.function_ch.send_nowait(function_call)
-        
+
         # Execute tool directly and send result to Ultravox immediately
         asyncio.create_task(self._execute_tool_and_send_result(event))
 
@@ -855,13 +878,13 @@ class RealtimeSession(
                     if info.name == event.tool_name:
                         tool = t
                         break
-            
+
             if not tool:
                 logger.error(f"[ultravox] tool '{event.tool_name}' not found")
                 result = f"Error: Tool '{event.tool_name}' not found"
             else:
                 logger.info(f"[ultravox] executing tool: {event.tool_name}")
-                
+
                 # Execute the tool
                 if is_function_tool(tool):
                     # For regular function tools, convert parameters to proper types first
@@ -872,36 +895,40 @@ class RealtimeSession(
                     result = await tool(event.parameters, None)  # context=None for now
                 else:
                     result = "Error: Unknown tool type"
-                
+
                 logger.info(f"[ultravox] tool execution result: {result}")
-            
+
             # Send result to Ultravox immediately
             await self.send_tool_result(event.invocation_id, str(result))
-            
+
         except Exception as e:
             logger.error(f"[ultravox] error executing tool {event.tool_name}: {e}", exc_info=True)
             error_msg = f"Error executing tool: {e}"
             await self.send_tool_result(event.invocation_id, error_msg)
 
-    async def _convert_tool_parameters(self, tool: llm.FunctionTool, raw_params: dict[str, Any]) -> dict[str, Any]:
+    async def _convert_tool_parameters(
+        self, tool: llm.FunctionTool, raw_params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Convert raw parameters to the proper types expected by the tool."""
         try:
             # Get the Pydantic model for this tool's parameters
             model = function_arguments_to_pydantic_model(tool)
-            
+
             # Parse and validate the parameters using the Pydantic model
             validated_params = model.model_validate(raw_params)
-            
+
             # Convert back to dict with proper types
             return validated_params.model_dump()
-            
+
         except ValidationError as e:
             logger.warning(f"[ultravox] parameter validation failed for {tool.__name__}: {e}")
             logger.info(f"[ultravox] falling back to raw parameters: {raw_params}")
             # Fallback to raw parameters if validation fails - the tool itself should handle invalid values
             return raw_params
         except Exception as e:
-            logger.error(f"[ultravox] error converting parameters for {tool.__name__}: {e}", exc_info=True)
+            logger.error(
+                f"[ultravox] error converting parameters for {tool.__name__}: {e}", exc_info=True
+            )
             # Fallback to raw parameters if conversion fails
             return raw_params
 
@@ -921,6 +948,13 @@ class RealtimeSession(
         """Handle playback clear buffer events from Ultravox."""
         pass
 
+    def _handle_debug_event(self, event: DebugEvent) -> None:
+        """Handle debug events from Ultravox."""
+        if lk_ultravox_debug:
+            logger.debug(f"[ultravox] Debug: {event.message}")
+        # Could also emit as a custom event for advanced debugging
+        # self.emit("debug_message", event.message)
+
     @utils.log_exceptions(logger=logger)
     def _handle_audio_data(self, audio_data: bytes) -> None:
         """Handle binary audio data from Ultravox."""
@@ -928,7 +962,7 @@ class RealtimeSession(
             if self._current_generation and self._current_generation._first_token_timestamp is None:
                 self._current_generation._first_token_timestamp = time.time()
                 logger.debug("[ultravox] first audio token received")
-                
+
             frame = rtc.AudioFrame(
                 data=audio_data,
                 sample_rate=self._opts.output_sample_rate,
@@ -1030,7 +1064,11 @@ class RealtimeSession(
                                     if "type" in p
                                     else {  # fallback minimal schema for enum/anyOf etc.
                                         "type": _extract_type(p),
-                                        **({"description": p.get("description")} if p.get("description") else {}),
+                                        **(
+                                            {"description": p.get("description")}
+                                            if p.get("description")
+                                            else {}
+                                        ),
                                     }
                                 ),
                                 "required": pn in parameters.get("required", []),
