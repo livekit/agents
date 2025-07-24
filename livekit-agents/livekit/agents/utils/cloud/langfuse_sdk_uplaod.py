@@ -15,7 +15,7 @@ def upload_wav_to_langfuse_media(wav_data: bytes, langfuse_client: Langfuse, cur
 
         with trace.use_span(current_span, end_on_exit=False):
             langfuse_client.update_current_span(output={"context": wrapped_obj})
-    except ImportError:
-        raise Exception("Langfuse SDK is not installed")
+    except ImportError as import_err:
+        raise Exception("Langfuse SDK is not installed") from import_err
     except Exception as e:
         raise Exception(f"Failed to upload wav to langfuse media: {e}") from e
