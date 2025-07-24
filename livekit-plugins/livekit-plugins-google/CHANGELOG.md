@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.11.5
+
+### Patch Changes
+
+- backporting fix to agents 0.x to ignore Gemini LLM responses with no candidates (#2898) - [`73e5384c85ea9b29fa4c946f29c66bef80d5d160`](https://github.com/livekit/agents/commit/73e5384c85ea9b29fa4c946f29c66bef80d5d160) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.11.4
 
 ### Patch Changes
