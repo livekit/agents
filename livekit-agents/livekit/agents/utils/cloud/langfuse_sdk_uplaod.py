@@ -18,4 +18,4 @@ def upload_wav_to_langfuse_media(wav_data: bytes, langfuse_client: Langfuse, cur
     except ImportError:
         raise Exception("Langfuse SDK is not installed")
     except Exception as e:
-        raise Exception(f"Failed to upload wav to langfuse media: {e}")
+        raise Exception(f"Failed to upload wav to langfuse media: {e}") from e
