@@ -109,6 +109,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             max_tokens=max_tokens,
         )
+        self.extra_body: dict[str, Any] = {}
         self._client = client or openai.AsyncClient(
             api_key=api_key,
             base_url=base_url,
@@ -485,15 +486,19 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        web_search_options: dict[str, str] | None = None,
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
 
         ``api_key`` must be set to your Perplexity API key, either using the argument or by setting
         the ``PERPLEXITY_API_KEY`` environmental variable.
+
+        ``web_search_options`` allows configuration for web search in model responses, e.g.
+        ``{"search_context_size": "high"}`` to retrieve more search context for the model.
         """
         api_key = _get_api_key("PERPLEXITY_API_KEY", api_key)
-        return LLM(
+        perplexity_llm = LLM(
             model=model,
             api_key=api_key,
             base_url=base_url,
@@ -503,6 +508,8 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
         )
+        perplexity_llm.extra_body["web_search_options"] = web_search_options
+        return perplexity_llm
 
     @staticmethod
     def with_together(
@@ -713,6 +720,7 @@ class LLMStream(llm.LLMStream):
                 messages=messages,
                 model=self._model,
                 **opts,
+                extra_body=self._llm.extra_body,
             )
 
             async with stream:
