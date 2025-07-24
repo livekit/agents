@@ -604,12 +604,13 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             else:
                 if message_content is None:
                     logger.warning(
-                        "message content is None, skipping: %s",
+                        "message content is None, setting to empty content for continuity: %s",
                         message,
                         extra=self._sess.logging_extra(),
                     )
-                    fut.set_result(False)
-                    return fut
+                    message_content = []
+                    # fut.set_result(False)
+                    # return fut
                 if not isinstance(message_content, list):
                     message_content = [message_content]
 
@@ -907,7 +908,31 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._init_sync_task = asyncio.create_task(self.set_chat_ctx(chat_ctx))
 
         self._fnc_tasks = utils.aio.TaskSet()
+        
+        self._is_recovering = False
+        # Handle session expiration by notifying the model to renew
+        self.on("session_expired", lambda: self._loop.create_task(self.renew_session()))
 
+    async def renew_session(self):
+        logger.info("attempting to renew session")
+        await self.aclose()
+        
+        self._main_atask = asyncio.create_task(
+            self._main_task(), name="openai-realtime-session"
+        )
+        
+        self._send_ch = utils.aio.Chan[api_proto.ClientEvents]()
+        
+        self._session_id = "not-connected"
+        self.session_update()  # initial session init
+        
+        chat_ctx = self.chat_ctx_copy()
+        self._remote_converstation_items = remote_items._RemoteConversationItems()
+        await self.set_chat_ctx(chat_ctx)
+        
+        self._is_recovering = False
+        logger.info("session renewed successfully")
+    
     async def aclose(self) -> None:
         if self._send_ch.closed:
             return
@@ -1054,7 +1079,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 "type": "session.update",
                 "session": session_data,
             }
-        )
+        ) 
 
     def chat_ctx_copy(self) -> llm.ChatContext:
         return self._remote_conversation_items.to_chat_context()
@@ -1097,15 +1122,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             # Patch: append an empty audio message to set the API in audio mode
             changes.to_add.append((None, self._create_empty_user_audio_message(1.0)))
 
-        _futs = [
-            self.conversation.item.delete(item_id=msg.id) for msg in changes.to_delete
-        ] + [
-            self.conversation.item.create(msg, prev.id if prev else None)
-            for prev, msg in changes.to_add
-        ]
+        # First delete all items that need to be removed
+        for msg in changes.to_delete:
+            await self.conversation.item.delete(item_id=msg.id)
 
-        # wait for all the futures to complete
-        await asyncio.gather(*_futs)
+        # Then create new items in order
+        for prev, msg in changes.to_add:
+            await self.conversation.item.create(msg, prev.id if prev else None)
+
 
     def cancel_response(self) -> None:
         if self._active_response_id:
@@ -1176,7 +1200,11 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         item.content = content
 
     def _queue_msg(self, msg: api_proto.ClientEvents) -> None:
-        self._send_ch.send_nowait(msg)
+        try:
+            self._send_ch.send_nowait(msg)
+        except Exception:
+            # TODO: Sent during session renewal. For now, can ignore.
+            logger.error("caught queue message exception, carry on")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -1240,7 +1268,12 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     if closing:
                         return
 
-                    raise Exception("OpenAI S2S connection closed unexpectedly")
+                    # Attempt to recover.
+                    if not self._is_recovering:
+                        self._is_recovering = True
+                        self.emit("session_expired")
+                    return
+                    # raise Exception("OpenAI S2S connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning(
@@ -1395,6 +1428,10 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         )
 
     def _handle_error(self, error: api_proto.ServerEvent.Error):
+        if error["error"]["code"] == "session_expired":
+            self._is_recovering = True
+            logger.warning("session expired.")
+            self.emit("session_expired")
         logger.error(
             "OpenAI S2S error %s",
             error,
