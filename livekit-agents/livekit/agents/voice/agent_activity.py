@@ -1387,9 +1387,7 @@ class AgentActivity(RecognitionHooks):
             msg: llm.ChatMessage | None = None
             if forwarded_text:
                 msg = self._agent._chat_ctx.add_message(
-                    role="assistant",
-                    content=forwarded_text,
-                    interrupted=speech_handle.interrupted,
+                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
                 )
 
                 speech_handle._chat_items.append(msg)
@@ -1964,10 +1962,7 @@ class AgentActivity(RecognitionHooks):
                 msg: llm.ChatMessage | None = None
                 if forwarded_text:
                     msg = llm.ChatMessage(
-                        role="assistant",
-                        content=[forwarded_text],
-                        id=msg_id,
-                        interrupted=True,
+                        role="assistant", content=[forwarded_text], id=msg_id, interrupted=True
                     )
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
