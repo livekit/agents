@@ -1,27 +1,12 @@
-name: Build package
+name: Build Package
 
 on:
-  workflow_call:
-    inputs:
-      package:
-        required: true
-        type: string
-      artifact_name:
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      package:
-        description: "Name of the package to build"
-        required: true
-        default: "livekit-plugins-browser"
-      artifact_name:
-        description: "Artifact name for the distribution package"
-        required: true
-        default: "build-artifact"
+  push:
+    branches:
+      - main
 
 jobs:
-  build_plugins:
+  build:
     runs-on: ubuntu-latest
     if: inputs.package != 'livekit-plugins-browser'
     defaults:
