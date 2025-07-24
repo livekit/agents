@@ -1,22 +1,21 @@
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, Union
 from enum import Enum
+from typing import Annotated, Union
 
 from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
     AgentSession,
+    ChatContext,
     JobContext,
     JobProcess,
+    ToolError,
     WorkerOptions,
     cli,
     function_tool,
-    ToolError,
-    ChatContext,
     llm,
-    RunContext,
 )
 from livekit.agents.voice.events import (
     ConversationItemAddedEvent,
@@ -120,11 +119,14 @@ async def order_pizza(
     when the LLM accidentally sends a string representation like "[... ]".
     """
     try:
-        logger.info(f"[tool:order_pizza] ENTRY: size={size}, toppings={toppings}, quantity={quantity}")
-        
+        logger.info(
+            f"[tool:order_pizza] ENTRY: size={size}, toppings={toppings}, quantity={quantity}"
+        )
+
         # Normalise toppings into a list[str]
         if isinstance(toppings, str):
-            import json, re
+            import json
+            import re
 
             # Try to parse JSON first
             try:
@@ -159,12 +161,12 @@ async def check_availability(item: str) -> str:
     """
     try:
         logger.info(f"[tool:check_availability] ENTRY: item={item!r}")
-        
+
         if "unicorn" in item.lower():
             result = "Sorry, we are all out of unicorns at the moment."
         else:
             result = f"Yes, {item} is available!"
-        
+
         logger.info(f"[tool:check_availability] SUCCESS -> {result}")
         return result
     except Exception as e:
@@ -174,20 +176,30 @@ async def check_availability(item: str) -> str:
 
 # Simple knowledge base for testing
 CUSTOMER_DATABASE = {
-    "john smith": {"name": "John Smith", "account_id": "ACC-001", "status": "VIP", "balance": "$1,250"},
-    "jane doe": {"name": "Jane Doe", "account_id": "ACC-002", "status": "Standard", "balance": "$340"},
+    "john smith": {
+        "name": "John Smith",
+        "account_id": "ACC-001",
+        "status": "VIP",
+        "balance": "$1,250",
+    },
+    "jane doe": {
+        "name": "Jane Doe",
+        "account_id": "ACC-002",
+        "status": "Standard",
+        "balance": "$340",
+    },
 }
 
 KNOWLEDGE_BASE = {
     "hours": "Our business hours are Monday-Friday 9AM-6PM EST, Saturday 10AM-4PM EST.",
     "pricing": "Standard support: $50/month, Premium: $150/month, Enterprise: custom pricing",
-    "support": "For urgent issues, call 1-800-HELP. For billing, email billing@company.com"
+    "support": "For urgent issues, call 1-800-HELP. For billing, email billing@company.com",
 }
 
 
 @function_tool
 async def lookup_customer(
-    customer_name: Annotated[str, "The customer's full name to look up"]
+    customer_name: Annotated[str, "The customer's full name to look up"],
 ) -> str:
     """Look up customer information by name."""
     try:
@@ -200,12 +212,12 @@ async def lookup_customer(
             return f"No customer found with name '{customer_name}'"
     except Exception as e:
         logger.error(f"[tool:lookup_customer] Error: {e}")
-        raise ToolError(f"Error looking up customer: {e}")
+        raise ToolError(f"Error looking up customer: {e}") from e
 
 
-@function_tool  
+@function_tool
 async def search_knowledge(
-    query: Annotated[str, "The topic to search for (hours, pricing, support, etc.)"]
+    query: Annotated[str, "The topic to search for (hours, pricing, support, etc.)"],
 ) -> str:
     """Search the company knowledge base for information."""
     try:
@@ -217,18 +229,20 @@ async def search_knowledge(
         return f"No information found for '{query}'. Available topics: hours, pricing, support"
     except Exception as e:
         logger.error(f"[tool:search_knowledge] Error: {e}")
-        raise ToolError(f"Error searching knowledge base: {e}")
+        raise ToolError(f"Error searching knowledge base: {e}") from e
 
 
 class TestAgent(Agent):
     """Test agent that demonstrates both tools and dynamic context management."""
-    
-    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: llm.ChatMessage) -> None:
+
+    async def on_user_turn_completed(
+        self, turn_ctx: ChatContext, new_message: llm.ChatMessage
+    ) -> None:
         """Inject relevant context based on user input - demonstrates RAG integration."""
         try:
             user_text = new_message.content.lower() if new_message.content else ""
             logger.info(f"[RAG] Processing user turn: {user_text[:50]}...")
-            
+
             # Auto-inject customer context if name mentioned
             for name in CUSTOMER_DATABASE:
                 if name in user_text:
@@ -236,20 +250,17 @@ class TestAgent(Agent):
                     logger.info(f"[RAG] Auto-injecting context for: {customer_data['name']}")
                     turn_ctx.add_message(
                         role="system",
-                        content=f"Context: Customer {customer_data['name']} is calling. Account: {customer_data['account_id']}, Status: {customer_data['status']}, Balance: {customer_data['balance']}"
+                        content=f"Context: Customer {customer_data['name']} is calling. Account: {customer_data['account_id']}, Status: {customer_data['status']}, Balance: {customer_data['balance']}",
                     )
                     break
-            
-            # Auto-inject knowledge if relevant topic mentioned  
+
+            # Auto-inject knowledge if relevant topic mentioned
             for topic in KNOWLEDGE_BASE:
                 if topic in user_text:
                     logger.info(f"[RAG] Auto-injecting knowledge for: {topic}")
-                    turn_ctx.add_message(
-                        role="system",
-                        content=f"Context: {KNOWLEDGE_BASE[topic]}"
-                    )
+                    turn_ctx.add_message(role="system", content=f"Context: {KNOWLEDGE_BASE[topic]}")
                     break
-                
+
         except Exception as e:
             logger.error(f"[RAG] Error in context injection: {e}", exc_info=True)
 
@@ -261,7 +272,7 @@ async def entrypoint(ctx: JobContext) -> None:
         allow_interruptions=True,
         vad=ctx.proc.userdata["vad"],
         llm=RealtimeModel(
-            model_id="fixie-ai/ultravox", 
+            model_id="fixie-ai/ultravox",
             voice="Jessica",
             temperature=0.7,
             language_hint="en",
@@ -295,7 +306,15 @@ You have access to:
 
 When you receive context about a customer or company information, acknowledge it and use it in your response.
 Be conversational and helpful. Use tools when needed to look up specific information.""",
-            tools=[get_time, get_time_raw, say_hello, order_pizza, check_availability, lookup_customer, search_knowledge],
+            tools=[
+                get_time,
+                get_time_raw,
+                say_hello,
+                order_pizza,
+                check_availability,
+                lookup_customer,
+                search_knowledge,
+            ],
         ),
         room=ctx.room,
     )
