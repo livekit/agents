@@ -177,6 +177,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
 
+    _main_atask: Optional[asyncio.Task[Any]]
+    _deferred_validation: Optional[_DeferredReplyValidation]
+
     def __init__(
         self,
         *,
@@ -353,6 +356,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         if self._started:
             raise RuntimeError("voice assistant already started")
+
+        # Reset the future for track publishing
+        self._track_published_fut = asyncio.Future()
 
         @self._stt.on("metrics_collected")
         def _on_stt_metrics(stt_metrics: metrics.STTMetrics) -> None:
@@ -537,12 +543,44 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._update_state_task = asyncio.create_task(_run_task(delay))
 
     async def aclose(self) -> None:
-        """Close the voice assistant"""
+        """Close the voice assistant and clean up all resources"""
         if not self._started:
             return
 
+        logger.info("Closing voice assistant and cleaning up resources...")
+
+        # Cancel and cleanup main task
+        if self._main_atask and not self._main_atask.done():
+            self._main_atask.cancel()
+            try:
+                await self._main_atask
+            except asyncio.CancelledError:
+                pass
+            self._main_atask = None
+
+        # Remove event listeners
         self._room.off("participant_connected", self._on_participant_connected)
-        await self._deferred_validation.aclose()
+        
+        # Close components
+        if self._deferred_validation:
+            await self._deferred_validation.aclose()
+            self._deferred_validation = None
+            
+        # Close STT and VAD if they exist
+        if hasattr(self, '_stt'):
+            await self._stt.aclose()
+        if hasattr(self, '_vad') and hasattr(self._vad, 'aclose'):
+            await self._vad.aclose()
+            
+        # Reset all state flags
+        self._started = False
+        self._closed = True
+        
+        # Clean up the future if it exists and hasn't been completed
+        if hasattr(self, '_track_published_fut') and not self._track_published_fut.done():
+            self._track_published_fut.cancel()
+        
+        logger.info("Voice assistant closed and resources cleaned up")
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
         if self._human_input is not None:
