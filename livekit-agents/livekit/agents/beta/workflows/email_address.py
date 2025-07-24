@@ -52,7 +52,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 "Always call `update_email_address` immediately whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.) \n"
                 "Call `confirm_email_address` **only** after explicitly asking the user to confirm that the provided email address is correct. \n"
                 "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
-                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
+                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary. \n"
+                "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is actually called."
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
@@ -100,7 +101,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 "no email address were provided, `update_email_address` must be called at least once before calling `confirm_email_address`"
             )
 
-        self.complete(GetEmailResult(email_address=self._current_email))
+        if not self.done():
+            self.complete(GetEmailResult(email_address=self._current_email))
 
     @function_tool
     async def decline_email_capture(self, reason: str) -> None:
