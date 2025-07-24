@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-from datetime import datetime, timezone
 import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
@@ -35,23 +34,16 @@ lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
 
 async def _upload_to_langfuse_async(
-    wav_data: bytes, 
-    langfuse_client, 
-    current_span,
-    operation_type: str = "TTS"
+    wav_data: bytes, langfuse_client, current_span, operation_type: str = "TTS"
 ) -> None:
     """Async wrapper for Langfuse upload to avoid blocking main thread"""
     try:
         # Import is conditional, so we need to check if it's available
-        if 'upload_wav_to_langfuse_media' in globals():
+        if "upload_wav_to_langfuse_media" in globals():
             # Run the upload in a thread pool to avoid blocking
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
-                None,
-                upload_wav_to_langfuse_media,
-                wav_data,
-                langfuse_client,
-                current_span
+                None, upload_wav_to_langfuse_media, wav_data, langfuse_client, current_span
             )
             logger.info(f"{operation_type} audio uploaded to langfuse media (async)")
     except Exception as e:
@@ -110,18 +102,20 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
-        
+
         # Initialize Langfuse client only if audio tracing is enabled
         if lk_audio_trace:
             try:
                 from langfuse import get_client
+
                 self._langfuse_client = get_client()
             except Exception as e:
-                logger.warning(f"Failed to initialize Langfuse client, Langfuse will not be used: {e}")
+                logger.warning(
+                    f"Failed to initialize Langfuse client, Langfuse will not be used: {e}"
+                )
                 self._langfuse_client = None
         else:
             self._langfuse_client = None
-    
 
     @property
     def label(self) -> str:
@@ -201,7 +195,7 @@ class ChunkedStream(ABC):
         else:
             self._langfuse_client = None
             self._collected_frames = None
-        
+
         self._upload_task = None
         self._tts_request_span: trace.Span | None = None
 
@@ -291,26 +285,30 @@ class ChunkedStream(ABC):
                     raise APIError("no audio frames were pushed")
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
-                
+
                 start_upload = time.perf_counter()
                 # Upload to langfuse Storage after successful synthesis only if audio tracing is enabled
                 if lk_audio_trace and self._langfuse_client is not None and self._collected_frames:
                     try:
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
                         wav_data = combined_frame.to_wav_bytes()
-                        
+
                         # Start upload task without awaiting it (fire and forget)
-                        self._upload_task = asyncio.create_task(_upload_to_langfuse_async(
-                            wav_data=wav_data,
-                            langfuse_client=self._langfuse_client,
-                            current_span=current_span,
-                            operation_type="TTS"
-                        ))
+                        self._upload_task = asyncio.create_task(
+                            _upload_to_langfuse_async(
+                                wav_data=wav_data,
+                                langfuse_client=self._langfuse_client,
+                                current_span=current_span,
+                                operation_type="TTS",
+                            )
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
                 end_upload = time.perf_counter()
-                logger.info(f"***TTS audio upload block completed in {end_upload - start_upload} seconds***")
+                logger.info(
+                    f"***TTS audio upload block completed in {end_upload - start_upload} seconds***"
+                )
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -348,7 +346,7 @@ class ChunkedStream(ABC):
         await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
         await self._metrics_task
-        
+
         if self._upload_task is not None:
             await self._upload_task
         await self._tee.aclose()
@@ -408,7 +406,7 @@ class SynthesizeStream(ABC):
 
         self._upload_task = None
         self._tts_request_span: trace.Span | None = None
-        
+
         # Langfuse integration for streaming only if audio tracing is enabled
         if lk_audio_trace:
             self._langfuse_client = self._tts._langfuse_client
@@ -450,24 +448,26 @@ class SynthesizeStream(ABC):
                         )
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
-                
+
                 # Upload to langfuse Storage after successful synthesis only if audio tracing is enabled
                 if lk_audio_trace and self._langfuse_client is not None and self._collected_frames:
                     try:
                         combined_frame = rtc.combine_audio_frames(self._collected_frames)
                         wav_data = combined_frame.to_wav_bytes()
-                        
+
                         # Start upload task without awaiting it (fire and forget)
-                        self._upload_task = asyncio.create_task(_upload_to_langfuse_async(
-                            wav_data=wav_data,
-                            langfuse_client=self._langfuse_client,
-                            current_span=current_span,
-                            operation_type="TTS Streaming"
-                        ))
+                        self._upload_task = asyncio.create_task(
+                            _upload_to_langfuse_async(
+                                wav_data=wav_data,
+                                langfuse_client=self._langfuse_client,
+                                current_span=current_span,
+                                operation_type="TTS Streaming",
+                            )
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to upload TTS audio to langfuse media: {e}")
                         # Don't fail the entire TTS operation if blob upload fails
-                
+
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
@@ -560,7 +560,7 @@ class SynthesizeStream(ABC):
             audio_duration += ev.frame.duration
             request_id = ev.request_id
             segment_id = ev.segment_id
-            
+
             # Store frames for Audio upload only if audio tracing is enabled
             if lk_audio_trace and self._collected_frames is not None:
                 self._collected_frames.append(ev.frame)
