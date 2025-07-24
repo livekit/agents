@@ -675,6 +675,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
+        self._thinking = False
         retryable = True
 
         try:
@@ -781,11 +782,28 @@ class LLMStream(llm.LLMStream):
             # we're done with the tool calls, run the last one
             return self._try_build_function(id, choice)
 
+        # Handle DeepSeek-R1's <think> tag
+        content = delta.content
+        reasoning = ""
+        if content and (idx := content.find("</think>")) != -1:
+            reasoning = content[:idx]
+            content = content[idx + len("</think>") :]
+            self._thinking = False
+        elif self._thinking:
+            reasoning += content
+            return None
+        elif content and content.startswith("<think>"):
+            self._thinking = True
+            reasoning = content[7:]
+            return None
+
         return llm.ChatChunk(
             request_id=id,
             choices=[
                 llm.Choice(
-                    delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
+                    delta=llm.ChoiceDelta(
+                        content=content, role="assistant", reasoning=reasoning
+                    ),
                     index=choice.index,
                 )
             ],
