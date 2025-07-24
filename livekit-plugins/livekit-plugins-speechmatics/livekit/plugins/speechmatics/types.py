@@ -1,214 +1,104 @@
-import ssl
-from dataclasses import asdict, dataclass, field
-from enum import Enum
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
 @dataclass
 class SpeechFragment:
-    """Fragment of an utterance."""
+    """Fragment of an utterance.
 
-    start_time: float
-    """Start time of the fragment in seconds."""
-
-    end_time: float
-    """End time of the fragment in seconds."""
-
-    language: str = "en"
-    """Language of the fragment."""
-
-    is_eos: bool = False
-    """Whether the fragment is the end of a sentence."""
-
-    is_final: bool = False
-    """Whether the fragment is the final fragment."""
-
-    attaches_to: str = ""
-    """Whether the fragment attaches to the previous or next fragment (punctuation)."""
-
-    content: str = ""
-    """Content of the fragment."""
-
-    speaker: Optional[str] = None
-    """Speaker of the fragment."""
-
-    confidence: float = 1.0
-    """Confidence of the fragment."""
-
-
-@dataclass
-class RTConversationConfig:
-    """Conversation config."""
-
-    end_of_utterance_silence_trigger: Optional[float] = None
-    """How much silence in seconds is required to trigger end of utterance detection."""
-
-
-@dataclass
-class RTSpeakerDiarizationConfig:
-    """Real-time mode: Speaker diarization config."""
-
-    max_speakers: Optional[int] = None
-    """This enforces the maximum number of speakers allowed in a single audio stream."""
-
-    speaker_sensitivity: Optional[float] = None
-    """The sensitivity of the speaker detection.
-    This is a number between 0 and 1, where 0 means least sensitive and 1 means
-    most sensitive."""
-
-    prefer_current_speaker: Optional[bool] = None
-    """Whether to prefer the current speaker when assigning speaker labels.
-    If true, the algorithm will prefer to stay with the current active speaker if it
-    is a close enough match, even if other speakers may be closer.  This is useful
-    for cases where we can flip incorrectly between similar speakers during a single
-    speaker section."""
-
-    speakers: Optional[dict[str, list[str]]] = None
-    """The list of speakers detected in the audio stream."""
-
-
-@dataclass
-class TranscriptionConfig:
-    """Real-time: Defines transcription parameters. See https://docs.speechmatics.com/rt-api-ref#transcription-config"""
-
-    language: str = "en"
-    """ISO 639-1 language code. eg. `en`"""
-
-    operating_point: Optional[str] = None
-    """Specifies which acoustic model to use."""
-
-    output_locale: Optional[str] = None
-    """RFC-5646 language code for transcript output. eg. `en-AU`"""
-
-    diarization: Optional[str] = None
-    """Indicates type of diarization to use, if any."""
-
-    additional_vocab: Optional[dict] = None
-    """Additional vocabulary that is not part of the standard language."""
-
-    punctuation_overrides: Optional[dict] = None
-    """Permitted puctuation marks for advanced punctuation."""
-
-    enable_entities: Optional[bool] = None
-    """Indicates if inverse text normalization entity output is enabled."""
-
-    max_delay: Optional[float] = None
-    """Maximum acceptable delay."""
-
-    max_delay_mode: Optional[str] = None
-    """Determines whether the threshold specified in max_delay can be exceeded
-    if a potential entity is detected. Flexible means if a potential entity
-    is detected, then the max_delay can be overriden until the end of that
-    entity. Fixed means that max_delay specified ignores any potential
-    entity that would not be completed within that threshold."""
-
-    enable_partials: Optional[bool] = None
-    """Indicates if partials for transcription, where words are produced
-    immediately, is enabled."""
-
-    audio_filtering_config: Optional[dict] = None
-    """Puts a lower limit on the volume of processed audio by using the volume_threshold setting."""
-
-    transcript_filtering_config: Optional[dict] = None
-    """Removes disfluencies with the remove_disfluencies setting."""
-
-    speaker_diarization_config: Optional[RTSpeakerDiarizationConfig] = None
-    """Options for speaker diarization such as ``max_speakers``."""
-
-    conversation_config: Optional[RTConversationConfig] = None
-    """Optional configuration for end-of-utterance detection."""
-
-    def asdict(self) -> dict[Any, Any]:
-        """Returns model as a dict while excluding None values recursively."""
-        return asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
-
-
-@dataclass
-class AudioSettings:
-    """Real-time: Defines audio parameters."""
-
-    encoding: str = "pcm_s16le"
-    """Encoding format when raw audio is used. Allowed values are
-    `pcm_f32le`, `pcm_s16le` and `mulaw`."""
-
-    sample_rate: int = 16000
-    """Sampling rate in hertz."""
-
-    def asdict(self) -> dict[str, Any]:
-        return {
-            "type": "raw",
-            "encoding": self.encoding,
-            "sample_rate": self.sample_rate,
-        }
-
-
-@dataclass
-class ConnectionSettings:
-    """Defines connection parameters."""
-
-    url: str
-    """Websocket server endpoint."""
-
-    ssl_context: ssl.SSLContext = field(default_factory=ssl.create_default_context)
-    """SSL context."""
-
-    api_key: Optional[str] = None
-    """api key to authenticate a customer."""
-
-    get_access_token: Optional[bool] = True
-    """Automatically generate a temporary token for authentication."""
-
-
-class ClientMessageType(str, Enum):
-    # pylint: disable=invalid-name
-    """Real-time: Defines various messages sent from client to server."""
-
-    StartRecognition = "StartRecognition"
-    """Initiates a recognition job based on configuration set previously."""
-
-    AddAudio = "AddAudio"
-    """Adds more audio data to the recognition job. The server confirms
-    receipt by sending an :py:attr:`ServerMessageType.AudioAdded` message."""
-
-    EndOfStream = "EndOfStream"
-    """Indicates that the client has no more audio to send."""
-
-    SetRecognitionConfig = "SetRecognitionConfig"
-    """Allows the client to re-configure the recognition session."""
-
-
-class ServerMessageType(str, Enum):
-    """Real-time: Defines various message types sent from server to client."""
-
-    RecognitionStarted = "RecognitionStarted"
-    """Server response to :py:attr:`ClientMessageType.StartRecognition`,
-    acknowledging that a recognition session has started."""
-
-    AudioAdded = "AudioAdded"
-    """Server response to :py:attr:`ClientMessageType.AddAudio`, indicating
-    that audio has been added successfully."""
-
-    AddPartialTranscript = "AddPartialTranscript"
-    """Indicates a partial transcript, which is an incomplete transcript that
-    is immediately produced and may change as more context becomes available.
+    Parameters:
+        start_time: Start time of the fragment in seconds (from session start).
+        end_time: End time of the fragment in seconds (from session start).
+        language: Language of the fragment. Defaults to `en`.
+        is_eos: Whether the fragment is the end of a sentence. Defaults to `False`.
+        is_final: Whether the fragment is the final fragment. Defaults to `False`.
+        is_disfluency: Whether the fragment is a disfluency. Defaults to `False`.
+        is_punctuation: Whether the fragment is a punctuation. Defaults to `False`.
+        attaches_to: Whether the fragment attaches to the previous or next fragment (punctuation). Defaults to empty string.
+        content: Content of the fragment. Defaults to empty string.
+        speaker: Speaker of the fragment (if diarization is enabled). Defaults to `None`.
+        confidence: Confidence of the fragment (0.0 to 1.0). Defaults to `1.0`.
+        result: Raw result of the fragment from the TTS.
     """
 
-    AddTranscript = "AddTranscript"
-    """Indicates the final transcript of a part of the audio."""
+    start_time: float
+    end_time: float
+    language: str = "en"
+    is_eos: bool = False
+    is_final: bool = False
+    is_disfluency: bool = False
+    is_punctuation: bool = False
+    attaches_to: str = ""
+    content: str = ""
+    speaker: Optional[str] = None
+    confidence: float = 1.0
+    result: Optional[Any] = None
 
-    EndOfUtterance = "EndOfUtterance"
-    """Indicates the end of an utterance (defined with `end_of_utterance_silence_trigger`)."""
 
-    EndOfTranscript = "EndOfTranscript"
-    """Server response to :py:attr:`ClientMessageType.EndOfStream`,
-    after the server has finished sending all :py:attr:`AddTranscript`
-    messages."""
+@dataclass
+class SpeakerFragments:
+    """SpeechFragment items grouped by speaker_id.
 
-    Info = "Info"
-    """Indicates a generic info message."""
+    Parameters:
+        speaker_id: The ID of the speaker.
+        is_active: Whether the speaker is active (emits frame).
+        timestamp: The timestamp of the frame.
+        language: The language of the frame.
+        fragments: The list of SpeechFragment items.
+    """
 
-    Warning = "Warning"
-    """Indicates a generic warning message."""
+    speaker_id: Optional[str] = None
+    is_active: bool = False
+    timestamp: Optional[str] = None
+    language: Optional[str] = None
+    fragments: list[SpeechFragment] = field(default_factory=list)
 
-    Error = "Error"
-    """Indicates n generic error message."""
+    def __str__(self):
+        """Return a string representation of the object."""
+        return f"SpeakerFragments(speaker_id: {self.speaker_id}, timestamp: {self.timestamp}, language: {self.language}, text: {self._format_text()})"
+
+    def _format_text(self, format: Optional[str] = None) -> str:
+        """Wrap text with speaker ID in an optional f-string format.
+
+        Args:
+            format: Format to wrap the text with.
+
+        Returns:
+            str: The wrapped text.
+        """
+        # Cumulative contents
+        content = ""
+
+        # Assemble the text
+        for frag in self.fragments:
+            if content == "" or frag.attaches_to == "previous":
+                content += frag.content
+            else:
+                content += " " + frag.content
+
+        # Format the text, if format is provided
+        if format is None or self.speaker_id is None:
+            return content
+        return format.format(**{"speaker_id": self.speaker_id, "text": content})
+
+    def _as_frame_attributes(
+        self, active_format: Optional[str] = None, passive_format: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Return a dictionary of attributes for a TranscriptionFrame.
+
+        Args:
+            active_format: Format to wrap the text with.
+            passive_format: Format to wrap the text with. Defaults to `active_format`.
+
+        Returns:
+            dict[str, Any]: The dictionary of attributes.
+        """
+        if not passive_format:
+            passive_format = active_format
+        return {
+            "text": self._format_text(active_format if self.is_active else passive_format),
+            "user_id": self.speaker_id,
+            "timestamp": self.timestamp,
+            "language": self.language,
+            "result": [frag.result for frag in self.fragments],
+        }
