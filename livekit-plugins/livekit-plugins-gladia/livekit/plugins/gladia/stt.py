@@ -117,6 +117,7 @@ class STTOptions:
     sample_rate: int
     bit_depth: Literal[8, 16, 24, 32]
     channels: int
+    region: Literal["us-west", "eu-west"]
     encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"]
     translation_config: TranslationConfiguration = dataclasses.field(
         default_factory=TranslationConfiguration
@@ -132,6 +133,7 @@ class STTOptions:
 def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     """Build the streaming configuration for Gladia API."""
     streaming_config: dict[str, Any] = {
+        "region": opts.region,
         "encoding": opts.encoding,
         "sample_rate": opts.sample_rate,
         "bit_depth": opts.bit_depth,
@@ -191,6 +193,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         bit_depth: Literal[8, 16, 24, 32] = 16,
         channels: int = 1,
+        region: Literal["us-west", "eu-west"] = "eu-west",
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] = "wav/pcm",
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -221,6 +224,7 @@ class STT(stt.STT):
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             bit_depth: The bit depth of the audio. Defaults to 16.
             channels: The number of audio channels. Defaults to 1.
+            region: The region to use for the Gladia API. Defaults to "eu-west".
             encoding: The encoding of the audio. Defaults to "wav/pcm".
             api_key: Your Gladia API key. If not provided, will look for GLADIA_API_KEY
                         environment variable.
@@ -286,6 +290,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             bit_depth=bit_depth,
             channels=channels,
+            region=region,
             encoding=encoding,
             translation_config=translation_config,
             pre_processing=pre_processing_config,
@@ -513,6 +518,7 @@ class STT(stt.STT):
         sample_rate: int | None = None,
         bit_depth: Literal[8, 16, 24, 32] | None = None,
         channels: int | None = None,
+        region: Literal["us-west", "eu-west"] | None = None,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
         translation_enabled: bool | None = None,
         translation_target_languages: list[str] | None = None,
@@ -612,6 +618,7 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 bit_depth=bit_depth,
                 channels=channels,
+                region=region,
                 encoding=encoding,
                 translation_enabled=translation_enabled,
                 translation_target_languages=translation_target_languages,
@@ -682,6 +689,7 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: int | None = None,
         bit_depth: Literal[8, 16, 24, 32] | None = None,
         channels: int | None = None,
+        region: Literal["us-west", "eu-west"] | None = None,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
         translation_enabled: bool | None = None,
         translation_target_languages: list[str] | None = None,
@@ -766,6 +774,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.bit_depth = bit_depth
         if channels is not None:
             self._opts.channels = channels
+        if region is not None:
+            self._opts.region = region
         if encoding is not None:
             self._opts.encoding = encoding
         if custom_vocabulary is not None:
