@@ -1,6 +1,8 @@
-# Ultravox plugin for LiveKit Agents
+# LiveKit Ultravox Plugin
 
-Support for Ultravox Realtime API.
+LiveKit plugin for Ultravox's real-time speech-to-speech AI models, providing seamless integration with the LiveKit Agents framework.
+
+
 
 ## Installation
 
@@ -8,6 +10,97 @@ Support for Ultravox Realtime API.
 pip install livekit-plugins-ultravox
 ```
 
-## Pre-requisites
+## Prerequisites
 
-You'll need an API key from Ultravox. It can be set as an environment variable: `ULTRAVOX_API_KEY`
+You'll need an API key from Ultravox. Set it as an environment variable:
+
+```bash
+export ULTRAVOX_API_KEY="your_api_key_here"
+```
+
+## Basic Usage
+
+### Simple Voice Assistant
+
+```python
+import asyncio
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.plugins import silero
+from livekit.plugins.ultravox.realtime import RealtimeModel
+
+async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+    
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        llm=RealtimeModel(
+            model_id="fixie-ai/ultravox",
+            voice="Mark",
+        ),
+    )
+    
+    await session.start(
+        agent=Agent(
+            instructions="You are a helpful voice assistant.",
+        ),
+        room=ctx.room,
+    )
+
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+```
+
+### Voice Assistant with Tools
+
+```python
+from livekit.agents import function_tool, Agent, AgentSession, JobContext
+from livekit.plugins.ultravox.realtime import RealtimeModel
+
+@function_tool
+async def get_weather(location: str) -> str:
+    """Get weather information for a location."""
+    return f"The weather in {location} is sunny and 72°F"
+
+@function_tool
+async def book_appointment(date: str, time: str) -> str:
+    """Book an appointment."""
+    return f"Appointment booked for {date} at {time}"
+
+async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+    
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        llm=RealtimeModel(model_id="fixie-ai/ultravox"),
+    )
+    
+    await session.start(
+        agent=Agent(
+            instructions="You are a helpful assistant with access to weather and scheduling tools.",
+            tools=[get_weather, book_appointment],
+        ),
+        room=ctx.room,
+    )
+```
+
+
+## Configuration Options
+
+### Ultravox API (/api/call)  Parameters
+
+```python
+RealtimeModel(
+    model_id="fixie-ai/ultravox",           # Ultravox model to use
+    voice="Mark",                           # Voice for TTS (Mark, Emma, etc.)
+    api_key=None,                          # API key (defaults to env var)
+    base_url=None,                         # API base URL (defaults to Ultravox API)
+    system_prompt="You are helpful.",      # System prompt
+    input_sample_rate=16000,               # Input audio sample rate
+    output_sample_rate=24000,              # Output audio sample rate  
+    client_buffer_size_ms=60,              # Audio buffer size
+    http_session=None,                     # Custom HTTP session
+)
+```
+
+
+
