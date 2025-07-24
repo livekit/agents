@@ -247,9 +247,7 @@ class SpeechStream(stt.RecognizeStream):
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)
             def _evt_on_end_of_utterance(message: dict[str, Any]):
                 logger.debug("End of utterance received from STT")
-                asyncio.run_coroutine_threadsafe(
-                    self._send_frames(finalized=True), self.get_event_loop()
-                )
+                asyncio.create_task(self._send_frames(finalized=True))
 
         # Start session
         await self._client.start_session(
@@ -280,68 +278,6 @@ class SpeechStream(stt.RecognizeStream):
 
         # TODO - handle the closing of the stream?
 
-    def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
-        """
-        Process a stream event from the STT engine.
-
-        Events we expect to receive:
-            RecognitionStarted: Received once the STT engine has started and ready to receive audio.
-            AddPartialTranscript: Partial transcript messages from the STT engine.
-            AddTranscript: Final transcript messages from the STT engine.
-            EndOfUtterance: End of utterance message from the STT engine.
-            EndOfTranscript: End of transcript message from the STT engine at the session end.
-
-        Args:
-            data: The stream event data.
-            closing_ws: Whether the WebSocket is closing.
-        """
-
-        # Get the message type
-        message_type = data["message"]
-
-        if message_type == ServerMessageType.RecognitionStarted:
-            """Received once the STT engine has started and is ready to receive audio."""
-            self._recognition_started.set()
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
-
-        elif message_type in (
-            ServerMessageType.AddPartialTranscript,
-            ServerMessageType.AddTranscript,
-        ):
-            """Partial and Final transcript messages from the STT engine."""
-
-            # Add the new speech fragments to the list
-            has_changed = self._add_speech_fragments(
-                message=data,
-                is_final=message_type == ServerMessageType.AddTranscript,
-            )
-
-            # Skip if unchanged
-            if not has_changed:
-                return
-
-            # Get the speech data
-            speech_data = self._get_speech_data_from_fragments()
-            if speech_data:
-                self._send_result(speech_data, is_final=False)
-
-        elif message_type == ServerMessageType.EndOfUtterance:
-            """End of utterance message from the STT engine."""
-
-            # Get the speech data
-            speech_data = self._get_speech_data_from_fragments()
-            if speech_data:
-                self._send_result(speech_data, is_final=True, is_eou=True)
-
-        elif message_type == ServerMessageType.EndOfTranscript:
-            """End of transcript message from the STT engine at the end of the session."""
-
-            if closing_ws:
-                pass
-            else:
-                raise Exception("Speechmatics connection closed unexpectedly")
-
     def _handle_transcript(self, message: dict[str, Any], is_final: bool) -> None:
         """Handle the partial and final transcript events.
 
@@ -359,53 +295,50 @@ class SpeechStream(stt.RecognizeStream):
         if not has_changed:
             return
 
-        frags = self._get_frames_from_fragments()
-        if frags:
-            print(frags)
-
         # Send frames
-        # asyncio.run_coroutine_threadsafe(self._send_frames(), self.get_event_loop())
+        asyncio.create_task(self._send_frames())
 
-    def _send_result(
-        self,
-        speech_data: list[SpeakerSpeechData],
-        is_final: bool = False,
-        is_eou: bool = False,
-    ) -> None:
-        """
-        Send an interim or final transcript to LiveKit.
+    async def _send_frames(self, finalized: bool = False) -> None:
+        """Send frames to the pipeline.
 
-        Process the new partial and final data from the STT. With ever new
-        payload, all previous partials are removed, retaining any finals.
-        The STT will emit repeat partials until they are finalised by the
-        engine.
+        Send speech frames to the pipeline. If VAD is enabled, then this will
+        also send an interruption and user started speaking frames. When the
+        final transcript is received, then this will send a user stopped speaking
+        and stop interruption frames.
 
         Args:
-            speech_data: The SpeechData objects to send.
-            is_final: Whether the transcript is final.
-            is_eou: Whether the transcript is an end of utterance.
+            finalized: Whether the data is final or partial.
         """
+        # Get speech frames (InterimTranscriptionFrame)
+        speech_frames = self._get_frames_from_fragments()
+
+        # Skip if no frames
+        if not speech_frames:
+            return
+
+        # Check at least one frame is active
+        if not any(frame.is_active for frame in speech_frames):
+            return
 
         # Event type to send
-        if not is_final:
+        if not finalized:
             event_type = stt.SpeechEventType.INTERIM_TRANSCRIPT
         else:
             event_type = stt.SpeechEventType.FINAL_TRANSCRIPT
 
         # Get the speech data and send
-        for item in speech_data:
+        for item in speech_frames:
             final_event = stt.SpeechEvent(
                 type=event_type,
-                alternatives=[item],
+                alternatives=[SpeakerSpeechData(**item._as_speech_data_attributes())],
             )
             self._event_ch.send_nowait(final_event)
 
-        # Send End of Speech
-        if is_eou:
+        # Send end of speech
+        if finalized:
+            # Send End of Speech
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
-        # Reset the accumulator and update LiveKit with timing info
-        if is_final:
             # Reset the data
             self._speech_fragments.clear()
 

@@ -81,7 +81,7 @@ class SpeakerFragments:
             return content
         return format.format(**{"speaker_id": self.speaker_id, "text": content})
 
-    def _as_frame_attributes(
+    def _as_speech_data_attributes(
         self, active_format: Optional[str] = None, passive_format: Optional[str] = None
     ) -> dict[str, Any]:
         """Return a dictionary of attributes for a TranscriptionFrame.
@@ -96,9 +96,9 @@ class SpeakerFragments:
         if not passive_format:
             passive_format = active_format
         return {
-            "text": self._format_text(active_format if self.is_active else passive_format),
-            "user_id": self.speaker_id,
-            "timestamp": self.timestamp,
             "language": self.language,
-            "result": [frag.result for frag in self.fragments],
+            "text": self._format_text(active_format if self.is_active else passive_format),
+            "speaker_id": self.speaker_id,
+            "start_time": self.timestamp,
+            "confidence": 1.0,
         }
