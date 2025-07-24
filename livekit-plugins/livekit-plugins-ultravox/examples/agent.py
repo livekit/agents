@@ -12,9 +12,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
-    ChatContext,
 )
-from livekit.agents import llm
 from livekit.agents.voice.events import (
     ConversationItemAddedEvent,
     FunctionToolsExecutedEvent,
