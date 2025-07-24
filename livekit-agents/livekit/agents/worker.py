@@ -166,6 +166,10 @@ class WorkerOptions:
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
     Defaults to 0 (disabled).
     """
+    no_jobs_exit_timeout: int = 0
+    """When greater than 0, the worker will exit after this many seconds if there are no pending or active jobs.
+    Defaults to 0 (disabled), meaning the worker will never exit automatically due to inactivity.
+    """
 
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
@@ -210,6 +214,11 @@ class WorkerOptions:
         if load_threshold > 1 and not devmode:
             logger.warning(
                 f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
+            )
+            
+        if self.no_jobs_exit_timeout < 0:
+            logger.warning(
+                f"no_jobs_exit_timeout must be non-negative, current value: {self.no_jobs_exit_timeout}"
             )
 
 
@@ -263,6 +272,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._close_future: asyncio.Future[None] | None = None
         self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
         self._devmode = devmode
+        self._no_jobs_time_start: float | None = None
 
         # using spawn context for all platforms. We may have further optimizations for
         # Linux with forkserver, but for now, this is the safest option
@@ -759,6 +769,35 @@ class Worker(utils.EventEmitter[EventTypes]):
             msg = agent.WorkerMessage(update_worker=update)
             await self._queue_msg(msg)
             return
+
+        # Check if we should exit due to inactivity
+        if self._opts.no_jobs_exit_timeout > 0 and not self._draining:
+            current_time = asyncio.get_event_loop().time()
+            if job_cnt == 0:
+                # No jobs running, track the time
+                if self._no_jobs_time_start is None:
+                    self._no_jobs_time_start = current_time
+                    logger.info(
+                        "no jobs running, will exit in %d seconds if no new jobs arrive",
+                        self._opts.no_jobs_exit_timeout,
+                    )
+                elif (current_time - self._no_jobs_time_start) >= self._opts.no_jobs_exit_timeout:
+                    logger.info(
+                        "exiting due to inactivity timeout of %d seconds",
+                        self._opts.no_jobs_exit_timeout,
+                    )
+                    
+                    # Instead of creating a separate task that does drain+close, just trigger
+                    # a KeyboardInterrupt which the CLI will catch and perform cleanup correctly
+                    logger.info("Triggering graceful exit due to inactivity timeout")
+                    import signal, os
+                    os.kill(os.getpid(), signal.SIGINT)
+                    return
+            else:
+                # Reset timeout when jobs are running
+                if self._no_jobs_time_start is not None:
+                    logger.info("jobs are now running, canceling inactivity timeout")
+                    self._no_jobs_time_start = None
 
         def load_fnc():
             signature = inspect.signature(self._opts.load_fnc)
