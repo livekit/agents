@@ -507,6 +507,8 @@ class AgentActivity(RecognitionHooks):
             _set_activity_task_info(task, inline_task=False)
 
             self._cancel_preemptive_generation()
+
+            await self._on_exit_task
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
