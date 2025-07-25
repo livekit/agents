@@ -422,58 +422,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._update_agent_state("initializing")
 
             tasks: list[asyncio.Task[None]] = []
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
-                from .chat_cli import ChatCLI
+            from .chat_cli import ChatCLI
 
-                if (
-                    self.input.audio is not None
-                    or self.output.audio is not None
-                    or self.output.transcription is not None
-                ):
-                    logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
-                        "or output.transcription is already set, overriding.."
-                    )
-
-                chat_cli = ChatCLI(self)
-                tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
-
-            elif is_given(room) and not self._room_io:
-                room_input_options = copy.copy(
-                    room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
-                )
-                room_output_options = copy.copy(
-                    room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
+            if (
+                self.input.audio is not None
+                or self.output.audio is not None
+                or self.output.transcription is not None
+            ):
+                logger.warning(
+                    "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
+                    "or output.transcription is already set, overriding.."
                 )
 
-                if self.input.audio is not None:
-                    if room_input_options.audio_enabled:
-                        logger.warning(
-                            "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
-                        )
-                    room_input_options.audio_enabled = False
-
-                if self.output.audio is not None:
-                    if room_output_options.audio_enabled:
-                        logger.warning(
-                            "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
-                        )
-                    room_output_options.audio_enabled = False
-
-                if self.output.transcription is not None:
-                    if room_output_options.transcription_enabled:
-                        logger.warning(
-                            "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
-                        )
-                    room_output_options.transcription_enabled = False
-
-                self._room_io = room_io.RoomIO(
-                    room=room,
-                    agent_session=self,
-                    input_options=room_input_options,
-                    output_options=room_output_options,
-                )
-                tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
+            chat_cli = ChatCLI(self)
+            tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
 
             # session can be restarted, register the callbacks only once
             try:
@@ -517,13 +479,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
-            if self._room_io and self._room_io.subscribed_fut:
-
-                def on_room_io_subscribed(_: asyncio.Future[None]) -> None:
-                    if self._user_state == "listening" and self._agent_state == "listening":
-                        self._set_user_away_timer()
-
-                self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
 
             # log used IO
             def _collect_source(
