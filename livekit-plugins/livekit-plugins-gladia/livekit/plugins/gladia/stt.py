@@ -25,7 +25,6 @@ from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
 
-
 import aiohttp
 import numpy as np
 
@@ -845,6 +844,7 @@ class SpeechStream(stt.SpeechStream):
         streaming_config = _build_streaming_config(self._opts)
         try:
             from urllib.parse import urlencode
+
             url = f"{self._base_url}?{urlencode({'region': streaming_config['region']})}"
             streaming_config = {k: v for k, v in streaming_config.items() if k != "region"}
             async with self._session.post(
