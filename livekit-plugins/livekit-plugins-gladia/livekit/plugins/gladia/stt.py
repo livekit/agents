@@ -23,6 +23,8 @@ import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlencode
+
 
 import aiohttp
 import numpy as np
@@ -133,7 +135,6 @@ class STTOptions:
 def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     """Build the streaming configuration for Gladia API."""
     streaming_config: dict[str, Any] = {
-        "region": opts.region,
         "encoding": opts.encoding,
         "sample_rate": opts.sample_rate,
         "bit_depth": opts.bit_depth,
@@ -432,8 +433,10 @@ class STT(stt.STT):
     async def _init_live_session(self, config: dict, conn_options: APIConnectOptions) -> dict:
         """Initialize a live transcription session with Gladia."""
         try:
+            url = f"{self._base_url}?{urlencode({'region': config['region']})}"
+            config = {k: v for k, v in config.items() if k != "region"}
             async with self._ensure_session().post(
-                url=self._base_url,
+                url=url,
                 json=config,
                 headers={"X-Gladia-Key": self._api_key},
                 timeout=aiohttp.ClientTimeout(
@@ -841,8 +844,11 @@ class SpeechStream(stt.SpeechStream):
         """Initialize a live session with Gladia."""
         streaming_config = _build_streaming_config(self._opts)
         try:
+            from urllib.parse import urlencode
+            url = f"{self._base_url}?{urlencode({'region': streaming_config['region']})}"
+            streaming_config = {k: v for k, v in streaming_config.items() if k != "region"}
             async with self._session.post(
-                url=self._base_url,
+                url=url,
                 json=streaming_config,
                 headers={"X-Gladia-Key": self._api_key},
                 timeout=aiohttp.ClientTimeout(
