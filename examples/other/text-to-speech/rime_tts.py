@@ -7,17 +7,6 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import rime
 
-"""
-This script demonstrates text-to-speech capabilities using Rime's TTS service with LiveKit.
-
-Required Environment Variables:
-    LIVEKIT_URL: The URL of your LiveKit server
-    LIVEKIT_API_KEY: Your LiveKit API key
-    LIVEKIT_API_SECRET: Your LiveKit API secret
-    RIME_API_KEY: Your Rime API key
-"""
-
-
 # Initialize environment and logging
 load_dotenv()
 logger = logging.getLogger("rime-tts-demo")
@@ -42,7 +31,8 @@ class TextSegmenter:
             list[str]: List of segmented sentences
         """
         # Clean up text by replacing smart quotes and removing asterisks
-        text = text.replace("\u2018", "'").replace("\u2019", "'").replace("*", "")
+        text = text.replace("\u2018", "'").replace(
+            "\u2019", "'").replace("*", "")
         result = []
         start_pos = 0
 
@@ -107,7 +97,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # Initialize LiveKit connection with no auto-subscription
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
         await ctx.wait_for_participant()
-        logger.info("Connected to LiveKit room successfully And participant joined")
+        logger.info(
+            "Connected to LiveKit room successfully And participant joined")
         # Initialize Rime TTS with specific voice and generation parameters
         # For available models: https://docs.rime.ai/api-reference/models
         # For available voices: https://docs.rime.ai/api-reference/voices
