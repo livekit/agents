@@ -9,7 +9,6 @@ This example demonstrates how to create a animated avatar using [Simli](https://
 ```bash
 # Simli Config
 export SIMLI_API_KEY="..."
-export SIMLI_FACE_ID="..."
 
 # OpenAI config (or other models, tts, stt)
 export OPENAI_API_KEY="..."
