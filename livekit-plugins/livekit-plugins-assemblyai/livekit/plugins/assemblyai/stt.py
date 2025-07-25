@@ -151,7 +151,7 @@ class STT(stt.STT):
 
 class SpeechStream(stt.SpeechStream):
     # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
+    _CLOSE_MSG: str = json.dumps({"type": "Terminate"})
 
     def __init__(
         self,

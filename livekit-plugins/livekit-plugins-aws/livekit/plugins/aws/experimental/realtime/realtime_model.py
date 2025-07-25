@@ -239,6 +239,7 @@ class RealtimeModel(llm.RealtimeModel):
                 turn_detection=True,
                 user_transcription=True,
                 auto_tool_reply_generation=True,
+                audio_output=True,
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
@@ -355,6 +356,7 @@ class RealtimeSession(  # noqa: F811
             aws_credentials_identity_resolver=Boto3CredentialsResolver(),
             http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
             http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
+            user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
         )
         self._bedrock_client = BedrockRuntimeClient(config=config)
 
@@ -1232,7 +1234,9 @@ class RealtimeSession(  # noqa: F811
     def interrupt(self) -> None:
         logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
+    def truncate(
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 
     @utils.log_exceptions(logger=logger)

@@ -1,11 +1,11 @@
 from livekit import rtc
 
-from . import aio, audio, codecs, http_context, hw, images
+from . import aio, audio, codecs, http_context, http_server, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
 from .connection_pool import ConnectionPool
 from .exp_filter import ExpFilter
 from .log import log_exceptions
-from .misc import is_given, shortuuid, time_ms
+from .misc import is_given, nodename, shortuuid, time_ms
 from .moving_average import MovingAverage
 from .participant import wait_for_participant, wait_for_track_publication
 
@@ -16,8 +16,10 @@ __all__ = [
     "merge_frames",
     "combine_frames",
     "time_ms",
+    "nodename",
     "shortuuid",
     "http_context",
+    "http_server",
     "ExpFilter",
     "MovingAverage",
     "EventEmitter",

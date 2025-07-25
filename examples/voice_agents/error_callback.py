@@ -23,8 +23,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         stt=deepgram.STT(),
         llm=openai.LLM(),

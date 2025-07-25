@@ -26,12 +26,7 @@ if TYPE_CHECKING:
 
 
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
-from ._output import (
-    _ParallelTextOutput,
-    _ParticipantAudioOutput,
-    _ParticipantLegacyTranscriptionOutput,
-    _ParticipantTranscriptionOutput,
-)
+from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
@@ -103,6 +98,9 @@ class RoomOutputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
+    transcription_speed_factor: float = 1.0
+    """Speed factor of transcription synchronization with audio output.
+    Only effective if `sync_transcription` is True."""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
@@ -133,8 +131,8 @@ class RoomIO:
         self._audio_input: _ParticipantAudioInputStream | None = None
         self._video_input: _ParticipantVideoInputStream | None = None
         self._audio_output: _ParticipantAudioOutput | None = None
-        self._user_tr_output: _ParallelTextOutput | None = None
-        self._agent_tr_output: _ParallelTextOutput | None = None
+        self._user_tr_output: _ParticipantTranscriptionOutput | None = None
+        self._agent_tr_output: _ParticipantTranscriptionOutput | None = None
         self._tr_synchronizer: TranscriptSynchronizer | None = None
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
@@ -197,13 +195,14 @@ class RoomIO:
         if self._output_options.transcription_enabled or not utils.is_given(
             self._output_options.transcription_enabled
         ):
-            self._user_tr_output = self._create_transcription_output(
-                is_delta_stream=False, participant=self._participant_identity
+            self._user_tr_output = _ParticipantTranscriptionOutput(
+                room=self._room, is_delta_stream=False, participant=self._participant_identity
             )
             self._user_transcript_atask = asyncio.create_task(self._forward_user_transcript())
+
             # TODO(long): add next in the chain for session.output.transcription
-            self._agent_tr_output = self._create_transcription_output(
-                is_delta_stream=True, participant=None
+            self._agent_tr_output = _ParticipantTranscriptionOutput(
+                room=self._room, is_delta_stream=True, participant=None
             )
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
@@ -216,7 +215,9 @@ class RoomIO:
                 audio_output := self._audio_output or self._agent_session.output.audio
             ):
                 self._tr_synchronizer = TranscriptSynchronizer(
-                    next_in_chain_audio=audio_output, next_in_chain_text=self._agent_tr_output
+                    next_in_chain_audio=audio_output,
+                    next_in_chain_text=self._agent_tr_output,
+                    speed=self._output_options.transcription_speed_factor,
                 )
 
         # -- set the room event handlers --
@@ -343,7 +344,8 @@ class RoomIO:
         if self._video_input:
             self._video_input.set_participant(participant_identity)
 
-        self._update_transcription_output(self._user_tr_output, participant_identity)
+        if self._user_tr_output:
+            self._user_tr_output.set_participant(participant_identity)
 
     def unset_participant(self) -> None:
         self._participant_identity = None
@@ -352,7 +354,9 @@ class RoomIO:
             self._audio_input.set_participant(None)
         if self._video_input:
             self._video_input.set_participant(None)
-        self._update_transcription_output(self._user_tr_output, None)
+
+        if self._user_tr_output:
+            self._user_tr_output.set_participant(None)
 
     @utils.log_exceptions(logger=logger)
     async def _init_task(self) -> None:
@@ -366,9 +370,9 @@ class RoomIO:
         self.set_participant(participant.identity)
 
         # init outputs
-        self._update_transcription_output(
-            self._agent_tr_output, self._room.local_participant.identity
-        )
+        if self._agent_tr_output:
+            self._agent_tr_output.set_participant(self._room.local_participant.identity)
+
         if self._audio_output:
             await self._audio_output.start()
 
@@ -418,32 +422,17 @@ class RoomIO:
             and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
             and not self._close_session_atask
         ):
-
-            def _on_closed(_: asyncio.Task[None]) -> None:
-                self._close_session_atask = None
-
-                if self._close_session_atask is not None:
-                    return
-
-            async def _close_session() -> None:
-                if not self._agent_session._started:
-                    return
-
-                logger.info(
-                    "closing agent session due to participant disconnect "
-                    "(disable via `RoomInputOptions.close_on_disconnect=False`)",
-                    extra={
-                        "participant": participant.identity,
-                        "reason": rtc.DisconnectReason.Name(
-                            participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
-                        ),
-                    },
-                )
-                await self._agent_session._aclose_impl(reason=CloseReason.PARTICIPANT_DISCONNECTED)
-                await self._room.disconnect()
-
-            self._close_session_atask = asyncio.create_task(_close_session())
-            self._close_session_atask.add_done_callback(_on_closed)
+            logger.info(
+                "closing agent session due to participant disconnect "
+                "(disable via `RoomInputOptions.close_on_disconnect=False`)",
+                extra={
+                    "participant": participant.identity,
+                    "reason": rtc.DisconnectReason.Name(
+                        participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
+                    ),
+                },
+            )
+            self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_atask:
@@ -484,30 +473,3 @@ class RoomIO:
             self._update_state_atask.cancel()
 
         self._update_state_atask = asyncio.create_task(_set_state())
-
-    def _create_transcription_output(
-        self, is_delta_stream: bool, participant: rtc.Participant | str | None = None
-    ) -> _ParallelTextOutput:
-        return _ParallelTextOutput(
-            [
-                _ParticipantLegacyTranscriptionOutput(
-                    room=self._room, is_delta_stream=is_delta_stream, participant=participant
-                ),
-                _ParticipantTranscriptionOutput(
-                    room=self._room, is_delta_stream=is_delta_stream, participant=participant
-                ),
-            ],
-            next_in_chain=None,
-        )
-
-    def _update_transcription_output(
-        self, output: _ParallelTextOutput | None, participant_identity: str | None
-    ) -> None:
-        if output is None:
-            return
-
-        for sink in output._sinks:
-            if isinstance(
-                sink, (_ParticipantLegacyTranscriptionOutput, _ParticipantTranscriptionOutput)
-            ):
-                sink.set_participant(participant_identity)

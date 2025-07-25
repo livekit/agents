@@ -18,8 +18,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     room_io = RoomIO(session, room=ctx.room)
     await room_io.start()

@@ -33,7 +33,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import aio, is_given
+from livekit.agents.utils import is_given
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageParam,
@@ -68,6 +68,7 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
     max_completion_tokens: NotGivenOr[int]
+    service_tier: NotGivenOr[str]
 
 
 class LLM(llm.LLM):
@@ -87,6 +88,7 @@ class LLM(llm.LLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
+        service_tier: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -104,6 +106,7 @@ class LLM(llm.LLM):
             store=store,
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
+            service_tier=service_tier,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
@@ -123,7 +126,10 @@ class LLM(llm.LLM):
             ),
         )
 
-        self._prewarm_task: asyncio.Task | None = None
+    @property
+    def model(self) -> str:
+        """Get the model name for this LLM instance."""
+        return self._opts.model
 
     @staticmethod
     def with_azure(
@@ -564,6 +570,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
 
+        if is_given(self._opts.service_tier):
+            extra["service_tier"] = self._opts.service_tier
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -596,19 +605,6 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
         )
-
-    def prewarm(self) -> None:
-        async def _prewarm() -> None:
-            try:
-                await self._client.get("/", cast_to=str)
-            except Exception:
-                pass
-
-        self._prewarm_task = asyncio.create_task(_prewarm())
-
-    async def aclose(self) -> None:
-        if self._prewarm_task:
-            await aio.cancel_and_wait(self._prewarm_task)
 
 
 class LLMStream(llm.LLMStream):

@@ -128,7 +128,7 @@ def run_app(
         CLI_ARGUMENTS = args
         _run.run_dev(args)
 
-    @cli.command(help="Start a new chat")
+    @cli.command(help="Start a new conversation inside the console")
     @click.option(
         "--url",
         envvar="LIVEKIT_URL",
@@ -144,11 +144,8 @@ def run_app(
         envvar="LIVEKIT_API_SECRET",
         help="LiveKit server or Cloud project's API secret",
     )
-    def console(
-        url: str,
-        api_key: str,
-        api_secret: str,
-    ) -> None:
+    @click.option("--record", is_flag=True, help="Whether to record the conversation")
+    def console(url: str, api_key: str, api_secret: str, record: bool) -> None:
         # keep everything inside the same process when using the chat mode
         opts.job_executor_type = JobExecutorType.THREAD
         opts.ws_url = url or opts.ws_url or "ws://localhost:7881/fake_console_url"
@@ -162,6 +159,7 @@ def run_app(
             asyncio_debug=False,
             watch=False,
             console=True,
+            record=record,
             register=False,
             simulate_job=SimulateJobInfo(room="mock-console"),
         )

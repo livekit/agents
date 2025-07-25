@@ -58,8 +58,10 @@ from .version import __version__
 from .voice import (
     Agent,
     AgentEvent,
+    AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
@@ -74,7 +76,7 @@ from .voice import (
     avatar,
     io,
 )
-from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import (
     SimulateJobInfo,
@@ -124,6 +126,7 @@ __all__ = [
     "CloseEvent",
     "ConversationItemAddedEvent",
     "AgentStateChangedEvent",
+    "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
@@ -139,6 +142,7 @@ __all__ = [
     "AgentEvent",
     "ModelSettings",
     "Agent",
+    "AgentTask",
     "AssignmentTimeoutError",
     "APIConnectionError",
     "APIError",
@@ -152,6 +156,7 @@ __all__ = [
     "BackgroundAudioPlayer",
     "BuiltinAudioClip",
     "AudioConfig",
+    "PlayHandle",
     "SimulateJobInfo",
     "io",
     "avatar",

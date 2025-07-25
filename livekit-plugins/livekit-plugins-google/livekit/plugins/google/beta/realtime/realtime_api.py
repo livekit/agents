@@ -52,7 +52,7 @@ class _RealtimeOptions:
     api_key: str | None
     voice: Voice | str
     language: NotGivenOr[str]
-    response_modalities: NotGivenOr[list[types.Modality]]
+    response_modalities: list[types.Modality]
     vertexai: bool
     project: str | None
     location: str | None
@@ -192,12 +192,15 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
 
+        modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
                 turn_detection=server_turn_detection,
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=True,
+                audio_output=types.Modality.AUDIO in modalities,
             )
         )
 
@@ -538,7 +541,9 @@ class RealtimeSession(llm.RealtimeSession):
             return
         self.start_user_activity()
 
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
+    def truncate(
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
         logger.warning("truncate is not supported by the Google Realtime API.")
         pass
 
@@ -732,9 +737,7 @@ class RealtimeSession(llm.RealtimeSession):
             gemini_tools=self._opts.gemini_tools if is_given(self._opts.gemini_tools) else None,
         )
         conf = types.LiveConnectConfig(
-            response_modalities=self._opts.response_modalities
-            if is_given(self._opts.response_modalities)
-            else [types.Modality.AUDIO],
+            response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
@@ -783,6 +786,10 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
 
+        # emit input_speech_started event before starting a new generation
+        # to interrupt the previous audio playout if any
+        self._handle_input_speech_started()
+
         response_id = utils.shortuuid("GR_")
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
@@ -793,6 +800,8 @@ class RealtimeSession(llm.RealtimeSession):
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             _created_timestamp=time.time(),
         )
+        if not self._realtime_model.capabilities.audio_output:
+            self._current_generation.audio_ch.close()
 
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
@@ -877,6 +886,9 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation or self._current_generation._done:
             return
 
+        # emit input_speech_stopped event after the generation is done
+        self._handle_input_speech_stopped()
+
         gen = self._current_generation
 
         # The only way we'd know that the transcription is complete is by when they are
@@ -921,6 +933,14 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
+    def _handle_input_speech_stopped(self) -> None:
+        self.emit(
+            "input_speech_stopped",
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=self._realtime_model.capabilities.user_transcription
+            ),
+        )
+
     def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> None:
         if not self._current_generation:
             logger.warning("received tool call but no active generation.")
@@ -937,7 +957,6 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
-        self._on_final_input_audio_transcription()
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
@@ -1017,15 +1036,6 @@ class RealtimeSession(llm.RealtimeSession):
         )
         # TODO(dz): this isn't a seamless reconnection just yet
         self._session_should_close.set()
-
-    def _on_final_input_audio_transcription(self) -> None:
-        if (gen := self._current_generation) and gen.input_transcription:
-            self.emit(
-                "input_audio_transcription_completed",
-                llm.InputTranscriptionCompleted(
-                    item_id=gen.response_id, transcript=gen.input_transcription, is_final=True
-                ),
-            )
 
     def commit_audio(self) -> None:
         pass
