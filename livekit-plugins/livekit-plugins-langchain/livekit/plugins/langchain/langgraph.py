@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel.protocol import PregelProtocol
 
@@ -123,7 +123,10 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
 
     if isinstance(msg, str):
         content = msg
-    elif isinstance(msg, BaseMessageChunk):
+    elif isinstance(msg, AIMessageChunk):
+        if msg.tool_call_chunks or msg.tool_calls:
+            # Ignore tool calls in the message chunk
+            return None
         content = msg.text()
         if msg.id:
             message_id = msg.id
