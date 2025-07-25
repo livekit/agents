@@ -13,11 +13,10 @@ logger = logging.getLogger("rime-tts-demo")
 logger.setLevel(logging.INFO)
 
 
-_sentence_pattern = re.compile(r".+?[,，.。!！?？:：]", re.DOTALL)
-
-
 class TextSegmenter:
     """Utility class for segmenting text into natural chunks for TTS processing."""
+
+    _sentence_pattern = re.compile(r".+?[,，.。!！?？:：]", re.DOTALL)
 
     @staticmethod
     def sentence_segmentation(text: str) -> list[str]:
@@ -37,7 +36,7 @@ class TextSegmenter:
         start_pos = 0
 
         # Find sentence boundaries using regex pattern
-        for match in _sentence_pattern.finditer(text):
+        for match in TextSegmenter._sentence_pattern.finditer(text):
             sentence = match.group(0)
             end_pos = match.end()
             sentence = sentence.strip()
