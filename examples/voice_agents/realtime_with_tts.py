@@ -18,7 +18,7 @@ load_dotenv()
 class WeatherAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are a weather agent.",
+            instructions="You are a helpful assistant.",
             llm=openai.realtime.RealtimeModel(modalities=["text"]),
             # llm=google.beta.realtime.RealtimeModel(modalities=[Modality.TEXT]),
             tts=openai.TTS(voice="ash"),
@@ -47,6 +47,7 @@ async def entrypoint(ctx: JobContext):
             audio_enabled=True,  # you can also disable audio output to use text modality only
         ),
     )
+    session.generate_reply(instructions="say hello to the user in English")
 
 
 if __name__ == "__main__":
