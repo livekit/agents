@@ -116,13 +116,13 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            messages_mistral = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            messages_mistral, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             async_response = await self._client.chat.stream_async(
                 messages=cast(list[ChatCompletionStreamRequestMessages], messages_mistral),
                 model=self._model,
                 **self._extra_kwargs,
             )
-            print("Streaming Start")
+
             async for chunk in async_response:
                 for choice in chunk.data.choices:
                     chat_chunk = self._parse_choice(chunk.data.id, choice)
