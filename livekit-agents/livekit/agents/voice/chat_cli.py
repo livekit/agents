@@ -198,6 +198,8 @@ class ChatCLI:
             self._transcript_syncer.audio_output if self._transcript_syncer else self._audio_sink
         )
 
+        self._mute_microphone = False
+
         self._recorder_io: RecorderIO | None = None
         if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.record:
             self._recorder_io = RecorderIO(agent_session=agent_session)
@@ -311,7 +313,7 @@ class ChatCLI:
             self._output_stream = sd.OutputStream(
                 callback=self._sd_output_callback,
                 dtype="int16",
-                channels=1,
+                channels=2,
                 device=output_device,
                 samplerate=24000,
                 blocksize=2400,  # 100ms
@@ -377,6 +379,9 @@ class ChatCLI:
 
         FRAME_SAMPLES = 240  # 10ms at 24000 Hz
         num_frames = frame_count // FRAME_SAMPLES
+
+        if self._mute_microphone:
+            return
 
         for i in range(num_frames):
             start = i * FRAME_SAMPLES
