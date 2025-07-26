@@ -187,7 +187,9 @@ class RealtimeModel(llm.RealtimeModel):
         output_sample_rate : int
             Output audio sample rate.
         client_buffer_size_ms : int
-            Size of the client-side audio buffer in milliseconds.
+            Size of the client-side audio buffer in milliseconds. For WebSocket integration,
+            larger buffer sizes (>200ms) are recommended to prevent audio underflow.
+            The implementation will automatically use a minimum of 200ms.
         temperature : float, optional
             Controls response randomness (0.0-1.0). Lower values are more deterministic.
         language_hint : str, optional
@@ -539,6 +541,10 @@ class RealtimeSession(
             create_call_url += f"?{query_string}"
 
         # Build payload with core parameters
+        # Use recommended larger buffer size for WebSocket integration to prevent audio underflow
+        # while allowing proper PlaybackClearBuffer functionality
+        recommended_buffer_size = max(self._realtime_model._opts.client_buffer_size_ms, 200)
+        
         payload = {
             "systemPrompt": self._realtime_model._opts.system_prompt,
             "model": self._realtime_model._opts.model_id,
@@ -547,7 +553,7 @@ class RealtimeSession(
                 "serverWebSocket": {
                     "inputSampleRate": self._realtime_model._opts.input_sample_rate,
                     "outputSampleRate": self._realtime_model._opts.output_sample_rate,
-                    "clientBufferSizeMs": self._realtime_model._opts.client_buffer_size_ms,
+                    "clientBufferSizeMs": recommended_buffer_size,
                 }
             },
             "selectedTools": self._prepare_tools(self._tools.function_tools.values()),
@@ -588,16 +594,28 @@ class RealtimeSession(
                 await self._ws.close()
 
         except Exception as e:
-            logger.error(f"Ultravox WebSocket error: {e}, payload: {payload}", exc_info=True)
+            logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
+            
+            # Determine if error is recoverable based on type
+            is_recoverable = False
+            if isinstance(e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)):
+                is_recoverable = True
+            
+            # Convert to appropriate API error type
+            if isinstance(e, (APIConnectionError, APIError)):
+                error = e
+            elif isinstance(e, aiohttp.ClientResponseError):
+                error = APIError(f"HTTP {e.status}: {e.message}", retryable=is_recoverable)
+            else:
+                error = APIConnectionError(f"Connection failed: {str(e)}")
+            
             self.emit(
                 "error",
                 llm.RealtimeModelError(
                     timestamp=time.time(),
                     label=self._realtime_model._label,
-                    error=e
-                    if isinstance(e, (APIConnectionError, APIError))
-                    else APIConnectionError(str(e)),
-                    recoverable=False,
+                    error=error,
+                    recoverable=is_recoverable,
                 ),
             )
         finally:
@@ -618,7 +636,7 @@ class RealtimeSession(
                 if lk_ultravox_debug:
                     logger.info(f">>> {msg_dict}")
             except Exception as e:
-                logger.error(f"Error sending message: {e}")
+                logger.error(f"Error sending message: {e}", exc_info=True)
                 break
 
         self._closing = True
@@ -628,11 +646,7 @@ class RealtimeSession(
         """Task for receiving messages from Ultravox WebSocket."""
         while True:
             msg = await self._ws.receive()
-            if (not self._current_generation or self._current_generation._done) and (
-                msg.type in {aiohttp.WSMsgType.BINARY}
-            ):
-                logger.info("Starting new generation")
-                self._start_new_generation()
+            # Generation will be started when we receive state change to "speaking" or first transcript
 
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
@@ -751,10 +765,11 @@ class RealtimeSession(
 
             # Handle incremental transcript updates (delta)
             if event.delta:
-                # Set first token timestamp on first text delta
+                # Set first token timestamp on first text delta (TTFT measurement)
                 if msg_gen._first_token_timestamp is None:
                     msg_gen._first_token_timestamp = time.time()
-                    logger.debug("[ultravox] first text token received")
+                    ttft = msg_gen._first_token_timestamp - msg_gen._created_timestamp
+                    logger.info(f"[ultravox] first text token received - TTFT: {ttft:.3f}s")
                 msg_gen.text_ch.send_nowait(event.delta)
 
             # Handle final transcript
@@ -796,8 +811,19 @@ class RealtimeSession(
         first_token_timestamp = gen._first_token_timestamp
 
         # Calculate timing metrics
+        # TTFT should be from when user stops speaking (generation created) to first response token
         ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = completed_timestamp - created_timestamp
+
+        # Log detailed TTFT information for debugging with validation
+        if ttft > 0 and ttft < 30.0:  # Reasonable TTFT should be between 0 and 30 seconds
+            logger.info(
+                f"[ultravox] TTFT measurement: {ttft:.3f}s (created: {created_timestamp}, first_token: {first_token_timestamp})"
+            )
+        elif ttft <= 0:
+            logger.warning("[ultravox] Invalid TTFT measurement: no first token received")
+        else:
+            logger.warning(f"[ultravox] Unrealistic TTFT measurement: {ttft:.3f}s - possible timing issue")
 
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
@@ -837,7 +863,22 @@ class RealtimeSession(
         logger.info(f"Ultravox state: {event.state}")
         if event.state == "listening":
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        elif event.state == "thinking":
+            # Start generation when Ultravox begins processing (user finished speaking)
+            # This is the proper TTFT start time: when user stops speaking and agent starts processing
+            if not self._current_generation or self._current_generation._done:
+                logger.info(
+                    "Starting new generation (Ultravox thinking state - user finished speaking)"
+                )
+                self._start_new_generation()
         elif event.state == "speaking":
+            # Ensure we have a generation when Ultravox starts speaking
+            # This handles cases where audio arrives before the generation is created
+            if not self._current_generation or self._current_generation._done:
+                logger.info(
+                    "Starting new generation (Ultravox speaking state - ensuring generation exists)"
+                )
+                self._start_new_generation()
             self.emit(
                 "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             )
@@ -891,8 +932,8 @@ class RealtimeSession(
                     converted_params = await self._convert_tool_parameters(tool, event.parameters)
                     result = await tool(**converted_params)
                 elif is_raw_function_tool(tool):
-                    # For raw function tools, pass parameters as raw_arguments dict
-                    result = await tool(event.parameters, None)  # context=None for now
+                    # For raw function tools, call with just the parameters dict
+                    result = await tool(event.parameters)
                 else:
                     result = "Error: Unknown tool type"
 
@@ -945,8 +986,30 @@ class RealtimeSession(
             logger.debug(f"Ultravox latency: {latency:.3f}s")
 
     def _handle_playback_clear_buffer_event(self, event: PlaybackClearBufferEvent) -> None:
-        """Handle playback clear buffer events from Ultravox."""
-        pass
+        """Handle playback clear buffer events from Ultravox.
+        
+        This event is WebSocket-specific and indicates that the client should
+        clear any buffered audio output to prevent audio lag or overlapping.
+        """
+        logger.debug("[ultravox] Received PlaybackClearBuffer - clearing audio buffer")
+        
+        # Clear the current audio generation if exists
+        if self._current_generation and not self._current_generation._done:
+            # Close and recreate audio channel to clear any buffered audio
+            if not self._current_generation.audio_ch.closed:
+                self._current_generation.audio_ch.close()
+                # Create new audio channel for continued streaming
+                self._current_generation.audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+                self._current_generation.message_ch.send_nowait(
+                    llm.MessageGeneration(
+                        message_id=self._current_generation.response_id,
+                        text_stream=self._current_generation.text_ch,
+                        audio_stream=self._current_generation.audio_ch,
+                    )
+                )
+        
+        # Also clear local audio buffer
+        self.clear_audio()
 
     def _handle_debug_event(self, event: DebugEvent) -> None:
         """Handle debug events from Ultravox."""
@@ -959,9 +1022,22 @@ class RealtimeSession(
     def _handle_audio_data(self, audio_data: bytes) -> None:
         """Handle binary audio data from Ultravox."""
         try:
-            if self._current_generation and self._current_generation._first_token_timestamp is None:
+            # Check if we have a current generation before processing audio
+            if not self._current_generation or self._current_generation._done:
+                logger.debug("[ultravox] Received audio data but no current generation, ignoring")
+                return
+
+            # Set first token timestamp when we receive first audio from Ultravox (TTFT measurement)
+            # Only set if this is actually the first audio token (non-zero data)
+            if (self._current_generation._first_token_timestamp is None and 
+                len(audio_data) > 0 and 
+                any(audio_data)):  # Check for non-zero audio data
                 self._current_generation._first_token_timestamp = time.time()
-                logger.debug("[ultravox] first audio token received")
+                ttft = (
+                    self._current_generation._first_token_timestamp
+                    - self._current_generation._created_timestamp
+                )
+                logger.info(f"[ultravox] first audio token received - TTFT: {ttft:.3f}s")
 
             frame = rtc.AudioFrame(
                 data=audio_data,
