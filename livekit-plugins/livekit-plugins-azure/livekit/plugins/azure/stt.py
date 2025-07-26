@@ -56,6 +56,7 @@ class STTOptions:
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
+    phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -75,6 +76,7 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
+        phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
     ):
         """
         Create a new instance of Azure STT.
@@ -86,6 +88,10 @@ class STT(stt.STT):
          Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
         and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
+
+        Args:
+            phrase_list: List of words or phrases to boost recognition accuracy.
+                        Azure will give higher priority to these phrases during recognition.
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
@@ -131,6 +137,7 @@ class STT(stt.STT):
             segmentation_strategy=segmentation_strategy,
             profanity=profanity,
             speech_endpoint=speech_endpoint,
+            phrase_list=phrase_list,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -372,5 +379,11 @@ def _create_speech_recognizer(
     speech_recognizer = speechsdk.SpeechRecognizer(
         speech_config=speech_config, audio_config=audio_config, **kwargs
     )
+
+    # Add phrase list for keyword boosting if provided
+    if is_given(config.phrase_list) and isinstance(config.phrase_list, list) and config.phrase_list:
+        phrase_list_grammar = speechsdk.PhraseListGrammar.from_recognizer(speech_recognizer)
+        for phrase in config.phrase_list:
+            phrase_list_grammar.addPhrase(phrase)
 
     return speech_recognizer
