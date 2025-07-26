@@ -19,7 +19,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import trace_types, tracer
+from ..telemetry import trace_types, tracer, utils as telemetry_utils
 from ..telemetry.traces import _chat_ctx_to_otel_events
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -171,7 +171,13 @@ class LLMStream(ABC):
 
         for i in range(self._conn_options.max_retry + 1):
             try:
-                return await self._run()
+                with tracer.start_as_current_span("llm_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        return await self._run()
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
+                        raise
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
 
@@ -207,11 +213,6 @@ class LLMStream(ABC):
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
-        if not recoverable and self._llm_request_span:
-            self._llm_request_span.record_exception(api_error)
-            self._llm_request_span.set_status(
-                trace.Status(trace.StatusCode.ERROR, description=str(api_error))
-            )
         self._llm.emit(
             "error",
             LLMError(
