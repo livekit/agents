@@ -544,7 +544,7 @@ class RealtimeSession(
         # Use recommended larger buffer size for WebSocket integration to prevent audio underflow
         # while allowing proper PlaybackClearBuffer functionality
         recommended_buffer_size = max(self._realtime_model._opts.client_buffer_size_ms, 200)
-        
+
         payload = {
             "systemPrompt": self._realtime_model._opts.system_prompt,
             "model": self._realtime_model._opts.model_id,
@@ -595,12 +595,12 @@ class RealtimeSession(
 
         except Exception as e:
             logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
-            
+
             # Determine if error is recoverable based on type
             is_recoverable = False
             if isinstance(e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)):
                 is_recoverable = True
-            
+
             # Convert to appropriate API error type
             if isinstance(e, (APIConnectionError, APIError)):
                 error = e
@@ -608,7 +608,7 @@ class RealtimeSession(
                 error = APIError(f"HTTP {e.status}: {e.message}", retryable=is_recoverable)
             else:
                 error = APIConnectionError(f"Connection failed: {str(e)}")
-            
+
             self.emit(
                 "error",
                 llm.RealtimeModelError(
@@ -823,7 +823,9 @@ class RealtimeSession(
         elif ttft <= 0:
             logger.warning("[ultravox] Invalid TTFT measurement: no first token received")
         else:
-            logger.warning(f"[ultravox] Unrealistic TTFT measurement: {ttft:.3f}s - possible timing issue")
+            logger.warning(
+                f"[ultravox] Unrealistic TTFT measurement: {ttft:.3f}s - possible timing issue"
+            )
 
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
@@ -987,12 +989,12 @@ class RealtimeSession(
 
     def _handle_playback_clear_buffer_event(self, event: PlaybackClearBufferEvent) -> None:
         """Handle playback clear buffer events from Ultravox.
-        
+
         This event is WebSocket-specific and indicates that the client should
         clear any buffered audio output to prevent audio lag or overlapping.
         """
         logger.debug("[ultravox] Received PlaybackClearBuffer - clearing audio buffer")
-        
+
         # Clear the current audio generation if exists
         if self._current_generation and not self._current_generation._done:
             # Close and recreate audio channel to clear any buffered audio
@@ -1007,7 +1009,7 @@ class RealtimeSession(
                         audio_stream=self._current_generation.audio_ch,
                     )
                 )
-        
+
         # Also clear local audio buffer
         self.clear_audio()
 
@@ -1029,9 +1031,11 @@ class RealtimeSession(
 
             # Set first token timestamp when we receive first audio from Ultravox (TTFT measurement)
             # Only set if this is actually the first audio token (non-zero data)
-            if (self._current_generation._first_token_timestamp is None and 
-                len(audio_data) > 0 and 
-                any(audio_data)):  # Check for non-zero audio data
+            if (
+                self._current_generation._first_token_timestamp is None
+                and len(audio_data) > 0
+                and any(audio_data)
+            ):  # Check for non-zero audio data
                 self._current_generation._first_token_timestamp = time.time()
                 ttft = (
                     self._current_generation._first_token_timestamp
