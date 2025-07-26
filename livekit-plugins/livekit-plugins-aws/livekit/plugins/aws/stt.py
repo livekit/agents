@@ -16,7 +16,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from amazon_transcribe.auth import AwsCrtCredentialResolver
+from amazon_transcribe.auth import AwsCrtCredentialResolver, StaticCredentialResolver
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.exceptions import BadRequestException
 from amazon_transcribe.model import Result, StartStreamTranscriptionEventStream, TranscriptEvent
@@ -57,6 +57,8 @@ class STT(stt.STT):
         self,
         *,
         region: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         language: str = "en-US",
         encoding: str = "pcm",
@@ -76,9 +78,15 @@ class STT(stt.STT):
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
         self._region = region
+        if is_given(api_key) and is_given(api_secret):
+            credential_resolver = StaticCredentialResolver(
+                access_key_id=api_key,
+                secret_access_key=api_secret,
+            )
+        else:
+            credential_resolver = AwsCrtCredentialResolver(None)  # type: ignore
         self._client = TranscribeStreamingClient(
-            region=self._region,
-            credential_resolver=AwsCrtCredentialResolver(None),  # type: ignore
+            region=self._region, credential_resolver=credential_resolver
         )
 
         self._config = STTOptions(
