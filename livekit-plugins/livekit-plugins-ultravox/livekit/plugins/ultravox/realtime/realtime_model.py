@@ -796,12 +796,14 @@ class RealtimeSession(
         # TTFT should be from when user stops speaking (generation created) to first response token
         ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = completed_timestamp - created_timestamp
-        
+
         # Log detailed TTFT information for debugging
         if ttft > 0:
-            logger.info(f"[ultravox] TTFT measurement: {ttft:.3f}s (created: {created_timestamp}, first_token: {first_token_timestamp})")
+            logger.info(
+                f"[ultravox] TTFT measurement: {ttft:.3f}s (created: {created_timestamp}, first_token: {first_token_timestamp})"
+            )
         else:
-            logger.warning(f"[ultravox] Invalid TTFT measurement: no first token received")
+            logger.warning("[ultravox] Invalid TTFT measurement: no first token received")
 
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
@@ -845,7 +847,9 @@ class RealtimeSession(
             # Start generation when Ultravox begins processing (user finished speaking)
             # This is the proper TTFT start time: when user stops speaking and agent starts processing
             if not self._current_generation or self._current_generation._done:
-                logger.info("Starting new generation (Ultravox thinking state - user finished speaking)")
+                logger.info(
+                    "Starting new generation (Ultravox thinking state - user finished speaking)"
+                )
                 self._start_new_generation()
         elif event.state == "speaking":
             self.emit(
@@ -977,7 +981,10 @@ class RealtimeSession(
             # Set first token timestamp when we receive first audio from Ultravox (TTFT measurement)
             if self._current_generation._first_token_timestamp is None:
                 self._current_generation._first_token_timestamp = time.time()
-                ttft = self._current_generation._first_token_timestamp - self._current_generation._created_timestamp
+                ttft = (
+                    self._current_generation._first_token_timestamp
+                    - self._current_generation._created_timestamp
+                )
                 logger.info(f"[ultravox] first audio token received - TTFT: {ttft:.3f}s")
 
             frame = rtc.AudioFrame(
