@@ -628,11 +628,7 @@ class RealtimeSession(
         """Task for receiving messages from Ultravox WebSocket."""
         while True:
             msg = await self._ws.receive()
-            if (not self._current_generation or self._current_generation._done) and (
-                msg.type in {aiohttp.WSMsgType.BINARY}
-            ):
-                logger.info("Starting new generation")
-                self._start_new_generation()
+            # Generation will be started when we receive state change to "speaking" or first transcript
 
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
@@ -751,10 +747,11 @@ class RealtimeSession(
 
             # Handle incremental transcript updates (delta)
             if event.delta:
-                # Set first token timestamp on first text delta
+                # Set first token timestamp on first text delta (TTFT measurement)
                 if msg_gen._first_token_timestamp is None:
                     msg_gen._first_token_timestamp = time.time()
-                    logger.debug("[ultravox] first text token received")
+                    ttft = msg_gen._first_token_timestamp - msg_gen._created_timestamp
+                    logger.info(f"[ultravox] first text token received - TTFT: {ttft:.3f}s")
                 msg_gen.text_ch.send_nowait(event.delta)
 
             # Handle final transcript
@@ -796,8 +793,15 @@ class RealtimeSession(
         first_token_timestamp = gen._first_token_timestamp
 
         # Calculate timing metrics
+        # TTFT should be from when user stops speaking (generation created) to first response token
         ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = completed_timestamp - created_timestamp
+        
+        # Log detailed TTFT information for debugging
+        if ttft > 0:
+            logger.info(f"[ultravox] TTFT measurement: {ttft:.3f}s (created: {created_timestamp}, first_token: {first_token_timestamp})")
+        else:
+            logger.warning(f"[ultravox] Invalid TTFT measurement: no first token received")
 
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
@@ -837,6 +841,12 @@ class RealtimeSession(
         logger.info(f"Ultravox state: {event.state}")
         if event.state == "listening":
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        elif event.state == "thinking":
+            # Start generation when Ultravox begins processing (user finished speaking)
+            # This is the proper TTFT start time: when user stops speaking and agent starts processing
+            if not self._current_generation or self._current_generation._done:
+                logger.info("Starting new generation (Ultravox thinking state - user finished speaking)")
+                self._start_new_generation()
         elif event.state == "speaking":
             self.emit(
                 "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
@@ -959,9 +969,16 @@ class RealtimeSession(
     def _handle_audio_data(self, audio_data: bytes) -> None:
         """Handle binary audio data from Ultravox."""
         try:
-            if self._current_generation and self._current_generation._first_token_timestamp is None:
+            # Check if we have a current generation before processing audio
+            if not self._current_generation:
+                logger.debug("[ultravox] Received audio data but no current generation, ignoring")
+                return
+
+            # Set first token timestamp when we receive first audio from Ultravox (TTFT measurement)
+            if self._current_generation._first_token_timestamp is None:
                 self._current_generation._first_token_timestamp = time.time()
-                logger.debug("[ultravox] first audio token received")
+                ttft = self._current_generation._first_token_timestamp - self._current_generation._created_timestamp
+                logger.info(f"[ultravox] first audio token received - TTFT: {ttft:.3f}s")
 
             frame = rtc.AudioFrame(
                 data=audio_data,
