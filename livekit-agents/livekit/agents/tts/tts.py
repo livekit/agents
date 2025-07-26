@@ -384,6 +384,11 @@ class SynthesizeStream(ABC):
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
+        if not recoverable and self._tts_request_span:
+            self._tts_request_span.record_exception(api_error)
+            self._tts_request_span.set_status(
+                trace.Status(trace.StatusCode.ERROR, description=str(api_error))
+            )
         self._tts.emit(
             "error",
             TTSError(
