@@ -1,4 +1,5 @@
 from ...types import ATTRIBUTE_PUBLISH_ON_BEHALF
+from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
 from .room_io import (
     DEFAULT_ROOM_INPUT_OPTIONS,
     DEFAULT_ROOM_OUTPUT_OPTIONS,
@@ -16,6 +17,8 @@ __all__ = [
     "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
     "TextInputEvent",
+    "_ParticipantTranscriptionOutput",
+    "_ParticipantAudioOutput",
 ]
 
 # Cleanup docs of unexported modules
