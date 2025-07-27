@@ -283,10 +283,12 @@ class _ParticipantStreamTranscriptionOutput:
         *,
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
+        attributes: dict[str, str] | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
+        self._additional_attributes = attributes
 
         self._writer: rtc.TextStreamWriter | None = None
 
@@ -333,6 +335,10 @@ class _ParticipantStreamTranscriptionOutput:
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
         attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
+
+        for key, val in self._additional_attributes.items():
+            if key not in attributes:
+                attributes[key] = val
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,

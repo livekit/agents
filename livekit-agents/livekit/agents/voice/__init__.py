@@ -17,6 +17,11 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
+from .room_io import (
+    _ParticipantAudioOutput,
+    _ParticipantStreamTranscriptionOutput,
+    _ParticipantTranscriptionOutput,
+)
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer
 
@@ -43,6 +48,10 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "TranscriptSynchronizer",
     "io",
+    "room_io",
+    "_ParticipantAudioOutput",
+    "_ParticipantTranscriptionOutput",
+    "_ParticipantStreamTranscriptionOutput",
 ]
 
 # Cleanup docs of unexported modules
