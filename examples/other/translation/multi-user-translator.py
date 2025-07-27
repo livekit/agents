@@ -1,5 +1,22 @@
-"""Real-time speech to translated captions service using LiveKit Agents framework.
-Supports multiple languages and provides live captioning capabilities."""
+"""Realtime speech translation with captions and voice output.
+
+This example demonstrates how to build a multi-user meeting where each participant
+can speak in their own language, and be able to understand the other participants.
+
+It works by:
+- Each participant contains an attribute indicating theirlanguage
+  (this is embedded in their access token)
+- The agent keeps track of the languages needed for each participant, and creates
+  translation tasks for each input audio track.
+- In each translation task, we use an LLM to translate to the target language, and
+  synthesize the translated audio.
+- The translated audio and transcriptions are published to the room.
+  - The audio track is named as "{input_track_id}-{target_language_code}"
+  - The transcription is published as a text stream, with an attribute "language"
+    set to the target language.
+- With the above, the UI can render the right captions and audio tracks matching the
+  language that the participant is speaking.
+"""
 
 import asyncio
 import logging
@@ -416,15 +433,13 @@ async def entrypoint(ctx: JobContext):
 
     room_translator = RoomTranslator(
         ctx.room,
-        additional_languages=["zh"],
+        # for testing, uncomment to add additional languages to translate to
+        # additional_languages=["zh"],
     )
     room_translator.start()
 
-    # await asyncio.sleep(100000)
-
 
 async def request_fnc(req: JobRequest):
-    """Handle incoming job requests by accepting them."""
     await req.accept(
         name="agent",
         identity="agent",
@@ -436,6 +451,8 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             request_fnc=request_fnc,
+            # paired with the right frontend, it should be dispatching the agent explicitly
+            # leaving it commented out to allow you testing with agent-starter-react
             # agent_name="translator",
         )
     )
