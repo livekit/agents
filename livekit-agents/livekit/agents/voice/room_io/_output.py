@@ -288,7 +288,7 @@ class _ParticipantStreamTranscriptionOutput:
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
-        self._additional_attributes = attributes
+        self._additional_attributes = attributes or {}
 
         self._writer: rtc.TextStreamWriter | None = None
 
