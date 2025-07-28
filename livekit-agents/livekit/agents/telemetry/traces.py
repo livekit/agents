@@ -4,11 +4,11 @@ import json
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry import context as otel_context, trace
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes
+from opentelemetry.util.types import Attributes, AttributeValue
 
 from . import trace_types
 
@@ -54,8 +54,27 @@ class _DynamicTracer(Tracer):
 tracer: Tracer = _DynamicTracer("livekit-agents")
 
 
-def set_tracer_provider(tracer_provider: TracerProvider) -> None:
+def set_tracer_provider(
+    tracer_provider: TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+) -> None:
+    """Set the tracer provider for the livekit-agents.
+
+    Args:
+        tracer_provider (TracerProvider): The tracer provider to set.
+        metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
+    """
     assert isinstance(tracer, _DynamicTracer)
+
+    class _MetadataSpanProcessor(SpanProcessor):
+        def __init__(self, metadata: dict[str, AttributeValue]) -> None:
+            self._metadata = metadata
+
+        def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
+            span.set_attributes(self._metadata)
+
+    if metadata:
+        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+
     tracer.set_provider(tracer_provider)
 
 
