@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Dict, Literal, TypedDict, cast
 
 import httpx
 
@@ -38,6 +38,15 @@ from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
 
 
+class ThinkingConfig(TypedDict):
+    """Configuration for Claude's extended thinking feature."""
+    type: Literal["enabled"]
+    budget_tokens: int
+
+
+ThinkingConfigDict = Dict[str, Any]
+
+
 @dataclass
 class _LLMOptions:
     model: str | ChatModels
@@ -48,6 +57,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    thinking: NotGivenOr[ThinkingConfig | ThinkingConfigDict]
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -66,6 +76,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        thinking: NotGivenOr[ThinkingConfig | ThinkingConfigDict] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -82,6 +93,7 @@ class LLM(llm.LLM):
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
+        thinking (ThinkingConfig | ThinkingConfigDict, optional): Configuration for Claude's extended thinking feature. Must include "type": "enabled" and "budget_tokens" (int).
         """  # noqa: E501
 
         super().__init__()
@@ -95,6 +107,7 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            thinking=thinking,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
@@ -143,6 +156,9 @@ class LLM(llm.LLM):
             extra["top_k"] = self._opts.top_k
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
+
+        if is_given(self._opts.thinking):
+            extra["thinking"] = self._opts.thinking
 
         if tools:
             extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
@@ -237,6 +253,9 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
+        # thinking content tracking
+        self._thinking_content: str | None = None
+
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
         self._input_tokens = 0
@@ -302,6 +321,8 @@ class LLMStream(llm.LLMStream):
                 self._tool_call_id = event.content_block.id
                 self._fnc_name = event.content_block.name
                 self._fnc_raw_arguments = ""
+            elif event.content_block.type == "thinking":
+                self._thinking_content = ""
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -321,6 +342,14 @@ class LLMStream(llm.LLMStream):
                 return llm.ChatChunk(
                     id=self._request_id,
                     delta=llm.ChoiceDelta(content=text, role="assistant"),
+                )
+            elif delta.type == "thinking_delta":
+                if self._thinking_content is not None:
+                    self._thinking_content += delta.thinking
+                # Return the thinking content as a chunk for streaming
+                return llm.ChatChunk(
+                    id=self._request_id,
+                    delta=llm.ChoiceDelta(content=delta.thinking, role="assistant"),
                 )
             elif delta.type == "input_json_delta":
                 assert self._fnc_raw_arguments is not None
@@ -346,5 +375,8 @@ class LLMStream(llm.LLMStream):
                 )
                 self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
                 return chat_chunk
+            elif self._thinking_content is not None:
+                # Clear thinking content on block stop
+                self._thinking_content = None
 
         return None
