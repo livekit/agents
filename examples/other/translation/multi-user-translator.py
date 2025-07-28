@@ -187,6 +187,7 @@ class Translator:
             is_delta_stream=True,
             attributes={
                 "language": self._target_language.code,
+                "translated": "true",
             },
         )
         synchronizer = voice.TranscriptSynchronizer(
