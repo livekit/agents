@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 import httpx
 
@@ -40,11 +40,12 @@ from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
 
 class ThinkingConfig(TypedDict):
     """Configuration for Claude's extended thinking feature."""
+
     type: Literal["enabled"]
     budget_tokens: int
 
 
-ThinkingConfigDict = Dict[str, Any]
+ThinkingConfigDict = dict[str, Any]
 
 
 @dataclass
