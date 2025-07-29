@@ -16,7 +16,9 @@ You'll need an API key from Anthropic. It can be set as an environment variable:
 
 ## Extended Thinking
 
-This plugin supports Claude's extended thinking feature, which allows Claude to show its internal reasoning process before delivering the final answer. This is particularly useful for complex mathematical, logical, or analytical tasks.
+This plugin supports Claude's extended thinking feature, which allows Claude to reason before delivering the final answer. This is particularly useful for complex mathematical, logical, or analytical tasks.
+
+The thinking tokens do not get passed back to the agent and are not added to the session context.
 
 ### Usage
 

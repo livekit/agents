@@ -245,8 +245,6 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-        # thinking content tracking
-        self._thinking_content: str | None = None
 
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
@@ -313,8 +311,6 @@ class LLMStream(llm.LLMStream):
                 self._tool_call_id = event.content_block.id
                 self._fnc_name = event.content_block.name
                 self._fnc_raw_arguments = ""
-            elif event.content_block.type == "thinking":
-                self._thinking_content = ""
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -334,14 +330,6 @@ class LLMStream(llm.LLMStream):
                 return llm.ChatChunk(
                     id=self._request_id,
                     delta=llm.ChoiceDelta(content=text, role="assistant"),
-                )
-            elif delta.type == "thinking_delta":
-                if self._thinking_content is not None:
-                    self._thinking_content += delta.thinking
-                # Return the thinking content as a chunk for streaming
-                return llm.ChatChunk(
-                    id=self._request_id,
-                    delta=llm.ChoiceDelta(content=delta.thinking, role="assistant"),
                 )
             elif delta.type == "input_json_delta":
                 assert self._fnc_raw_arguments is not None
@@ -367,8 +355,5 @@ class LLMStream(llm.LLMStream):
                 )
                 self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
                 return chat_chunk
-            elif self._thinking_content is not None:
-                # Clear thinking content on block stop
-                self._thinking_content = None
 
         return None
