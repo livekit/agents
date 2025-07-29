@@ -16,7 +16,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from amazon_transcribe.auth import AwsCrtCredentialResolver
+from amazon_transcribe.auth import AwsCrtCredentialResolver, StaticCredentialResolver
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.exceptions import BadRequestException
 from amazon_transcribe.model import Result, StartStreamTranscriptionEventStream, TranscriptEvent
@@ -51,6 +51,8 @@ class STTOptions:
     partial_results_stability: NotGivenOr[str]
     language_model_name: NotGivenOr[str]
     region: str
+    api_key: NotGivenOr[str]
+    api_secret: NotGivenOr[str]
 
 
 class STT(stt.STT):
@@ -58,6 +60,8 @@ class STT(stt.STT):
         self,
         *,
         region: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         language: str = "en-US",
         encoding: str = "pcm",
@@ -92,6 +96,8 @@ class STT(stt.STT):
             partial_results_stability=partial_results_stability,
             language_model_name=language_model_name,
             region=region,
+            api_key=api_key,
+            api_secret=api_secret,
         )
 
     async def aclose(self) -> None:
@@ -127,9 +133,17 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         while True:
+            if is_given(self._opts.api_key) and is_given(self._opts.api_secret):
+                credential_resolver = StaticCredentialResolver(
+                    access_key_id=self._opts.api_key,
+                    secret_access_key=self._opts.api_secret,
+                )  # type: ignore
+            else:
+                credential_resolver = AwsCrtCredentialResolver(None)  # type: ignore
+
             client = TranscribeStreamingClient(
                 region=self._opts.region,
-                credential_resolver=AwsCrtCredentialResolver(None),  # type: ignore
+                credential_resolver=credential_resolver,
             )
 
             live_config = {
