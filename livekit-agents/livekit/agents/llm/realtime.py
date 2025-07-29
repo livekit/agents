@@ -31,6 +31,7 @@ class MessageGeneration:
     message_id: str
     text_stream: AsyncIterable[str]  # could be io.TimedString
     audio_stream: AsyncIterable[rtc.AudioFrame]
+    message_type: asyncio.Future[Literal["text", "audio"]]
 
 
 @dataclass

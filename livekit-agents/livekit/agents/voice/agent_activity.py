@@ -1822,8 +1822,9 @@ class AgentActivity(RecognitionHooks):
                         )
                         break
 
+                    msg_type = await msg.message_type
                     tts_text_input: AsyncIterable[str] | None = None
-                    if not self.llm.capabilities.audio_output and self.tts:
+                    if msg_type == "text" and self.tts:
                         tee = utils.aio.itertools.tee(msg.text_stream, 2)
                         tts_text_input, tr_text_input = tee
                         tees.append(tee)
@@ -1853,7 +1854,7 @@ class AgentActivity(RecognitionHooks):
                             )
                             tasks.append(tts_task)
                             realtime_audio_result = tts_gen_data.audio_ch
-                        elif self.llm.capabilities.audio_output:
+                        elif msg_type == "audio":
                             realtime_audio = self._agent.realtime_audio_output_node(
                                 msg.audio_stream, model_settings
                             )
@@ -1861,6 +1862,12 @@ class AgentActivity(RecognitionHooks):
                                 await realtime_audio
                                 if asyncio.iscoroutine(realtime_audio)
                                 else realtime_audio
+                            )
+                        elif self.llm.capabilities.audio_output:
+                            logger.error(
+                                "Text message received from Realtime API with audio modality. "
+                                "This usually happens when text chat context is synced to the API. "
+                                "Try to add a TTS model as fallback or use text modality with TTS instead."
                             )
                         else:
                             logger.warning(
