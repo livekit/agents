@@ -4,6 +4,7 @@ import asyncio
 import sys
 import threading
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 import click
@@ -11,10 +12,13 @@ import numpy as np
 
 from livekit import rtc
 
+from ..cli import cli
+from ..job import get_job_context
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
 from .agent_session import AgentSession
+from .recorder_io import RecorderIO
 from .transcription import TranscriptSynchronizer
 
 if TYPE_CHECKING:
@@ -40,6 +44,7 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
 
 class _AudioInput(io.AudioInput):
     def __init__(self, cli: ChatCLI) -> None:
+        super().__init__(label="ChatCLI")
         self._cli = cli
 
     async def __anext__(self) -> rtc.AudioFrame:
@@ -48,7 +53,7 @@ class _AudioInput(io.AudioInput):
 
 class _TextOutput(io.TextOutput):
     def __init__(self, cli: ChatCLI) -> None:
-        super().__init__(next_in_chain=None)
+        super().__init__(label="ChatCLI", next_in_chain=None)
         self._cli = cli
         self._capturing = False
         self._enabled = True
@@ -78,7 +83,7 @@ class _TextOutput(io.TextOutput):
 
 class _AudioOutput(io.AudioOutput):
     def __init__(self, cli: ChatCLI) -> None:
-        super().__init__(next_in_chain=None, sample_rate=24000)
+        super().__init__(label="ChatCLI", next_in_chain=None, sample_rate=24000)
         self._cli = cli
         self._capturing = False
         self._pushed_duration: float = 0.0
@@ -188,7 +193,34 @@ class ChatCLI:
 
         self._main_atask: asyncio.Task[None] | None = None
 
+        self._input_audio: io.AudioInput = _AudioInput(self)
+        self._output_audio: io.AudioOutput = (
+            self._transcript_syncer.audio_output if self._transcript_syncer else self._audio_sink
+        )
+
+        self._recorder_io: RecorderIO | None = None
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.record:
+            self._recorder_io = RecorderIO(agent_session=agent_session)
+            self._input_audio = self._recorder_io.record_input(self._input_audio)
+            self._output_audio = self._recorder_io.record_output(self._output_audio)
+
     async def start(self) -> None:
+        if self._recorder_io:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            filename = f"console_{timestamp}.ogg"
+            await self._recorder_io.start(output_path=filename)
+
+            try:
+                job_ctx = get_job_context()
+                job_ctx.add_shutdown_callback(self._recorder_io.aclose)
+            except RuntimeError:
+                pass  # ignore
+
+        if self._transcript_syncer:
+            self._update_text_output(enable=True, stdout_enable=False)
+
+        self._update_microphone(enable=True)
+        self._update_speaker(enable=True)
         self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
 
     @log_exceptions(logger=logger)
@@ -229,11 +261,6 @@ class ChatCLI:
 
             self._loop.add_reader(fd, on_input)
 
-        self._update_microphone(enable=True)
-        self._update_speaker(enable=True)
-        if self._transcript_syncer:
-            self._update_text_output(enable=True, stdout_enable=False)
-
         try:
             input_cli_task = asyncio.create_task(self._input_cli_task(stdin_ch))
             input_cli_task.add_done_callback(lambda _: self._done_fut.set_result(None))
@@ -269,7 +296,7 @@ class ChatCLI:
                 blocksize=2400,
             )
             self._input_stream.start()
-            self._session.input.audio = _AudioInput(self)
+            self._session.input.audio = self._input_audio
         elif self._input_stream is not None:
             self._input_stream.stop()
             self._input_stream.close()
@@ -290,11 +317,7 @@ class ChatCLI:
                 blocksize=2400,  # 100ms
             )
             self._output_stream.start()
-            self._session.output.audio = (
-                self._transcript_syncer.audio_output
-                if self._transcript_syncer
-                else self._audio_sink
-            )
+            self._session.output.audio = self._output_audio
         elif self._output_stream is not None:
             self._output_stream.close()
             self._output_stream = None
@@ -346,7 +369,11 @@ class ChatCLI:
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:  # type: ignore
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
-        self._apm.set_stream_delay_ms(int(total_delay * 1000))
+
+        try:
+            self._apm.set_stream_delay_ms(int(total_delay * 1000))
+        except RuntimeError:
+            pass  # setting stream delay in console mode fails often, so we silently continue
 
         FRAME_SAMPLES = 240  # 10ms at 24000 Hz
         num_frames = frame_count // FRAME_SAMPLES

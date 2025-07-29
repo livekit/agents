@@ -27,12 +27,14 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.12"
 
       - name: Install the project
         run: uv sync --all-extras --dev
 
       - name: Run tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: uv run pytest tests/test_agent_session.py
                   tests/test_tts_fallback.py
                   tests/test_stt_fallback.py
@@ -41,6 +43,9 @@ jobs:
                   tests/test_config.py
                   tests/test_schema_gemini.py
                   tests/test_tokenizer.py
+                  tests/test_workflows.py
+                  tests/test_evals.py
+                  tests/test_transcription_filter.py
 
   tests:
     # don't run tests for PRs on forks
@@ -48,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, lmnt, neuphonic, playai, resemble, openai, rime, speechify, hume, spitch]
+        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, openai, rime, speechify, hume, inworld]
 
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}
@@ -70,6 +75,7 @@ jobs:
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
           CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
@@ -93,6 +99,7 @@ jobs:
           HUME_API_KEY: ${{ secrets.HUME_API_KEY }}
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
+          INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
         working-directory: tests
         run: make test
 
@@ -112,17 +119,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all dump shards
+      - name: download all dump shards
         uses: actions/download-artifact@v4
         with:
           pattern: lk-dump-*
           path: all_lk_dump
           merge-multiple: true
 
-      - name: Create tarball
-        run: tar -czf lk-dump-all.tar.gz -C all_lk_dump .
+      - name: create tarball
+        id: tar
+        run: |
+          if [ -d "all_lk_dump" ] && [ "$(ls -A all_lk_dump)" ]; then
+            tar -czf lk-dump-all.tar.gz -C all_lk_dump .
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No dump shards found, skipping tarball creation."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload merged dump
+      - name: upload merged dump
+        if: steps.tar.outputs.created == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: lk-dump-all

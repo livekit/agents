@@ -25,6 +25,7 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from .log import logger
 
 DEFAULT_API_URL = "https://api.hedra.com/public/livekit/v1/session"
+SAMPLE_RATE = 16000
 _AVATAR_AGENT_IDENTITY = "hedra-avatar-agent"
 _AVATAR_AGENT_NAME = "hedra-avatar-agent"
 
@@ -91,13 +92,10 @@ class AvatarSession:
 
         try:
             job_ctx = get_job_context()
-            decoded = job_ctx.decode_token()
-            local_participant_identity = decoded["sub"]
-        except (RuntimeError, KeyError):
+            local_participant_identity = job_ctx.token_claims().identity
+        except RuntimeError as e:
             if not room.isconnected():
-                raise HedraException(
-                    "local participant identity not found in token, and room is not connected"
-                ) from None
+                raise HedraException("failed to get local participant identity") from e
             local_participant_identity = room.local_participant.identity
 
         livekit_token = (
@@ -117,6 +115,8 @@ class AvatarSession:
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
+            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            sample_rate=SAMPLE_RATE,
         )
 
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:

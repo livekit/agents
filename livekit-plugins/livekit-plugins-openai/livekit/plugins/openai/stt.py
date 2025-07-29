@@ -527,6 +527,7 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception("failed to process OpenAI message")
 
         while True:
+            closing_ws = False  # reset the flag
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -551,4 +552,5 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await tasks_group
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception

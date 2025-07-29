@@ -22,7 +22,7 @@ from livekit.plugins import langchain
 ...
 
 def entrypoint(ctx: JobContext):
-    graph = StateGraph(...).build()
+    graph = StateGraph(...).compile()
 
     session = AgentSession(
         vad=...,

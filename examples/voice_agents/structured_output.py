@@ -124,7 +124,6 @@ class MyAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
     session = AgentSession(
         vad=silero.VAD.load(),
         turn_detection=EnglishModel(),

@@ -106,11 +106,11 @@ class LangGraphStream(llm.LLMStream):
                 content = item.text_content
                 if content:
                     if item.role == "assistant":
-                        messages.append(AIMessage(content=content))
+                        messages.append(AIMessage(content=content, id=item.id))
                     elif item.role == "user":
-                        messages.append(HumanMessage(content=content))
+                        messages.append(HumanMessage(content=content, id=item.id))
                     elif item.role in ["system", "developer"]:
-                        messages.append(SystemMessage(content=content))
+                        messages.append(SystemMessage(content=content, id=item.id))
 
         return {
             "messages": messages,

@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncIterator
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Union
 
 from livekit import rtc
 
 from ... import utils
+from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
-
-logger = logging.getLogger(__name__)
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
@@ -28,11 +26,17 @@ class DataStreamAudioOutput(AudioOutput):
     """  # noqa: E501
 
     def __init__(
-        self, room: rtc.Room, *, destination_identity: str, sample_rate: int | None = None
+        self,
+        room: rtc.Room,
+        *,
+        destination_identity: str,
+        sample_rate: int | None = None,
+        wait_remote_track: rtc.TrackKind.ValueType | None = None,
     ):
-        super().__init__(next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(label="DataStreamIO", next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._destination_identity = destination_identity
+        self._wait_remote_track = wait_remote_track
         self._stream_writer: rtc.ByteStreamWriter | None = None
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -44,7 +48,10 @@ class DataStreamAudioOutput(AudioOutput):
         self._started = False
         self._lock = asyncio.Lock()
 
-    async def start(self) -> None:
+        self._start_atask: asyncio.Task | None = None
+
+    @utils.log_exceptions(logger=logger)
+    async def _start_task(self) -> None:
         async with self._lock:
             if self._started:
                 return
@@ -54,14 +61,38 @@ class DataStreamAudioOutput(AudioOutput):
             self._room.local_participant.register_rpc_method(
                 RPC_PLAYBACK_FINISHED, self._handle_playback_finished
             )
+            logger.debug(
+                "waiting for the remote participant",
+                extra={"identity": self._destination_identity},
+            )
             await utils.wait_for_participant(room=self._room, identity=self._destination_identity)
+            if self._wait_remote_track:
+                logger.debug(
+                    "waiting for the remote track",
+                    extra={
+                        "identity": self._destination_identity,
+                        "kind": rtc.TrackKind.Name(self._wait_remote_track),
+                    },
+                )
+                await utils.wait_for_track_publication(
+                    room=self._room,
+                    identity=self._destination_identity,
+                    kind=self._wait_remote_track,
+                )
+            logger.debug("remote participant ready", extra={"identity": self._destination_identity})
 
             self._started = True
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
-        if not self._started:
-            await self.start()
+        # TODO(theomonnom): this class should be encapsuled somewhere else
+        # to allow for a clean close
+        if self._start_atask is None:
+            self._start_atask = asyncio.create_task(self._start_task())
+
+        # TODO(theomonnom): what to do if start takes a while?
+        # we want to avoid OOM & outdated speech?
+        await asyncio.shield(self._start_atask)
 
         await super().capture_frame(frame)
 
@@ -142,6 +173,7 @@ class DataStreamAudioReceiver(AudioReceiver):
         *,
         sender_identity: str | None = None,
         frame_size_ms: NotGivenOr[int] = NOT_GIVEN,
+        rpc_max_retries: int = 3,
     ):
         super().__init__()
         self._room = room
@@ -151,9 +183,17 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
+        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
 
         self._current_reader: rtc.ByteStreamReader | None = None
         self._current_reader_cleared: bool = False
+
+        self._playback_finished_ch = utils.aio.Chan[PlaybackFinishedEvent]()
+        self._rpc_max_retries = rpc_max_retries
+
+        self._main_atask: asyncio.Task | None = None
+        self._exception: Exception | None = None
+        self._closing: bool = False
 
     async def start(self) -> None:
         # wait for the target participant or first agent participant to join
@@ -162,6 +202,7 @@ class DataStreamAudioReceiver(AudioReceiver):
             identity=self._sender_identity,
             kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if not self._sender_identity else None,
         )
+        self._main_atask = asyncio.create_task(self._main_task())
 
         def _handle_clear_buffer(data: rtc.RpcInvocationData) -> str:
             assert self._remote_participant is not None
@@ -180,8 +221,6 @@ class DataStreamAudioReceiver(AudioReceiver):
             self.emit("clear_buffer")
             return "ok"
 
-        self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
-
         def _handle_stream_received(
             reader: rtc.ByteStreamReader, remote_participant_id: str
         ) -> None:
@@ -194,33 +233,60 @@ class DataStreamAudioReceiver(AudioReceiver):
             self._stream_readers.append(reader)
             self._stream_reader_changed.set()
 
+        self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
-    async def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
-        """Notify the sender that playback has finished"""
-        assert self._remote_participant is not None
-        event = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
-        try:
-            logger.debug(
-                f"notifying playback finished: {event.playback_position:.3f}s, "
-                f"interrupted: {event.interrupted}"
-            )
-            await self._room.local_participant.perform_rpc(
-                destination_identity=self._remote_participant.identity,
-                method=RPC_PLAYBACK_FINISHED,
-                payload=json.dumps(asdict(event)),
-            )
-        except Exception as e:
-            logger.exception(f"error notifying playback finished: {e}")
+    def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
+        self._playback_finished_ch.send_nowait(
+            PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
+        )
 
-    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
-        return self._stream_impl()
+    async def _main_task(self) -> None:
+        tasks = [
+            asyncio.create_task(self._recv_task()),
+            asyncio.create_task(self._send_task()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as error:
+            self._exception = error
+        finally:
+            self._playback_finished_ch.close()
+            self._data_ch.close()
+            await utils.aio.cancel_and_wait(*tasks)
 
     @utils.log_exceptions(logger=logger)
-    async def _stream_impl(
-        self,
-    ) -> AsyncGenerator[rtc.AudioFrame | AudioSegmentEnd, None]:
-        while True:
+    async def _send_task(self) -> None:
+        async for event in self._playback_finished_ch:
+            assert self._remote_participant is not None
+
+            retry_count = 0  # TODO: use retry logic in rust
+            while retry_count < self._rpc_max_retries:
+                logger.debug(
+                    f"notifying playback finished: {event.playback_position:.3f}s, "
+                    f"interrupted: {event.interrupted}"
+                )
+                try:
+                    await self._room.local_participant.perform_rpc(
+                        destination_identity=self._remote_participant.identity,
+                        method=RPC_PLAYBACK_FINISHED,
+                        payload=json.dumps(asdict(event)),
+                    )
+                    break
+                except rtc.RpcError as e:
+                    if retry_count == self._rpc_max_retries - 1:
+                        logger.error(
+                            f"failed to notify playback finished after {retry_count + 1} retries",
+                            exc_info=e,
+                        )
+                        raise
+                    retry_count += 1
+                    logger.warning("failed to notify the agent playback finished, retrying...")
+                    await asyncio.sleep(0.1)
+
+    @utils.log_exceptions(logger=logger)
+    async def _recv_task(self) -> None:
+        while not self._data_ch.closed:
             await self._stream_reader_changed.wait()
 
             while self._stream_readers:
@@ -240,19 +306,46 @@ class DataStreamAudioReceiver(AudioReceiver):
                     num_channels=num_channels,
                     samples_per_channel=int(math.ceil(sample_rate * self._frame_size_ms / 1000)),
                 )
-                async for data in self._current_reader:
-                    if self._current_reader_cleared:
-                        # ignore the rest data of the current reader if clear_buffer was called
-                        break
-                    for frame in bstream.push(data):
-                        yield frame
 
-                if not self._current_reader_cleared:
-                    for frame in bstream.flush():
-                        yield frame
+                try:
+                    async for data in self._current_reader:
+                        if self._current_reader_cleared:
+                            # ignore the rest data of the current reader if clear_buffer was called
+                            break
+                        for frame in bstream.push(data):
+                            self._data_ch.send_nowait(frame)
 
-                self._current_reader = None
-                self._current_reader_cleared = False
-                yield AudioSegmentEnd()
+                    if not self._current_reader_cleared:
+                        for frame in bstream.flush():
+                            self._data_ch.send_nowait(frame)
+
+                    self._current_reader = None
+                    self._current_reader_cleared = False
+                    self._data_ch.send_nowait(AudioSegmentEnd())
+
+                except utils.aio.ChanClosed:
+                    if self._closing:
+                        return
+                    raise
 
             self._stream_reader_changed.clear()
+
+    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+        return self
+
+    async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
+        try:
+            return await self._data_ch.recv()
+        except utils.aio.ChanClosed as e:
+            if self._exception:
+                raise self._exception from e
+
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        self._closing = True
+        self._playback_finished_ch.close()
+        self._data_ch.close()
+        self._stream_reader_changed.set()
+        if self._main_atask:
+            await utils.aio.cancel_and_wait(self._main_atask)

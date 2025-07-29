@@ -12,19 +12,47 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
 
     if isinstance(metrics, LLMMetrics):
         logger.info(
-            f"LLM metrics: ttft={metrics.ttft:.2f}, input_tokens={metrics.prompt_tokens},  cached_input_tokens={metrics.prompt_cached_tokens}, output_tokens={metrics.completion_tokens}, tokens_per_second={metrics.tokens_per_second:.2f}"  # noqa: E501
+            "LLM metrics",
+            extra={
+                "ttft": round(metrics.ttft, 2),
+                "prompt_tokens": metrics.prompt_tokens,
+                "prompt_cached_tokens": metrics.prompt_cached_tokens,
+                "completion_tokens": metrics.completion_tokens,
+                "tokens_per_second": round(metrics.tokens_per_second, 2),
+            },
         )
     elif isinstance(metrics, RealtimeModelMetrics):
         logger.info(
-            f"RealtimeModel metrics: ttft={metrics.ttft:.2f}, input_tokens={metrics.input_tokens}, cached_input_tokens={metrics.input_token_details.cached_tokens}, output_tokens={metrics.output_tokens}, total_tokens={metrics.total_tokens}, tokens_per_second={metrics.tokens_per_second:.2f}"  # noqa: E501
+            "RealtimeModel metrics",
+            extra={
+                "ttft": round(metrics.ttft, 2),
+                "input_tokens": metrics.input_tokens,
+                "cached_input_tokens": metrics.input_token_details.cached_tokens,
+                "output_tokens": metrics.output_tokens,
+                "total_tokens": metrics.total_tokens,
+                "tokens_per_second": round(metrics.tokens_per_second, 2),
+            },
         )
     elif isinstance(metrics, TTSMetrics):
         logger.info(
-            f"TTS metrics: ttfb={metrics.ttfb}, audio_duration={metrics.audio_duration:.2f}"
+            "TTS metrics",
+            extra={
+                "ttfb": metrics.ttfb,
+                "audio_duration": round(metrics.audio_duration, 2),
+            },
         )
     elif isinstance(metrics, EOUMetrics):
         logger.info(
-            f"EOU metrics: end_of_utterance_delay={metrics.end_of_utterance_delay:.2f}, transcription_delay={metrics.transcription_delay:.2f}"  # noqa: E501
+            "EOU metrics",
+            extra={
+                "end_of_utterance_delay": round(metrics.end_of_utterance_delay, 2),
+                "transcription_delay": round(metrics.transcription_delay, 2),
+            },
         )
     elif isinstance(metrics, STTMetrics):
-        logger.info(f"STT metrics: audio_duration={metrics.audio_duration:.2f}")
+        logger.info(
+            "STT metrics",
+            extra={
+                "audio_duration": round(metrics.audio_duration, 2),
+            },
+        )

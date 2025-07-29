@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Any, Literal, Union
 
 from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
 from .tts import (
     TTS,
@@ -83,6 +83,7 @@ class FallbackAdapter(
         super().__init__(
             capabilities=TTSCapabilities(
                 streaming=all(t.capabilities.streaming for t in tts),
+                aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
             ),
             sample_rate=sample_rate,
             num_channels=num_channels,
@@ -102,6 +103,8 @@ class FallbackAdapter(
                 _TTSStatus(available=True, recovering_task=None, resampler=resampler)
             )
 
+            t.on("metrics_collected", self._on_metrics_collected)
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS
     ) -> FallbackChunkedStream:
@@ -116,10 +119,16 @@ class FallbackAdapter(
         if self._tts_instances:
             self._tts_instances[0].prewarm()
 
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
+
     async def aclose(self) -> None:
         for tts_status in self._status:
             if tts_status.recovering_task is not None:
                 await aio.cancel_and_wait(tts_status.recovering_task)
+
+        for t in self._tts_instances:
+            t.off("metrics_collected", self._on_metrics_collected)
 
 
 class FallbackChunkedStream(ChunkedStream):
@@ -128,6 +137,9 @@ class FallbackChunkedStream(ChunkedStream):
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
+        pass  # do nothing
 
     async def _try_synthesize(
         self, *, tts: TTS, recovering: bool = False
@@ -202,6 +214,9 @@ class FallbackChunkedStream(ChunkedStream):
                 try:
                     resampler = tts_status.resampler
                     async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
+                        if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                            output_emitter.push_timed_transcript(texts)
+
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
                                 output_emitter.push(rf.data.tobytes())
@@ -239,6 +254,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._fallback_adapter = tts
         self._pushed_tokens: list[str] = []
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
+        pass  # do nothing
 
     async def _try_synthesize(
         self,
@@ -341,6 +359,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             ),
                             recovering=False,
                         ):
+                            if texts := synthesized_audio.frame.userdata.get(
+                                USERDATA_TIMED_TRANSCRIPT
+                            ):
+                                output_emitter.push_timed_transcript(texts)
+
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):
                                     output_emitter.push(resampled_frame.data.tobytes())

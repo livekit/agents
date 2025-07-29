@@ -42,7 +42,22 @@ class FallbackAdapter(
         # use fallback instead of retrying
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
+        retry_on_chunk_sent: bool = False,
     ) -> None:
+        """FallbackAdapter is an LLM that can fallback to a different LLM if the current LLM fails.
+
+        Args:
+            llm (list[LLM]): List of LLM instances to fallback to.
+            attempt_timeout (float, optional): Timeout for each LLM attempt. Defaults to 5.0.
+            max_retry_per_llm (int, optional): Internal retries per LLM. Defaults to 0, which means no
+                internal retries, the failed LLM will be skipped and the next LLM will be used.
+            retry_interval (float, optional): Interval between retries. Defaults to 0.5.
+            retry_on_chunk_sent (bool, optional): Whether to retry when a LLM failed after chunks
+                are sent. Defaults to False.
+
+        Raises:
+            ValueError: If no LLM instances are provided.
+        """
         if len(llm) < 1:
             raise ValueError("at least one LLM instance must be provided.")
 
@@ -52,6 +67,7 @@ class FallbackAdapter(
         self._attempt_timeout = attempt_timeout
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
+        self._retry_on_chunk_sent = retry_on_chunk_sent
 
         self._status = [
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
@@ -210,10 +226,16 @@ class FallbackLLMStream(LLMStream):
         for i, llm in enumerate(self._fallback_adapter._llm_instances):
             llm_status = self._fallback_adapter._status[i]
             if llm_status.available or all_failed:
-                chunk_sent = False
+                text_sent: str = ""
+                tool_calls_sent: list[str] = []
                 try:
                     async for result in self._try_generate(llm=llm, check_recovery=False):
-                        chunk_sent = True
+                        if result.delta:
+                            if result.delta.content:
+                                text_sent += result.delta.content
+                            for tool_call in result.delta.tool_calls:
+                                tool_calls_sent.append(tool_call.name)
+
                         self._event_ch.send_nowait(result)
 
                     return
@@ -225,8 +247,20 @@ class FallbackLLMStream(LLMStream):
                             AvailabilityChangedEvent(llm=llm, available=False),
                         )
 
-                    if chunk_sent:
-                        raise
+                    if text_sent or tool_calls_sent:
+                        extra = {"text_sent": text_sent, "tool_calls_sent": tool_calls_sent}
+                        if not self._fallback_adapter._retry_on_chunk_sent:
+                            logger.error(
+                                f"{llm.label} failed after sending chunk, skip retrying. "
+                                "Set `retry_on_chunk_sent` to `True` to enable retrying after chunks are sent.",
+                                extra=extra,
+                            )
+                            raise
+
+                        logger.warning(
+                            f"{llm.label} failed after sending chunk, retrying..",
+                            extra=extra,
+                        )
 
             self._try_recovery(llm)
 
