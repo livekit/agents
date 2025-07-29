@@ -17,7 +17,7 @@
 See https://docs.livekit.io/agents/integrations/llm/anthropic/ for more information.
 """
 
-from .llm import LLM, LLMStream, ThinkingConfig, ThinkingConfigDict
+from .llm import LLM, LLMStream
 from .log import logger
 from .models import ChatModels
 from .version import __version__
@@ -25,8 +25,6 @@ from .version import __version__
 __all__ = [
     "LLM",
     "LLMStream",
-    "ThinkingConfig",
-    "ThinkingConfigDict",
     "ChatModels",
     "logger",
     "__version__",
