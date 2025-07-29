@@ -1,5 +1,46 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from enum import Enum
+from typing import Any
+
+
+class EndOfUtteranceMode(str, Enum):
+    """End of turn delay options for transcription."""
+
+    FIXED = "fixed"
+    ADAPTIVE = "adaptive"
+
+
+class DiarizationFocusMode(str, Enum):
+    """Speaker focus mode for diarization."""
+
+    RETAIN = "retain"
+    IGNORE = "ignore"
+
+
+@dataclass
+class AdditionalVocabEntry:
+    """Additional vocabulary entry.
+
+    Attributes:
+        content: The word to add to the dictionary.
+        sounds_like: Similar words to the word.
+    """
+
+    content: str
+    sounds_like: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DiarizationKnownSpeaker:
+    """Known speakers for speaker diarization.
+
+    Attributes:
+        label: The label of the speaker.
+        speaker_identifiers: One or more data strings for the speaker.
+    """
+
+    label: str
+    speaker_identifiers: list[str]
 
 
 @dataclass
@@ -9,7 +50,7 @@ class SpeechFragment:
     Parameters:
         start_time: Start time of the fragment in seconds (from session start).
         end_time: End time of the fragment in seconds (from session start).
-        language: Language of the fragment. Defaults to `en`.
+        language: Language of the fragment. Defaults to `Language.EN`.
         is_eos: Whether the fragment is the end of a sentence. Defaults to `False`.
         is_final: Whether the fragment is the final fragment. Defaults to `False`.
         is_disfluency: Whether the fragment is a disfluency. Defaults to `False`.
@@ -30,9 +71,9 @@ class SpeechFragment:
     is_punctuation: bool = False
     attaches_to: str = ""
     content: str = ""
-    speaker: Optional[str] = None
+    speaker: str | None = None
     confidence: float = 1.0
-    result: Optional[Any] = None
+    result: Any | None = None
 
 
 @dataclass
@@ -47,17 +88,17 @@ class SpeakerFragments:
         fragments: The list of SpeechFragment items.
     """
 
-    speaker_id: Optional[str] = None
+    speaker_id: str | None = None
     is_active: bool = False
-    timestamp: Optional[str] = None
-    language: Optional[str] = None
+    timestamp: str | None = None
+    language: str | None = None
     fragments: list[SpeechFragment] = field(default_factory=list)
 
     def __str__(self):
         """Return a string representation of the object."""
         return f"SpeakerFragments(speaker_id: {self.speaker_id}, timestamp: {self.timestamp}, language: {self.language}, text: {self._format_text()})"
 
-    def _format_text(self, format: Optional[str] = None) -> str:
+    def _format_text(self, format: str | None = None) -> str:
         """Wrap text with speaker ID in an optional f-string format.
 
         Args:
@@ -82,7 +123,7 @@ class SpeakerFragments:
         return format.format(**{"speaker_id": self.speaker_id, "text": content})
 
     def _as_speech_data_attributes(
-        self, active_format: Optional[str] = None, passive_format: Optional[str] = None
+        self, active_format: str | None = None, passive_format: str | None = None
     ) -> dict[str, Any]:
         """Return a dictionary of attributes for a TranscriptionFrame.
 

@@ -19,11 +19,7 @@ import dataclasses
 import datetime
 import os
 import re
-from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
-
-import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -40,55 +36,53 @@ from speechmatics.rt import (
     AsyncClient,
     AudioEncoding,
     AudioFormat,
+    ClientMessageType,
     ConversationConfig,
     OperatingPoint,
     ServerMessageType,
-    SpeakerDiarizationConfig,
     TranscriptionConfig,
 )
 
 from .log import logger
-from .types import SpeakerFragments, SpeechFragment
-from .version import __version__
-
-# Default transcription configuration
-DEFAULT_TRANSCRIPTION_CONFIG = TranscriptionConfig(
-    language="en",
-    operating_point=OperatingPoint.ENHANCED,
-    enable_partials=True,
-    enable_entities=True,
-    max_delay=1.5,
-    max_delay_mode="fixed",
-    diarization="speaker",
-    speaker_diarization_config=SpeakerDiarizationConfig(max_speakers=4),
-    conversation_config=ConversationConfig(
-        end_of_utterance_silence_trigger=0.5,
-    ),
+from .types import (
+    AdditionalVocabEntry,
+    DiarizationFocusMode,
+    DiarizationKnownSpeaker,
+    EndOfUtteranceMode,
+    SpeakerFragments,
+    SpeechFragment,
 )
-
-
-@dataclass
-class SpeakerSpeechData(stt.SpeechData):
-    def text_formatted(self) -> str:
-        """Wrap with speaker id XML tags."""
-
-        # Wrap in XML tags
-        if self.speaker_id:
-            return f"<{self.speaker_id}>{self.text.strip()}</{self.speaker_id}>"
-
-        # Simply return the unformatted text
-        return self.text
+from .utils import get_endpoint_url
 
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        transcription_config: NotGivenOr[TranscriptionConfig] = NOT_GIVEN,
-        audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
-        extra_headers: NotGivenOr[dict] = NOT_GIVEN,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        operating_point: OperatingPoint = OperatingPoint.ENHANCED,
+        domain: str | None = None,
+        language: str = "en",
+        output_locale: str | None = None,
+        enable_vad: bool = False,
+        enable_partials: bool = True,
+        enable_diarization: bool = False,
+        max_delay: float = 1.0,
+        end_of_utterance_silence_trigger: float = 0.5,
+        end_of_utterance_mode: EndOfUtteranceMode = EndOfUtteranceMode.FIXED,
+        additional_vocab: list[AdditionalVocabEntry] | None = None,
+        diarization_sensitivity: float = 0.5,
+        speaker_active_format: str = "{text}",
+        speaker_passive_format: str = "{text}",
+        prefer_current_speaker: bool = False,
+        focus_speakers: list[str] | None = None,
+        ignore_speakers: list[str] | None = None,
+        focus_mode: DiarizationFocusMode = DiarizationFocusMode.RETAIN,
+        known_speakers: list[DiarizationKnownSpeaker] | None = None,
+        sample_rate: int = 16000,
+        chunk_size: int = 160,
+        audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -97,50 +91,63 @@ class STT(stt.STT):
             ),
         )
 
-        # Set the transcription config
-        if not is_given(transcription_config):
-            transcription_config = DEFAULT_TRANSCRIPTION_CONFIG
-        else:
-            # Merge the default and given transcription config
-            merged_config = {
-                **DEFAULT_TRANSCRIPTION_CONFIG.asdict(),
-                **transcription_config.asdict(),
-            }
+        # Service parameters
+        self._api_key: str = api_key or os.getenv("SPEECHMATICS_API_KEY")
+        self._base_url: str = (
+            base_url or os.getenv("SPEECHMATICS_RT_URL") or "wss://eu2.rt.speechmatics.com/v2"
+        )
+        self._operating_point: OperatingPoint = operating_point
+        self._domain: str | None = domain
 
-            # Convert nested RTSpeakerDiarizationConfig if present
-            if "speaker_diarization_config" in merged_config:
-                merged_config["speaker_diarization_config"] = SpeakerDiarizationConfig(
-                    **merged_config["speaker_diarization_config"]
-                )
+        # Language
+        self._language: str | None = language
+        self._output_locale: str | None = output_locale
 
-            # Convert nested RTConversationConfig if present
-            if "conversation_config" in merged_config:
-                merged_config["conversation_config"] = ConversationConfig(
-                    **merged_config["conversation_config"]
-                )
+        # Features
+        self._enable_vad: bool = enable_vad
+        self._enable_partials: bool = enable_partials
+        self._enable_diarization: bool = enable_diarization
 
-            # Create the transcription config
-            transcription_config = TranscriptionConfig(**merged_config)
+        # STT parameters
+        self._max_delay: float = max_delay
+        self._end_of_utterance_silence_trigger: float = end_of_utterance_silence_trigger
+        self._end_of_utterance_mode: EndOfUtteranceMode = end_of_utterance_mode
+        self._additional_vocab: list[AdditionalVocabEntry] = additional_vocab or []
 
-        # Set the connection settings
-        self._base_url = base_url
+        # Diarization
+        self._diarization_sensitivity: float = diarization_sensitivity
+        self._speaker_active_format: str = speaker_active_format
+        self._speaker_passive_format: str = speaker_passive_format
+        self._prefer_current_speaker: bool = prefer_current_speaker
+        self._focus_speakers: list[str] = focus_speakers or []
+        self._ignore_speakers: list[str] = ignore_speakers or []
+        self._focus_mode: DiarizationFocusMode = focus_mode
+        self._known_speakers: list[DiarizationKnownSpeaker] = known_speakers or []
+
+        # Audio settings
+        self._sample_rate: int = sample_rate
+        self._chunk_size: int = chunk_size
+        self._audio_encoding: AudioEncoding = audio_encoding
+
+        # Check we have required attributes
+        if not self._api_key:
+            raise ValueError("Missing Speechmatics API key")
+        if not self._base_url:
+            raise ValueError("Missing Speechmatics base URL")
+
+        # Complete configuration objects
+        self._transcription_config: TranscriptionConfig = None
+        self._process_config()
 
         # Set the audio settings
-        if not is_given(audio_format):
-            audio_format = AudioFormat(
-                sample_rate=16000, chunk_size=160, encoding=AudioEncoding.PCM_S16LE
-            )
-        self._audio_format = audio_format
-
-        # Session configuration
-        self._transcription_config = transcription_config
-        self._extra_headers = extra_headers or {}
+        self._audio_format = AudioFormat(
+            sample_rate=self._sample_rate,
+            chunk_size=self._chunk_size,
+            encoding=self._audio_encoding,
+        )
 
         # Set of active stream
         self._stream: stt.RecognizeStream | None = None
-
-        # Lower logging level for AsyncClient
-        # logging.getLogger("speechmatics.rt.transport").setLevel(logging.INFO)
 
     async def _recognize_impl(
         self,
@@ -169,45 +176,75 @@ class STT(stt.STT):
         # Create the stream
         self._stream = SpeechStream(
             stt=self,
-            transcription_config=transcription_config,
-            audio_format=self._audio_format,
-            base_url=self._base_url,
             conn_options=conn_options,
-            extra_headers=self._extra_headers,
         )
 
         # Return the stream
         return self._stream
 
+    def _process_config(self) -> None:
+        """Create a formatted STT transcription config.
+
+        Creates a transcription config object based on the service parameters. Aligns
+        with the Speechmatics RT API transcription config.
+        """
+        # Transcription config
+        transcription_config = TranscriptionConfig(
+            language=self._language,
+            domain=self._domain,
+            output_locale=self._output_locale,
+            operating_point=self._operating_point,
+            diarization="speaker" if self._enable_diarization else None,
+            enable_partials=self._enable_partials,
+            max_delay=self._max_delay,
+        )
+
+        # Additional vocab
+        if self._additional_vocab:
+            transcription_config.additional_vocab = [
+                {
+                    "content": e.content,
+                    "sounds_like": e.sounds_like,
+                }
+                for e in self._additional_vocab
+            ]
+
+        # Diarization
+        if self._enable_diarization:
+            dz_cfg = {}
+            if self._diarization_sensitivity is not None:
+                dz_cfg["speaker_sensitivity"] = self._diarization_sensitivity
+            if self._prefer_current_speaker is not None:
+                dz_cfg["prefer_current_speaker"] = self._prefer_current_speaker
+            if self._known_speakers:
+                dz_cfg["speakers"] = {s.label: s.speaker_identifiers for s in self._known_speakers}
+            if dz_cfg:
+                transcription_config.speaker_diarization_config = dz_cfg
+
+        # End of Utterance (for fixed)
+        if (
+            self._end_of_utterance_silence_trigger
+            and self._end_of_utterance_mode == EndOfUtteranceMode.FIXED
+        ):
+            transcription_config.conversation_config = ConversationConfig(
+                end_of_utterance_silence_trigger=self._end_of_utterance_silence_trigger,
+            )
+
+        # Set config
+        self._transcription_config = transcription_config
+
 
 class SpeechStream(stt.RecognizeStream):
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        transcription_config: TranscriptionConfig,
-        audio_format: AudioFormat,
-        base_url: str,
-        conn_options: APIConnectOptions,
-        extra_headers: dict,
-    ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=audio_format.sample_rate)
+    def __init__(self, stt: STT, conn_options: APIConnectOptions) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._sample_rate)
 
-        # Session configuration
-        self._transcription_config = transcription_config
-        self._audio_format = audio_format
-        self._extra_headers = extra_headers
+        # Reference to STT object
+        self._stt = stt
 
-        # Endpoint URL
-        self._base_url = _get_endpoint_url(
-            base_url or os.getenv("SPEECHMATICS_RT_URL") or "wss://eu2.rt.speechmatics.com/v2"
-        )
-
-        # Uses EndOfUtterance detection
-        self._uses_eou_detection = (
-            transcription_config.conversation_config
-            and transcription_config.conversation_config.end_of_utterance_silence_trigger
-        )
+        # Speakers
+        self._focus_speakers: list[str] = stt._focus_speakers.copy()
+        self._ignore_speakers: list[str] = stt._ignore_speakers.copy()
+        self._focus_mode: DiarizationFocusMode = stt._focus_mode
 
         # Session
         self._speech_duration: float = 0
@@ -219,11 +256,20 @@ class SpeechStream(stt.RecognizeStream):
         # Current utterance speech data
         self._speech_fragments: list[SpeechFragment] = []
 
+        # EndOfUtterance fallback timer
+        self._end_of_utterance_timer: asyncio.Task | None = None
+
     async def _run(self) -> None:
         """Run the STT stream."""
 
         # Create Speechmatics client
-        self._client = AsyncClient(url=self._base_url)
+        self._client = AsyncClient(
+            api_key=self._stt._api_key,
+            url=get_endpoint_url(self._stt._base_url),
+        )
+
+        # Log the event
+        logger.debug("Connected to Speechmatics STT service")
 
         # Recognition started event
         @self._client.on(ServerMessageType.RECOGNITION_STARTED)
@@ -232,9 +278,11 @@ class SpeechStream(stt.RecognizeStream):
             self._start_time = datetime.datetime.now(datetime.timezone.utc)
 
         # Partial transcript event
-        @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)
-        def _evt_on_partial_transcript(message: dict[str, Any]):
-            self._handle_transcript(message, is_final=False)
+        if self._stt._enable_partials:
+
+            @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)
+            def _evt_on_partial_transcript(message: dict[str, Any]):
+                self._handle_transcript(message, is_final=False)
 
         # Final transcript event
         @self._client.on(ServerMessageType.ADD_TRANSCRIPT)
@@ -242,23 +290,30 @@ class SpeechStream(stt.RecognizeStream):
             self._handle_transcript(message, is_final=True)
 
         # End of Utterance
-        if self._uses_eou_detection:
+        if self._stt._end_of_utterance_mode == EndOfUtteranceMode.FIXED:
 
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)
             def _evt_on_end_of_utterance(message: dict[str, Any]):
                 logger.debug("End of utterance received from STT")
                 asyncio.create_task(self._send_frames(finalized=True))
 
+        # Speaker Result
+        if self._stt._enable_diarization:
+
+            @self._client.on(ServerMessageType.SPEAKERS_RESULT)
+            def _evt_on_speakers_result(message: dict[str, Any]):
+                logger.debug("Speakers result received from STT")
+                logger.debug(message)
+
         # Start session
         await self._client.start_session(
-            transcription_config=self._transcription_config,
-            audio_format=self._audio_format,
-            ws_headers=self._extra_headers,
+            transcription_config=self._stt._transcription_config,
+            audio_format=self._stt._audio_format,
         )
 
         # Create an audio byte stream
         audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._audio_format.sample_rate,
+            sample_rate=self._stt._audio_format.sample_rate,
             num_channels=1,
         )
 
@@ -277,6 +332,55 @@ class SpeechStream(stt.RecognizeStream):
                 await self._client.send_audio(frame.data.tobytes())
 
         # TODO - handle the closing of the stream?
+
+    def update_speakers(
+        self,
+        focus_speakers: list[str] | None = None,
+        ignore_speakers: list[str] | None = None,
+        focus_mode: DiarizationFocusMode | None = None,
+    ) -> None:
+        """Updates the speaker configuration.
+
+        This can update the speakers to listen to or ignore during an in-flight
+        transcription. Only available if diarization is enabled.
+
+        Args:
+            focus_speakers: List of speakers to focus on.
+            ignore_speakers: List of speakers to ignore.
+            focus_mode: Focus mode to use.
+        """
+        # Check possible
+        if not self._enable_diarization:
+            raise ValueError("Diarization is not enabled")
+
+        # Update the diarization configuration
+        if focus_speakers is not None:
+            self._focus_speakers = focus_speakers
+        if ignore_speakers is not None:
+            self._ignore_speakers = ignore_speakers
+        if focus_mode is not None:
+            self._focus_mode = focus_mode
+
+    async def send_message(self, message: ClientMessageType | str, **kwargs: Any) -> None:
+        """Send a message to the STT service.
+
+        This sends a message to the STT service via the underlying transport. If the session
+        is not running, this will raise an exception. Messages in the wrong format will also
+        cause an error.
+
+        Args:
+            message: Message to send to the STT service.
+            **kwargs: Additional arguments passed to the underlying transport.
+        """
+        try:
+            payload = {"message": message}
+            payload.update(kwargs)
+            logger.debug(f"Sending message to STT: {payload}")
+            asyncio.run_coroutine_threadsafe(
+                self._client.send_message(payload), self.get_event_loop()
+            )
+        except Exception as e:
+            raise RuntimeError(f"error sending message to STT: {e}") from e
 
     def _handle_transcript(self, message: dict[str, Any], is_final: bool) -> None:
         """Handle the partial and final transcript events.
@@ -297,6 +401,46 @@ class SpeechStream(stt.RecognizeStream):
 
         # Send frames
         asyncio.create_task(self._send_frames())
+
+    def _end_of_utterance_timer_start(self):
+        """Start the timer for the end of utterance.
+
+        This will use the STT's `end_of_utterance_silence_trigger` value and set
+        a timer to send the latest transcript to the pipeline. It is used as a
+        fallback from the EnfOfUtterance messages from the STT.
+
+        Note that the `end_of_utterance_silence_trigger` will be from when the
+        last updated speech was received and this will likely be longer in
+        real world time to that inside of the STT engine.
+        """
+        # Reset the end of utterance timer
+        if self._end_of_utterance_timer is not None:
+            self._end_of_utterance_timer.cancel()
+
+        # Send after a delay
+        async def send_after_delay(delay: float):
+            await asyncio.sleep(delay)
+            logger.debug("Fallback EndOfUtterance triggered.")
+            asyncio.create_task(self._handle_end_of_utterance())
+
+        # Start the timer
+        self._end_of_utterance_timer = asyncio.create_task(
+            send_after_delay(self._stt._end_of_utterance_silence_trigger * 2)
+        )
+
+    async def _handle_end_of_utterance(self):
+        """Handle the end of utterance event.
+
+        This will check for any running timers for end of utterance, reset them,
+        and then send a finalized frame to the pipeline.
+        """
+        # Send the frames
+        await self._send_frames(finalized=True)
+
+        # Reset the end of utterance timer
+        if self._end_of_utterance_timer:
+            self._end_of_utterance_timer.cancel()
+            self._end_of_utterance_timer = None
 
     async def _send_frames(self, finalized: bool = False) -> None:
         """Send frames to the pipeline.
@@ -330,7 +474,13 @@ class SpeechStream(stt.RecognizeStream):
         for item in speech_frames:
             final_event = stt.SpeechEvent(
                 type=event_type,
-                alternatives=[SpeakerSpeechData(**item._as_speech_data_attributes())],
+                alternatives=[
+                    stt.SpeechData(
+                        **item._as_speech_data_attributes(
+                            self._stt._speaker_active_format, self._stt._speaker_passive_format
+                        )
+                    )
+                ],
             )
             self._event_ch.send_nowait(final_event)
 
@@ -400,11 +550,8 @@ class SpeechStream(stt.RecognizeStream):
                         continue
 
                     # Drop ignored speakers
-                    # if (
-                    #     self._diarization_config.ignore_speakers
-                    #     and fragment.speaker in self._diarization_config.ignore_speakers
-                    # ):
-                    #     continue
+                    if self._ignore_speakers and fragment.speaker in self._ignore_speakers:
+                        continue
 
                 # Add the fragment
                 fragments.append(fragment)
@@ -432,7 +579,7 @@ class SpeechStream(stt.RecognizeStream):
         in strict order for the context of the conversation.
 
         Returns:
-            list[SpeakerFragments]: The list of objects.
+            List[SpeakerFragments]: The list of objects.
         """
         # Speaker groups
         current_speaker: str | None = None
@@ -497,8 +644,8 @@ class SpeechStream(stt.RecognizeStream):
 
         # Determine if the speaker is considered active
         is_active = True
-        # if self._diarization_config.enable and self._diarization_config.focus_speakers:
-        #     is_active = group[0].speaker in self._diarization_config.focus_speakers
+        if self._stt._enable_diarization and self._focus_speakers:
+            is_active = group[0].speaker in self._focus_speakers
 
         # Return the SpeakerFragments object
         return SpeakerFragments(
@@ -522,19 +669,3 @@ class SpeechStream(stt.RecognizeStream):
         if self._client:
             await self._client.close()
             self._client = None
-
-
-def _get_endpoint_url(url: str) -> str:
-    """Format the endpoint URL with the SDK and app versions.
-
-    Args:
-        url: The base URL for the endpoint.
-
-    Returns:
-        str: The formatted endpoint URL.
-    """
-    query_params = {}
-    query_params["sm-app"] = f"livekit/{__version__}"
-    query = urlencode(query_params)
-
-    return f"{url}?{query}"

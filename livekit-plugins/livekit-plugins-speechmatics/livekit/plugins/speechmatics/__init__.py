@@ -17,11 +17,21 @@ See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more infor
 
 from .log import logger
 from .stt import STT, SpeechStream
+from .types import (
+    AdditionalVocabEntry,
+    DiarizationFocusMode,
+    DiarizationKnownSpeaker,
+    EndOfUtteranceMode,
+)
 from .version import __version__
 
 __all__ = [
     "STT",
     "SpeechStream",
+    "AdditionalVocabEntry",
+    "EndOfUtteranceMode",
+    "DiarizationFocusMode",
+    "DiarizationKnownSpeaker",
     "logger",
     "__version__",
 ]
