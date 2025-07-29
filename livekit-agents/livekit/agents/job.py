@@ -25,14 +25,14 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable
 
-import jwt
-
 from livekit import api, rtc
+from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
+from .cli import cli
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .types import NOT_GIVEN, NotGivenOr
+from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -109,7 +109,6 @@ class JobContext:
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
-        self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
             tuple[
                 JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK,
@@ -157,6 +156,11 @@ class JobContext:
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
+        """Returns an LiveKitAPI for making API calls to LiveKit.
+
+        This property requires LIVEKIT_API_KEY and LIVEKIT_API_SECRET to be set in the environment.
+        If they are passed in WorkerOptions, it would not be able to satisfy this API.
+        """
         return api.LiveKitAPI(session=http_context.http_session())
 
     @property
@@ -211,15 +215,6 @@ class JobContext:
                 information like job ID, trace information, or worker metadata.
         """
         self._log_fields = fields
-
-    def add_tracing_callback(
-        self,
-        callback: Callable[[], Coroutine[None, None, None]],
-    ) -> None:
-        """
-        Add a callback to be called when the job is about to receive a new tracing request.
-        """
-        self._tracing_callbacks.append(callback)
 
     def add_shutdown_callback(
         self,
@@ -288,6 +283,12 @@ class JobContext:
 
     def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            logger.warning("job_ctx.delete_room() is not executed while in console mode")
+            fut = asyncio.Future[api.DeleteRoomResponse]()
+            fut.set_result(api.DeleteRoomResponse())
+            return fut
+
         task = asyncio.create_task(
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         )
@@ -317,6 +318,12 @@ class JobContext:
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
+            fut = asyncio.Future[api.SIPParticipantInfo]()
+            fut.set_result(api.SIPParticipantInfo())
+            return fut
+
         task = asyncio.create_task(
             self.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
@@ -354,6 +361,14 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            logger.warning(
+                "job_ctx.transfer_sip_participant() is not executed while in console mode"
+            )
+            fut = asyncio.Future[api.SIPParticipantInfo]()
+            fut.set_result(api.SIPParticipantInfo())
+            return fut
+
         if isinstance(participant, rtc.RemoteParticipant):
             assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
                 "Participant must be a SIP participant"
@@ -416,12 +431,8 @@ class JobContext:
                 lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
 
-    def decode_token(self, api_secret: NotGivenOr[str] = NOT_GIVEN) -> dict[str, Any]:
-        options = {}
-        if not is_given(api_secret):
-            options["verify_signature"] = False
-            api_secret = ""
-        return jwt.decode(self._info.token, api_secret, options=options, algorithms=["HS256"])  # type: ignore
+    def token_claims(self) -> Claims:
+        return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

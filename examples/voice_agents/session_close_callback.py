@@ -64,8 +64,6 @@ async def entrypoint(ctx: JobContext):
         # this will stop the worker immediately
         ctx.delete_room()
 
-    await ctx.connect()
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
