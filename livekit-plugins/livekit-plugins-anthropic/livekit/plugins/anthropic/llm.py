@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -36,7 +36,6 @@ from livekit.agents.utils import is_given
 
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
-
 
 
 @dataclass
