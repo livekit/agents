@@ -400,6 +400,9 @@ class SpeechStream(stt.RecognizeStream):
         if not has_changed:
             return
 
+        # Set a timer for the end of utterance
+        self._end_of_utterance_timer_start()
+
         # Send frames
         asyncio.create_task(self._send_frames())
 

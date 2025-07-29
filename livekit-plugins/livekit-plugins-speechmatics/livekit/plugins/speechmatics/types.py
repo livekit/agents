@@ -6,6 +6,7 @@ from typing import Any
 class EndOfUtteranceMode(str, Enum):
     """End of turn delay options for transcription."""
 
+    NONE = "none"
     FIXED = "fixed"
     ADAPTIVE = "adaptive"
 
