@@ -2,6 +2,7 @@ ATTR_SPEECH_ID = "lk.speech_id"
 ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
+ATTR_RETRY_COUNT = "lk.retry_count"
 
 # session start
 ATTR_JOB_ID = "lk.job_id"
@@ -57,6 +58,11 @@ EVENT_GEN_AI_USER_MESSAGE = "gen_ai.user.message"
 EVENT_GEN_AI_ASSISTANT_MESSAGE = "gen_ai.assistant.message"
 EVENT_GEN_AI_TOOL_MESSAGE = "gen_ai.tool.message"
 EVENT_GEN_AI_CHOICE = "gen_ai.choice"
+
+# Exception attributes
+ATTR_EXCEPTION_TRACE = "exception.stacktrace"
+ATTR_EXCEPTION_TYPE = "exception.type"
+ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
