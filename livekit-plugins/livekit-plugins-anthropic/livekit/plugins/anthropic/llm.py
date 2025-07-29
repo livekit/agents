@@ -244,7 +244,6 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
 
-
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
         self._input_tokens = 0

@@ -42,7 +42,9 @@ async def main():
 
     # Create a chat context with a complex problem
     chat_ctx = ChatContext().empty()
-    chat_ctx.add_message(role="system", content="You are a helpful math tutor. Think step by step through problems.")
+    chat_ctx.add_message(
+        role="system", content="You are a helpful math tutor. Think step by step through problems."
+    )
     chat_ctx.add_message(
         role="user",
         content="What is the derivative of x^3 + 2x^2 - 5x + 7? Please show your thinking process.",
