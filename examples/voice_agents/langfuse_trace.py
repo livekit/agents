@@ -3,6 +3,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
+from opentelemetry.util.types import AttributeValue
 
 from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, metrics
 from livekit.agents.llm import function_tool
@@ -21,7 +22,11 @@ load_dotenv()
 
 
 def setup_langfuse(
-    host: str | None = None, public_key: str | None = None, secret_key: str | None = None
+    metadata: dict[str, AttributeValue] | None = None,
+    *,
+    host: str | None = None,
+    public_key: str | None = None,
+    secret_key: str | None = None,
 ):
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.trace import TracerProvider
@@ -40,7 +45,7 @@ def setup_langfuse(
 
     trace_provider = TracerProvider()
     trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    set_tracer_provider(trace_provider)
+    set_tracer_provider(trace_provider, metadata=metadata)
 
 
 @function_tool
@@ -99,7 +104,13 @@ class Alloy(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    setup_langfuse()  # set up the langfuse tracer
+    # set up the langfuse tracer
+    setup_langfuse(
+        # metadata will be set as attributes on all spans created by the tracer
+        metadata={
+            "langfuse.session.id": ctx.room.name,
+        }
+    )
 
     session = AgentSession(vad=silero.VAD.load())
 

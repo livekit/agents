@@ -8,6 +8,8 @@ from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
+from ...voice.events import RunContext
+from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ...voice.agent_session import TurnDetectionMode
@@ -49,10 +51,13 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 "- Filter out filler words or hesitations.\n"
                 "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
                 "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                "Always call `update_email_address` immediately whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.) \n"
-                "Call `confirm_email_address` **only** after explicitly asking the user to confirm that the provided email address is correct. \n"
-                "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
-                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
+                "Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. "
+                "(before asking any questions or providing any answers.) \n"
+                "Don't invent new email addresses, stick strictly to what the user said. \n"
+                "Call `confirm_email_address` after the user confirmed the email address is correct. \n"
+                "If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed. \n"
+                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary. \n"
+                "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
@@ -65,19 +70,26 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         self._current_email = ""
 
+        # speech_handle/turn used to update the email address.
+        # used to ignore the call to confirm_email_address in case the LLM is hallucinating and not asking for user confirmation
+        self._email_update_speech_handle: SpeechHandle | None = None
+
     async def on_enter(self) -> None:
         self.session.generate_reply(
-            instructions="Ask the user to provide their email address. If you already have it, ask for confirmation."
+            instructions=(
+                "Ask the user to provide an email address. If you already have it, ask for confirmation.\n"
+                "Do not call `decline_email_capture`"
+            )
         )
 
     @function_tool
-    async def update_email_address(self, email: str) -> str:
-        """Store your best guess of the user's email address.
-        This must be called at the earliest opportunity
+    async def update_email_address(self, email: str, ctx: RunContext) -> str:
+        """Update the email address provided by the user.
 
         Args:
-            email: The corrected email address provided by the language model.
+            email: The email address provided by the user
         """
+        self._email_update_speech_handle = ctx.speech_handle
         email = email.strip()
 
         if not re.match(EMAIL_REGEX, email):
@@ -87,26 +99,33 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         separated_email = " ".join(email)
 
         return (
-            f"The email has been updated: {email}\n"
-            f"For clarity, you can also repeat it character by character: {separated_email} if needed"
+            f"The email has been updated to {email}\n"
+            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
     @function_tool
-    async def confirm_email_address(self) -> None:
-        """Validates the email address only after the user has explicitly confirmed it.
-        Always prompt the user for confirmation before calling this function."""
+    async def confirm_email_address(self, ctx: RunContext) -> None:
+        """Validates/confirms the email address provided by the user."""
+        await ctx.wait_for_playout()
+
+        if ctx.speech_handle == self._email_update_speech_handle:
+            raise ToolError("error: the user must confirm the email address explicitly")
+
         if not self._current_email.strip():
             raise ToolError(
-                "no email address were provided, `update_email_address` must be called at least once before calling `confirm_email_address`"
+                "error: no email address were provided, `update_email_address` must be called before"
             )
 
-        self.complete(GetEmailResult(email_address=self._current_email))
+        if not self.done():
+            self.complete(GetEmailResult(email_address=self._current_email))
 
     @function_tool
     async def decline_email_capture(self, reason: str) -> None:
         """Handles the case when the user explicitly declines to provide an email address.
 
         Args:
-            reason: A short explanation of why the user declined
+            reason: A short explanation of why the user declined to provide the email address
         """
-        self.complete(ToolError(f"failed to get the user's email address: {reason}"))
+        if not self.done():
+            self.complete(ToolError(f"couldn't get the email address: {reason}"))

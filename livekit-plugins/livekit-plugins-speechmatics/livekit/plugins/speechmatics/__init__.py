@@ -15,7 +15,6 @@
 See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
 """
 
-from .log import logger
 from .stt import STT, SpeechStream
 from .types import (
     AdditionalVocabEntry,
@@ -38,10 +37,12 @@ __all__ = [
 
 from livekit.agents import Plugin
 
+from .log import logger
+
 
 class SpeechmaticsPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(SpeechmaticsPlugin())

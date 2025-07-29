@@ -21,6 +21,8 @@ import os
 import re
 from typing import Any
 
+import aiohttp
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
@@ -83,6 +85,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         chunk_size: int = 160,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
+        http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -148,6 +151,9 @@ class STT(stt.STT):
 
         # Set of active stream
         self._stream: stt.RecognizeStream | None = None
+
+        # HTTP session
+        self._http_session: aiohttp.ClientSession | None = http_session
 
     async def _recognize_impl(
         self,
@@ -233,6 +239,34 @@ class STT(stt.STT):
         # Set config
         self._transcription_config = transcription_config
 
+    def update_speakers(
+        self,
+        focus_speakers: list[str] | None = None,
+        ignore_speakers: list[str] | None = None,
+        focus_mode: DiarizationFocusMode | None = None,
+    ) -> None:
+        """Updates the speaker configuration.
+
+        This can update the speakers to listen to or ignore during an in-flight
+        transcription. Only available if diarization is enabled.
+
+        Args:
+            focus_speakers: List of speakers to focus on.
+            ignore_speakers: List of speakers to ignore.
+            focus_mode: Focus mode to use.
+        """
+        # Check possible
+        if not self._enable_diarization:
+            raise ValueError("Diarization is not enabled")
+
+        # Update the diarization configuration
+        if focus_speakers is not None:
+            self._focus_speakers = focus_speakers
+        if ignore_speakers is not None:
+            self._ignore_speakers = ignore_speakers
+        if focus_mode is not None:
+            self._focus_mode = focus_mode
+
 
 class SpeechStream(stt.RecognizeStream):
     def __init__(self, stt: STT, conn_options: APIConnectOptions) -> None:
@@ -240,11 +274,6 @@ class SpeechStream(stt.RecognizeStream):
 
         # Reference to STT object
         self._stt = stt
-
-        # Speakers
-        self._focus_speakers: list[str] = stt._focus_speakers.copy()
-        self._ignore_speakers: list[str] = stt._ignore_speakers.copy()
-        self._focus_mode: DiarizationFocusMode = stt._focus_mode
 
         # Session
         self._speech_duration: float = 0
@@ -332,34 +361,6 @@ class SpeechStream(stt.RecognizeStream):
                 await self._client.send_audio(frame.data.tobytes())
 
         # TODO - handle the closing of the stream?
-
-    def update_speakers(
-        self,
-        focus_speakers: list[str] | None = None,
-        ignore_speakers: list[str] | None = None,
-        focus_mode: DiarizationFocusMode | None = None,
-    ) -> None:
-        """Updates the speaker configuration.
-
-        This can update the speakers to listen to or ignore during an in-flight
-        transcription. Only available if diarization is enabled.
-
-        Args:
-            focus_speakers: List of speakers to focus on.
-            ignore_speakers: List of speakers to ignore.
-            focus_mode: Focus mode to use.
-        """
-        # Check possible
-        if not self._enable_diarization:
-            raise ValueError("Diarization is not enabled")
-
-        # Update the diarization configuration
-        if focus_speakers is not None:
-            self._focus_speakers = focus_speakers
-        if ignore_speakers is not None:
-            self._ignore_speakers = ignore_speakers
-        if focus_mode is not None:
-            self._focus_mode = focus_mode
 
     async def send_message(self, message: ClientMessageType | str, **kwargs: Any) -> None:
         """Send a message to the STT service.
@@ -549,8 +550,19 @@ class SpeechStream(stt.RecognizeStream):
                     if re.match(r"^__[A-Z0-9_]{2,}__$", fragment.speaker):
                         continue
 
+                    # Drop speakers not focussed on
+                    if (
+                        self._stt._focus_mode == DiarizationFocusMode.IGNORE
+                        and self._stt._focus_speakers
+                        and fragment.speaker not in self._stt._focus_speakers
+                    ):
+                        continue
+
                     # Drop ignored speakers
-                    if self._ignore_speakers and fragment.speaker in self._ignore_speakers:
+                    if (
+                        self._stt._ignore_speakers
+                        and fragment.speaker in self._stt._ignore_speakers
+                    ):
                         continue
 
                 # Add the fragment
@@ -644,8 +656,8 @@ class SpeechStream(stt.RecognizeStream):
 
         # Determine if the speaker is considered active
         is_active = True
-        if self._stt._enable_diarization and self._focus_speakers:
-            is_active = group[0].speaker in self._focus_speakers
+        if self._stt._enable_diarization and self._stt._focus_speakers:
+            is_active = group[0].speaker in self._stt._focus_speakers
 
         # Return the SpeakerFragments object
         return SpeakerFragments(

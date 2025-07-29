@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
-from livekit.agents.voice.events import CloseReason
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
@@ -606,9 +605,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             allow_interruptions=allow_interruptions,
         )
 
-        self.__inline_mode = False
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
+
+    def done(self) -> bool:
+        return self.__fut.done()
 
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
@@ -621,23 +622,20 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__fut.exception()  # silence exc not retrieved warnings
 
-        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .agent_activity import _SpeechHandleContextVar
 
         speech_handle = _SpeechHandleContextVar.get(None)
-        activity = _AgentActivityContextVar.get()
-        session = activity.session
 
         if speech_handle:
             speech_handle._maybe_run_final_output = result
 
-        if not self.__inline_mode:
-            session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
+        # if not self.__inline_mode:
+        #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
 
     async def __await_impl(self) -> TaskResult_T:
         if self.__started:
             raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
-        self.__inline_mode = True
         self.__started = True
 
         current_task = asyncio.current_task()
@@ -696,6 +694,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         try:
             return await asyncio.shield(self.__fut)
+
         finally:
             # run_state could have changed after self.__fut
             run_state = session._global_run_state
@@ -715,6 +714,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                         self.chat_ctx, exclude_function_call=True, exclude_instructions=True
                     )
                 )
+
                 await session._update_activity(old_agent, new_activity="resume")
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:

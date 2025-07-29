@@ -77,7 +77,7 @@ class TTS(tts.TTS):
             base_url (str, optional): The base URL for the Neuphonic API. Defaults to "api.neuphonic.com".
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=1,
         )
