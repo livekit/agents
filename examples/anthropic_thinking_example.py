@@ -41,13 +41,11 @@ async def main():
     )
 
     # Create a chat context with a complex problem
-    chat_ctx = ChatContext().append(
-        text="You are a helpful math tutor. Think step by step through problems."
-    )
-
-    chat_ctx.append(
-        text="What is the derivative of x^3 + 2x^2 - 5x + 7? Please show your thinking process.",
+    chat_ctx = ChatContext().empty()
+    chat_ctx.add_message(role="system", content="You are a helpful math tutor. Think step by step through problems.")
+    chat_ctx.add_message(
         role="user",
+        content="What is the derivative of x^3 + 2x^2 - 5x + 7? Please show your thinking process.",
     )
 
     print("Question: What is the derivative of x^3 + 2x^2 - 5x + 7?")
@@ -59,8 +57,8 @@ async def main():
         full_response = ""
 
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
+            if chunk.delta and chunk.delta.content:
+                content = chunk.delta.content
                 print(content, end="", flush=True)
                 full_response += content
 
@@ -80,11 +78,12 @@ async def main():
     )
 
     # Ask a reasoning question
-    reasoning_ctx = ChatContext().append(text="You are a logical reasoning assistant.")
+    reasoning_ctx = ChatContext().empty()
+    reasoning_ctx.add_message(role="system", content="You are a logical reasoning assistant.")
 
-    reasoning_ctx.append(
-        text="If all roses are flowers, and some flowers are red, can we conclude that some roses are red? Explain your reasoning.",
+    reasoning_ctx.add_message(
         role="user",
+        content="If all roses are flowers, and some flowers are red, can we conclude that some roses are red? Explain your reasoning.",
     )
 
     print("Question: Logic puzzle about roses and flowers")
@@ -95,8 +94,8 @@ async def main():
         stream = llm_with_typed_thinking.chat(chat_ctx=reasoning_ctx)
 
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
+            if chunk.delta and chunk.delta.content:
+                content = chunk.delta.content
                 print(content, end="", flush=True)
 
         print("\n" + "=" * 50)
@@ -112,9 +111,9 @@ async def main():
         # No thinking configuration
     )
 
-    comparison_ctx = ChatContext().append(text="You are a helpful assistant.")
-
-    comparison_ctx.append(text="What is 127 * 89?", role="user")
+    comparison_ctx = ChatContext().empty()
+    comparison_ctx.add_message(role="system", content="You are a helpful assistant.")
+    comparison_ctx.add_message(role="user", content="What is 127 * 89?")
 
     print("Question: What is 127 * 89?")
     print("Claude's response without thinking:")
@@ -124,8 +123,8 @@ async def main():
         stream = llm_no_thinking.chat(chat_ctx=comparison_ctx)
 
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
+            if chunk.delta and chunk.delta.content:
+                content = chunk.delta.content
                 print(content, end="", flush=True)
 
         print("\n" + "=" * 50)

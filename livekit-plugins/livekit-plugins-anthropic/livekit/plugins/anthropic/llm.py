@@ -38,15 +38,6 @@ from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
 
 
-class ThinkingConfig(TypedDict):
-    """Configuration for Claude's extended thinking feature."""
-
-    type: Literal["enabled"]
-    budget_tokens: int
-
-
-ThinkingConfigDict = dict[str, Any]
-
 
 @dataclass
 class _LLMOptions:
@@ -58,7 +49,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
-    thinking: NotGivenOr[ThinkingConfig | ThinkingConfigDict]
+    thinking: NotGivenOr[anthropic.types.ThinkingConfigParam]
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -77,7 +68,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
-        thinking: NotGivenOr[ThinkingConfig | ThinkingConfigDict] = NOT_GIVEN,
+        thinking: NotGivenOr[anthropic.types.ThinkingConfigParam] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
