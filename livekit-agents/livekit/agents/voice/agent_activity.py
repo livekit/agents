@@ -1976,7 +1976,7 @@ class AgentActivity(RecognitionHooks):
                         forwarded_text = ""
                         playback_position = 0
 
-                    # truncate server-side message if it's an audio message
+                    # truncate server-side message
                     msg_type = msg_gen.message_type
                     if isinstance(msg_type, Awaitable):
                         msg_type = await msg_type
