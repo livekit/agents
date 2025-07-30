@@ -24,15 +24,16 @@ export ULTRAVOX_API_KEY="your_api_key_here"
 
 ```python
 import asyncio
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
 from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
     
-    session = AgentSession(
-        vad=silero.VAD.load(),
+    session: AgentSession[None] = AgentSession(
+        allow_interruptions=True,
+        vad=ctx.proc.userdata["vad"],
         llm=RealtimeModel(
             model_id="fixie-ai/ultravox",
             voice="Mark",
@@ -46,14 +47,18 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
+def prewarm(proc: JobProcess) -> None:
+    proc.userdata["vad"] = silero.VAD.load()
+
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
 ```
 
 ### Voice Assistant with Tools
 
 ```python
-from livekit.agents import function_tool, Agent, AgentSession, JobContext
+from livekit.agents import function_tool, Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
+from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
 @function_tool
@@ -69,8 +74,9 @@ async def book_appointment(date: str, time: str) -> str:
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
     
-    session = AgentSession(
-        vad=silero.VAD.load(),
+    session: AgentSession[None] = AgentSession(
+        allow_interruptions=True,
+        vad=ctx.proc.userdata["vad"],
         llm=RealtimeModel(model_id="fixie-ai/ultravox"),
     )
     
@@ -81,6 +87,12 @@ async def entrypoint(ctx: JobContext):
         ),
         room=ctx.room,
     )
+
+def prewarm(proc: JobProcess) -> None:
+    proc.userdata["vad"] = silero.VAD.load()
+
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
 ```
 
 
