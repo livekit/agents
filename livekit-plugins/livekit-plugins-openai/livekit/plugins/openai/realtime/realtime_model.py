@@ -1140,9 +1140,14 @@ class RealtimeSession(
         self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: Literal["text", "audio"],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        if self._realtime_model.capabilities.audio_output:
+        if message_type == "audio":
             self.send_event(
                 ConversationItemTruncateEvent(
                     type="conversation.item.truncate",

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from opentelemetry import trace
 
 from livekit import rtc
+from livekit.agents.llm.realtime import MessageGeneration
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
@@ -1809,7 +1810,7 @@ class AgentActivity(RecognitionHooks):
         # read text and audio outputs
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
-            outputs: list[tuple[str, _TextOutput | None, _AudioOutput | None]],
+            outputs: list[tuple[MessageGeneration, _TextOutput | None, _AudioOutput | None]],
         ) -> None:
             assert isinstance(self.llm, llm.RealtimeModel)
 
@@ -1828,6 +1829,10 @@ class AgentActivity(RecognitionHooks):
 
                     tts_text_input: AsyncIterable[str] | None = None
                     if msg_type == "text" and self.tts:
+                        if self.llm.capabilities.audio_output:
+                            logger.warning(
+                                "text response received from realtime API, falling back to use a TTS model."
+                            )
                         tee = utils.aio.itertools.tee(msg.text_stream, 2)
                         tts_text_input, tr_text_input = tee
                         tees.append(tee)
@@ -1887,13 +1892,15 @@ class AgentActivity(RecognitionHooks):
                     elif text_out is not None:
                         text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-                    outputs.append((msg.message_id, text_out, audio_out))
+                    outputs.append((msg, text_out, audio_out))
 
                 await asyncio.gather(*forward_tasks)
             finally:
                 await utils.aio.cancel_and_wait(*forward_tasks)
 
-        message_outputs: list[tuple[str, _TextOutput | None, _AudioOutput | None]] = []
+        message_outputs: list[
+            tuple[MessageGeneration, _TextOutput | None, _AudioOutput | None]
+        ] = []
         tasks.append(
             asyncio.create_task(
                 _read_messages(message_outputs),
@@ -1954,7 +1961,7 @@ class AgentActivity(RecognitionHooks):
 
             if len(message_outputs) > 0:
                 # there should be only one message
-                msg_id, text_out, audio_out = message_outputs[0]
+                msg_gen, text_out, audio_out = message_outputs[0]
                 forwarded_text = text_out.text if text_out else ""
                 if audio_output is not None:
                     audio_output.clear_buffer()
@@ -1969,9 +1976,13 @@ class AgentActivity(RecognitionHooks):
                         forwarded_text = ""
                         playback_position = 0
 
-                    # truncate server-side message
+                    # truncate server-side message if it's an audio message
+                    msg_type = msg_gen.message_type
+                    if isinstance(msg_type, Awaitable):
+                        msg_type = await msg_type
                     self._rt_session.truncate(
-                        message_id=msg_id,
+                        message_id=msg_gen.message_id,
+                        message_type=msg_type,
                         audio_end_ms=int(playback_position * 1000),
                         audio_transcript=forwarded_text,
                     )
@@ -1979,7 +1990,10 @@ class AgentActivity(RecognitionHooks):
                 msg: llm.ChatMessage | None = None
                 if forwarded_text:
                     msg = llm.ChatMessage(
-                        role="assistant", content=[forwarded_text], id=msg_id, interrupted=True
+                        role="assistant",
+                        content=[forwarded_text],
+                        id=msg_gen.message_id,
+                        interrupted=True,
                     )
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
@@ -2000,11 +2014,11 @@ class AgentActivity(RecognitionHooks):
 
         if len(message_outputs) > 0:
             # there should be only one message
-            msg_id, text_out, _ = message_outputs[0]
+            msg_gen, text_out, _ = message_outputs[0]
             msg = llm.ChatMessage(
                 role="assistant",
                 content=[text_out.text if text_out else ""],
-                id=msg_id,
+                id=msg_gen.message_id,
                 interrupted=False,
             )
             self._agent._chat_ctx.items.append(msg)

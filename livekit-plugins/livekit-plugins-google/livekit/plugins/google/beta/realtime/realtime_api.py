@@ -8,6 +8,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Literal
 
 from google import genai
 from google.genai import types
@@ -542,7 +543,12 @@ class RealtimeSession(llm.RealtimeSession):
         self.start_user_activity()
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: Literal["text", "audio"],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         logger.warning("truncate is not supported by the Google Realtime API.")
         pass

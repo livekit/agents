@@ -181,7 +181,12 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: MessageType,
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None: ...
 
     @abstractmethod

@@ -1241,7 +1241,12 @@ class RealtimeSession(  # noqa: F811
         logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: Literal["text", "audio"],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 
