@@ -118,7 +118,6 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
-    message_type: asyncio.Future[Literal["text", "audio"]]
 
 
 @dataclass
@@ -592,19 +591,15 @@ class RealtimeSession(  # noqa: F811
                 message_id=self._current_generation.response_id,
                 text_ch=utils.aio.Chan(),
                 audio_ch=utils.aio.Chan(),
-                message_type=asyncio.Future(),
             )
-            if self._realtime_model.capabilities.audio_output:
-                msg_gen.message_type.set_result("audio")
-            else:
-                msg_gen.message_type.set_result("text")
-
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
                     text_stream=msg_gen.text_ch,
                     audio_stream=msg_gen.audio_ch,
-                    message_type=msg_gen.message_type,
+                    message_type="audio"
+                    if self._realtime_model.capabilities.audio_output
+                    else "text",
                 )
             )
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
@@ -767,20 +762,16 @@ class RealtimeSession(  # noqa: F811
                 message_id=self._current_generation.response_id,
                 text_ch=utils.aio.Chan(),
                 audio_ch=utils.aio.Chan(),
-                message_type=asyncio.Future(),
             )
-            if self._realtime_model.capabilities.audio_output:
-                msg_gen.message_type.set_result("audio")
-            else:
-                msg_gen.message_type.set_result("text")
-
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
                     text_stream=msg_gen.text_ch,
                     audio_stream=msg_gen.audio_ch,
-                    message_type=msg_gen.message_type,
+                    message_type="audio"
+                    if self._realtime_model.capabilities.audio_output
+                    else "text",
                 )
             )
             self.emit_generation_event()

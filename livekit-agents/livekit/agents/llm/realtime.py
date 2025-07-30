@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
@@ -26,12 +26,15 @@ class InputSpeechStoppedEvent:
     user_transcription_enabled: bool
 
 
+MessageType = Literal["text", "audio"]
+
+
 @dataclass
 class MessageGeneration:
     message_id: str
     text_stream: AsyncIterable[str]  # could be io.TimedString
     audio_stream: AsyncIterable[rtc.AudioFrame]
-    message_type: asyncio.Future[Literal["text", "audio"]]
+    message_type: MessageType | Awaitable[MessageType]
 
 
 @dataclass

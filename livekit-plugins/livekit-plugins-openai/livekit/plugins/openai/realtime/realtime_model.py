@@ -760,10 +760,6 @@ class RealtimeSession(
                         self._handle_conversion_item_input_audio_transcription_failed(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
-                    # elif event["type"] == "response.content_part.done":
-                    #     self._handle_response_content_part_done(
-                    #         ResponseContentPartDoneEvent.construct(**event)
-                    #     )
                     elif event["type"] == "response.text.delta":
                         self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
                     elif event["type"] == "response.text.done":
@@ -1273,20 +1269,6 @@ class RealtimeSession(
         with contextlib.suppress(asyncio.InvalidStateError):
             self._current_generation.messages[item_id].message_type.set_result(item_type)
 
-    # def _handle_response_content_part_done(self, event: ResponseContentPartDoneEvent) -> None:
-    #     if event.part.type == "text" and self._realtime_model.capabilities.audio_output:
-    #         logger.error(
-    #             "Text response received from OpenAI Realtime API in audio modality. "
-    #             "This usually happens when text chat context is synced to the API. "
-    #             "Try to use text modality with TTS instead."
-    #         )
-    #         self._emit_error(
-    #             llm.RealtimeError(
-    #                 "Text response received from OpenAI Realtime API in audio modality."
-    #             ),
-    #             recoverable=False,
-    #         )
-
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
 
@@ -1365,6 +1347,9 @@ class RealtimeSession(
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+
+        if not item_generation.message_type.done():
+            item_generation.message_type.set_result("audio")
 
         data = base64.b64decode(event.delta)
         item_generation.audio_ch.send_nowait(

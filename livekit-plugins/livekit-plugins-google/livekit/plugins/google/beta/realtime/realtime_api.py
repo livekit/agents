@@ -8,7 +8,6 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
 
 from google import genai
 from google.genai import types
@@ -82,7 +81,6 @@ class _RealtimeOptions:
 class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
-    message_type: asyncio.Future[Literal["text", "audio"]]
 
     input_id: str
     response_id: str
@@ -792,7 +790,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
-            message_type=asyncio.Future(),
             response_id=response_id,
             input_id=utils.shortuuid("GI_"),
             text_ch=utils.aio.Chan[str](),
@@ -801,16 +798,13 @@ class RealtimeSession(llm.RealtimeSession):
         )
         if not self._realtime_model.capabilities.audio_output:
             self._current_generation.audio_ch.close()
-            self._current_generation.message_type.set_result("text")
-        else:
-            self._current_generation.message_type.set_result("audio")
 
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
                 text_stream=self._current_generation.text_ch,
                 audio_stream=self._current_generation.audio_ch,
-                message_type=self._current_generation.message_type,
+                message_type="audio" if self._realtime_model.capabilities.audio_output else "text",
             )
         )
 

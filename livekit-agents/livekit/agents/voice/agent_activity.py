@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Awaitable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
@@ -1822,7 +1822,10 @@ class AgentActivity(RecognitionHooks):
                         )
                         break
 
-                    msg_type = await msg.message_type
+                    msg_type = msg.message_type
+                    if isinstance(msg_type, Awaitable):
+                        msg_type = await msg_type
+
                     tts_text_input: AsyncIterable[str] | None = None
                     if msg_type == "text" and self.tts:
                         tee = utils.aio.itertools.tee(msg.text_stream, 2)
