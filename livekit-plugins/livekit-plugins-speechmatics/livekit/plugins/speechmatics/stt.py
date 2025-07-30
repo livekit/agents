@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import datetime
+import logging
 import os
 import re
 from typing import Any
@@ -48,6 +49,7 @@ from speechmatics.rt import (
 from .log import logger
 from .types import (
     AdditionalVocabEntry,
+    AudioSettings,
     DiarizationFocusMode,
     DiarizationKnownSpeaker,
     EndOfUtteranceMode,
@@ -74,6 +76,7 @@ class STT(stt.STT):
         end_of_utterance_silence_trigger: float = 0.5,
         end_of_utterance_mode: EndOfUtteranceMode = EndOfUtteranceMode.FIXED,
         additional_vocab: list[AdditionalVocabEntry] | None = None,
+        punctuation_overrides: dict | None = None,
         diarization_sensitivity: float = 0.5,
         speaker_active_format: str = "{text}",
         speaker_passive_format: str = "{text}",
@@ -85,6 +88,8 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         chunk_size: int = 160,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
+        transcription_config: TranscriptionConfig | None = None,  # Deprecated
+        audio_settings: AudioSettings | None = None,  # Deprecated
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
@@ -93,6 +98,31 @@ class STT(stt.STT):
                 interim_results=True,
             ),
         )
+
+        # Parse deprecated `transcription_config`
+        if transcription_config:
+            logger.warning(
+                "`transcription_config` is deprecated. Use individual arguments instead (which override this argument)."
+            )
+            language = language or transcription_config.language
+            output_locale = output_locale or transcription_config.output_locale
+            domain = domain or transcription_config.domain
+            operating_point = operating_point or transcription_config.operating_point
+            enable_diarization = enable_diarization or transcription_config.diarization == "speaker"
+            enable_partials = enable_partials or transcription_config.enable_partials
+            max_delay = max_delay or transcription_config.max_delay
+            additional_vocab = additional_vocab or transcription_config.additional_vocab
+            punctuation_overrides = (
+                punctuation_overrides or transcription_config.punctuation_overrides
+            )
+
+        # Parse deprecated `audio_settings`
+        if audio_settings:
+            logger.warning(
+                "`audio_settings` is deprecated. Use individual arguments instead (which override this argument)."
+            )
+            sample_rate = sample_rate or audio_settings.sample_rate
+            audio_encoding = audio_encoding or audio_settings.encoding
 
         # Service parameters
         self._api_key: str = api_key or os.getenv("SPEECHMATICS_API_KEY")
@@ -116,6 +146,7 @@ class STT(stt.STT):
         self._end_of_utterance_silence_trigger: float = end_of_utterance_silence_trigger
         self._end_of_utterance_mode: EndOfUtteranceMode = end_of_utterance_mode
         self._additional_vocab: list[AdditionalVocabEntry] = additional_vocab or []
+        self._punctuation_overrides: dict | None = punctuation_overrides
 
         # Diarization
         self._diarization_sensitivity: float = diarization_sensitivity
@@ -154,6 +185,9 @@ class STT(stt.STT):
 
         # HTTP session
         self._http_session: aiohttp.ClientSession | None = http_session
+
+        # Lower logging of the SMX module
+        logging.getLogger("speechmatics.rt.transport").setLevel(logging.WARNING)
 
     async def _recognize_impl(
         self,
@@ -235,6 +269,10 @@ class STT(stt.STT):
             transcription_config.conversation_config = ConversationConfig(
                 end_of_utterance_silence_trigger=self._end_of_utterance_silence_trigger,
             )
+
+        # Punctuation overrides
+        if self._punctuation_overrides:
+            transcription_config.punctuation_overrides = self._punctuation_overrides
 
         # Set config
         self._transcription_config = transcription_config
@@ -324,7 +362,7 @@ class SpeechStream(stt.RecognizeStream):
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)
             def _evt_on_end_of_utterance(message: dict[str, Any]):
                 logger.debug("End of utterance received from STT")
-                asyncio.create_task(self._send_frames(finalized=True))
+                asyncio.create_task(self._handle_end_of_utterance())
 
         # Speaker Result
         if self._stt._enable_diarization:

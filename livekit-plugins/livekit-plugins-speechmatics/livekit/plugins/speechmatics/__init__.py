@@ -18,9 +18,11 @@ See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more infor
 from .stt import STT, SpeechStream
 from .types import (
     AdditionalVocabEntry,
+    AudioSettings,
     DiarizationFocusMode,
     DiarizationKnownSpeaker,
     EndOfUtteranceMode,
+    TranscriptionConfig,
 )
 from .version import __version__
 
@@ -28,9 +30,11 @@ __all__ = [
     "STT",
     "SpeechStream",
     "AdditionalVocabEntry",
-    "EndOfUtteranceMode",
+    "AudioSettings",
     "DiarizationFocusMode",
     "DiarizationKnownSpeaker",
+    "EndOfUtteranceMode",
+    "TranscriptionConfig",
     "logger",
     "__version__",
 ]

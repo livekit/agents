@@ -2,6 +2,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from speechmatics.rt import TranscriptionConfig
+
+__all__ = ["TranscriptionConfig"]
+
 
 class EndOfUtteranceMode(str, Enum):
     """End of turn delay options for transcription."""
@@ -144,3 +148,15 @@ class SpeakerFragments:
             "start_time": self.timestamp,
             "confidence": 1.0,
         }
+
+
+@dataclass
+class AudioSettings:
+    """Real-time: Defines audio parameters."""
+
+    encoding: str = "pcm_s16le"
+    """Encoding format when raw audio is used. Allowed values are
+    `pcm_f32le`, `pcm_s16le` and `mulaw`."""
+
+    sample_rate: int = 16000
+    """Sampling rate in hertz."""
