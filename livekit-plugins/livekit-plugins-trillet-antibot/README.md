@@ -1,16 +1,6 @@
-# Trillet Voiceguard Plugin
+# Trillet Antibot Plugin
 
-A real-time AI voice detection plugin for LiveKit that identifies synthetic/fake voices during voice calls. This plugin analyzes audio streams during the first 30 seconds of calls and can automatically terminate calls when fake voices are detected.
-
-## Features
-
-- 🎯 **Real-time Voice Detection**: Analyzes audio streams in real-time using AI voice detection
-- 🔊 **Audio Processing**: Converts audio to optimal format (16-bit PCM, Mono, 16kHz)
-- ⚡ **WebSocket Integration**: Streams audio data to Trillet Voiceguard service via WebSocket
-- 🛡️ **Automatic Call Protection**: Optionally terminates calls when fake voices are detected
-- 📊 **Comprehensive Reporting**: Provides detailed analysis results and summaries
-- 🎚️ **Configurable Parameters**: Customizable detection parameters and thresholds
-- 💾 **Audio Recording**: Optional audio recording for archival purposes
+A real-time AI voice detection plugin for LiveKit that identifies synthetic/fake voices during voice calls. This plugin analyzes audio streams during the calls and can automatically terminate calls when fake voices are detected.
 
 ## Installation
 
@@ -278,25 +268,6 @@ The final summary includes:
     "fake_percentage": 70.0,
     "average_fake_confidence": 0.78,
     "average_real_confidence": 0.22,
-    # Audio contribution info (if save_audio_to_s3=True)
-    "audio_upload": {
-        "success": True,
-        "filename": "voiceguard_audio_room1_20240126_143022.wav",
-        "uploaded_at": "20240126_143022",
-        "file_size": 960000
-    }
-}
-```
-
-### Audio Data Contribution Status
-When `save_audio_to_s3=True`, your contribution status contains:
-```python
-{
-    "success": True,  # or False if contribution failed
-    "filename": "voiceguard_audio_roomname_timestamp.wav", 
-    "uploaded_at": "20240126_143022",
-    "file_size": 960000,
-    "error": "Error message if success=False"
 }
 ```
 
@@ -327,13 +298,6 @@ The plugin automatically handles audio format conversion:
 - **Participants**: Processes audio from remote participants (incoming audio)
 - **Model Contribution**: When enabled, records WAV files (16-bit PCM, Mono, 16kHz) to help improve AI accuracy
 
-## WebSocket Connection
-
-The plugin connects to the Trillet Voiceguard service via WebSocket:
-- **URL**: `wss://p01--trillet-voice-guard-dev--j629vb9mq7pk.ccvhxjx8pb.code.run/trillet-voiceguard/ws/detect`
-- **Protocol**: Binary audio data in, JSON responses out
-- **Auto-reconnection**: Not implemented (single-session design)
-
 ## Logging
 
 The plugin provides detailed logging at various levels:
@@ -351,64 +315,7 @@ The plugin provides detailed logging at various levels:
 5. **Model Improvement**: Consider enabling `save_audio_to_s3=True` to contribute to model enhancement
 6. **Privacy Compliance**: When contributing audio data, ensure you have appropriate consent and comply with privacy regulations
 
-## Troubleshooting
-
-### Common Issues
-
-#### WebSocket Connection Failures
-```
-ERROR: Failed to connect to Voiceguard websocket
-```
-- Check your API key is valid
-- Verify network connectivity
-- Ensure the service is available
-
-#### No Audio Data
-```
-WARNING: No audio data being processed
-```
-- Ensure participants are speaking
-- Check that audio tracks are being received
-- Verify room has remote participants
-
-#### High False Positives
-- Increase `confidence_threshold` parameter
-- Consider using longer `segment_length` for more stable results
-
-#### Detection Not Running
-- Ensure `start_streaming()` was called
-- Check logs for connection errors
-- Verify `duration_seconds` hasn't expired
-
-#### Audio Data Contribution Issues
-```
-ERROR: Error contributing audio data
-```
-- Check your API key has contribution permissions
-- Verify network connectivity  
-- Check server logs for detailed error information
-
-#### Audio Contribution Not Working
-- Ensure `save_audio_to_s3=True` is set
-- Check that audio data is being received from participants
-- Verify the room has active audio streams
-
-## Requirements
-
-- Python 3.8+
-- LiveKit Python SDK
-- WebSocket support (websockets >= 11.0)
-- NumPy (for audio processing)
-- aiohttp (for S3 upload functionality)
-- Wave support (built-in Python module)
-
-## License
-
-[Your license information here]
-
 ## Support
 
 For support and questions:
-- Email: [Your support email]
-- Documentation: [Your documentation URL]
-- Issues: [Your issue tracker URL]
+- Email: support@trillet.ai
