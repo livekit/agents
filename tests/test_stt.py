@@ -21,6 +21,7 @@ from livekit.plugins import (
     silero,
     speechmatics,
     spitch,
+    reverie
 )
 
 from .utils import make_test_speech, wer
@@ -87,6 +88,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: azure.STT(), id="azure"),
     pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
     pytest.param(lambda: spitch.STT(), id="spitch"),
+    pytest.param(lambda: reverie.STT(), id="reverie"),
 ]
 
 

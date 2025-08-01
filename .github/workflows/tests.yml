@@ -14,7 +14,6 @@ permissions:
   actions: write
 
 jobs:
-
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -36,16 +35,16 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: uv run pytest tests/test_agent_session.py
-                  tests/test_tts_fallback.py
-                  tests/test_stt_fallback.py
-                  tests/test_aio.py
-                  tests/test_chat_ctx.py
-                  tests/test_config.py
-                  tests/test_schema_gemini.py
-                  tests/test_tokenizer.py
-                  tests/test_workflows.py
-                  tests/test_evals.py
-                  tests/test_transcription_filter.py
+          tests/test_tts_fallback.py
+          tests/test_stt_fallback.py
+          tests/test_aio.py
+          tests/test_chat_ctx.py
+          tests/test_config.py
+          tests/test_schema_gemini.py
+          tests/test_tokenizer.py
+          tests/test_workflows.py
+          tests/test_evals.py
+          tests/test_transcription_filter.py
 
   tests:
     # don't run tests for PRs on forks
@@ -53,7 +52,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, openai, rime, speechify, hume, inworld]
+        plugin:
+          [
+            cartesia,
+            aws,
+            azure,
+            deepgram,
+            elevenlabs,
+            google,
+            groq,
+            openai,
+            rime,
+            speechify,
+            hume,
+            inworld,
+            reverie,
+          ]
 
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}
@@ -100,6 +114,8 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+          REVERIE_API_KEY: ${{ secrets.REVERIE_API_KEY }}
+          REVERIE_APP_ID: ${{ secrets.REVERIE_APP_ID }}
         working-directory: tests
         run: make test
 
@@ -110,8 +126,7 @@ jobs:
           name: lk-dump-${{ matrix.plugin }}
           path: lk_dump/**
           if-no-files-found: ignore
-          retention-days: 1 
-
+          retention-days: 1
 
   aggregate-dumps:
     if: always()

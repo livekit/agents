@@ -14,9 +14,7 @@
 
 """Reverie plugin for LiveKit Agents
 
-Support for speech-to-text with [Reverie](https://reverieinc.com/).
-
-See https://docs.livekit.io/agents/integrations/stt/reverie/ for more information.
+Support for speech-to-text with [Reverie APIs](https://docs.reverieinc.com/usage-guides/speech-to-text-streaming/getting-started).
 """
 
 from .stt import STT, SpeechStream
