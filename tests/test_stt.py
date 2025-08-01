@@ -18,10 +18,10 @@ from livekit.plugins import (
     fal,
     google,
     openai,
+    reverie,
     silero,
     speechmatics,
     spitch,
-    reverie
 )
 
 from .utils import make_test_speech, wer
