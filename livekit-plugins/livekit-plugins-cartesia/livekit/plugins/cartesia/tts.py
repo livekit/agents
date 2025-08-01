@@ -27,6 +27,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -277,7 +278,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._sent_tokenizer_stream = tts._sentence_tokenizer.stream()
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -290,10 +290,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
+        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             context_id = utils.shortuuid()
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
-            async for ev in self._sent_tokenizer_stream:
+            async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = context_id
                 token_pkt["transcript"] = ev.token + " "
@@ -310,12 +312,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    sent_tokenizer_stream.flush()
                     continue
 
-                self._sent_tokenizer_stream.push_text(data)
+                sent_tokenizer_stream.push_text(data)
 
-            self._sent_tokenizer_stream.end_input()
+            sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_segment_id: str | None = None
@@ -335,6 +337,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
+                if data.get("type") == "error":
+                    raise APIError(f"Cartesia returned error: {data}")
+
                 segment_id = data.get("context_id")
                 if current_segment_id is None:
                     current_segment_id = segment_id

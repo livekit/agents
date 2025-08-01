@@ -382,6 +382,7 @@ class AgentActivity(RecognitionHooks):
                     context=trace.set_span_in_context(start_span),
                     attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
                 )
+                @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
                     await self._agent.on_enter()
 
@@ -495,6 +496,7 @@ class AgentActivity(RecognitionHooks):
         @tracer.start_as_current_span(
             "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
         )
+        @utils.log_exceptions(logger=logger)
         async def _traceable_on_exit() -> None:
             await self._agent.on_exit()
 
@@ -505,6 +507,8 @@ class AgentActivity(RecognitionHooks):
             _set_activity_task_info(task, inline_task=False)
 
             self._cancel_preemptive_generation()
+
+            await self._on_exit_task
             await self._pause_scheduling_task()
 
     async def _pause_scheduling_task(
@@ -1148,6 +1152,13 @@ class AgentActivity(RecognitionHooks):
             # is detected. So the previous execution should complete quickly.
             await old_task
 
+        if self._scheduling_paused:
+            logger.warning(
+                "skipping reply to user input, speech scheduling is paused",
+                extra={"user_input": info.new_transcript},
+            )
+            return
+
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
@@ -1283,6 +1294,7 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
+        speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             return
@@ -1379,12 +1391,12 @@ class AgentActivity(RecognitionHooks):
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
 
-            msg = self._agent._chat_ctx.add_message(
-                role="assistant",
-                content=forwarded_text,
-                interrupted=speech_handle.interrupted,
-            )
+            msg: llm.ChatMessage | None = None
             if forwarded_text:
+                msg = self._agent._chat_ctx.add_message(
+                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
+                )
+
                 speech_handle._chat_items.append(msg)
                 self._session._conversation_item_added(msg)
 
@@ -1486,6 +1498,7 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
+        speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -1952,13 +1965,12 @@ class AgentActivity(RecognitionHooks):
                         audio_end_ms=int(playback_position * 1000),
                         audio_transcript=forwarded_text,
                     )
-                msg = llm.ChatMessage(
-                    role="assistant",
-                    content=[forwarded_text],
-                    id=msg_id,
-                    interrupted=True,
-                )
+
+                msg: llm.ChatMessage | None = None
                 if forwarded_text:
+                    msg = llm.ChatMessage(
+                        role="assistant", content=[forwarded_text], id=msg_id, interrupted=True
+                    )
                     self._agent._chat_ctx.items.append(msg)
                     speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)

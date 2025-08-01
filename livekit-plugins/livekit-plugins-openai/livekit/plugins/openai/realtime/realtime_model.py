@@ -316,6 +316,7 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         base_url: str | None = None,
         voice: str = "alloy",
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
@@ -335,6 +336,7 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
             base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            modalities (list[Literal["text", "audio"]], optional): Modalities to use for the session. Defaults to ["text", "audio"].
             input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
             input_audio_noise_reduction (InputAudioNoiseReduction or None, optional): Options for input audio noise reduction. `near_field` is for close-talking microphones such as headphones, `far_field` is for far-field microphones such as laptop or conference room microphones. Defaults to None.
             turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
@@ -382,6 +384,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         return cls(
             voice=voice,
+            modalities=modalities,
             input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
