@@ -1,6 +1,4 @@
-import os
 import logging
-from pathlib import Path
 from dotenv import load_dotenv
 
 from mem0 import AsyncMemoryClient
@@ -21,6 +19,7 @@ from livekit.plugins.turn_detector.english import EnglishModel
 # Load environment variables
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
 # User ID for RAG data in Mem0
 RAG_USER_ID = "livekit-mem0"
