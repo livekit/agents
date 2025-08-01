@@ -58,7 +58,8 @@ class AvatarSession:
     def __init__(
         self,
         *,
-        mode: NotGivenOr[Literal["local", "cloud_gpu", "cloud_cpu", "cloud"]] = "local",
+        # avatar options, cloud_expression for cloud gpu usage, cloud_essence for cloud cpu usage and local for local cpu usage
+        mode: NotGivenOr[Literal["local", "cloud_expression", "cloud_essence"]] = "local",
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
@@ -80,7 +81,7 @@ class AvatarSession:
 
         # set default mode based on avatar image presence
         self._mode = (
-            mode if utils.is_given(mode) else "cloud" if utils.is_given(avatar_image) else "local"
+            mode if utils.is_given(mode) else "cloud_expression" if utils.is_given(avatar_image) else "local"
         )
 
         # validate mode-specific requirements
@@ -93,7 +94,7 @@ class AvatarSession:
                 raise BitHumanException(
                     "BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN are required for local mode"
                 )
-        elif self._mode == "cloud_gpu" or self._mode == "cloud_cpu" or self._mode == "cloud":
+        elif self._mode == "cloud_expression" or self._mode == "cloud_essence":
             if not utils.is_given(avatar_image) and not utils.is_given(avatar_id):
                 raise BitHumanException("`avatar_image` or `avatar_id` must be set for cloud mode")
             if self._api_secret is None:
@@ -128,7 +129,7 @@ class AvatarSession:
     ) -> None:
         if self._mode == "local":
             await self._start_local(agent_session, room)
-        elif self._mode == "cloud_gpu" or self._mode == "cloud_cpu" or self._mode == "cloud":
+        elif self._mode == "cloud_expression" or self._mode == "cloud_essence":
             await self._start_cloud(
                 agent_session,
                 room,
@@ -202,8 +203,6 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        from bithuman.lib.generator import BithumanGenerator as LibBithumanGenerator
-        self.__fingerprint = LibBithumanGenerator().fingerprint
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -224,8 +223,7 @@ class AvatarSession:
                 ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
                 "agent_id": self._avatar_id,
                 "image": self._avatar_image,
-                "api_secret": self._api_secret,
-                "fingerprint": self.__fingerprint,
+                "api_secret": self._api_secret
             })
             .to_jwt()
         )
@@ -252,8 +250,7 @@ class AvatarSession:
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
             "room_name": room_name,
-            "fingerprint": self.__fingerprint,
-            "mode": "gpu" if self._mode == 'cloud_gpu' else "cpu",
+            "mode": "gpu" if self._mode == 'cloud_expression' else "cpu",
         }
 
         # Handle avatar image
