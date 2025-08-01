@@ -152,33 +152,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        # Reverie doesn't support batch transcription, only streaming
-        # For batch processing, we'll create a temporary stream
-        stream = self.stream(language=language, conn_options=conn_options)
-
-        try:
-            # Send all audio frames
-            for frame in buffer:
-                stream.push_frame(frame)
-
-            stream.flush()
-
-            # Wait for final result
-            final_event = None
-            async for event in stream:
-                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                    final_event = event
-                    break
-
-            if final_event is None:
-                return stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[],
-                )
-
-            return final_event
-        finally:
-            await stream.aclose()
+        raise NotImplementedError("Azure STT does not support single frame recognition")
 
     def stream(
         self,
