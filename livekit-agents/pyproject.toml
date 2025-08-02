@@ -91,6 +91,7 @@ inworld = ["livekit-plugins-inworld>=1.2.2"]
 hedra = ["livekit-plugins-hedra>=1.2.2"]
 anam = ["livekit-plugins-anam>=1.2.2"]
 simli = ["livekit-plugins-simli>=1.2.2"]
+reverie = ["livekit-plugins-reverie>=1.2.2"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
