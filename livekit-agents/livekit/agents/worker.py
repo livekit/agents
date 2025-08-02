@@ -139,7 +139,8 @@ class _WorkerEnvOption(Generic[T]):
         if isinstance(opt, _WorkerEnvOption):
             return opt.dev_default if devmode else opt.prod_default
         return opt
-    
+
+
 _default_load_threshold = _WorkerEnvOption(dev_default=math.inf, prod_default=0.7)
 
 
@@ -280,10 +281,14 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         if opts._worker_token:
             if opts.load_fnc != _DefaultLoadCalc.get_load:
-                logger.warning("custom load_fnc is not supported when hosting on Cloud, reverting to default")
+                logger.warning(
+                    "custom load_fnc is not supported when hosting on Cloud, reverting to default"
+                )
                 opts.load_fnc = _DefaultLoadCalc.get_load
             if opts.load_threshold != _default_load_threshold:
-                logger.warning("custom load_threshold is not supported when hosting on Cloud, reverting to default")
+                logger.warning(
+                    "custom load_threshold is not supported when hosting on Cloud, reverting to default"
+                )
                 opts.load_threshold = _default_load_threshold
 
         self._opts = opts
