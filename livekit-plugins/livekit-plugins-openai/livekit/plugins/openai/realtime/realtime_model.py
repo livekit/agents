@@ -53,7 +53,7 @@ from openai.types.beta.realtime import (
     ResponseAudioDoneEvent,
     ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
-    ResponseContentPartDoneEvent,
+    ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
     ResponseCreateEvent,
     ResponseDoneEvent,
@@ -125,6 +125,7 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
+    message_type: asyncio.Future[Literal["text", "audio"]]
     audio_transcript: str = ""
 
 
@@ -739,6 +740,10 @@ class RealtimeSession(
                         self._handle_response_output_item_added(
                             ResponseOutputItemAddedEvent.construct(**event)
                         )
+                    elif event["type"] == "response.content_part.added":
+                        self._handle_response_content_part_added(
+                            ResponseContentPartAddedEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.created":
                         self._handle_conversion_item_created(
                             ConversationItemCreatedEvent.construct(**event)
@@ -754,10 +759,6 @@ class RealtimeSession(
                     elif event["type"] == "conversation.item.input_audio_transcription.failed":
                         self._handle_conversion_item_input_audio_transcription_failed(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
-                        )
-                    elif event["type"] == "response.content_part.done":
-                        self._handle_response_content_part_done(
-                            ResponseContentPartDoneEvent.construct(**event)
                         )
                     elif event["type"] == "response.text.delta":
                         self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
@@ -1139,9 +1140,14 @@ class RealtimeSession(
         self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: Literal["text", "audio"],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        if self._realtime_model.capabilities.audio_output:
+        if message_type == "audio":
             self.send_event(
                 ConversationItemTruncateEvent(
                     type="conversation.item.truncate",
@@ -1241,32 +1247,32 @@ class RealtimeSession(
                 message_id=item_id,
                 text_ch=utils.aio.Chan(),
                 audio_ch=utils.aio.Chan(),
+                message_type=asyncio.Future(),
             )
             if not self._realtime_model.capabilities.audio_output:
                 item_generation.audio_ch.close()
+                item_generation.message_type.set_result("text")
 
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=item_id,
                     text_stream=item_generation.text_ch,
                     audio_stream=item_generation.audio_ch,
+                    message_type=item_generation.message_type,
                 )
             )
             self._current_generation.messages[item_id] = item_generation
 
-    def _handle_response_content_part_done(self, event: ResponseContentPartDoneEvent) -> None:
-        if event.part.type == "text" and self._realtime_model.capabilities.audio_output:
-            logger.error(
-                "Text response received from OpenAI Realtime API in audio modality. "
-                "This usually happens when text chat context is synced to the API. "
-                "Try to use text modality with TTS instead."
-            )
-            self._emit_error(
-                llm.RealtimeError(
-                    "Text response received from OpenAI Realtime API in audio modality."
-                ),
-                recoverable=False,
-            )
+    def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        assert (item_id := event.item_id) is not None, "item_id is None"
+        assert (item_type := event.part.type) is not None, "part.type is None"
+
+        if item_type == "text" and self._realtime_model.capabilities.audio_output:
+            logger.warning("Text response received from OpenAI Realtime API in audio modality.")
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._current_generation.messages[item_id].message_type.set_result(item_type)
 
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
@@ -1347,6 +1353,9 @@ class RealtimeSession(
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
 
+        if not item_generation.message_type.done():
+            item_generation.message_type.set_result("audio")
+
         data = base64.b64decode(event.delta)
         item_generation.audio_ch.send_nowait(
             rtc.AudioFrame(
@@ -1385,6 +1394,10 @@ class RealtimeSession(
             item_generation = self._current_generation.messages[item_id]
             item_generation.text_ch.close()
             item_generation.audio_ch.close()
+            if not item_generation.message_type.done():
+                item_generation.message_type.set_result(
+                    "audio" if self._realtime_model.capabilities.audio_output else "text"
+                )
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         if self._current_generation is None:
@@ -1401,6 +1414,10 @@ class RealtimeSession(
                 generation.text_ch.close()
             if not generation.audio_ch.closed:
                 generation.audio_ch.close()
+            if not generation.message_type.done():
+                generation.message_type.set_result(
+                    "audio" if self._realtime_model.capabilities.audio_output else "text"
+                )
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()

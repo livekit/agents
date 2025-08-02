@@ -597,6 +597,9 @@ class RealtimeSession(  # noqa: F811
                     message_id=msg_gen.message_id,
                     text_stream=msg_gen.text_ch,
                     audio_stream=msg_gen.audio_ch,
+                    message_type="audio"
+                    if self._realtime_model.capabilities.audio_output
+                    else "text",
                 )
             )
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
@@ -766,6 +769,9 @@ class RealtimeSession(  # noqa: F811
                     message_id=msg_gen.message_id,
                     text_stream=msg_gen.text_ch,
                     audio_stream=msg_gen.audio_ch,
+                    message_type="audio"
+                    if self._realtime_model.capabilities.audio_output
+                    else "text",
                 )
             )
             self.emit_generation_event()
@@ -1235,7 +1241,12 @@ class RealtimeSession(  # noqa: F811
         logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: Literal["text", "audio"],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
@@ -26,11 +26,15 @@ class InputSpeechStoppedEvent:
     user_transcription_enabled: bool
 
 
+MessageType = Literal["text", "audio"]
+
+
 @dataclass
 class MessageGeneration:
     message_id: str
     text_stream: AsyncIterable[str]  # could be io.TimedString
     audio_stream: AsyncIterable[rtc.AudioFrame]
+    message_type: MessageType | Awaitable[MessageType]
 
 
 @dataclass
@@ -177,7 +181,12 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        message_type: MessageType,
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None: ...
 
     @abstractmethod
