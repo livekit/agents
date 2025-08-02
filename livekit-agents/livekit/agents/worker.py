@@ -141,6 +141,9 @@ class _WorkerEnvOption(Generic[T]):
         return opt
 
 
+_default_load_threshold = _WorkerEnvOption(dev_default=math.inf, prod_default=0.7)
+
+
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
@@ -156,12 +159,10 @@ class WorkerOptions:
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
-    load_threshold: float | _WorkerEnvOption[float] = _WorkerEnvOption(
-        dev_default=math.inf, prod_default=0.75
-    )
+    load_threshold: float | _WorkerEnvOption[float] = _default_load_threshold
     """When the load exceeds this threshold, the worker will be marked as unavailable.
 
-    Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
+    Defaults to 0.7 on "production" mode, and is disabled in "development" mode.
     """
 
     job_memory_warn_mb: float = 500
@@ -277,6 +278,18 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         if not is_given(opts.http_proxy):
             opts.http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
+        if opts._worker_token:
+            if opts.load_fnc != _DefaultLoadCalc.get_load:
+                logger.warning(
+                    "custom load_fnc is not supported when hosting on Cloud, reverting to default"
+                )
+                opts.load_fnc = _DefaultLoadCalc.get_load
+            if opts.load_threshold != _default_load_threshold:
+                logger.warning(
+                    "custom load_threshold is not supported when hosting on Cloud, reverting to default"
+                )
+                opts.load_threshold = _default_load_threshold
 
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
