@@ -95,6 +95,8 @@ class RoomOutputOptions:
     audio_publish_options: rtc.TrackPublishOptions = field(
         default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
+    audio_track_name: NotGivenOr[str] = NOT_GIVEN
+    """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
@@ -190,6 +192,9 @@ class RoomIO:
                 sample_rate=self._output_options.audio_sample_rate,
                 num_channels=self._output_options.audio_num_channels,
                 track_publish_options=self._output_options.audio_publish_options,
+                track_name=self._output_options.audio_track_name
+                if utils.is_given(self._output_options.audio_track_name)
+                else "roomio_audio",
             )
 
         if self._output_options.transcription_enabled or not utils.is_given(
