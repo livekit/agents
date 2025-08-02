@@ -454,6 +454,6 @@ if __name__ == "__main__":
             request_fnc=request_fnc,
             # paired with the right frontend, it should be dispatching the agent explicitly
             # leaving it commented out to allow you testing with agent-starter-react
-            # agent_name="translator",
+            agent_name="translator",
         )
     )
