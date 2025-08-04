@@ -70,6 +70,52 @@ class AvatarSession:
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """
+        Initialize a BitHuman avatar session.
+
+        Args:
+            api_url: The BitHuman API URL.
+            api_secret: The BitHuman API secret.
+            api_token: The BitHuman API token.
+            model: The BitHuman model to use.
+            model_path: The path to the BitHuman model.
+            runtime: The BitHuman runtime to use.
+            avatar_image: The avatar image to use.
+            avatar_id: The avatar ID to use.
+            conn_options: The connection options to use.
+            avatar_participant_identity: The avatar participant identity to use.
+            avatar_participant_name: The avatar participant name to use.
+
+        Model Types:
+            BitHuman supports two model types with different capabilities:
+
+            - **expression**: Provides dynamic real-time facial expressions and emotional responses.
+              This model can generate live emotional expressions based on the content and context,
+              offering more natural and interactive avatar behavior.
+
+            - **essence**: Uses predefined actions and expressions. This model provides consistent
+              and predictable avatar behavior with pre-configured gestures and expressions.
+
+        Parameter Combinations:
+            The following parameter combinations determine the avatar mode and behavior:
+
+            1. **Local Mode (model_path provided)**:
+               - `model_path`: Loads the BitHuman SDK locally for processing
+               - Works with both expression and essence models
+               - Requires BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN
+
+            2. **Cloud Mode with avatar_image**:
+               - `avatar_image`: Custom avatar image for personalization
+               - `model`: Defaults to "expression" for dynamic emotional expressions
+               - Provides real-time expression generation based on the custom image
+
+            3. **Cloud Mode with avatar_id**:
+               - `avatar_id`: Pre-configured avatar identifier
+               - `model`: Defaults to "essence" if not specified, but can be set to either:
+                 * "expression" for dynamic emotional responses
+                 * "essence" for predefined actions and expressions
+               - Allows flexibility in choosing the interaction style
+        """
         self._api_url = (
             api_url
             or os.getenv("BITHUMAN_API_URL")
@@ -84,11 +130,7 @@ class AvatarSession:
 
         # set default mode based on model_path, avatar_image or avatar_id presence
         self._mode = (
-            "local"
-            if utils.is_given(model_path)
-            else "cloud"
-            if utils.is_given(avatar_image) or utils.is_given(avatar_id)
-            else "local"
+            "cloud" if utils.is_given(avatar_image) or utils.is_given(avatar_id) else "local"
         )
         self._model = model
 
