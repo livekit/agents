@@ -592,11 +592,16 @@ class RealtimeSession(  # noqa: F811
                 text_ch=utils.aio.Chan(),
                 audio_ch=utils.aio.Chan(),
             )
+            msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
+            msg_modalities.set_result(
+                ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
+            )
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
                     text_stream=msg_gen.text_ch,
                     audio_stream=msg_gen.audio_ch,
+                    modalities=msg_modalities,
                 )
             )
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
@@ -761,11 +766,16 @@ class RealtimeSession(  # noqa: F811
                 audio_ch=utils.aio.Chan(),
             )
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
+            msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
+            msg_modalities.set_result(
+                ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
+            )
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
                     text_stream=msg_gen.text_ch,
                     audio_stream=msg_gen.audio_ch,
+                    modalities=msg_modalities,
                 )
             )
             self.emit_generation_event()
@@ -1235,7 +1245,12 @@ class RealtimeSession(  # noqa: F811
         logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
 
