@@ -39,7 +39,7 @@ class StreamAdapter(TTS):
         self._sentence_tokenizer = sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
             retain_format=True
         )
-        self._stream_pacer = stream_pacer if utils.is_given(stream_pacer) else SentenceStreamPacer()
+        self._stream_pacer = stream_pacer if utils.is_given(stream_pacer) else None
 
         @self._wrapped_tts.on("metrics_collected")
         def _forward_metrics(*args: Any, **kwargs: Any) -> None:

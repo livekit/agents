@@ -153,7 +153,7 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
-        self._stream_pacer = stream_pacer if is_given(stream_pacer) else tts.SentenceStreamPacer()
+        self._stream_pacer = stream_pacer if is_given(stream_pacer) else None
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -356,10 +356,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)
                 elif data.get("done"):
-                    logger.debug("received done from cartesia", extra=data)
                     if sent_tokenizer_stream.closed:
+                        # close only if the input stream is closed
                         output_emitter.end_input()
-                        logger.debug("end output")
                         break
                 elif word_timestamps := data.get("word_timestamps"):
                     for word, start, end in zip(
