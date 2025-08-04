@@ -221,10 +221,13 @@ class AvatarSession:
             )
 
         # Prepare attributes for JWT token
-        attributes = {
+        attributes: dict[str, str] = {
             ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
-            "api_secret": self._api_secret,
         }
+
+        # Only add api_secret if it's not None
+        if self._api_secret is not None:
+            attributes["api_secret"] = self._api_secret
 
         # Only add agent_id if it's actually provided (not NotGiven)
         if utils.is_given(self._avatar_id):
