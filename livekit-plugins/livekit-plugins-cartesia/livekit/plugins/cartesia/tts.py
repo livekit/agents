@@ -87,7 +87,7 @@ class TTS(tts.TTS):
         word_timestamps: bool = True,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        stream_pacer: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
+        text_pacing: tts.SentenceStreamPacer | bool = False,
         base_url: str = "https://api.cartesia.ai",
     ) -> None:
         """
@@ -107,7 +107,7 @@ class TTS(tts.TTS):
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT).
-            stream_pacer (tts.SentenceStreamPacer, optional): Stream pacer for the TTS. Set to None to disable.
+            text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
 
@@ -153,7 +153,11 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
-        self._stream_pacer = stream_pacer if is_given(stream_pacer) else None
+        self._stream_pacer: tts.SentenceStreamPacer | None = None
+        if text_pacing is True:
+            self._stream_pacer = tts.SentenceStreamPacer()
+        elif isinstance(text_pacing, tts.SentenceStreamPacer):
+            self._stream_pacer = text_pacing
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

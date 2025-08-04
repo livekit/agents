@@ -28,7 +28,7 @@ class StreamAdapter(TTS):
         *,
         tts: TTS,
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        stream_pacer: NotGivenOr[SentenceStreamPacer | None] = NOT_GIVEN,
+        text_pacing: SentenceStreamPacer | bool = False,
     ) -> None:
         super().__init__(
             capabilities=TTSCapabilities(streaming=True, aligned_transcript=True),
@@ -39,7 +39,11 @@ class StreamAdapter(TTS):
         self._sentence_tokenizer = sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
             retain_format=True
         )
-        self._stream_pacer = stream_pacer if utils.is_given(stream_pacer) else None
+        self._stream_pacer: SentenceStreamPacer | None = None
+        if text_pacing is True:
+            self._stream_pacer = SentenceStreamPacer()
+        elif isinstance(text_pacing, SentenceStreamPacer):
+            self._stream_pacer = text_pacing
 
         @self._wrapped_tts.on("metrics_collected")
         def _forward_metrics(*args: Any, **kwargs: Any) -> None:

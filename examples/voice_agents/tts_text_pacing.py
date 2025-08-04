@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, tts
 from livekit.plugins import cartesia, deepgram, openai, silero  # noqa: F401
 
-logger = logging.getLogger("tts-stream-pacer")
+logger = logging.getLogger("tts-text-pacing")
 
 load_dotenv()
 
@@ -22,19 +22,16 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(),
+        tts=tts.StreamAdapter(
+            tts=openai.TTS(),
+            text_pacing=True,  # use the default pacer configuration
+        ),
         # tts=cartesia.TTS(
-        #     stream_pacer=tts.SentenceStreamPacer(
+        #     text_pacing=tts.SentenceStreamPacer(  # or use a custom pacer to specify the params
         #         min_remaining_audio=3.0,
         #         max_text_length=300,
         #     )
         # ),
-        tts=tts.StreamAdapter(
-            tts=openai.TTS(),
-            stream_pacer=tts.SentenceStreamPacer(
-                min_remaining_audio=3.0,
-                max_text_length=300,
-            ),
-        ),
         use_tts_aligned_transcript=True,
     )
 
