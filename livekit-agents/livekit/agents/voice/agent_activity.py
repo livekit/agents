@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Awaitable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
