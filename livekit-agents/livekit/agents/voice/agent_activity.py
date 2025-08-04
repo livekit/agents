@@ -389,7 +389,7 @@ class AgentActivity(RecognitionHooks):
                 self._on_enter_task = task = self._create_speech_task(
                     _traceable_on_enter(), name="AgentTask_on_enter"
                 )
-                _set_activity_task_info(task, inline_task=False)
+                _set_activity_task_info(task, inline_task=True)
             finally:
                 start_span.end()
 
@@ -504,7 +504,7 @@ class AgentActivity(RecognitionHooks):
             self._on_exit_task = task = self._create_speech_task(
                 _traceable_on_exit(), name="AgentTask_on_exit"
             )
-            _set_activity_task_info(task, inline_task=False)
+            _set_activity_task_info(task, inline_task=True)
 
             self._cancel_preemptive_generation()
 
