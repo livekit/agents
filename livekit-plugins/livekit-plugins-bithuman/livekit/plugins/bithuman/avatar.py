@@ -58,11 +58,10 @@ class AvatarSession:
     def __init__(
         self,
         *,
-        # avatar options, cloud_expression for cloud gpu usage, cloud_essence for cloud cpu usage and local for local cpu usage
-        mode: NotGivenOr[Literal["local", "cloud_expression", "cloud_essence"]] = "local",
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[Literal["expression", "essence"]] = "essence",
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
         runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
@@ -79,10 +78,11 @@ class AvatarSession:
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
 
-        # set default mode based on avatar image presence
+        # set default mode based on model_path, avatar_image or avatar_id presence
         self._mode = (
-            mode if utils.is_given(mode) else "cloud_expression" if utils.is_given(avatar_image) else "local"
+            "local" if utils.is_given(model_path) else "cloud" if utils.is_given(avatar_image) or utils.is_given(avatar_id) else "local"
         )
+        self._model = model
 
         # validate mode-specific requirements
         if self._mode == "local":
@@ -94,7 +94,7 @@ class AvatarSession:
                 raise BitHumanException(
                     "BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN are required for local mode"
                 )
-        elif self._mode == "cloud_expression" or self._mode == "cloud_essence":
+        elif self._mode == "cloud":
             if not utils.is_given(avatar_image) and not utils.is_given(avatar_id):
                 raise BitHumanException("`avatar_image` or `avatar_id` must be set for cloud mode")
             if self._api_secret is None:
@@ -129,7 +129,7 @@ class AvatarSession:
     ) -> None:
         if self._mode == "local":
             await self._start_local(agent_session, room)
-        elif self._mode == "cloud_expression" or self._mode == "cloud_essence":
+        elif self._mode == "cloud":
             await self._start_cloud(
                 agent_session,
                 room,
@@ -212,6 +212,20 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
+        # Prepare attributes for JWT token
+        attributes = {
+            ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
+            "api_secret": self._api_secret
+        }
+
+        # Only add agent_id if it's actually provided (not NotGiven)
+        if utils.is_given(self._avatar_id):
+            attributes["agent_id"] = self._avatar_id
+
+        # Only add image if it's actually provided (not NotGiven)
+        # if utils.is_given(self._avatar_image) and self._avatar_image is not None:
+        #     attributes["image"] = self._avatar_image
+
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
@@ -219,12 +233,7 @@ class AvatarSession:
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({
-                ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
-                "agent_id": self._avatar_id,
-                "image": self._avatar_image,
-                "api_secret": self._api_secret
-            })
+            .with_attributes(attributes)
             .to_jwt()
         )
 
@@ -250,7 +259,7 @@ class AvatarSession:
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
             "room_name": room_name,
-            "mode": "gpu" if self._mode == 'cloud_expression' else "cpu",
+            "mode": "gpu" if (utils.is_given(self._avatar_image) and self._avatar_image is not None) or self._model == "expression" else "cpu",
         }
 
         # Handle avatar image
@@ -258,10 +267,13 @@ class AvatarSession:
             img_byte_arr = io.BytesIO()
             self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
             img_byte_arr.seek(0)
-            # Convert image to base64 string for JSON
+            # Convert to base64 for JSON serialization
             import base64
-            img_base64 = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-            json_data["image"] = img_base64
+            json_data["image"] = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+        elif isinstance(self._avatar_image, bytes):
+            # Convert bytes to base64 for JSON serialization
+            import base64
+            json_data["image"] = base64.b64encode(self._avatar_image).decode('utf-8')
         elif isinstance(self._avatar_image, str):
             json_data["image"] = self._avatar_image
 

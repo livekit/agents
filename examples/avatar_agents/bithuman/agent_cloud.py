@@ -29,8 +29,9 @@ async def entrypoint(ctx: JobContext):
     )
 
     bithuman_avatar = bithuman.AvatarSession(
-        mode="cloud_expression",
         avatar_image=Image.open(os.path.join(os.path.dirname(__file__), "avatar.jpg")),
+        # avatar_id="A70MXC2074",
+        # model="expression",
     )
     await bithuman_avatar.start(session, room=ctx.room)
 
