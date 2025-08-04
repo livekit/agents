@@ -26,15 +26,12 @@ class InputSpeechStoppedEvent:
     user_transcription_enabled: bool
 
 
-MessageType = Literal["text", "audio"]
-
-
 @dataclass
 class MessageGeneration:
     message_id: str
     text_stream: AsyncIterable[str]  # could be io.TimedString
     audio_stream: AsyncIterable[rtc.AudioFrame]
-    message_type: MessageType | Awaitable[MessageType]
+    modalities: Awaitable[list[Literal["text", "audio"]]]
 
 
 @dataclass
@@ -184,7 +181,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
         self,
         *,
         message_id: str,
-        message_type: MessageType,
+        modalities: list[Literal["text", "audio"]],
         audio_end_ms: int,
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None: ...

@@ -1823,12 +1823,9 @@ class AgentActivity(RecognitionHooks):
                         )
                         break
 
-                    msg_type = msg.message_type
-                    if isinstance(msg_type, Awaitable):
-                        msg_type = await msg_type
-
+                    msg_modalities = await msg.modalities
                     tts_text_input: AsyncIterable[str] | None = None
-                    if msg_type == "text" and self.tts:
+                    if "audio" not in msg_modalities and self.tts:
                         if self.llm.capabilities.audio_output:
                             logger.warning(
                                 "text response received from realtime API, falling back to use a TTS model."
@@ -1862,7 +1859,7 @@ class AgentActivity(RecognitionHooks):
                             )
                             tasks.append(tts_task)
                             realtime_audio_result = tts_gen_data.audio_ch
-                        elif msg_type == "audio":
+                        elif "audio" in msg_modalities:
                             realtime_audio = self._agent.realtime_audio_output_node(
                                 msg.audio_stream, model_settings
                             )
@@ -1977,12 +1974,10 @@ class AgentActivity(RecognitionHooks):
                         playback_position = 0
 
                     # truncate server-side message
-                    msg_type = msg_gen.message_type
-                    if isinstance(msg_type, Awaitable):
-                        msg_type = await msg_type
+                    msg_modalities = await msg_gen.modalities
                     self._rt_session.truncate(
                         message_id=msg_gen.message_id,
-                        message_type=msg_type,
+                        modalities=msg_modalities,
                         audio_end_ms=int(playback_position * 1000),
                         audio_transcript=forwarded_text,
                     )

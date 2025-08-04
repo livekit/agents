@@ -125,7 +125,7 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
-    message_type: asyncio.Future[Literal["text", "audio"]]
+    modalities: asyncio.Future[list[Literal["text", "audio"]]]
     audio_transcript: str = ""
 
 
@@ -1143,11 +1143,11 @@ class RealtimeSession(
         self,
         *,
         message_id: str,
-        message_type: Literal["text", "audio"],
+        modalities: list[Literal["text", "audio"]],
         audio_end_ms: int,
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        if message_type == "audio":
+        if "audio" in modalities:
             self.send_event(
                 ConversationItemTruncateEvent(
                     type="conversation.item.truncate",
@@ -1247,18 +1247,18 @@ class RealtimeSession(
                 message_id=item_id,
                 text_ch=utils.aio.Chan(),
                 audio_ch=utils.aio.Chan(),
-                message_type=asyncio.Future(),
+                modalities=asyncio.Future(),
             )
             if not self._realtime_model.capabilities.audio_output:
                 item_generation.audio_ch.close()
-                item_generation.message_type.set_result("text")
+                item_generation.modalities.set_result(["text"])
 
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=item_id,
                     text_stream=item_generation.text_ch,
                     audio_stream=item_generation.audio_ch,
-                    message_type=item_generation.message_type,
+                    modalities=item_generation.modalities,
                 )
             )
             self._current_generation.messages[item_id] = item_generation
@@ -1272,7 +1272,9 @@ class RealtimeSession(
             logger.warning("Text response received from OpenAI Realtime API in audio modality.")
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._current_generation.messages[item_id].message_type.set_result(item_type)
+            self._current_generation.messages[item_id].modalities.set_result(
+                ["text"] if item_type == "text" else ["audio", "text"]
+            )
 
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
@@ -1353,8 +1355,8 @@ class RealtimeSession(
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
 
-        if not item_generation.message_type.done():
-            item_generation.message_type.set_result("audio")
+        if not item_generation.modalities.done():
+            item_generation.modalities.set_result(["audio", "text"])
 
         data = base64.b64decode(event.delta)
         item_generation.audio_ch.send_nowait(
@@ -1394,10 +1396,9 @@ class RealtimeSession(
             item_generation = self._current_generation.messages[item_id]
             item_generation.text_ch.close()
             item_generation.audio_ch.close()
-            if not item_generation.message_type.done():
-                item_generation.message_type.set_result(
-                    "audio" if self._realtime_model.capabilities.audio_output else "text"
-                )
+            if not item_generation.modalities.done():
+                # in case message modalities is not set, this shouldn't happen
+                item_generation.modalities.set_result(self._realtime_model._opts.modalities)
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         if self._current_generation is None:
@@ -1414,10 +1415,8 @@ class RealtimeSession(
                 generation.text_ch.close()
             if not generation.audio_ch.closed:
                 generation.audio_ch.close()
-            if not generation.message_type.done():
-                generation.message_type.set_result(
-                    "audio" if self._realtime_model.capabilities.audio_output else "text"
-                )
+            if not generation.modalities.done():
+                generation.modalities.set_result(self._realtime_model._opts.modalities)
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
