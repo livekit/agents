@@ -13,8 +13,8 @@ load_dotenv()
 # Reduces interruption waste and improves speech quality by batching text with more context.
 # Works with non-streaming TTS (StreamAdapter) or Cartesia TTS in streaming mode.
 #
-# NOTE: Transcription sync relies on full audio length, so sync quality suffers when audio
-# generation is incomplete. Enable `use_tts_aligned_transcript` to improve sync quality.
+# NOTE: The default transcription sync relies on full audio length, so sync quality suffers when audio
+# generation is incomplete. Enable `use_tts_aligned_transcript` to improve sync quality if possible.
 
 
 async def entrypoint(ctx: JobContext):
