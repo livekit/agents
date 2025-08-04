@@ -10,7 +10,19 @@ from ...log import logger
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
-VOICE_ID = Literal["matthew", "tiffany", "amy"]
+VOICE_ID = Literal[
+    "matthew",
+    "tiffany",
+    "amy",
+    "ambre",
+    "florian",
+    "beatrice",
+    "lorenzo",
+    "greta",
+    "lennart",
+    "lupe",
+    "carlos",
+]
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
 STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
