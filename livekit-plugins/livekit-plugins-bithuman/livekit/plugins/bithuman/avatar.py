@@ -70,7 +70,11 @@ class AvatarSession:
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        self._api_url = api_url or os.getenv("BITHUMAN_API_URL") or "https://auth.api.bithuman.ai/v1/runtime-tokens/request"
+        self._api_url = (
+            api_url
+            or os.getenv("BITHUMAN_API_URL")
+            or "https://auth.api.bithuman.ai/v1/runtime-tokens/request"
+        )
         self._api_secret = api_secret or os.getenv("BITHUMAN_API_SECRET")
         self._api_token = api_token or os.getenv("BITHUMAN_API_TOKEN")
         self._model_path = model_path or os.getenv("BITHUMAN_MODEL_PATH")
@@ -80,7 +84,11 @@ class AvatarSession:
 
         # set default mode based on model_path, avatar_image or avatar_id presence
         self._mode = (
-            "local" if utils.is_given(model_path) else "cloud" if utils.is_given(avatar_image) or utils.is_given(avatar_id) else "local"
+            "local"
+            if utils.is_given(model_path)
+            else "cloud"
+            if utils.is_given(avatar_image) or utils.is_given(avatar_id)
+            else "local"
         )
         self._model = model
 
@@ -215,7 +223,7 @@ class AvatarSession:
         # Prepare attributes for JWT token
         attributes = {
             ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
-            "api_secret": self._api_secret
+            "api_secret": self._api_secret,
         }
 
         # Only add agent_id if it's actually provided (not NotGiven)
@@ -259,7 +267,10 @@ class AvatarSession:
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
             "room_name": room_name,
-            "mode": "gpu" if (utils.is_given(self._avatar_image) and self._avatar_image is not None) or self._model == "expression" else "cpu",
+            "mode": "gpu"
+            if (utils.is_given(self._avatar_image) and self._avatar_image is not None)
+            or self._model == "expression"
+            else "cpu",
         }
 
         # Handle avatar image
@@ -269,11 +280,13 @@ class AvatarSession:
             img_byte_arr.seek(0)
             # Convert to base64 for JSON serialization
             import base64
-            json_data["image"] = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+
+            json_data["image"] = base64.b64encode(img_byte_arr.getvalue()).decode("utf-8")
         elif isinstance(self._avatar_image, bytes):
             # Convert bytes to base64 for JSON serialization
             import base64
-            json_data["image"] = base64.b64encode(self._avatar_image).decode('utf-8')
+
+            json_data["image"] = base64.b64encode(self._avatar_image).decode("utf-8")
         elif isinstance(self._avatar_image, str):
             json_data["image"] = self._avatar_image
 
