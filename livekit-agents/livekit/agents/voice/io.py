@@ -379,8 +379,20 @@ class AgentInput:
 
     @video.setter
     def video(self, stream: VideoInput | None) -> None:
+        if stream is self._video_stream:
+            return
+
+        if self._video_stream:
+            self._video_stream.on_detached()
+
         self._video_stream = stream
         self._video_changed()
+
+        if self._video_stream:
+            if self._video_enabled:
+                self._video_stream.on_attached()
+            else:
+                self._video_stream.on_detached()
 
     @property
     def audio(self) -> AudioInput | None:
@@ -388,8 +400,20 @@ class AgentInput:
 
     @audio.setter
     def audio(self, stream: AudioInput | None) -> None:
+        if stream is self._audio_stream:
+            return
+
+        if self._audio_stream:
+            self._audio_stream.on_detached()
+
         self._audio_stream = stream
         self._audio_changed()
+
+        if self._audio_stream:
+            if self._audio_enabled:
+                self._audio_stream.on_attached()
+            else:
+                self._audio_stream.on_detached()
 
 
 class AgentOutput:
@@ -479,8 +503,20 @@ class AgentOutput:
 
     @video.setter
     def video(self, sink: VideoOutput | None) -> None:
+        if sink is self._video_sink:
+            return
+
+        if self._video_sink:
+            self._video_sink.on_detached()
+
         self._video_sink = sink
         self._video_changed()
+
+        if self._video_sink:
+            if self._video_enabled:
+                self._video_sink.on_attached()
+            else:
+                self._video_sink.on_detached()
 
     @property
     def audio(self) -> AudioOutput | None:
@@ -498,7 +534,10 @@ class AgentOutput:
         self._audio_changed()
 
         if self._audio_sink:
-            self._audio_sink.on_attached()
+            if self._audio_enabled:
+                self._audio_sink.on_attached()
+            else:
+                self._audio_sink.on_detached()
 
     @property
     def transcription(self) -> TextOutput | None:
@@ -516,4 +555,7 @@ class AgentOutput:
         self._transcription_changed()
 
         if self._transcription_sink:
-            self._transcription_sink.on_attached()
+            if self._transcription_enabled:
+                self._transcription_sink.on_attached()
+            else:
+                self._transcription_sink.on_detached()
