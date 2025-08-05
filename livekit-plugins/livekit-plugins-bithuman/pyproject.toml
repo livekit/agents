@@ -21,7 +21,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.2.2", "bithuman>=0.5.22"]
+
+dependencies = ["livekit-agents>=1.2.3", "bithuman>=0.5.22"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
