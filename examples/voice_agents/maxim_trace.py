@@ -8,15 +8,17 @@ from livekit import api as livekit_api
 from livekit.agents import Agent, AgentSession, function_tool
 from livekit.api.room_service import CreateRoomRequest
 from livekit.plugins import openai
+from tavily import TavilyClient
+
 from maxim import Maxim
 from maxim.logger.livekit import instrument_livekit
-from tavily import TavilyClient
 
 # Load environment variables
 dotenv.load_dotenv(override=True)
 logging.basicConfig(level=logging.DEBUG)
 
 """
+This example shows how to use the maxim tracer to trace the agent session.
 To run this agent example, set MAXIM_API_KEY, MAXIM_LOG_REPO_ID, TAVILY_API_KEY & OPENAI_API_KEY environment variables.
 To install maxim, run `pip install maxim-py`
 """
