@@ -8,10 +8,9 @@ from livekit import api as livekit_api
 from livekit.agents import Agent, AgentSession, function_tool
 from livekit.api.room_service import CreateRoomRequest
 from livekit.plugins import openai
-from tavily import TavilyClient
-
 from maxim import Maxim
 from maxim.logger.livekit import instrument_livekit
+from tavily import TavilyClient
 
 # Load environment variables
 dotenv.load_dotenv(override=True)
