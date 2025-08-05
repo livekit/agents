@@ -183,11 +183,6 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the chunked synthesis process."""
-
-        self._chunk_size = 250
-        if self._opts.model == "lightning-large" or self._opts.model == "lightning-v2":
-            self._chunk_size = 140
-
         try:
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
