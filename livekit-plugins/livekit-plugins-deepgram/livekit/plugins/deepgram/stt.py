@@ -46,6 +46,8 @@ from .models import DeepgramLanguages, DeepgramModels
 
 BASE_URL = "https://api.deepgram.com/v1/listen"
 
+# Deepgram is sometimes sensitive, so we'll ignore results with low confidence
+_default_min_confidence = 0.4
 
 @dataclass
 class STTOptions:
@@ -63,6 +65,7 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
+    min_confidence_threshold: float
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
@@ -90,6 +93,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
+        min_confidence_threshold: float = _default_min_confidence,
         numerals: bool = False,
         mip_opt_out: bool = False,
     ) -> None:
@@ -116,6 +120,7 @@ class STT(stt.STT):
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
+            min_confidence_threshold(float): minimum confidence threshold for recognition
             numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
 
@@ -155,6 +160,7 @@ class STT(stt.STT):
             keywords=keywords if is_given(keywords) else [],
             keyterms=keyterms if is_given(keyterms) else [],
             profanity_filter=profanity_filter,
+            min_confidence_threshold=min_confidence_threshold,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
@@ -253,6 +259,7 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -281,6 +288,8 @@ class STT(stt.STT):
             self._opts.keyterms = keyterms
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(min_confidence_threshold):
+            self._opts.min_confidence_threshold = min_confidence_threshold
         if is_given(numerals):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
@@ -369,6 +378,7 @@ class SpeechStream(stt.SpeechStream):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -397,6 +407,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.keyterms = keyterms
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(min_confidence_threshold):
+            self._opts.min_confidence_threshold = min_confidence_threshold
         if is_given(numerals):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
@@ -530,6 +542,7 @@ class SpeechStream(stt.SpeechStream):
             "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
+            "min_confidence_threshold": self._opts.min_confidence_threshold,
             "numerals": self._opts.numerals,
             "mip_opt_out": self._opts.mip_opt_out,
         }
@@ -592,7 +605,7 @@ class SpeechStream(stt.SpeechStream):
             is_endpoint = data["speech_final"]
             self._request_id = request_id
 
-            alts = live_transcription_to_speech_data(self._opts.language, data)
+            alts = live_transcription_to_speech_data(self._opts.language, data, self._opts.min_confidence_threshold)
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
             # been observed.
@@ -630,21 +643,23 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
-def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.SpeechData]:
+def live_transcription_to_speech_data(language: str, data: dict, min_confidence_threshold: float) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
     speech_data = []
     for alt in dg_alts:
-        sd = stt.SpeechData(
-            language=language,
-            start_time=alt["words"][0]["start"] if alt["words"] else 0,
-            end_time=alt["words"][-1]["end"] if alt["words"] else 0,
-            confidence=alt["confidence"],
-            text=alt["transcript"],
-        )
-        if language == "multi" and "languages" in alt:
-            sd.language = alt["languages"][0]  # TODO: handle multiple languages
-        speech_data.append(sd)
+        cur_confidence = alt["confidence"]
+        if cur_confidence >= min_confidence_threshold:
+            sd = stt.SpeechData(
+                language=language,
+                start_time=alt["words"][0]["start"] if alt["words"] else 0,
+                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+                confidence=cur_confidence,
+                text=alt["transcript"],
+            )
+            if language == "multi" and "languages" in alt:
+                sd.language = alt["languages"][0]  # TODO: handle multiple languages
+            speech_data.append(sd)
     return speech_data
 
 
