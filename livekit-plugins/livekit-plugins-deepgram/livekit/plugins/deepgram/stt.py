@@ -61,10 +61,10 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
+    endpoint_url: str
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
-    endpoint_url: str | None = None
 
 
 class STT(stt.STT):
@@ -375,7 +375,7 @@ class SpeechStream(stt.SpeechStream):
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
-        endpoint_url: NotGivenOr[list[str]] = NOT_GIVEN,
+        endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = language
