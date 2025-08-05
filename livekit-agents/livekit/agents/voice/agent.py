@@ -715,7 +715,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     )
                 )
 
-                await session._update_activity(old_agent, new_activity="resume")
+                await session._update_activity(old_agent, new_activity="resume", wait_on_enter=False)
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
