@@ -5,6 +5,7 @@ from .fallback_adapter import (
     FallbackSynthesizeStream,
 )
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
+from .stream_pacer import SentenceStreamPacer
 from .tts import (
     TTS,
     AudioEmitter,
@@ -29,6 +30,7 @@ __all__ = [
     "FallbackSynthesizeStream",
     "AudioEmitter",
     "TTSError",
+    "SentenceStreamPacer",
 ]
 
 

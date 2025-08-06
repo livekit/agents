@@ -25,6 +25,9 @@ class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out audio frames or AudioSegmentEnd when the stream ends"""
 
+    async def aclose(self) -> None:
+        pass
+
 
 class VideoGenerator(ABC):
     @abstractmethod

@@ -25,6 +25,7 @@ resolution-markers = [
 [manifest]
 members = [
     "livekit-agents",
+    "livekit-plugins-anam",
     "livekit-plugins-anthropic",
     "livekit-plugins-assemblyai",
     "livekit-plugins-aws",
@@ -55,6 +56,7 @@ members = [
     "livekit-plugins-rime",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
+    "livekit-plugins-simli",
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
@@ -1794,6 +1796,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+anam = [
+    { name = "livekit-plugins-anam" },
+]
 anthropic = [
     { name = "livekit-plugins-anthropic" },
 ]
@@ -1889,6 +1894,9 @@ sarvam = [
 silero = [
     { name = "livekit-plugins-silero" },
 ]
+simli = [
+    { name = "livekit-plugins-simli" },
+]
 speechify = [
     { name = "livekit-plugins-speechify" },
 ]
@@ -1915,8 +1923,9 @@ requires-dist = [
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "livekit", specifier = ">=1.0.12,<2" },
-    { name = "livekit-api", specifier = ">=1.0.3,<2" },
+    { name = "livekit-api", specifier = ">=1.0.4,<2" },
     { name = "livekit-blingfire", specifier = "~=1.0" },
+    { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
@@ -1945,6 +1954,7 @@ requires-dist = [
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
     { name = "livekit-plugins-sarvam", marker = "extra == 'sarvam'", editable = "livekit-plugins/livekit-plugins-sarvam" },
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-simli", marker = "extra == 'simli'", editable = "livekit-plugins/livekit-plugins-simli" },
     { name = "livekit-plugins-speechify", marker = "extra == 'speechify'", editable = "livekit-plugins/livekit-plugins-speechify" },
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-spitch", marker = "extra == 'spitch'", editable = "livekit-plugins/livekit-plugins-spitch" },
@@ -1969,11 +1979,11 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "speechify", "speechmatics", "spitch", "tavus", "turn-detector"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "speechify", "speechmatics", "spitch", "tavus", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
-version = "1.0.3"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1982,9 +1992,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/cf/2476359a6eab73fab0e58ca0053887a9344db3ba7caca5a29913e270a86f/livekit_api-1.0.3.tar.gz", hash = "sha256:24ffd1f0a92fd91f1d9977034e317951259d0ec9d053c6315c1562ba699d4cc8", size = 14940 }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/3a/abf4135de6ac7b43b5cc467a68731ee1adbdaa9dadea8149d37a4b0ef85f/livekit_api-1.0.4.tar.gz", hash = "sha256:90d68423e9d398834cbef300e65b7dc8f0f380f279ba25764d35296df1703152", size = 15032 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/b3/ff1c47a553d8773281aef531fb660e296e811176390b887901e1bcd351ab/livekit_api-1.0.3-py3-none-any.whl", hash = "sha256:38eee0ba44e9bba7eb95d53d29a6ac56b89e32e6f90dfa11d2f65463db8f06c5", size = 17413 },
+    { url = "https://files.pythonhosted.org/packages/0b/1a/13f4cfdd0fb60b7057adf0a1ffeb2f0bdb13ad140d59fd34cff45e0c52a3/livekit_api-1.0.4-py3-none-any.whl", hash = "sha256:583004fc6aa7255d53932c5863145dbec16a4645fbf3944f0fdcbf2bb8ed9f86", size = 17472 },
 ]
 
 [[package]]
@@ -2018,6 +2028,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/ef/7947ab8e75cb994138e950fcc5b3cb2cef0025a321d2d4920f8233521edd/livekit_blingfire-1.0.0-cp39-cp39-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5273c5da357e33ddc51c1c8959622f9d647834197e618d1a0148f919c3ba065c", size = 167857 },
     { url = "https://files.pythonhosted.org/packages/b0/d8/e69c89faf3df11c02f9a0834b1a76e2ab3ce937c86479152fe82b08cf6ff/livekit_blingfire-1.0.0-cp39-cp39-win_amd64.whl", hash = "sha256:ac10f9a6e3ad8585f002ad86f5b14d684107bef1fdd95e0b4f7edbf6ecdf709e", size = 124830 },
 ]
+
+[[package]]
+name = "livekit-plugins-anam"
+source = { editable = "livekit-plugins/livekit-plugins-anam" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-anthropic"
@@ -2442,6 +2462,16 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
 ]
+
+[[package]]
+name = "livekit-plugins-simli"
+source = { editable = "livekit-plugins/livekit-plugins-simli" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-speechify"

@@ -48,6 +48,7 @@ jobs:
       - name: Run tests
         shell: bash
         env:
+          LIVEKIT_EVALS_VERBOSE: 1
           PLUGIN: ${{ matrix.example }}
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
@@ -78,4 +79,4 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-        run: uv run pytest examples/${{matrix.example}}/test_agent.py
+        run: uv run pytest examples/${{matrix.example}}/test_agent.py -s

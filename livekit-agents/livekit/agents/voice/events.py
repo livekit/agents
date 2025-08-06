@@ -85,6 +85,7 @@ EventTypes = Literal[
     "agent_state_changed",
     "user_input_transcribed",
     "conversation_item_added",
+    "agent_false_interruption",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -115,6 +116,17 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentFalseInterruptionEvent(BaseModel):
+    type: Literal["agent_false_interruption"] = "agent_false_interruption"
+    message: ChatMessage | None
+    """The `assistant` message that got interrupted"""
+    extra_instructions: str | None = None
+    """Optional instructions originally passed to `AgentSession.generate_reply` via the `instructions` argument.
+    Populated only if the user interrupted a speech response generated using `session.generate_reply`.
+    Useful for understanding what the agent was attempting to convey before the interruption."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -193,6 +205,7 @@ AgentEvent = Annotated[
         UserInputTranscribedEvent,
         UserStateChangedEvent,
         AgentStateChangedEvent,
+        AgentFalseInterruptionEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,

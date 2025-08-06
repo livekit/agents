@@ -58,6 +58,7 @@ from .version import __version__
 from .voice import (
     Agent,
     AgentEvent,
+    AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
     AgentTask,
@@ -125,6 +126,7 @@ __all__ = [
     "CloseEvent",
     "ConversationItemAddedEvent",
     "AgentStateChangedEvent",
+    "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
     "SpeechCreatedEvent",

@@ -59,6 +59,10 @@ class SentenceStream(ABC):
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
+    @property
+    def closed(self) -> bool:
+        return self._event_ch.closed
+
 
 class WordTokenizer(ABC):
     @abstractmethod

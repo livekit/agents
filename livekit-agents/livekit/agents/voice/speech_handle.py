@@ -27,6 +27,9 @@ class SpeechHandle:
 
         self._generations: list[asyncio.Future[None]] = []
 
+        # indicate if the speech was interrupted by a user turn
+        self._interrupted_by_user: bool = False
+
         # internal tasks used by this generation
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
@@ -204,8 +207,12 @@ class SpeechHandle:
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
-            self._mark_generation_done()
+            if self._generations:
+                self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
 
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._scheduled_fut.set_result(None)
+
+    def _mark_interrupted_by_user(self) -> None:
+        self._interrupted_by_user = True

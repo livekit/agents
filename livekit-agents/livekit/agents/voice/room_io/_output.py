@@ -27,7 +27,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         track_publish_options: rtc.TrackPublishOptions,
         queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
     ) -> None:
-        super().__init__(next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(label="RoomIO", next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
@@ -128,7 +128,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._republish_task = asyncio.create_task(self._publish_track())
 
 
-class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
+class _ParticipantLegacyTranscriptionOutput:
     def __init__(
         self,
         room: rtc.Room,
@@ -136,7 +136,6 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
     ):
-        super().__init__(next_in_chain=None)
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
@@ -275,7 +274,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         return False
 
 
-class _ParticipantTranscriptionOutput(io.TextOutput):
+class _ParticipantStreamTranscriptionOutput:
     def __init__(
         self,
         room: rtc.Room,
@@ -283,7 +282,6 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
     ):
-        super().__init__(next_in_chain=None)
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
@@ -369,9 +367,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             logger.warning("failed to publish transcription", exc_info=e)
 
     async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
-        attributes = {
-            ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
-        }
+        attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 
@@ -420,16 +416,45 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
 
 # Keep this utility private for now
-class _ParallelTextOutput(io.TextOutput):
+class _ParticipantTranscriptionOutput(io.TextOutput):
     def __init__(
-        self, sinks: list[io.TextOutput], *, next_in_chain: io.TextOutput | None = None
+        self,
+        *,
+        room: rtc.Room,
+        is_delta_stream: bool = True,
+        participant: rtc.Participant | str | None = None,
+        next_in_chain: io.TextOutput | None = None,
     ) -> None:
-        super().__init__(next_in_chain=next_in_chain)
-        self._sinks = sinks
+        super().__init__(label="RoomIO", next_in_chain=next_in_chain)
+
+        self.__outputs: list[
+            _ParticipantLegacyTranscriptionOutput | _ParticipantStreamTranscriptionOutput
+        ] = [
+            _ParticipantLegacyTranscriptionOutput(
+                room=room,
+                is_delta_stream=is_delta_stream,
+                participant=participant,
+            ),
+            _ParticipantStreamTranscriptionOutput(
+                room=room,
+                is_delta_stream=is_delta_stream,
+                participant=participant,
+            ),
+        ]
+
+    def set_participant(self, participant: rtc.Participant | str | None) -> None:
+        for source in self.__outputs:
+            source.set_participant(participant)
 
     async def capture_text(self, text: str) -> None:
-        await asyncio.gather(*[sink.capture_text(text) for sink in self._sinks])
+        await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])
+
+        if self.next_in_chain:
+            await self.next_in_chain.capture_text(text)
 
     def flush(self) -> None:
-        for sink in self._sinks:
-            sink.flush()
+        for source in self.__outputs:
+            source.flush()
+
+        if self.next_in_chain:
+            self.next_in_chain.flush()
