@@ -358,7 +358,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     "agent_name": self._opts.agent_name,
                     "worker_type": agent.JobType.Name(self._opts.worker_type.value),
                     "active_jobs": len(self.active_jobs),
-                    "version": __version__,
+                    "sdk_version": __version__,
                     "project_type": "python",
                 }
             )
