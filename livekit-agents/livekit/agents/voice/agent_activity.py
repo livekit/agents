@@ -1182,13 +1182,6 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
-        if self._scheduling_paused:
-            logger.warning(
-                "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
-            )
-            return
-
         # id is generated
         user_message: llm.ChatMessage = llm.ChatMessage(
             role="user",
