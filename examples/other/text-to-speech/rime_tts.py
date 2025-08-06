@@ -1,55 +1,19 @@
 import logging
-import re
 
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import rime
+from livekit.agents.tokenize import blingfire
+
 
 # Initialize environment and logging
 load_dotenv()
 logger = logging.getLogger("rime-tts-demo")
 logger.setLevel(logging.INFO)
 
-
-class TextSegmenter:
-    """Utility class for segmenting text into natural chunks for TTS processing."""
-
-    _sentence_pattern = re.compile(r".+?[,，.。!！?？:：]", re.DOTALL)
-
-    @staticmethod
-    def sentence_segmentation(text: str) -> list[str]:
-        """
-        Segments text into natural sentences.
-
-        Args:
-            text (str): Input text to be segmented
-
-        Returns:
-            list[str]: List of segmented sentences
-        """
-        # Clean up text by replacing smart quotes and removing asterisks
-        text = text.replace("\u2018", "'").replace("\u2019", "'").replace("*", "")
-        result = []
-        start_pos = 0
-
-        # Find sentence boundaries using regex pattern
-        for match in TextSegmenter._sentence_pattern.finditer(text):
-            sentence = match.group(0)
-            end_pos = match.end()
-            sentence = sentence.strip()
-            if sentence:
-                result.append(sentence)
-            start_pos = end_pos
-
-        # Handle any remaining text
-        if start_pos < len(text):
-            sentence = text[start_pos:].strip()
-            if sentence:
-                result.append(sentence)
-
-        return result
+tokenizer = blingfire.SentenceTokenizer()
 
 
 async def stream_text_chunks():
@@ -66,8 +30,7 @@ async def stream_text_chunks():
     """
 
     # Create segmenter instance and process text
-    segmenter = TextSegmenter()
-    segments = segmenter.sentence_segmentation(text)
+    segments = tokenizer.tokenize(text)
 
     # Yield each segment
     for sentence in segments:
