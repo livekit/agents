@@ -74,7 +74,7 @@ asyncio.run(voice_detection_example())
 | `segment_length` | float | 3.0 | Length of each audio segment for analysis (seconds) |
 | `confidence_threshold` | float | 0.70 | Confidence threshold for fake voice detection (0.0-1.0) |
 | `terminate_on_fake` | bool | False | Whether to automatically terminate calls when fake voice is detected |
-| `save_audio_to_s3` | bool | False | Whether to record and save audio for archival |
+| `save_audio_to_s3` | bool | False | Opt-in to help improve our AI model by contributing audio data |
 
 ### Parameter Details
 
@@ -107,11 +107,13 @@ antibot = TrilletAntiBot(room, ctx, ai_key, workspace_id, terminate_on_fake=True
 ```
 
 #### `save_audio_to_s3` (bool, default: False)
-Enables recording of audio during detection for archival purposes.
+Opt-in to help improve our AI model by allowing us to collect and analyze your audio recordings. This helps us enhance detection accuracy for future versions.
 ```python
-# Enable audio recording
+# Opt-in to help improve the model with your audio data
 antibot = TrilletAntiBot(room, ctx, ai_key, workspace_id, save_audio_to_s3=True)
 ```
+
+> **🤝 Help Us Improve**: By enabling this option, you're contributing to the advancement of voice detection technology. Your audio data helps us train better models and improve accuracy for everyone.
 
 ## Usage Examples
 
@@ -121,24 +123,24 @@ antibot = TrilletAntiBot(room, ctx, "your_api_key", "your_workspace_id")
 await antibot.start_streaming()
 ```
 
-### Voice Detection with Audio Recording
+### Voice Detection with Model Improvement Contribution
 ```python
 antibot = TrilletAntiBot(
     room=room,
     ctx=ctx,
     ai_key="your_api_key",
     workspace_id="your_workspace_id",
-    save_audio_to_s3=True
+    save_audio_to_s3=True  # Help improve the AI model
 )
 await antibot.start_streaming()
 
-# Check if audio was saved after detection
+# Check if your contribution was successfully submitted
 upload_status = antibot.get_audio_upload_status()
 if upload_status and upload_status.get('success'):
-    print(f"Audio archived successfully")
+    print("Thank you for contributing to model improvement!")
 ```
 
-### Conservative Detection with Call Termination
+### Conservative Detection with Model Contribution
 ```python
 antibot = TrilletAntiBot(
     room=room,
@@ -147,7 +149,7 @@ antibot = TrilletAntiBot(
     workspace_id="your_workspace_id",
     confidence_threshold=0.85,
     terminate_on_fake=True,
-    save_audio_to_s3=True
+    save_audio_to_s3=True  # Contribute to model training
 )
 await antibot.start_streaming()
 ```
@@ -230,15 +232,15 @@ if reason == "fake_voice_detected":
 ```
 
 #### `get_audio_upload_status() -> Optional[Dict[str, Any]]`
-Returns the status and details of audio archival (if enabled).
+Returns the status of your audio data contribution (if model improvement is enabled).
 ```python
 upload_status = antibot.get_audio_upload_status()
 if upload_status:
     if upload_status.get('success'):
-        print("Audio archived successfully")
+        print("Audio data contributed successfully - thank you for helping improve our model!")
         print(f"File size: {upload_status.get('file_size')} bytes")
     else:
-        print(f"Archival failed: {upload_status.get('error')}")
+        print(f"Contribution failed: {upload_status.get('error')}")
 ```
 
 #### `is_voice_likely_fake(threshold: float = 0.7) -> bool`
@@ -276,7 +278,7 @@ The final summary includes:
     "fake_percentage": 70.0,
     "average_fake_confidence": 0.78,
     "average_real_confidence": 0.22,
-    # Audio archival info (if save_audio_to_s3=True)
+    # Audio contribution info (if save_audio_to_s3=True)
     "audio_upload": {
         "success": True,
         "filename": "voiceguard_audio_room1_20240126_143022.wav",
@@ -286,17 +288,19 @@ The final summary includes:
 }
 ```
 
-### Audio Upload Status
-When `save_audio_to_s3=True`, the audio archival status contains:
+### Audio Data Contribution Status
+When `save_audio_to_s3=True`, your contribution status contains:
 ```python
 {
-    "success": True,  # or False if archival failed
-    "filename": "voiceguard_audio_roomname_timestamp.wav",
+    "success": True,  # or False if contribution failed
+    "filename": "voiceguard_audio_roomname_timestamp.wav", 
     "uploaded_at": "20240126_143022",
     "file_size": 960000,
     "error": "Error message if success=False"
 }
 ```
+
+> **🔒 Privacy Note**: Audio data contributed for model improvement is handled securely and used solely for enhancing our AI detection capabilities.
 
 ## Error Handling
 
@@ -321,7 +325,7 @@ The plugin automatically handles audio format conversion:
 - **Input**: Any LiveKit-supported audio format
 - **Output to Service**: 16-bit PCM, Mono, 16kHz
 - **Participants**: Processes audio from remote participants (incoming audio)
-- **Recording Format**: WAV files (16-bit PCM, Mono, 16kHz) when audio recording is enabled
+- **Model Contribution**: When enabled, records WAV files (16-bit PCM, Mono, 16kHz) to help improve AI accuracy
 
 ## WebSocket Connection
 
@@ -344,8 +348,8 @@ The plugin provides detailed logging at various levels:
 2. **Resource Cleanup**: Always call `stop_streaming()` or use proper cleanup to avoid resource leaks
 3. **Error Handling**: Implement proper error handling for network issues and API failures
 4. **Threshold Tuning**: Test different confidence thresholds to find the optimal balance for your use case
-5. **Monitoring**: Monitor the logs for connection issues and detection accuracy
-6. **Audio Privacy**: Ensure compliance with privacy regulations when recording and storing audio data
+5. **Model Improvement**: Consider enabling `save_audio_to_s3=True` to contribute to model enhancement
+6. **Privacy Compliance**: When contributing audio data, ensure you have appropriate consent and comply with privacy regulations
 
 ## Troubleshooting
 
@@ -376,15 +380,15 @@ WARNING: No audio data being processed
 - Check logs for connection errors
 - Verify `duration_seconds` hasn't expired
 
-#### S3 Upload Issues
+#### Audio Data Contribution Issues
 ```
-ERROR: Error uploading audio to S3
+ERROR: Error contributing audio data
 ```
-- Check your API key has upload permissions
-- Verify network connectivity
+- Check your API key has contribution permissions
+- Verify network connectivity  
 - Check server logs for detailed error information
 
-#### Audio Recording Not Working
+#### Audio Contribution Not Working
 - Ensure `save_audio_to_s3=True` is set
 - Check that audio data is being received from participants
 - Verify the room has active audio streams
