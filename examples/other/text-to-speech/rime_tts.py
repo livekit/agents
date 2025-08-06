@@ -4,9 +4,8 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
-from livekit.plugins import rime
 from livekit.agents.tokenize import blingfire
-
+from livekit.plugins import rime
 
 # Initialize environment and logging
 load_dotenv()
