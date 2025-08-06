@@ -589,6 +589,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         drain: bool = False,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
+        if self._root_span_context:
+            # make `activity.drain` and `on_exit` under the root span
+            otel_context.attach(self._root_span_context)
+
         async with self._lock:
             if not self._started:
                 return
