@@ -29,7 +29,6 @@ from livekit.plugins import (
     hume,
     inworld,
     lmnt,
-    murfai,
     neuphonic,
     openai,
     playai,
@@ -257,13 +256,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": murfai.TTS(),
-            "proxy-upstream": "api.murf.ai:443",
-        },
-        id="murfai",
     ),
 ]
 
