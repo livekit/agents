@@ -25,10 +25,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
         sample_rate: int,
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
+        track_name: str = "roomio_audio",
         queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
     ) -> None:
         super().__init__(label="RoomIO", next_in_chain=None, sample_rate=sample_rate)
         self._room = room
+        self._track_name = track_name
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
@@ -45,7 +47,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
     async def _publish_track(self) -> None:
         async with self._lock:
-            track = rtc.LocalAudioTrack.create_audio_track("roomio_audio", self._audio_source)
+            track = rtc.LocalAudioTrack.create_audio_track(self._track_name, self._audio_source)
             self._publication = await self._room.local_participant.publish_track(
                 track, self._publish_options
             )
@@ -281,10 +283,12 @@ class _ParticipantStreamTranscriptionOutput:
         *,
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
+        attributes: dict[str, str] | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
+        self._additional_attributes = attributes or {}
 
         self._writer: rtc.TextStreamWriter | None = None
 
@@ -331,6 +335,10 @@ class _ParticipantStreamTranscriptionOutput:
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
         attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
+
+        for key, val in self._additional_attributes.items():
+            if key not in attributes:
+                attributes[key] = val
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
