@@ -18,7 +18,7 @@ from livekit import rtc
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..telemetry import trace_types, tracer
+from ..telemetry import trace_types, tracer, utils as telemetry_utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio, audio, codecs, log_exceptions
 
@@ -225,7 +225,13 @@ class ChunkedStream(ABC):
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                await self._run(output_emitter)
+                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        await self._run(output_emitter)
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
+                        raise
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
@@ -345,7 +351,13 @@ class SynthesizeStream(ABC):
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                await self._run(output_emitter)
+                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        await self._run(output_emitter)
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
+                        raise
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors

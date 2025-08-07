@@ -6,6 +6,7 @@ from typing import Any
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from .stream_pacer import SentenceStreamPacer
 from .tts import (
     TTS,
     AudioEmitter,
@@ -27,6 +28,7 @@ class StreamAdapter(TTS):
         *,
         tts: TTS,
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        text_pacing: SentenceStreamPacer | bool = False,
     ) -> None:
         super().__init__(
             capabilities=TTSCapabilities(streaming=True, aligned_transcript=True),
@@ -37,6 +39,11 @@ class StreamAdapter(TTS):
         self._sentence_tokenizer = sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
             retain_format=True
         )
+        self._stream_pacer: SentenceStreamPacer | None = None
+        if text_pacing is True:
+            self._stream_pacer = SentenceStreamPacer()
+        elif isinstance(text_pacing, SentenceStreamPacer):
+            self._stream_pacer = text_pacing
 
         @self._wrapped_tts.on("metrics_collected")
         def _forward_metrics(*args: Any, **kwargs: Any) -> None:
@@ -62,12 +69,18 @@ class StreamAdapterWrapper(SynthesizeStream):
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._tts: StreamAdapter = tts
         self._wrapped_tts_conn_options = conn_options
-        self._sent_stream = tts._sentence_tokenizer.stream()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         pass  # do nothing
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
+        sent_stream = self._tts._sentence_tokenizer.stream()
+        if self._tts._stream_pacer:
+            sent_stream = self._tts._stream_pacer.wrap(
+                sent_stream=sent_stream,
+                audio_emitter=output_emitter,
+            )
+
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -83,18 +96,18 @@ class StreamAdapterWrapper(SynthesizeStream):
         async def _forward_input() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_stream.flush()
+                    sent_stream.flush()
                     continue
 
-                self._sent_stream.push_text(data)
+                sent_stream.push_text(data)
 
-            self._sent_stream.end_input()
+            sent_stream.end_input()
 
         async def _synthesize() -> None:
             from ..voice.io import TimedString
 
             duration = 0.0
-            async for ev in self._sent_stream:
+            async for ev in sent_stream:
                 output_emitter.push_timed_transcript(
                     TimedString(text=ev.token, start_time=duration)
                 )
@@ -117,4 +130,5 @@ class StreamAdapterWrapper(SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
+            await sent_stream.aclose()
             await utils.aio.cancel_and_wait(*tasks)
