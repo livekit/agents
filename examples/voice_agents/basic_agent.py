@@ -7,7 +7,6 @@ from livekit.agents import (
     Agent,
     AgentFalseInterruptionEvent,
     AgentSession,
-    ConversationItemAddedEvent,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
