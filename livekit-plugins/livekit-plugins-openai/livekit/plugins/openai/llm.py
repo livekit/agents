@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -59,6 +59,8 @@ from .utils import AsyncAzureADTokenProvider, to_fnc_ctx
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
+Verbosity = Literal["low", "medium", "high"]
+
 
 @dataclass
 class _LLMOptions:
@@ -75,6 +77,7 @@ class _LLMOptions:
     max_completion_tokens: NotGivenOr[int]
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
+    verbosity: NotGivenOr[Verbosity]
 
 
 class LLM(llm.LLM):
@@ -98,6 +101,7 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -125,6 +129,7 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            verbosity=verbosity,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
@@ -682,6 +687,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.top_p):
             extra["top_p"] = self._opts.top_p
+
+        if is_given(self._opts.verbosity):
+            extra["verbosity"] = self._opts.verbosity
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
