@@ -435,7 +435,7 @@ async def entrypoint(ctx: JobContext):
     room_translator = RoomTranslator(
         ctx.room,
         # for testing, uncomment to add additional languages to translate to
-        # additional_languages=["zh"],
+        # additional_languages=[],
     )
     room_translator.start()
 
