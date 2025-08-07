@@ -5,7 +5,7 @@ import json
 import math
 from collections.abc import AsyncIterator
 from dataclasses import asdict
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 from livekit import rtc
 
@@ -24,6 +24,9 @@ class DataStreamAudioOutput(AudioOutput):
     """
     AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
     """  # noqa: E501
+
+    _playback_finished_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
+    _playback_finished_rpc_registered: bool = False
 
     def __init__(
         self,
@@ -58,8 +61,10 @@ class DataStreamAudioOutput(AudioOutput):
 
             await self._room_connected_fut
 
-            self._room.local_participant.register_rpc_method(
-                RPC_PLAYBACK_FINISHED, self._handle_playback_finished
+            self._register_playback_finished_rpc(
+                self._room,
+                caller_identity=self._destination_identity,
+                handler=self._handle_playback_finished,
             )
             logger.debug(
                 "waiting for the remote participant",
@@ -148,6 +153,11 @@ class DataStreamAudioOutput(AudioOutput):
             )
             return "reject"
 
+        logger.info(
+            "playback finished event received",
+            extra={"caller_identity": data.caller_identity},
+        )
+
         event = PlaybackFinishedEvent(**json.loads(data.payload))
         self.on_playback_finished(
             playback_position=event.playback_position,
@@ -159,6 +169,34 @@ class DataStreamAudioOutput(AudioOutput):
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
 
+    @classmethod
+    def _register_playback_finished_rpc(
+        cls,
+        room: rtc.Room,
+        *,
+        caller_identity: str,
+        handler: Callable[[rtc.RpcInvocationData], str],
+    ) -> None:
+        cls._playback_finished_handlers[caller_identity] = handler
+
+        if cls._playback_finished_rpc_registered:
+            return
+
+        def _handler(data: rtc.RpcInvocationData) -> str:
+            if data.caller_identity not in cls._playback_finished_handlers:
+                logger.warning(
+                    "playback finished event received from unexpected participant",
+                    extra={
+                        "caller_identity": data.caller_identity,
+                        "expected_identities": list(cls._playback_finished_handlers.keys()),
+                    },
+                )
+                return "reject"
+            return cls._playback_finished_handlers[data.caller_identity](data)
+
+        room.local_participant.register_rpc_method(RPC_PLAYBACK_FINISHED, _handler)
+        cls._playback_finished_rpc_registered = True
+
 
 class DataStreamAudioReceiver(AudioReceiver):
     """
@@ -166,6 +204,9 @@ class DataStreamAudioReceiver(AudioReceiver):
     If the sender_identity is provided, subscribe to the specified participant. If not provided,
     subscribe to the first agent participant in the room.
     """
+
+    _clear_buffer_rpc_registered: bool = False
+    _clear_buffer_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
 
     def __init__(
         self,
@@ -233,7 +274,11 @@ class DataStreamAudioReceiver(AudioReceiver):
             self._stream_readers.append(reader)
             self._stream_reader_changed.set()
 
-        self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
+        self._register_clear_buffer_rpc(
+            self._room,
+            caller_identity=self._remote_participant.identity,
+            handler=_handle_clear_buffer,
+        )
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
@@ -349,3 +394,31 @@ class DataStreamAudioReceiver(AudioReceiver):
         self._stream_reader_changed.set()
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
+
+    @classmethod
+    def _register_clear_buffer_rpc(
+        cls,
+        room: rtc.Room,
+        *,
+        caller_identity: str,
+        handler: Callable[[rtc.RpcInvocationData], str],
+    ) -> None:
+        cls._clear_buffer_handlers[caller_identity] = handler
+
+        if cls._clear_buffer_rpc_registered:
+            return
+
+        def _handler(data: rtc.RpcInvocationData) -> str:
+            if data.caller_identity not in cls._clear_buffer_handlers:
+                logger.warning(
+                    "clear buffer event received from unexpected participant",
+                    extra={
+                        "caller_identity": data.caller_identity,
+                        "expected_identities": list(cls._clear_buffer_handlers.keys()),
+                    },
+                )
+                return "reject"
+            return cls._clear_buffer_handlers[data.caller_identity](data)
+
+        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handler)
+        cls._clear_buffer_rpc_registered = True
