@@ -34,6 +34,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from openai.types import ReasoningEffort
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageParam,
@@ -52,6 +53,7 @@ from .models import (
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
+    _supports_reasoning_effort,
 )
 from .utils import AsyncAzureADTokenProvider, to_fnc_ctx
 
@@ -62,33 +64,41 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 class _LLMOptions:
     model: str | ChatModels
     user: NotGivenOr[str]
+    safety_identifier: NotGivenOr[str]
+    prompt_cache_key: NotGivenOr[str]
     temperature: NotGivenOr[float]
+    top_p: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
     max_completion_tokens: NotGivenOr[int]
     service_tier: NotGivenOr[str]
+    reasoning_effort: NotGivenOr[ReasoningEffort]
 
 
 class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "gpt-4o",
+        model: str | ChatModels = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
-        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -97,6 +107,10 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
+
+        if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
+            reasoning_effort = "minimal"
+
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -107,6 +121,10 @@ class LLM(llm.LLM):
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
             service_tier=service_tier,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
@@ -145,10 +163,14 @@ class LLM(llm.LLM):
         project: str | None = None,
         base_url: str | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -183,12 +205,16 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
     def with_cerebras(
         *,
-        model: str | CerebrasChatModels = "llama3.1-8b",
+        model: str | CerebrasChatModels = "llama-4-scout-17b-16e-instruct",
         api_key: str | None = None,
         base_url: str = "https://api.cerebras.ai/v1",
         client: openai.AsyncClient | None = None,
@@ -196,6 +222,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -219,6 +249,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -232,6 +266,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -255,6 +293,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -268,6 +310,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of XAI LLM.
@@ -291,6 +337,10 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             # TODO(long): add provider fmt for grok
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -304,6 +354,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -327,6 +381,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -340,6 +398,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -363,6 +425,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -374,6 +440,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -387,6 +457,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -400,6 +474,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -423,6 +501,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -436,6 +518,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -459,6 +545,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -472,6 +562,10 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -495,6 +589,10 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
         )
 
     @staticmethod
@@ -572,6 +670,18 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.reasoning_effort):
+            extra["reasoning_effort"] = self._opts.reasoning_effort
+
+        if is_given(self._opts.safety_identifier):
+            extra["safety_identifier"] = self._opts.safety_identifier
+
+        if is_given(self._opts.prompt_cache_key):
+            extra["prompt_cache_key"] = self._opts.prompt_cache_key
+
+        if is_given(self._opts.top_p):
+            extra["top_p"] = self._opts.top_p
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls

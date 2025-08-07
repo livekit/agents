@@ -23,6 +23,17 @@ LLMModels = Literal[
     "qwen/qwen3-32b",
 ]
 
+
+def _is_reasoning_model(model: LLMModels | str) -> bool:
+    return model in [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "moonshotai/kimi-k2-instruct",
+        "qwen/qwen3-32b",
+        "deepseek-r1-distill-llama-70b",
+    ]
+
+
 TTSModels = Literal[
     "playai-tts",
     "playai-tts-arabic",
