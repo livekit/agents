@@ -242,7 +242,7 @@ class _ParticipantLegacyTranscriptionOutput:
     ) -> None:
         if (
             not self._is_local_proxy_participant(participant)
-            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
         ):
             return
 
@@ -255,7 +255,7 @@ class _ParticipantLegacyTranscriptionOutput:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
-            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
         ):
             return
 
@@ -398,7 +398,7 @@ class _ParticipantStreamTranscriptionOutput:
         if (
             self._participant_identity is None
             or participant.identity != self._participant_identity
-            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
         ):
             return
 
@@ -408,7 +408,7 @@ class _ParticipantStreamTranscriptionOutput:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
-            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
         ):
             return
 
