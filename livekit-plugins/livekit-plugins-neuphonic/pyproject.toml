@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.2.3",
+    "livekit-agents>=1.2.4",
 ]
 
 [project.urls]
