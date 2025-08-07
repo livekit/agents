@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -37,7 +36,6 @@ from .log import logger
 from .models import TTSEncoding, TTSModels
 
 NUM_CHANNELS = 1
-SENTENCE_END_REGEX = re.compile(r".*[.—!?,;:…।|]$")
 SMALLEST_BASE_URL = "https://waves-api.smallest.ai/api/v1"
 
 
@@ -183,11 +181,6 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the chunked synthesis process."""
-
-        self._chunk_size = 250
-        if self._opts.model == "lightning-large" or self._opts.model == "lightning-v2":
-            self._chunk_size = 140
-
         try:
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
@@ -212,7 +205,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    mime_type=f"audio/{self._opts.output_format}",
                 )
 
                 async for data, _ in resp.content.iter_chunks():

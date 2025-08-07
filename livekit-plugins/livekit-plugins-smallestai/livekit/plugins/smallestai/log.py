@@ -1,4 +1,4 @@
 # Simple logger for the plugin
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("livekit.plugins.smallestai")
