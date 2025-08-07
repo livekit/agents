@@ -49,6 +49,7 @@ from .models import (
     DeepSeekChatModels,
     OctoChatModels,
     PerplexityChatModels,
+    ReasoningEffort,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
@@ -69,6 +70,7 @@ class _LLMOptions:
     metadata: NotGivenOr[dict[str, str]]
     max_completion_tokens: NotGivenOr[int]
     service_tier: NotGivenOr[str]
+    reasoning_effort: NotGivenOr[ReasoningEffort]
 
 
 class LLM(llm.LLM):
@@ -89,6 +91,7 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -107,6 +110,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
             service_tier=service_tier,
+            reasoning_effort=reasoning_effort,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
@@ -572,6 +576,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.reasoning_effort):
+            extra["reasoning_effort"] = self._opts.reasoning_effort
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls

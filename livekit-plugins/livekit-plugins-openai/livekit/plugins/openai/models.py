@@ -54,6 +54,8 @@ EmbeddingModels = Literal[
 
 AssistantTools = Literal["code_interpreter", "file_search", "function"]
 
+ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+
 # adapters for OpenAI-compatible LLMs
 
 TelnyxChatModels = Literal[
