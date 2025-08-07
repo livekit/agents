@@ -205,6 +205,9 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
+    _clear_buffer_rpc_registered: bool = False
+    _clear_buffer_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
+
     def __init__(
         self,
         room: rtc.Room,
@@ -271,7 +274,11 @@ class DataStreamAudioReceiver(AudioReceiver):
             self._stream_readers.append(reader)
             self._stream_reader_changed.set()
 
-        self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
+        self._register_clear_buffer_rpc(
+            self._room,
+            caller_identity=self._remote_participant.identity,
+            handler=_handle_clear_buffer,
+        )
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
@@ -387,3 +394,31 @@ class DataStreamAudioReceiver(AudioReceiver):
         self._stream_reader_changed.set()
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
+
+    @classmethod
+    def _register_clear_buffer_rpc(
+        cls,
+        room: rtc.Room,
+        *,
+        caller_identity: str,
+        handler: Callable[[rtc.RpcInvocationData], str],
+    ) -> None:
+        cls._clear_buffer_handlers[caller_identity] = handler
+
+        if cls._clear_buffer_rpc_registered:
+            return
+
+        def _handler(data: rtc.RpcInvocationData) -> str:
+            if data.caller_identity not in cls._clear_buffer_handlers:
+                logger.warning(
+                    "clear buffer event received from unexpected participant",
+                    extra={
+                        "caller_identity": data.caller_identity,
+                        "expected_identities": list(cls._clear_buffer_handlers.keys()),
+                    },
+                )
+                return "reject"
+            return cls._clear_buffer_handlers[data.caller_identity](data)
+
+        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handler)
+        cls._clear_buffer_rpc_registered = True
