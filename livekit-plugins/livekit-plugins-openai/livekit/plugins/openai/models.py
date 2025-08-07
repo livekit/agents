@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Union
 
 from openai.types import AudioModel
 
@@ -211,7 +211,7 @@ XAIChatModels = Literal[
 ]
 
 
-def _supports_reasoning_effort(model: ChatModels) -> bool:
+def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
     return model in [
         "gpt-5",
         "gpt-5-mini",
