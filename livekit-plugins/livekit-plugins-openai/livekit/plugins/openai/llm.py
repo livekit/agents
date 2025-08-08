@@ -836,7 +836,7 @@ class LLMStream(llm.LLMStream):
                     call_chunk = llm.ChatChunk(
                         id=id,
                         delta=llm.ChoiceDelta(
-                            role="assistant",
+                            role=delta.role,
                             content=delta.content,
                             tool_calls=[
                                 llm.FunctionToolCall(
@@ -864,7 +864,7 @@ class LLMStream(llm.LLMStream):
             call_chunk = llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
-                    role="assistant",
+                    role=delta.role,
                     content=delta.content,
                     tool_calls=[
                         llm.FunctionToolCall(
@@ -885,5 +885,5 @@ class LLMStream(llm.LLMStream):
 
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
+            delta=llm.ChoiceDelta(content=delta.content, role=delta.role),
         )
