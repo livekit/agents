@@ -55,7 +55,7 @@ class LLMAdapter(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "LangGraphStream":
+    ) -> LangGraphStream:
         return LangGraphStream(
             self,
             chat_ctx=chat_ctx,
