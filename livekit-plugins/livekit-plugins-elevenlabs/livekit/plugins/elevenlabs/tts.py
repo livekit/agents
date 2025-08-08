@@ -35,8 +35,10 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import TTSEncoding, TTSModels
@@ -88,6 +90,7 @@ class _TTSOptions:
     chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
     inactivity_timeout: int
+    sync_alignment: bool
     auto_mode: NotGivenOr[bool]
 
 
@@ -109,6 +112,7 @@ class TTS(tts.TTS):
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
+        sync_alignment: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -127,6 +131,7 @@ class TTS(tts.TTS):
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
+            sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
         """  # noqa: E501
 
         if not is_given(encoding):
@@ -135,6 +140,7 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
+                aligned_transcript=sync_alignment,
             ),
             sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
@@ -150,7 +156,7 @@ class TTS(tts.TTS):
             word_tokenizer = (
                 tokenize.basic.WordTokenizer(ignore_punctuation=False)
                 if not auto_mode
-                else tokenize.basic.SentenceTokenizer()
+                else tokenize.blingfire.SentenceTokenizer()
             )
         elif auto_mode and not isinstance(word_tokenizer, tokenize.SentenceTokenizer):
             logger.warning(
@@ -172,6 +178,7 @@ class TTS(tts.TTS):
             enable_ssml_parsing=enable_ssml_parsing,
             language=language,
             inactivity_timeout=inactivity_timeout,
+            sync_alignment=sync_alignment,
             auto_mode=auto_mode,
         )
         self._session = http_session
@@ -425,6 +432,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task() -> None:
             nonlocal eos_sent
 
+            # sync alignment
+            text_buffer = ""
+            start_times_ms: list[int] = []
+            durations_ms: list[int] = []
+
             while True:
                 msg = await ws_conn.receive()
                 if msg.type in (
@@ -443,16 +455,33 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
-                if data.get("audio"):
+
+                if data.get("error"):
+                    raise APIError(message=data["error"])
+
+                if alignment := data.get("alignment"):
+                    # 11labs aligns timestamps at the character level
+                    text_buffer += "".join(alignment["chars"])
+                    start_times_ms += alignment["charStartTimesMs"]
+                    durations_ms += alignment["charDurationsMs"]
+                    timed_words, text_buffer = _to_timed_words(
+                        text_buffer, start_times_ms, durations_ms
+                    )
+                    output_emitter.push_timed_transcript(timed_words)
+                    start_times_ms = start_times_ms[-len(text_buffer) :]
+                    durations_ms = durations_ms[-len(text_buffer) :]
+
+                if data.get("audio") is not None:
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("isFinal"):
+                    output_emitter.push_timed_transcript(
+                        _to_timed_words(text_buffer, start_times_ms, durations_ms, flush=True)[0]
+                    )
                     output_emitter.end_input()
                     return  # 11labs only allow one segment per connection
-                elif data.get("error"):
-                    raise APIError(message=data["error"])
                 else:
-                    raise APIError("unexpected 11labs message {data}")
+                    raise APIError(f"unexpected 11labs message {data}")
 
         tasks = [
             asyncio.create_task(send_task()),
@@ -508,7 +537,39 @@ def _stream_url(opts: _TTSOptions) -> str:
         url += f"&language_code={language}"
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
+    if opts.sync_alignment:
+        url += "&sync_alignment=true"
     if is_given(opts.auto_mode):
         url += f"&auto_mode={opts.auto_mode}"
 
     return url
+
+
+def _to_timed_words(
+    text: str, start_times_ms: list[int], durations_ms: list[int], flush: bool = False
+) -> tuple[list[TimedString], str]:
+    """Return timed words and the remaining text"""
+    if not text:
+        return [], ""
+
+    timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
+
+    words = split_words(text, ignore_punctuation=False, split_character=True)
+    timed_words = []
+    _, start_indices, _ = zip(*words)
+    end = 0
+    # we don't know if the last word is complete, always leave it as remaining
+    for start, end in zip(start_indices[:-1], start_indices[1:]):
+        start_t = timestamps[start] / 1000
+        end_t = timestamps[end] / 1000
+        timed_words.append(
+            TimedString(text=text[start:end], start_time=start_t, end_time=end_t),
+        )
+
+    if flush:
+        start_t = timestamps[end] / 1000
+        end_t = timestamps[-1] / 1000
+        timed_words.append(TimedString(text=text[end:], start_time=start_t, end_time=end_t))
+        end = len(text)
+
+    return timed_words, text[end:]

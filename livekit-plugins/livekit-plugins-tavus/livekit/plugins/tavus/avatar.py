@@ -80,13 +80,10 @@ class AvatarSession:
 
         try:
             job_ctx = get_job_context()
-            decoded = job_ctx.decode_token()
-            local_participant_identity = decoded["sub"]
-        except (RuntimeError, KeyError):
+            local_participant_identity = job_ctx.token_claims().identity
+        except RuntimeError as e:
             if not room.isconnected():
-                raise TavusException(
-                    "local participant identity not found in token, and room is not connected"
-                ) from None
+                raise TavusException("failed to get local participant identity") from e
             local_participant_identity = room.local_participant.identity
 
         livekit_token = (

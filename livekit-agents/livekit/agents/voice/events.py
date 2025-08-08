@@ -41,6 +41,8 @@ class RunContext(Generic[Userdata_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
 
+        self._initial_step_idx = speech_handle.num_steps - 1
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -57,12 +59,33 @@ class RunContext(Generic[Userdata_T]):
     def userdata(self) -> Userdata_T:
         return self.session.userdata
 
+    def disallow_interruptions(self) -> None:
+        """Disable interruptions for this FunctionCall.
+
+        Delegates to the SpeechHandle.allow_interruptions setter,
+        which will raise a RuntimeError if the handle is already interrupted.
+
+        Raises:
+            RuntimeError: If the SpeechHandle is already interrupted.
+        """
+        self.speech_handle.allow_interruptions = False
+
+    async def wait_for_playout(self) -> None:
+        """Waits for the speech playout corresponding to this function call step.
+
+        Unlike `SpeechHandle.wait_for_playout`, which waits for the full
+        assistant turn to complete (including all function tools),
+        this method only waits for the assistant's spoken response prior running
+        this tool to finish playing."""
+        await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
+
 
 EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
     "conversation_item_added",
+    "agent_false_interruption",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -93,6 +116,17 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentFalseInterruptionEvent(BaseModel):
+    type: Literal["agent_false_interruption"] = "agent_false_interruption"
+    message: ChatMessage | None
+    """The `assistant` message that got interrupted"""
+    extra_instructions: str | None = None
+    """Optional instructions originally passed to `AgentSession.generate_reply` via the `instructions` argument.
+    Populated only if the user interrupted a speech response generated using `session.generate_reply`.
+    Useful for understanding what the agent was attempting to convey before the interruption."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -156,6 +190,7 @@ class CloseReason(str, Enum):
     JOB_SHUTDOWN = "job_shutdown"
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
+    TASK_COMPLETED = "task_completed"
 
 
 class CloseEvent(BaseModel):
@@ -170,6 +205,7 @@ AgentEvent = Annotated[
         UserInputTranscribedEvent,
         UserStateChangedEvent,
         AgentStateChangedEvent,
+        AgentFalseInterruptionEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,

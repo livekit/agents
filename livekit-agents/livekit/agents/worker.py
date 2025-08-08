@@ -24,7 +24,6 @@ import multiprocessing as mp
 import os
 import sys
 import threading
-import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -38,9 +37,8 @@ from aiohttp import web
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
-from . import http_server, ipc, utils
+from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError
-from .debug import tracing
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -53,7 +51,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .types import NOT_GIVEN, NotGivenOr
-from .utils import is_given
+from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -143,6 +141,9 @@ class _WorkerEnvOption(Generic[T]):
         return opt
 
 
+_default_load_threshold = _WorkerEnvOption(dev_default=math.inf, prod_default=0.7)
+
+
 # NOTE: this object must be pickle-able
 @dataclass
 class WorkerOptions:
@@ -158,12 +159,10 @@ class WorkerOptions:
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
-    load_threshold: float | _WorkerEnvOption[float] = _WorkerEnvOption(
-        dev_default=math.inf, prod_default=0.75
-    )
+    load_threshold: float | _WorkerEnvOption[float] = _default_load_threshold
     """When the load exceeds this threshold, the worker will be marked as unavailable.
 
-    Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
+    Defaults to 0.7 on "production" mode, and is disabled in "development" mode.
     """
 
     job_memory_warn_mb: float = 500
@@ -226,6 +225,8 @@ class WorkerOptions:
 
     By default it uses "spawn" on all platforms, but "forkserver" on Linux.
     """
+    prometheus_port: NotGivenOr[int] = NOT_GIVEN
+    """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
@@ -278,6 +279,18 @@ class Worker(utils.EventEmitter[EventTypes]):
         if not is_given(opts.http_proxy):
             opts.http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
+        if opts._worker_token:
+            if opts.load_fnc != _DefaultLoadCalc.get_load:
+                logger.warning(
+                    "custom load_fnc is not supported when hosting on Cloud, reverting to default"
+                )
+                opts.load_fnc = _DefaultLoadCalc.get_load
+            if opts.load_threshold != _default_load_threshold:
+                logger.warning(
+                    "custom load_threshold is not supported when hosting on Cloud, reverting to default"
+                )
+                opts.load_threshold = _default_load_threshold
+
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
 
@@ -296,7 +309,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         if len(_InferenceRunner.registered_runners) > 0:
             self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
                 runners=_InferenceRunner.registered_runners,
-                initialize_timeout=30,
+                initialize_timeout=opts.initialize_process_timeout,
                 close_timeout=5,
                 memory_warn_mb=2000,
                 memory_limit_mb=0,  # no limit
@@ -334,6 +347,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         async def health_check(_: Any) -> web.Response:
+            if self._inference_executor and not self._inference_executor.is_alive():
+                return web.Response(status=503, text="inference process not running")
+
             return web.Response(text="OK")
 
         async def worker(_: Any) -> web.Response:
@@ -342,47 +358,25 @@ class Worker(utils.EventEmitter[EventTypes]):
                     "agent_name": self._opts.agent_name,
                     "worker_type": agent.JobType.Name(self._opts.worker_type.value),
                     "active_jobs": len(self.active_jobs),
+                    "sdk_version": __version__,
+                    "project_type": "python",
                 }
             )
             return web.Response(body=body, content_type="application/json")
 
         self._http_server.app.add_routes([web.get("/", health_check)])
         self._http_server.app.add_routes([web.get("/worker", worker)])
-        self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
+
+        self._prometheus_server: telemetry.http_server.HttpServer | None = None
+        if is_given(self._opts.prometheus_port):
+            self._prometheus_server = telemetry.http_server.HttpServer(
+                opts.host, self._opts.prometheus_port, loop=self._loop
+            )
 
         self._conn_task: asyncio.Task[None] | None = None
         self._load_task: asyncio.Task[None] | None = None
 
         self._worker_load: float = 0.0
-        self._worker_load_graph = tracing.Tracing.add_graph(
-            title="worker_load",
-            x_label="time",
-            y_label="load",
-            x_type="time",
-            y_range=(0, 1),
-            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
-        )
-
-        default_num_idle_processes = _WorkerEnvOption.getvalue(
-            self._opts.num_idle_processes, self._devmode
-        )
-        self._num_idle_target_graph = tracing.Tracing.add_graph(
-            title="num_idle_processes_target",
-            x_label="time",
-            y_label="target",
-            x_type="time",
-            y_range=(0, default_num_idle_processes),
-            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
-        )
-
-        self._num_idle_process_graph = tracing.Tracing.add_graph(
-            title="num_idle_processes",
-            x_label="time",
-            y_label="idle",
-            x_type="time",
-            y_range=(0, default_num_idle_processes),
-            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
-        )
 
     @property
     def worker_info(self) -> WorkerInfo:
@@ -398,7 +392,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         if self._opts.multiprocessing_context == "forkserver":
-            plugin_packages = [p.package for p in Plugin.registered_plugins]
+            plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
             logger.info("preloading plugins", extra={"packages": plugin_packages})
             self._mp_ctx.set_forkserver_preload(plugin_packages)
 
@@ -415,6 +409,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             t.add_done_callback(self._tasks.discard)
 
         await self._http_server.start()
+
+        if self._prometheus_server:
+            await self._prometheus_server.start()
 
         self._proc_pool.on("process_started", _update_job_status)
         self._proc_pool.on("process_closed", _update_job_status)
@@ -461,12 +458,6 @@ class Worker(utils.EventEmitter[EventTypes]):
                             self._proc_pool.set_target_idle_processes(available_job)
                     else:
                         self._proc_pool.set_target_idle_processes(default_num_idle_processes)
-
-                self._num_idle_target_graph.plot(time.time(), self._proc_pool.target_idle_processes)
-                self._num_idle_process_graph.plot(
-                    time.time(), self._proc_pool._warmed_proc_queue.qsize()
-                )
-                self._worker_load_graph.plot(time.time(), self._worker_load)
 
         tasks = []
         self._load_task = asyncio.create_task(_load_task(), name="load_task")
@@ -602,6 +593,10 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await self._http_session.close()
         await self._http_server.aclose()
+
+        if self._prometheus_server:
+            await self._prometheus_server.aclose()
+
         await self._api.aclose()  # type: ignore
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -924,6 +919,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _update_worker_status(self) -> None:
         job_cnt = len(self.active_jobs)
+
         if self._draining:
             update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)
             msg = agent.WorkerMessage(update_worker=update)

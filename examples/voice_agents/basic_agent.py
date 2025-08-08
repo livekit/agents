@@ -3,10 +3,13 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
+    AgentFalseInterruptionEvent,
     AgentSession,
     JobContext,
     JobProcess,
+    MetricsCollectedEvent,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
@@ -15,7 +18,6 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -32,6 +34,7 @@ class MyAgent(Agent):
         super().__init__(
             instructions="Your name is Kelly. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
+            "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor.",
         )
 
@@ -78,12 +81,21 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=openai.TTS(voice="ash"),
+        # allow the LLM to generate a response while waiting for the end of turn
+        preemptive_generation=True,
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )
 
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
+
+    # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
+    # when it's detected, you may resume the agent's speech
+    @session.on("agent_false_interruption")
+    def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
+        logger.info("false positive interruption, resuming")
+        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
@@ -106,9 +118,6 @@ async def entrypoint(ctx: JobContext):
         ),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
-
-    # join the room when agent is ready
-    await ctx.connect()
 
 
 if __name__ == "__main__":

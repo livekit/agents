@@ -27,12 +27,14 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.12"
 
       - name: Install the project
         run: uv sync --all-extras --dev
 
       - name: Run tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: uv run pytest tests/test_agent_session.py
                   tests/test_tts_fallback.py
                   tests/test_stt_fallback.py
@@ -41,6 +43,8 @@ jobs:
                   tests/test_config.py
                   tests/test_schema_gemini.py
                   tests/test_tokenizer.py
+                  tests/test_workflows.py
+                  tests/test_evals.py
                   tests/test_transcription_filter.py
 
   tests:
@@ -49,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, resemble, openai, mistralai, rime, speechify, hume, inworld]
+        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, openai, rime, speechify, hume, inworld]
 
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}

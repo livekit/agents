@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +31,7 @@ class MessageGeneration:
     message_id: str
     text_stream: AsyncIterable[str]  # could be io.TimedString
     audio_stream: AsyncIterable[rtc.AudioFrame]
+    modalities: Awaitable[list[Literal["text", "audio"]]]
 
 
 @dataclass
@@ -55,6 +57,7 @@ class RealtimeCapabilities:
     turn_detection: bool
     user_transcription: bool
     auto_tool_reply_generation: bool
+    audio_output: bool
 
 
 class RealtimeError(Exception):
@@ -76,6 +79,17 @@ class RealtimeModel:
 
     @abstractmethod
     async def aclose(self) -> None: ...
+
+    async def __aenter__(self) -> RealtimeModel:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 EventTypes = Literal[
@@ -163,7 +177,14 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
 
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None: ...
+    def truncate(
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None: ...
 
     @abstractmethod
     async def aclose(self) -> None: ...

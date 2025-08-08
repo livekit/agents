@@ -35,7 +35,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import Gender, SpeechLanguages
 
-BUFFERED_WORDS_COUNT = 8
 NUM_CHANNELS = 1
 DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
 DEFAULT_LANGUAGE = "en-US"
@@ -131,7 +130,7 @@ class TTS(tts.TTS):
             ssml_gender=ssml_gender,
         )
         if not is_given(tokenizer):
-            tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
+            tokenizer = tokenize.blingfire.SentenceTokenizer()
 
         pronunciations = None if not is_given(custom_pronunciations) else custom_pronunciations
 
