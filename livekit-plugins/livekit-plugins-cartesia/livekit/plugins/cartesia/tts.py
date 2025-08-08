@@ -349,9 +349,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
-                if data.get("type") == "error":
-                    raise APIError(f"Cartesia returned error: {data}")
-
                 segment_id = data.get("context_id")
                 if current_segment_id is None:
                     current_segment_id = segment_id
@@ -372,6 +369,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.push_timed_transcript(
                             TimedString(text=word, start_time=start, end_time=end)
                         )
+                elif data.get("type") == "error":
+                    raise APIError(f"Cartesia returned error: {data}")
                 else:
                     logger.warning("unexpected message %s", data)
 

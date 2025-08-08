@@ -358,6 +358,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                     "agent_name": self._opts.agent_name,
                     "worker_type": agent.JobType.Name(self._opts.worker_type.value),
                     "active_jobs": len(self.active_jobs),
+                    "sdk_version": __version__,
+                    "project_type": "python",
                 }
             )
             return web.Response(body=body, content_type="application/json")
