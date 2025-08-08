@@ -135,10 +135,12 @@ class _ParticipantLegacyTranscriptionOutput:
         *,
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
+        audio_sources: list[rtc.TrackSource.ValueType] | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
+        self._audio_sources = audio_sources or [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
 
         # identity of the participant that on behalf of the current participant
         self._represented_by: str | None = None
@@ -242,7 +244,7 @@ class _ParticipantLegacyTranscriptionOutput:
     ) -> None:
         if (
             not self._is_local_proxy_participant(participant)
-            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
+            or track.source not in self._audio_sources
         ):
             return
 
@@ -255,7 +257,7 @@ class _ParticipantLegacyTranscriptionOutput:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
-            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
+            or track.source not in self._audio_sources
         ):
             return
 
@@ -281,10 +283,12 @@ class _ParticipantStreamTranscriptionOutput:
         *,
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
+        audio_sources: list[rtc.TrackSource.ValueType] | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
+        self._audio_sources = audio_sources or [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
 
         self._writer: rtc.TextStreamWriter | None = None
 
@@ -398,7 +402,7 @@ class _ParticipantStreamTranscriptionOutput:
         if (
             self._participant_identity is None
             or participant.identity != self._participant_identity
-            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
+            or track.source not in self._audio_sources
         ):
             return
 
@@ -408,7 +412,7 @@ class _ParticipantStreamTranscriptionOutput:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
-            or track.source not in [rtc.TrackSource.SOURCE_MICROPHONE, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO]
+            or track.source not in self._audio_sources
         ):
             return
 
@@ -424,6 +428,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
         next_in_chain: io.TextOutput | None = None,
+        audio_sources: list[rtc.TrackSource.ValueType] | None = None,
     ) -> None:
         super().__init__(label="RoomIO", next_in_chain=next_in_chain)
 
@@ -434,11 +439,13 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
+                audio_sources=audio_sources,
             ),
             _ParticipantStreamTranscriptionOutput(
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
+                audio_sources=audio_sources,
             ),
         ]
 
