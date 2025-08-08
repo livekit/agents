@@ -48,6 +48,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    thinking: NotGivenOr[anthropic.types.ThinkingConfigParam]
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -66,6 +67,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        thinking: NotGivenOr[anthropic.types.ThinkingConfigParam] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -82,6 +84,7 @@ class LLM(llm.LLM):
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
+        thinking (ThinkingConfig | ThinkingConfigDict, optional): Configuration for Claude's extended thinking feature. Must include "type": "enabled" and "budget_tokens" (int).
         """  # noqa: E501
 
         super().__init__()
@@ -95,6 +98,7 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            thinking=thinking,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
@@ -143,6 +147,9 @@ class LLM(llm.LLM):
             extra["top_k"] = self._opts.top_k
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
+
+        if is_given(self._opts.thinking):
+            extra["thinking"] = self._opts.thinking
 
         if tools:
             extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
