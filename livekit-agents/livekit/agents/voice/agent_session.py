@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Callable,
     Generic,
     Literal,
     Protocol,
@@ -77,6 +78,7 @@ class VoiceOptions:
     max_tool_steps: int
     user_away_timeout: float | None
     agent_false_interruption_timeout: float | None
+    resume_false_interruption: bool | Callable[[AgentSession, AgentFalseInterruptionEvent], None]
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
@@ -136,6 +138,11 @@ class VoiceActivityVideoSampler:
         return False
 
 
+def _default_false_interruption_cb(session: AgentSession, ev: AgentFalseInterruptionEvent) -> None:
+    logger.info("resuming agent from interruption", extra={"instructions": ev.extra_instructions})
+    session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -157,6 +164,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
         agent_false_interruption_timeout: float | None = 4.0,
+        resume_false_interruption: bool
+        | Callable[[AgentSession, AgentFalseInterruptionEvent], None] = False,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         preemptive_generation: bool = False,
@@ -222,6 +231,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 `agent_false_interruption` event after this amount of time if
                 the user is silent and no user transcript is detected after
                 the interruption. Set to ``None`` to disable. Default ``4.0`` s.
+            resume_false_interruption (bool | Callable[[AgentSession, AgentFalseInterruptionEvent], None], optional):
+                If True, use the default callback to resume the agent from the interruption.
+                If a callable is provided, it will be called with the session and the event.
+                Default ``False``.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
@@ -263,6 +276,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             agent_false_interruption_timeout=agent_false_interruption_timeout,
+            resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
@@ -1025,6 +1039,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         def _emit_event() -> None:
             if self._agent_state != "listening" or self._user_state != "listening":
                 return
+
+            if self._opts.resume_false_interruption is True:
+                _default_false_interruption_cb(self, ev)
+            elif callable(self._opts.resume_false_interruption):
+                self._opts.resume_false_interruption(self, ev)
+
+            if self._events.get("agent_false_interruption"):
+                # deprecate warning
+                logger.warning(
+                    "`agent_false_interruption` event will be deprecated in future versions, "
+                    "use `resume_false_interruption` option of AgentSession instead."
+                )
 
             self.emit("agent_false_interruption", ev)
             self._false_interruption_timer = None
