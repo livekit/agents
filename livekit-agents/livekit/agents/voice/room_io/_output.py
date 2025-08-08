@@ -246,7 +246,7 @@ class _ParticipantLegacyTranscriptionOutput:
     ) -> None:
         if (
             not self._is_local_proxy_participant(participant)
-            or track.source not in self._audio_sources
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
 
@@ -259,7 +259,7 @@ class _ParticipantLegacyTranscriptionOutput:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
-            or track.source not in self._audio_sources
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
 
