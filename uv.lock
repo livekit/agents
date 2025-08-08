@@ -2388,7 +2388,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=1.84.0" },
+    { name = "openai", extras = ["realtime"], specifier = ">=1.99.2" },
 ]
 provides-extras = ["vertex"]
 
@@ -3389,7 +3389,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "1.85.0"
+version = "1.99.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -3401,9 +3401,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/22/3c/1143dc0a865d06482454fddb35d739c9260b18d721f01287f79cc53a315f/openai-1.85.0.tar.gz", hash = "sha256:6ba76e4ebc5725f71f2f6126c7cb5169ca8de60dd5aa61f350f9448ad162c913", size = 468207 }
+sdist = { url = "https://files.pythonhosted.org/packages/72/d3/c372420c8ca1c60e785fd8c19e536cea8f16b0cfdcdad6458e1d8884f2ea/openai-1.99.3.tar.gz", hash = "sha256:1a0e2910e4545d828c14218f2ac3276827c94a043f5353e43b9413b38b497897", size = 504932 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/73/b4427c7873f4f778ec7a6d2b1724fd3aadc85719a12e324615b9c2bc614f/openai-1.85.0-py3-none-any.whl", hash = "sha256:7dc3e839cb8bb8747979a90c63ad4cb25a8e0cbec17b53eec009532c9965cecf", size = 730229 },
+    { url = "https://files.pythonhosted.org/packages/92/bc/e52f49940b4e320629da7db09c90a2407a48c612cff397b4b41b7e58cdf9/openai-1.99.3-py3-none-any.whl", hash = "sha256:c786a03f6cddadb5ee42c6d749aa4f6134fe14fdd7d69a667e5e7ce7fd29a719", size = 785776 },
 ]
 
 [package.optional-dependencies]

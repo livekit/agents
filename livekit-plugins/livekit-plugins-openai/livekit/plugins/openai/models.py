@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Union
 
 from openai.types import AudioModel
 
@@ -65,8 +65,12 @@ CerebrasChatModels = Literal[
     "llama3.1-8b",
     "llama-3.3-70b",
     "llama-4-scout-17b-16e-instruct",
+    "llama-4-maverick-17b-128e-instruct",
     "qwen-3-32b",
-    "deepseek-r1-distill-llama-70b",
+    "qwen-3-235b-a22b-instruct-2507",
+    "qwen-3-235b-a22b-thinking-2507",
+    "qwen-3-coder-480b",
+    "gpt-oss-120b",
 ]
 
 PerplexityChatModels = Literal[
@@ -205,3 +209,11 @@ XAIChatModels = Literal[
     "grok-2-image-1212",
     "grok-2-1212",
 ]
+
+
+def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
+    return model in [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+    ]
