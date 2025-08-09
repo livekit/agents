@@ -38,19 +38,22 @@ class MultilingualModel(EOUModelBase):
 
         threshold = await super().unlikely_threshold(language)
         if threshold is None:
-            if url := _remote_inference_url():
-                async with utils.http_context.http_session().post(
-                    url=url,
-                    json={
-                        "language": language,
-                    },
-                    timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
-                ) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
-                    threshold = data.get("threshold")
-                    if threshold:
-                        self._languages[language] = {"threshold": threshold}
+            try:
+                if url := _remote_inference_url():
+                    async with utils.http_context.http_session().post(
+                        url=url,
+                        json={
+                            "language": language,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                        threshold = data.get("threshold")
+                        if threshold:
+                            self._languages[language] = {"threshold": threshold}
+            except Exception as e:
+                logger.warning("Error fetching threshold for language %s", language, exc_info=e)
 
         return threshold
 
@@ -61,10 +64,14 @@ class MultilingualModel(EOUModelBase):
         if not url:
             return await super().predict_end_of_turn(chat_ctx, timeout=timeout)
 
+        messages = chat_ctx.copy(
+            exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
+        )
+        request = messages.to_dict(exclude_image=True, exclude_audio=True, exclude_timestamp=True)
         started_at = perf_counter()
         async with utils.http_context.http_session().post(
             url=url,
-            json=chat_ctx.to_dict(exclude_function_call=True),
+            json=request,
             timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
         ) as resp:
             resp.raise_for_status()
