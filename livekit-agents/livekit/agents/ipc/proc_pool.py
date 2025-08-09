@@ -22,7 +22,7 @@ EventTypes = Literal[
     "process_job_launched",
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = math.ceil(get_cpu_monitor().cpu_count())
+MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
