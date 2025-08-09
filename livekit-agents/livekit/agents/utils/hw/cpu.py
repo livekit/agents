@@ -1,6 +1,7 @@
 import os
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import psutil
 
@@ -92,7 +93,7 @@ class CGroupV1CPUMonitor(CPUMonitor):
         percent = usage_seconds / (interval * num_cpus)
         return min(percent, 1.0)
 
-    def _read_cfs_quota_and_period(self) -> tuple[int | None, int]:
+    def _read_cfs_quota_and_period(self) -> tuple[Optional[int], Optional[int]]:
         quota_path_candidates = [
             "/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
         ]
