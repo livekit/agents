@@ -114,7 +114,7 @@ class CGroupV1CPUMonitor(CPUMonitor):
             raise RuntimeError("Failed to read cpuacct.usage for cgroup v1")
         return value
 
-    def _read_first_int(self, paths: list[str]) -> int | None:
+    def _read_first_int(self, paths: list[str]) -> Optional[int]:
         for p in paths:
             try:
                 with open(p) as f:
