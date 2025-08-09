@@ -8,7 +8,7 @@ import aiohttp
 from livekit.agents import llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .base import EOUModelBase, _EUORunnerBase
+from .base import MAX_HISTORY_TURNS, EOUModelBase, _EUORunnerBase
 from .log import logger
 
 REMOTE_INFERENCE_TIMEOUT = 2
@@ -66,7 +66,8 @@ class MultilingualModel(EOUModelBase):
 
         messages = chat_ctx.copy(
             exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
-        )
+        ).truncate(max_items=MAX_HISTORY_TURNS)
+
         request = messages.to_dict(exclude_image=True, exclude_audio=True, exclude_timestamp=True)
         started_at = perf_counter()
         async with utils.http_context.http_session().post(
