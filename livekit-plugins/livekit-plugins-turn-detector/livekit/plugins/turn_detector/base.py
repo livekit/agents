@@ -189,7 +189,6 @@ class EOUModelBase(ABC):
             lang_data = self._languages.get(base_lang)
 
         if not lang_data:
-            logger.warning(f"Language {language} not supported by EOU model")
             return None
         # if a custom threshold is provided, use it
         if self._unlikely_threshold is not None:
@@ -205,7 +204,6 @@ class EOUModelBase(ABC):
         self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
     ) -> float:
         messages: list[dict[str, Any]] = []
-
         for item in chat_ctx.items:
             if item.type != "message":
                 continue
@@ -213,18 +211,16 @@ class EOUModelBase(ABC):
             if item.role not in ("user", "assistant"):
                 continue
 
-            for cnt in item.content:
-                if isinstance(cnt, str):
-                    messages.append(
-                        {
-                            "role": item.role,
-                            "content": cnt,
-                        }
-                    )
-                    break
+            text_content = item.text_content
+            if text_content:
+                messages.append(
+                    {
+                        "role": item.role,
+                        "content": text_content,
+                    }
+                )
 
         messages = messages[-MAX_HISTORY_TURNS:]
-
         json_data = json.dumps({"chat_ctx": messages}).encode()
 
         result = await asyncio.wait_for(
