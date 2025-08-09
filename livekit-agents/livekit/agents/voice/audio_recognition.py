@@ -357,7 +357,7 @@ class AudioRecognition:
                     ):
                         # if there are failures, we should not hold the pipeline up
                         end_of_turn_probability = 0.0
-                        unlikely_threshold = 0.0
+                        unlikely_threshold: float | None = None
                         try:
                             end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                 chat_ctx
