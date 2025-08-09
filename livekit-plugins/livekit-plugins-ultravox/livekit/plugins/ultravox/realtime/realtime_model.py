@@ -27,7 +27,7 @@ from livekit.agents.llm.tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
-from livekit.agents.llm.utils import function_arguments_to_pydantic_model
+from livekit.agents.llm.utils import compute_chat_ctx_diff, function_arguments_to_pydantic_model
 from livekit.agents.metrics.base import RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
@@ -357,10 +357,22 @@ class RealtimeSession(
         if is_given(tool_choice):
             logger.warning("Ultravox does not support dynamic tool choice updates")
 
+    def _safe_text_content(self, item: llm.ChatItem) -> str | None:
+        """Safely extract text content from a chat item.
+        
+        Returns None if no valid text content is found.
+        """
+        if hasattr(item, 'text_content') and item.text_content:
+            return item.text_content
+        elif item.content:
+            return str(item.content) if item.content else None
+        return None
+
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Update chat context using Ultravox deferred messages.
-
-        System messages are sent as deferred instructions using the <instruction> pattern.
+        
+        Only sends NEW messages that haven't been sent to Ultravox yet.
+        System and developer messages are sent as deferred instructions using the <instruction> pattern.
         User messages are sent as regular text messages.
         Assistant messages are skipped (managed by Ultravox internally).
         Function calls/results are handled via the existing tool mechanism.
@@ -368,31 +380,53 @@ class RealtimeSession(
         Args:
             chat_ctx: The updated chat context to inject
         """
-        logger.info(f"[ultravox] Injecting context with {len(chat_ctx.items)} items")
-
-        for item in chat_ctx.items:
-            if item.role == "system" and item.content:
-                # System messages become deferred instructions
-                content_text = (
-                    item.text_content() if hasattr(item, "text_content") else str(item.content)
-                )
-                logger.debug(f"[ultravox] Injecting system instruction: {content_text[:100]}...")
-                self._send_client_event(
-                    InputTextMessageEvent(
-                        text=f"<instruction>{content_text}</instruction>", defer_response=True
+        # Compute the diff - only process new/changed items
+        diff_ops = compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
+        
+        if not diff_ops.to_create:
+            logger.debug("[ultravox] No new context items to inject")
+            return
+            
+        if diff_ops.to_remove:
+            logger.warning(f"[ultravox] Ignoring {len(diff_ops.to_remove)} message deletions (not supported by Ultravox)")
+            
+        logger.info(f"[ultravox] Processing {len(diff_ops.to_create)} new context items")
+        
+        # Process new items only (Ultravox doesn't support deletions)
+        for _, msg_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(msg_id)
+            if not item:
+                continue
+                
+            if item.role in ("system", "developer"):
+                # System and developer messages become deferred instructions
+                content_text = self._safe_text_content(item)
+                if content_text:
+                    logger.debug(f"[ultravox] Injecting {item.role} instruction: {content_text[:100]}...")
+                    self._send_client_event(
+                        InputTextMessageEvent(
+                            text=f"<instruction>{content_text}</instruction>", 
+                            defer_response=True
+                        )
                     )
-                )
-            elif item.role == "user" and item.content:
-                # User messages sent normally
-                content_text = (
-                    item.text_content() if hasattr(item, "text_content") else str(item.content)
-                )
-                logger.debug(f"[ultravox] Injecting user message: {content_text[:100]}...")
-                self._send_client_event(
-                    InputTextMessageEvent(text=content_text, defer_response=False)
-                )
+                
+            elif item.role == "user":
+                # User messages sent normally  
+                content_text = self._safe_text_content(item)
+                if content_text:
+                    logger.debug(f"[ultravox] Injecting user message: {content_text[:100]}...")
+                    self._send_client_event(
+                        InputTextMessageEvent(text=content_text, defer_response=False)
+                    )
             # Skip assistant messages (handled by Ultravox)
             # Skip function calls (handled by existing tool mechanism)
+        
+        # Update remote context to track what we've sent
+        for previous_msg_id, msg_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(msg_id)
+            if item and item.role in ("system", "developer", "user") and self._safe_text_content(item):
+                # Use previous_msg_id from diff operations for correct ordering
+                self._remote_chat_ctx.insert(previous_msg_id, item)
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         """Update the available tools."""
