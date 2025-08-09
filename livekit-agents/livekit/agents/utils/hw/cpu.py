@@ -107,7 +107,6 @@ class CGroupV1CPUMonitor(CPUMonitor):
     def _read_cpuacct_usage(self) -> int:
         candidates = [
             "/sys/fs/cgroup/cpuacct/cpuacct.usage",
-            "/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage",
         ]
         value = self._read_first_int(candidates)
         if value is None:
