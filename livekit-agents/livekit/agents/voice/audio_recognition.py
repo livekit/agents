@@ -356,8 +356,8 @@ class AudioRecognition:
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         # if there are failures, we should not hold the pipeline up
-                        end_of_turn_probability = 0
-                        unlikely_threshold = 0
+                        end_of_turn_probability = 0.0
+                        unlikely_threshold = 0.0
                         try:
                             end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                 chat_ctx
