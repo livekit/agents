@@ -18,6 +18,7 @@ from livekit.plugins import (
     fal,
     google,
     openai,
+    reverie,
     silero,
     speechmatics,
     spitch,
@@ -87,6 +88,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: azure.STT(), id="azure"),
     pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
     pytest.param(lambda: spitch.STT(), id="spitch"),
+    pytest.param(lambda: reverie.STT(), id="reverie"),
 ]
 
 

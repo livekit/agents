@@ -60,6 +60,8 @@ services:
       - LMNT_API_KEY
       - INWORLD_API_KEY
       - MISTRAL_API_KEY
+      - REVERIE_API_KEY
+      - REVERIE_APP_ID
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
