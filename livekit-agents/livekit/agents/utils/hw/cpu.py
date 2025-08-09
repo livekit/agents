@@ -1,6 +1,7 @@
 import os
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import psutil
 
@@ -74,11 +75,72 @@ class CGroupV2CPUMonitor(CPUMonitor):
         raise RuntimeError("Failed to read CPU usage")
 
 
+class CGroupV1CPUMonitor(CPUMonitor):
+    def cpu_count(self) -> float:
+        quota, period = self._read_cfs_quota_and_period()
+        if quota is None or quota < 0 or period is None or period <= 0:
+            return os.cpu_count() or 1.0
+        return max(1.0 * quota / period, 1.0)
+
+    def cpu_percent(self, interval: float = 0.5) -> float:
+        usage_start = self._read_cpuacct_usage()
+        time.sleep(interval)
+        usage_end = self._read_cpuacct_usage()
+        usage_diff_ns = usage_end - usage_start
+
+        usage_seconds = usage_diff_ns / 1_000_000_000
+        num_cpus = self.cpu_count()
+        percent = usage_seconds / (interval * num_cpus)
+        return min(percent, 1.0)
+
+    def _read_cfs_quota_and_period(self) -> tuple[Optional[int], Optional[int]]:
+        quota_path_candidates = [
+            "/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+        ]
+        period_path_candidates = [
+            "/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+        ]
+        quota = self._read_first_int(quota_path_candidates)
+        period = self._read_first_int(period_path_candidates)
+        return quota, period
+
+    def _read_cpuacct_usage(self) -> int:
+        candidates = [
+            "/sys/fs/cgroup/cpuacct/cpuacct.usage",
+        ]
+        value = self._read_first_int(candidates)
+        if value is None:
+            raise RuntimeError("Failed to read cpuacct.usage for cgroup v1")
+        return value
+
+    def _read_first_int(self, paths: list[str]) -> Optional[int]:
+        for p in paths:
+            try:
+                with open(p) as f:
+                    return int(f.read().strip())
+            except FileNotFoundError:
+                continue
+            except ValueError:
+                continue
+        return None
+
+
 def get_cpu_monitor() -> CPUMonitor:
     if _is_cgroup_v2():
         return CGroupV2CPUMonitor()
+    if _is_cgroup_v1():
+        return CGroupV1CPUMonitor()
     return DefaultCPUMonitor()
 
 
 def _is_cgroup_v2() -> bool:
     return os.path.exists("/sys/fs/cgroup/cpu.stat")
+
+
+def _is_cgroup_v1() -> bool:
+    candidates = [
+        "/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+        "/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+        "/sys/fs/cgroup/cpuacct/cpuacct.usage",
+    ]
+    return any(os.path.exists(p) for p in candidates)
