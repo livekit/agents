@@ -897,8 +897,6 @@ class RealtimeSession(
 
             # Handle final transcript
             if event.final:
-                if event.text and not event.delta:  # Only send full text if no delta was sent
-                    msg_gen.text_ch.send_nowait(event.text)
                 msg_gen.text_ch.close()
                 msg_gen.audio_ch.close()
                 self._handle_response_done()
