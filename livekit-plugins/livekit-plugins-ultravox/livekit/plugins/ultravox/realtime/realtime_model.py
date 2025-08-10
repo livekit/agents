@@ -337,7 +337,9 @@ class RealtimeSession(
     def _mark_restart_needed(self):
         if not self._session_should_close.is_set():
             self._session_should_close.set()
-            # reset the msg_ch, do not send messages from previous session
+            # Close old channel before creating new one
+            old_ch = self._msg_ch
+            old_ch.close()
             self._msg_ch = utils.aio.Chan[UltravoxEventType]()
 
     def update_options(
@@ -430,7 +432,19 @@ class RealtimeSession(
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         """Update the available tools."""
+        # Get current and new tool names for comparison
+        current_tool_names = set(self._tools.function_tools.keys())
+        new_tool_names = {
+            tool.name for tool in tools 
+            if hasattr(tool, 'name') and tool.name is not None
+        }
+        
+        # Always update the tools
         self._tools.update_tools(tools)
+        
+        # Restart session only if tool set actually changed
+        if current_tool_names != new_tool_names:
+            self._mark_restart_needed()
 
     async def update_instructions(self, instructions: str | NotGiven = NOT_GIVEN) -> None:
         """Update the system instructions."""
@@ -556,109 +570,148 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        """Main task for managing WebSocket connection and message handling."""
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "X-API-Key": self._realtime_model._opts.api_key,
-            "Content-Type": "application/json",
-        }
-
-        # Build query parameters
-        query_params = {}
-        if not self._realtime_model._opts.enable_greeting_prompt:
-            query_params["enableGreetingPrompt"] = "false"
-
-        # Construct URL with query parameters
-        create_call_url = f"{self._realtime_model._opts.base_url.rstrip('/')}/calls"
-        if query_params:
-            query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
-            create_call_url += f"?{query_string}"
-
-        # Build payload with core parameters
-        # Use recommended larger buffer size for WebSocket integration to prevent audio underflow
-        # while allowing proper PlaybackClearBuffer functionality
-        recommended_buffer_size = max(self._realtime_model._opts.client_buffer_size_ms, 200)
-
-        payload = {
-            "systemPrompt": self._realtime_model._opts.system_prompt,
-            "model": self._realtime_model._opts.model_id,
-            "voice": self._realtime_model._opts.voice,
-            "medium": {
-                "serverWebSocket": {
-                    "inputSampleRate": self._realtime_model._opts.input_sample_rate,
-                    "outputSampleRate": self._realtime_model._opts.output_sample_rate,
-                    "clientBufferSizeMs": recommended_buffer_size,
-                }
-            },
-            "selectedTools": self._prepare_tools(self._tools.function_tools.values()),
-        }
-
-        # Add optional parameters only if specified
-        if self._realtime_model._opts.temperature is not None:
-            payload["temperature"] = self._realtime_model._opts.temperature
-        if self._realtime_model._opts.language_hint is not None:
-            payload["languageHint"] = self._realtime_model._opts.language_hint
-        if self._realtime_model._opts.max_duration is not None:
-            payload["maxDuration"] = self._realtime_model._opts.max_duration
-        if self._realtime_model._opts.time_exceeded_message is not None:
-            payload["timeExceededMessage"] = self._realtime_model._opts.time_exceeded_message
-        if self._realtime_model._opts.first_speaker is not None:
-            payload["firstSpeaker"] = self._realtime_model._opts.first_speaker
-
-        try:
-            http_session = self._realtime_model._ensure_http_session()
-            async with http_session.post(create_call_url, json=payload, headers=headers) as resp:
-                resp.raise_for_status()
-                response_json = await resp.json()
-                join_url = response_json.get("joinUrl")
-                if not join_url:
-                    raise APIConnectionError("Ultravox call created, but no joinUrl received.")
-
-            ws_conn = await http_session.ws_connect(join_url)
-            self._ws = ws_conn
-
-            tasks = [
-                asyncio.create_task(self._recv_task(), name="_recv_task"),
-                asyncio.create_task(self._send_task(), name="_send_task"),
-            ]
+        """Main task with restart loop for managing WebSocket sessions."""
+        while not self._msg_ch.closed:
+            # Clear restart signal for new session
+            self._session_should_close.clear()
+            
             try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
-                await self._ws.close()
+                # Close any existing WebSocket connection before creating new one
+                await self._close_active_ws_session()
+                
+                # Create new Ultravox session
+                headers = {
+                    "User-Agent": "LiveKit Agents",
+                    "X-API-Key": self._realtime_model._opts.api_key,
+                    "Content-Type": "application/json",
+                }
 
-        except Exception as e:
-            logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
+                # Build query parameters
+                query_params = {}
+                if not self._realtime_model._opts.enable_greeting_prompt:
+                    query_params["enableGreetingPrompt"] = "false"
 
-            # Determine if error is recoverable based on type
-            is_recoverable = False
-            if isinstance(e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)):
-                is_recoverable = True
+                # Construct URL with query parameters
+                create_call_url = f"{self._realtime_model._opts.base_url.rstrip('/')}/calls"
+                if query_params:
+                    query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
+                    create_call_url += f"?{query_string}"
 
-            # Convert to appropriate API error type
-            if isinstance(e, (APIConnectionError, APIError)):
-                error = e
-            elif isinstance(e, aiohttp.ClientResponseError):
-                error = APIError(f"HTTP {e.status}: {e.message}", retryable=is_recoverable)
-            else:
-                error = APIConnectionError(f"Connection failed: {str(e)}")
+                # Build payload with core parameters
+                # Use recommended larger buffer size for WebSocket integration to prevent audio underflow
+                # while allowing proper PlaybackClearBuffer functionality
+                recommended_buffer_size = max(self._realtime_model._opts.client_buffer_size_ms, 200)
 
-            self.emit(
-                "error",
-                llm.RealtimeModelError(
-                    timestamp=time.time(),
-                    label=self._realtime_model._label,
-                    error=error,
-                    recoverable=is_recoverable,
-                ),
-            )
-        finally:
-            await self._cleanup()
+                payload = {
+                    "systemPrompt": self._realtime_model._opts.system_prompt,
+                    "model": self._realtime_model._opts.model_id,
+                    "voice": self._realtime_model._opts.voice,
+                    "medium": {
+                        "serverWebSocket": {
+                            "inputSampleRate": self._realtime_model._opts.input_sample_rate,
+                            "outputSampleRate": self._realtime_model._opts.output_sample_rate,
+                            "clientBufferSizeMs": recommended_buffer_size,
+                        }
+                    },
+                    "selectedTools": self._prepare_tools(self._tools.function_tools.values()),
+                }
+
+                # Add optional parameters only if specified
+                if self._realtime_model._opts.temperature is not None:
+                    payload["temperature"] = self._realtime_model._opts.temperature
+                if self._realtime_model._opts.language_hint is not None:
+                    payload["languageHint"] = self._realtime_model._opts.language_hint
+                if self._realtime_model._opts.max_duration is not None:
+                    payload["maxDuration"] = self._realtime_model._opts.max_duration
+                if self._realtime_model._opts.time_exceeded_message is not None:
+                    payload["timeExceededMessage"] = self._realtime_model._opts.time_exceeded_message
+                if self._realtime_model._opts.first_speaker is not None:
+                    payload["firstSpeaker"] = self._realtime_model._opts.first_speaker
+
+                # Create call and connect to WebSocket
+                http_session = self._realtime_model._ensure_http_session()
+                async with http_session.post(create_call_url, json=payload, headers=headers) as resp:
+                    resp.raise_for_status()
+                    response_json = await resp.json()
+                    join_url = response_json.get("joinUrl")
+                    if not join_url:
+                        raise APIConnectionError("Ultravox call created, but no joinUrl received.")
+
+                ws_conn = await http_session.ws_connect(join_url)
+                self._ws = ws_conn
+                self._closing = False
+
+                # Create tasks for send/recv and restart monitoring
+                send_task = asyncio.create_task(self._send_task(), name="_send_task")
+                recv_task = asyncio.create_task(self._recv_task(), name="_recv_task")
+                restart_wait_task = asyncio.create_task(
+                    self._session_should_close.wait(), name="_restart_wait"
+                )
+
+                # Wait for any task to complete
+                done, pending = await asyncio.wait(
+                    [send_task, recv_task, restart_wait_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                # Cancel remaining tasks
+                for task in pending:
+                    await utils.aio.cancel_and_wait(task)
+
+                # Close current WebSocket
+                if self._ws:
+                    await self._ws.close()
+                    self._ws = None
+
+                # If restart triggered, loop continues
+                # If msg_ch closed, exit loop
+                if restart_wait_task not in done and self._msg_ch.closed:
+                    break
+
+            except Exception as e:
+                logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
+
+                # Determine if error is recoverable based on type
+                is_recoverable = False
+                if isinstance(e, (aiohttp.ClientConnectionError, asyncio.TimeoutError)):
+                    is_recoverable = True
+
+                # Convert to appropriate API error type
+                if isinstance(e, (APIConnectionError, APIError)):
+                    error = e
+                elif isinstance(e, aiohttp.ClientResponseError):
+                    error = APIError(f"HTTP {e.status}: {e.message}", retryable=is_recoverable)
+                else:
+                    error = APIConnectionError(f"Connection failed: {str(e)}")
+
+                self.emit(
+                    "error",
+                    llm.RealtimeModelError(
+                        timestamp=time.time(),
+                        label=self._realtime_model._label,
+                        error=error,
+                        recoverable=is_recoverable,
+                    ),
+                )
+                
+                # Break loop on non-recoverable errors or if channel is closed
+                if not is_recoverable or self._msg_ch.closed:
+                    break
+                    
+                # Wait before retrying on recoverable errors
+                await asyncio.sleep(1.0)
+                
+        # Final cleanup when exiting the loop
+        await self._cleanup()
 
     @utils.log_exceptions(logger=logger)
     async def _send_task(self) -> None:
         """Task for sending messages to Ultravox WebSocket."""
         async for msg in self._msg_ch:
+            # Check if restart is needed
+            if self._session_should_close.is_set():
+                break
+                
             try:
                 if isinstance(msg, dict):
                     msg_dict = msg
@@ -679,6 +732,10 @@ class RealtimeSession(
     async def _recv_task(self) -> None:
         """Task for receiving messages from Ultravox WebSocket."""
         while True:
+            # Check if restart is needed
+            if self._session_should_close.is_set():
+                break
+                
             msg = await self._ws.receive()
             # Generation will be started when we receive state change to "speaking" or first transcript
 
