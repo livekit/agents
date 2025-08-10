@@ -310,6 +310,10 @@ class RealtimeSession(
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
         self._current_message_id: str | None = None
+        
+        # Server-event gating for generate_reply race condition fix
+        self._pending_generation_epoch: float | None = None
+        self._last_seen_ordinal: int = 0
 
         self._bstream = utils.audio.AudioByteStream(
             self._opts.input_sample_rate,
@@ -341,6 +345,12 @@ class RealtimeSession(
             old_ch = self._msg_ch
             old_ch.close()
             self._msg_ch = utils.aio.Chan[UltravoxEventType]()
+            
+            # Clear pending generation state on restart
+            if self._pending_generation_fut and not self._pending_generation_fut.done():
+                self._pending_generation_fut.cancel("Session restart")
+            self._pending_generation_fut = None
+            self._pending_generation_epoch = None
 
     def update_options(
         self,
@@ -489,12 +499,16 @@ class RealtimeSession(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the LLM based on the instructions."""
+        # Cancel prior pending generation if exists
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
             self._pending_generation_fut.cancel("Superseded by new generate_reply call")
 
+        # Record epoch for server-event gating
+        self._pending_generation_epoch = time.perf_counter()
+        
         fut = asyncio.Future()
         self._pending_generation_fut = fut
 
@@ -510,11 +524,10 @@ class RealtimeSession(
                 )
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
+                    self._pending_generation_epoch = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
         fut.add_done_callback(lambda _: timeout_handle.cancel())
-        # Starting a new generation here since the output medium might be changed.
-        self._start_new_generation()
 
         return fut
 
@@ -574,6 +587,8 @@ class RealtimeSession(
         while not self._msg_ch.closed:
             # Clear restart signal for new session
             self._session_should_close.clear()
+            # Reset ordinal tracking on reconnect to avoid stale event issues
+            self._last_seen_ordinal = 0
             
             try:
                 # Close any existing WebSocket connection before creating new one
@@ -775,7 +790,7 @@ class RealtimeSession(
             response_id=response_id,
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
-            _created_timestamp=time.time(),
+            _created_timestamp=time.perf_counter(),
         )
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
@@ -789,11 +804,6 @@ class RealtimeSession(
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
         )
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            generation_ev.user_initiated = True
-            self._pending_generation_fut.set_result(generation_ev)
-            self._pending_generation_fut = None
-
         self.emit("generation_created", generation_ev)
 
     @utils.log_exceptions(logger=logger)
@@ -836,6 +846,12 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     def _handle_transcript_event(self, event: TranscriptEvent) -> None:
         """Handle transcript events from Ultravox."""
+        # Gate by ordinal to avoid late/stale events
+        if event.ordinal < self._last_seen_ordinal:
+            logger.debug(f"Skipping stale TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_ordinal}")
+            return
+        self._last_seen_ordinal = event.ordinal
+        
         if event.role == "user":
             # User transcription - emit input_audio_transcription_completed when final
             if event.final:
@@ -858,9 +874,25 @@ class RealtimeSession(
             if event.delta:
                 # Set first token timestamp on first text delta (TTFT measurement)
                 if msg_gen._first_token_timestamp is None:
-                    msg_gen._first_token_timestamp = time.time()
+                    msg_gen._first_token_timestamp = time.perf_counter()
                     ttft = msg_gen._first_token_timestamp - msg_gen._created_timestamp
                     logger.info(f"[ultravox] first text token received - TTFT: {ttft:.3f}s")
+                    
+                    # Resolve pending generation on first agent TranscriptEvent as backup
+                    if (self._pending_generation_fut and 
+                        not self._pending_generation_fut.done() and
+                        self._pending_generation_epoch is not None and
+                        time.perf_counter() > self._pending_generation_epoch):
+                        logger.info("Resolving pending generate_reply via first agent TranscriptEvent")
+                        generation_created = llm.GenerationCreatedEvent(
+                            message_stream=self._current_generation.message_ch,
+                            function_stream=self._current_generation.function_ch,
+                            user_initiated=True
+                        )
+                        self._pending_generation_fut.set_result(generation_created)
+                        self._pending_generation_fut = None
+                        self._pending_generation_epoch = None
+                        
                 msg_gen.text_ch.send_nowait(event.delta)
 
             # Handle final transcript
@@ -876,7 +908,7 @@ class RealtimeSession(
         if self._current_generation is None:
             return
 
-        self._current_generation._completed_timestamp = time.time()
+        self._current_generation._completed_timestamp = time.perf_counter()
 
         if not self._current_generation.text_ch.closed:
             self._current_generation.text_ch.close()
@@ -896,7 +928,7 @@ class RealtimeSession(
             return
 
         gen = self._current_generation
-        current_time = time.time()
+        current_time = time.perf_counter()
         completed_timestamp = gen._completed_timestamp or current_time
         created_timestamp = gen._created_timestamp
         first_token_timestamp = gen._first_token_timestamp
@@ -972,6 +1004,22 @@ class RealtimeSession(
                     "Starting new generation (Ultravox speaking state - ensuring generation exists)"
                 )
                 self._start_new_generation()
+            
+            # Resolve pending generation with server confirmation via "speaking" event
+            if (self._pending_generation_fut and 
+                not self._pending_generation_fut.done() and
+                self._pending_generation_epoch is not None and
+                time.perf_counter() > self._pending_generation_epoch):
+                logger.info("Resolving pending generate_reply via speaking state event")
+                generation_created = llm.GenerationCreatedEvent(
+                    message_stream=self._current_generation.message_ch,
+                    function_stream=self._current_generation.function_ch,
+                    user_initiated=True
+                )
+                self._pending_generation_fut.set_result(generation_created)
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+                
             self.emit(
                 "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             )
@@ -1127,7 +1175,7 @@ class RealtimeSession(
                 and len(audio_data) > 0
                 and any(audio_data)
             ):  # Check for non-zero audio data
-                self._current_generation._first_token_timestamp = time.time()
+                self._current_generation._first_token_timestamp = time.perf_counter()
                 ttft = (
                     self._current_generation._first_token_timestamp
                     - self._current_generation._created_timestamp
