@@ -43,7 +43,7 @@ jobs:
           tests/test_tokenizer.py
           tests/test_transcription_filter.py
 
-  eval-tests:
+  evaluation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
