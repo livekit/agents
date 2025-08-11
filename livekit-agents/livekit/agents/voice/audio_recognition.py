@@ -46,7 +46,7 @@ class _TurnDetector(Protocol):
     async def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None
+        self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
     ) -> float: ...
 
 
