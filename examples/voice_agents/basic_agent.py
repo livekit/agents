@@ -1,7 +1,9 @@
 import logging
+from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
+from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -10,6 +12,7 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
+    ModelSettings,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
@@ -18,6 +21,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
+from livekit.agents.voice.transcription.filters import filter_markdown
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -42,6 +46,14 @@ class MyAgent(Agent):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
         self.session.generate_reply()
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        # TTS node allows us to process the text before it's sent to the model
+        # here we'll strip out markdown
+        filtered_text = filter_markdown(text)
+        return super().tts_node(filtered_text, model_settings)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active

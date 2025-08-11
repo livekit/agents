@@ -14,6 +14,13 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
+# This example is showing a half-duplex realtime LLM usage where we:
+# - use a multimodal/realtime LLM that takes audio input, generating text output
+# - then use a separate TTS to synthesize audio output
+#
+# This approach fully utilizes the realtime LLM's ability to understand directly from audio
+# and yet maintains control of the pipeline, including using custom voices with TTS
+
 
 class WeatherAgent(Agent):
     def __init__(self) -> None:
