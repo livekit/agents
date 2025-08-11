@@ -5,7 +5,7 @@ from time import perf_counter
 
 import aiohttp
 
-from livekit.agents import llm, utils
+from livekit.agents import get_job_context, llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
 from .base import MAX_HISTORY_TURNS, EOUModelBase, _EUORunnerBase
@@ -58,7 +58,10 @@ class MultilingualModel(EOUModelBase):
         return threshold
 
     async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        timeout: float | None = 3,
     ) -> float:
         url = _remote_inference_url()
         if not url:
@@ -68,7 +71,14 @@ class MultilingualModel(EOUModelBase):
             exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
         ).truncate(max_items=MAX_HISTORY_TURNS)
 
+        ctx = get_job_context()
         request = messages.to_dict(exclude_image=True, exclude_audio=True, exclude_timestamp=True)
+        request["jobId"] = ctx.job.id
+        request["workerId"] = ctx.worker_id
+        agent_id = os.getenv("LIVEKIT_AGENT_ID")
+        if agent_id:
+            request["agentId"] = agent_id
+
         started_at = perf_counter()
         async with utils.http_context.http_session().post(
             url=url,

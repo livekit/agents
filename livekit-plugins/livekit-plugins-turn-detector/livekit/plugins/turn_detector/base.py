@@ -201,7 +201,10 @@ class EOUModelBase(ABC):
 
     # our EOU model inference should be fast, 3 seconds is more than enough
     async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        timeout: float | None = 3,
     ) -> float:
         messages: list[dict[str, Any]] = []
         for item in chat_ctx.items:
