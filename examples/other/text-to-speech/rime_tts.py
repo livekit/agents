@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -5,6 +6,7 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.agents.tokenize import blingfire
+from livekit.agents.tts import StreamAdapter
 from livekit.plugins import rime
 
 # Initialize environment and logging
@@ -13,28 +15,6 @@ logger = logging.getLogger("rime-tts-demo")
 logger.setLevel(logging.INFO)
 
 tokenizer = blingfire.SentenceTokenizer()
-
-
-async def stream_text_chunks():
-    """Generator that yields properly segmented text chunks for natural TTS output."""
-
-    # Example text demonstrating various sentence structures and punctuation
-    text = """
-    Welcome to the Rime Text-to-Speech demonstration! This example shows how to properly segment text\
-    for natural-sounding speech synthesis. We handle various punctuation marks, including commas,\
-    periods, and question marks. Have you noticed how the voice maintains proper intonation? This is\
-    achieved through careful text segmentation. The TTS engine processes each segment independently,\
-    ensuring optimal timing and natural flow. Would you like to try different voices like Astra, Luna,\
-    or Celeste? Each voice has its own unique characteristics!
-    """
-
-    # Create segmenter instance and process text
-    segments = tokenizer.tokenize(text)
-
-    # Yield each segment
-    for sentence in segments:
-        logger.debug("Processing segment: %s", sentence)
-        yield sentence
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -64,10 +44,6 @@ async def entrypoint(ctx: JobContext) -> None:
         tts = rime.TTS(
             model="arcana",  # The TTS model to use
             speaker="astra",  # Voice ID to use for synthesis
-            temperature=0.5,  # Controls speech randomness
-            repetition_penalty=1.2,  # Prevents repetitive patterns
-            top_p=1.0,  # Controls sound diversity
-            max_tokens=5000,  # Maximum tokens for generation
         )
 
         logger.info("TTS initialized successfully")
@@ -92,19 +68,46 @@ async def entrypoint(ctx: JobContext) -> None:
             await source.capture_frame(output.frame)
 
         logger.info("Audio synthesis completed successfully")
-
         logger.info("Audio Streaming Simulation Example")
         logger.info("Starting streaming text chunks...")
-        async for text_chunk in stream_text_chunks():
-            logger.info("Processing chunk: %s...", text_chunk[:50])
-            # Synthesize each chunk separately
-            async for output in tts.synthesize(text_chunk):
-                await source.capture_frame(output.frame)
+
+        streaming_text = """
+                Welcome to the Rime Text-to-Speech demonstration! This example shows how to properly segment text\
+                for natural-sounding speech synthesis. We handle various punctuation marks, including commas,\
+                periods, and question marks. Have you noticed how the voice maintains proper intonation? This is\
+                achieved through careful text segmentation. The TTS engine processes each segment independently,\
+                ensuring optimal timing and natural flow. Would you like to try different voices like Astra, Luna,\
+                or Celeste? Each voice has its own unique characteristics!
+        """
+        tts_wrapped = StreamAdapter(tts=tts, sentence_tokenizer=tokenizer)
+        stream = tts_wrapped.stream()
+
+        async def _playback_task():
+            async for audio in stream:
+                await source.capture_frame(audio.frame)
+
+        playback_task = asyncio.create_task(_playback_task())
+
+        chunk_size = 15
+        for i in range(0, len(streaming_text), chunk_size):
+            chunk = streaming_text[i : i + chunk_size]
+            logger.info("Processing chunk: %s...", chunk[:50])  # Log first 50 chars
+            stream.push_text(chunk)
+            await asyncio.sleep(0.1)
+
+        stream.end_input()
+        await playback_task
         logger.info("Streaming completed successfully")
 
     except Exception as e:
         logger.error("An error occurred: %s", str(e), exc_info=True)
         raise
+    finally:
+        # Clean up resources
+        if "stream" in locals():
+            await stream.aclose()
+        if "tts_wrapped" in locals():
+            await tts_wrapped.aclose()
 
 
 if __name__ == "__main__":
