@@ -223,7 +223,7 @@ class InputTrack:
 
         self._translators: dict[str, Translator] = {}
         self._tasks: list[asyncio.Task] = []
-        self._stt = deepgram.STT(language=language)
+        self._stt = deepgram.STT(language=language, model="nova-2")
         tokenizer = tokenize.blingfire.SentenceTokenizer()
         self._sentence_stream: tokenize.SentenceStream = tokenizer.stream()
         self._stt_stream = self._stt.stream(language=language)
@@ -344,11 +344,11 @@ class RoomTranslator:
         self.input_tracks: list[InputTrack] = []
 
     def start(self):
-        @self.room.on("participant_joined")
+        @self.room.on("participant_connected")
         def on_participant_joined(participant: rtc.RemoteParticipant):
             self._update_languages()
 
-        @self.room.on("participant_left")
+        @self.room.on("participant_disconnected")
         def on_participant_left(participant: rtc.RemoteParticipant):
             self._update_languages()
 
