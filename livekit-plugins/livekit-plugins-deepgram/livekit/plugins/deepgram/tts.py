@@ -32,6 +32,7 @@ class _TTSOptions:
     encoding: str
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
+    mip_opt_out: bool
 
 
 class TTS(tts.TTS):
@@ -47,6 +48,7 @@ class TTS(tts.TTS):
             ignore_punctuation=False
         ),
         http_session: aiohttp.ClientSession | None = None,
+        mip_opt_out: bool = False,
     ) -> None:
         """
         Create a new instance of Deepgram TTS.
@@ -78,6 +80,7 @@ class TTS(tts.TTS):
             encoding=encoding,
             sample_rate=sample_rate,
             word_tokenizer=word_tokenizer,
+            mip_opt_out=mip_opt_out,
         )
         self._session = http_session
         self._api_key = api_key
@@ -94,6 +97,7 @@ class TTS(tts.TTS):
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
+            "mip_opt_out": self._opts.mip_opt_out,
         }
         return await asyncio.wait_for(
             session.ws_connect(
@@ -192,6 +196,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "encoding": self._opts.encoding,
                 "model": self._opts.model,
                 "sample_rate": self._opts.sample_rate,
+                "mip_opt_out": self._opts.mip_opt_out,
             }
             async with self._session.post(
                 _to_deepgram_url(config, self._base_url, websocket=False),
@@ -412,4 +417,4 @@ def _to_deepgram_url(
     elif not websocket and base_url.startswith("ws"):
         base_url = base_url.replace("ws", "http", 1)
 
-    return f"{base_url}?{urlencode(opts, doseq=True)}"
+    return f"{base_url}?{urlencode(opts, doseq=True)}".lower()
