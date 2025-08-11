@@ -175,7 +175,7 @@ class WorkerOptions:
     drain_timeout: int = 1800
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+        dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
@@ -358,6 +358,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                     "agent_name": self._opts.agent_name,
                     "worker_type": agent.JobType.Name(self._opts.worker_type.value),
                     "active_jobs": len(self.active_jobs),
+                    "sdk_version": __version__,
+                    "project_type": "python",
                 }
             )
             return web.Response(body=body, content_type="application/json")
