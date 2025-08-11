@@ -768,6 +768,9 @@ class LLMStream(llm.LLMStream):
                         "chat_ctx": chat_ctx,
                     },
                 )
+            if not self._tools:
+                # remove tool_choice from extra_kwargs if no tools are provided
+                self._extra_kwargs.pop("tool_choice", None)
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
