@@ -39,6 +39,7 @@ livekit-plugins-inworld = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-simli = { workspace = true }
+livekit-plugins-avatartalk = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]

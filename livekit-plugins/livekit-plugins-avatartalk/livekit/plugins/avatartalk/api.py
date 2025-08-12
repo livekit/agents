@@ -1,0 +1,60 @@
+import logging
+from typing import Any
+
+import aiohttp
+
+logger = logging.getLogger(__name__)
+
+
+class AvatarTalkException(Exception):
+    """Exception for AvatarTalkAPI errors"""
+
+
+class AvatarTalkAPI:
+    def __init__(
+        self,
+        api_url: str,
+        api_key: str,
+    ):
+        self._api_url = api_url
+        self._api_key = api_key
+        self._headers = {"Authorization": f"Bearer {self._api_key}"}
+
+    async def _request(self, method: str, path: str, **kwargs):
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                method, f"{self._api_url}{path}", headers=self._headers, **kwargs
+            ) as response:
+                if response.ok:
+                    return await response.json()
+                else:
+                    raise AvatarTalkException(
+                        f"API request failed: {response.status} {response.reason}"
+                    )
+
+    async def start_session(
+        self,
+        livekit_url: str,
+        avatar_name: str,
+        avatar_expression: str,
+        room_name: str,
+        livekit_listener_token: str,
+        livekit_room_token: str,
+        agent_identity: str,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/livekit/create-session",
+            json={
+                "livekit_url": livekit_url,
+                "avatar_name": avatar_name,
+                "avatar_expression": avatar_expression,
+                "room_name": room_name,
+                "room_token": livekit_room_token,
+                "listener_token": livekit_listener_token,
+                "agent_identity": agent_identity,
+            },
+        )
+
+    async def stop_session(self, task_id: str) -> dict[str, Any]:
+        return await self._request("DELETE", f"/livekit/delete-session/{task_id}")

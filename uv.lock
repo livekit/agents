@@ -28,6 +28,7 @@ members = [
     "livekit-plugins-anam",
     "livekit-plugins-anthropic",
     "livekit-plugins-assemblyai",
+    "livekit-plugins-avatartalk",
     "livekit-plugins-aws",
     "livekit-plugins-azure",
     "livekit-plugins-baseten",
@@ -68,6 +69,7 @@ constraints = [{ name = "onnxruntime", marker = "python_full_version == '3.9.*'"
 [manifest.dependency-groups]
 dev = [
     { name = "jiwer", specifier = ">=3.1.0" },
+    { name = "livekit-plugins-avatartalk", editable = "livekit-plugins/livekit-plugins-avatartalk" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
@@ -2058,6 +2060,16 @@ requires-dist = [
 [[package]]
 name = "livekit-plugins-assemblyai"
 source = { editable = "livekit-plugins/livekit-plugins-assemblyai" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-avatartalk"
+source = { editable = "livekit-plugins/livekit-plugins-avatartalk" }
 dependencies = [
     { name = "livekit-agents" },
 ]
