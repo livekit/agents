@@ -270,8 +270,6 @@ class RealtimeModel(llm.RealtimeModel):
         self, *, output_medium: NotGivenOr[Literal["text", "voice"]] = NOT_GIVEN
     ) -> None:
         """Update model options."""
-        if is_given(output_medium):
-            self._opts.output_medium = output_medium
 
         for sess in self._sessions:
             sess.update_options(output_medium=output_medium)
@@ -303,12 +301,10 @@ class RealtimeSession(
 
         self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
 
-        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-        self._current_message_id: str | None = None
-        
+
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
         self._last_seen_ordinal: int = 0
@@ -343,7 +339,7 @@ class RealtimeSession(
             old_ch = self._msg_ch
             old_ch.close()
             self._msg_ch = utils.aio.Chan[UltravoxEventType]()
-            
+
             # Clear pending generation state on restart
             if self._pending_generation_fut and not self._pending_generation_fut.done():
                 self._pending_generation_fut.cancel("Session restart")
@@ -361,7 +357,6 @@ class RealtimeSession(
     ) -> None:
         """Update session options."""
         if is_given(output_medium):
-            self._opts.output_medium = output_medium
             self._send_client_event(SetOutputMediumEvent(medium=output_medium))
 
         if is_given(tool_choice):
@@ -369,10 +364,10 @@ class RealtimeSession(
 
     def _safe_text_content(self, item: llm.ChatItem) -> str | None:
         """Safely extract text content from a chat item.
-        
+
         Returns None if no valid text content is found.
         """
-        if hasattr(item, 'text_content') and item.text_content:
+        if hasattr(item, "text_content") and item.text_content:
             return item.text_content
         elif item.content:
             return str(item.content) if item.content else None
@@ -380,7 +375,7 @@ class RealtimeSession(
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Update chat context using Ultravox deferred messages.
-        
+
         Only sends NEW messages that haven't been sent to Ultravox yet.
         System and developer messages are sent as deferred instructions using the <instruction> pattern.
         User messages are sent as regular text messages.
@@ -392,36 +387,39 @@ class RealtimeSession(
         """
         # Compute the diff - only process new/changed items
         diff_ops = compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
-        
+
         if not diff_ops.to_create:
             logger.debug("[ultravox] No new context items to inject")
             return
-            
+
         if diff_ops.to_remove:
-            logger.warning(f"[ultravox] Ignoring {len(diff_ops.to_remove)} message deletions (not supported by Ultravox)")
-            
+            logger.warning(
+                f"[ultravox] Ignoring {len(diff_ops.to_remove)} message deletions (not supported by Ultravox)"
+            )
+
         logger.info(f"[ultravox] Processing {len(diff_ops.to_create)} new context items")
-        
+
         # Process new items only (Ultravox doesn't support deletions)
         for _, msg_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(msg_id)
             if not item:
                 continue
-                
+
             if item.role in ("system", "developer"):
                 # System and developer messages become deferred instructions
                 content_text = self._safe_text_content(item)
                 if content_text:
-                    logger.debug(f"[ultravox] Injecting {item.role} instruction: {content_text[:100]}...")
+                    logger.debug(
+                        f"[ultravox] Injecting {item.role} instruction: {content_text[:100]}..."
+                    )
                     self._send_client_event(
                         InputTextMessageEvent(
-                            text=f"<instruction>{content_text}</instruction>", 
-                            defer_response=True
+                            text=f"<instruction>{content_text}</instruction>", defer_response=True
                         )
                     )
-                
+
             elif item.role == "user":
-                # User messages sent normally  
+                # User messages sent normally
                 content_text = self._safe_text_content(item)
                 if content_text:
                     logger.debug(f"[ultravox] Injecting user message: {content_text[:100]}...")
@@ -430,11 +428,15 @@ class RealtimeSession(
                     )
             # Skip assistant messages (handled by Ultravox)
             # Skip function calls (handled by existing tool mechanism)
-        
+
         # Update remote context to track what we've sent
         for previous_msg_id, msg_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(msg_id)
-            if item and item.role in ("system", "developer", "user") and self._safe_text_content(item):
+            if (
+                item
+                and item.role in ("system", "developer", "user")
+                and self._safe_text_content(item)
+            ):
                 # Use previous_msg_id from diff operations for correct ordering
                 self._remote_chat_ctx.insert(previous_msg_id, item)
 
@@ -443,13 +445,12 @@ class RealtimeSession(
         # Get current and new tool names for comparison
         current_tool_names = set(self._tools.function_tools.keys())
         new_tool_names = {
-            tool.name for tool in tools 
-            if hasattr(tool, 'name') and tool.name is not None
+            tool.name for tool in tools if hasattr(tool, "name") and tool.name is not None
         }
-        
+
         # Always update the tools
         self._tools.update_tools(tools)
-        
+
         # Restart session only if tool set actually changed
         if current_tool_names != new_tool_names:
             self._mark_restart_needed()
@@ -506,7 +507,7 @@ class RealtimeSession(
 
         # Record epoch for server-event gating
         self._pending_generation_epoch = time.perf_counter()
-        
+
         fut = asyncio.Future()
         self._pending_generation_fut = fut
 
@@ -563,11 +564,6 @@ class RealtimeSession(
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             self._pending_generation_fut.cancel("Session closed")
 
-        for fut in self._response_created_futures.values():
-            if not fut.done():
-                fut.set_exception(llm.RealtimeError("Session closed before response created"))
-        self._response_created_futures.clear()
-
         if self._current_generation:
             self._mark_current_generation_done()
 
@@ -588,11 +584,11 @@ class RealtimeSession(
             self._session_should_close.clear()
             # Reset ordinal tracking on reconnect to avoid stale event issues
             self._last_seen_ordinal = 0
-            
+
             try:
                 # Close any existing WebSocket connection before creating new one
                 await self._close_active_ws_session()
-                
+
                 # Create new Ultravox session
                 headers = {
                     "User-Agent": "LiveKit Agents",
@@ -638,13 +634,17 @@ class RealtimeSession(
                 if self._realtime_model._opts.max_duration is not None:
                     payload["maxDuration"] = self._realtime_model._opts.max_duration
                 if self._realtime_model._opts.time_exceeded_message is not None:
-                    payload["timeExceededMessage"] = self._realtime_model._opts.time_exceeded_message
+                    payload["timeExceededMessage"] = (
+                        self._realtime_model._opts.time_exceeded_message
+                    )
                 if self._realtime_model._opts.first_speaker is not None:
                     payload["firstSpeaker"] = self._realtime_model._opts.first_speaker
 
                 # Create call and connect to WebSocket
                 http_session = self._realtime_model._ensure_http_session()
-                async with http_session.post(create_call_url, json=payload, headers=headers) as resp:
+                async with http_session.post(
+                    create_call_url, json=payload, headers=headers
+                ) as resp:
                     resp.raise_for_status()
                     response_json = await resp.json()
                     join_url = response_json.get("joinUrl")
@@ -664,8 +664,7 @@ class RealtimeSession(
 
                 # Wait for any task to complete
                 done, pending = await asyncio.wait(
-                    [send_task, recv_task, restart_wait_task],
-                    return_when=asyncio.FIRST_COMPLETED
+                    [send_task, recv_task, restart_wait_task], return_when=asyncio.FIRST_COMPLETED
                 )
 
                 # Cancel remaining tasks
@@ -707,14 +706,14 @@ class RealtimeSession(
                         recoverable=is_recoverable,
                     ),
                 )
-                
+
                 # Break loop on non-recoverable errors or if channel is closed
                 if not is_recoverable or self._msg_ch.closed:
                     break
-                    
+
                 # Wait before retrying on recoverable errors
                 await asyncio.sleep(1.0)
-                
+
         # Final cleanup when exiting the loop
         await self._cleanup()
 
@@ -725,7 +724,7 @@ class RealtimeSession(
             # Check if restart is needed
             if self._session_should_close.is_set():
                 break
-                
+
             try:
                 if isinstance(msg, dict):
                     msg_dict = msg
@@ -749,7 +748,7 @@ class RealtimeSession(
             # Check if restart is needed
             if self._session_should_close.is_set():
                 break
-                
+
             msg = await self._ws.receive()
             # Generation will be started when we receive state change to "speaking" or first transcript
 
@@ -793,7 +792,7 @@ class RealtimeSession(
         )
         modalities_future = asyncio.Future()
         modalities_future.set_result(["text", "audio"])
-        
+
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
@@ -851,10 +850,12 @@ class RealtimeSession(
         """Handle transcript events from Ultravox."""
         # Gate by ordinal to avoid late/stale events
         if event.ordinal < self._last_seen_ordinal:
-            logger.debug(f"Skipping stale TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_ordinal}")
+            logger.debug(
+                f"Skipping stale TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_ordinal}"
+            )
             return
         self._last_seen_ordinal = event.ordinal
-        
+
         if event.role == "user":
             # User transcription - emit input_audio_transcription_completed when final
             if event.final:
@@ -880,22 +881,26 @@ class RealtimeSession(
                     msg_gen._first_token_timestamp = time.perf_counter()
                     ttft = msg_gen._first_token_timestamp - msg_gen._created_timestamp
                     logger.info(f"[ultravox] first text token received - TTFT: {ttft:.3f}s")
-                    
+
                     # Resolve pending generation on first agent TranscriptEvent as backup
-                    if (self._pending_generation_fut and 
-                        not self._pending_generation_fut.done() and
-                        self._pending_generation_epoch is not None and
-                        time.perf_counter() > self._pending_generation_epoch):
-                        logger.info("Resolving pending generate_reply via first agent TranscriptEvent")
+                    if (
+                        self._pending_generation_fut
+                        and not self._pending_generation_fut.done()
+                        and self._pending_generation_epoch is not None
+                        and time.perf_counter() > self._pending_generation_epoch
+                    ):
+                        logger.info(
+                            "Resolving pending generate_reply via first agent TranscriptEvent"
+                        )
                         generation_created = llm.GenerationCreatedEvent(
                             message_stream=self._current_generation.message_ch,
                             function_stream=self._current_generation.function_ch,
-                            user_initiated=True
+                            user_initiated=True,
                         )
                         self._pending_generation_fut.set_result(generation_created)
                         self._pending_generation_fut = None
                         self._pending_generation_epoch = None
-                        
+
                 msg_gen.text_ch.send_nowait(event.delta)
 
             # Handle final transcript
@@ -1005,22 +1010,24 @@ class RealtimeSession(
                     "Starting new generation (Ultravox speaking state - ensuring generation exists)"
                 )
                 self._start_new_generation()
-            
+
             # Resolve pending generation with server confirmation via "speaking" event
-            if (self._pending_generation_fut and 
-                not self._pending_generation_fut.done() and
-                self._pending_generation_epoch is not None and
-                time.perf_counter() > self._pending_generation_epoch):
+            if (
+                self._pending_generation_fut
+                and not self._pending_generation_fut.done()
+                and self._pending_generation_epoch is not None
+                and time.perf_counter() > self._pending_generation_epoch
+            ):
                 logger.info("Resolving pending generate_reply via speaking state event")
                 generation_created = llm.GenerationCreatedEvent(
                     message_stream=self._current_generation.message_ch,
                     function_stream=self._current_generation.function_ch,
-                    user_initiated=True
+                    user_initiated=True,
                 )
                 self._pending_generation_fut.set_result(generation_created)
                 self._pending_generation_fut = None
                 self._pending_generation_epoch = None
-                
+
             self.emit(
                 "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             )
