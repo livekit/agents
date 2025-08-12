@@ -69,7 +69,6 @@ constraints = [{ name = "onnxruntime", marker = "python_full_version == '3.9.*'"
 [manifest.dependency-groups]
 dev = [
     { name = "jiwer", specifier = ">=3.1.0" },
-    { name = "livekit-plugins-avatartalk", editable = "livekit-plugins/livekit-plugins-avatartalk" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
