@@ -207,8 +207,6 @@ class RealtimeModel(llm.RealtimeModel):
         """
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
-                # Ultravox manages the history internally
-                # TODO: truncation is called even when this is set to False
                 message_truncation=True,
                 # Ultravox manages the turn detection internally
                 turn_detection=True,
@@ -542,6 +540,7 @@ class RealtimeSession(
         *,
         message_id: str,
         audio_end_ms: int,
+        modalities: list[Literal["text", "audio"]],
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Ultravox has no server-side truncate; we simply ignore the request."""
@@ -792,11 +791,15 @@ class RealtimeSession(
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             _created_timestamp=time.perf_counter(),
         )
+        modalities_future = asyncio.Future()
+        modalities_future.set_result(["text", "audio"])
+        
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
                 text_stream=self._current_generation.text_ch,
                 audio_stream=self._current_generation.audio_ch,
+                modalities=modalities_future,
             )
         )
         generation_ev = llm.GenerationCreatedEvent(
@@ -1195,8 +1198,24 @@ class RealtimeSession(
         pass
 
     def clear_audio(self) -> None:
-        """Clear the audio buffer."""
+        """Best-effort local input buffer clear.
+
+        Ultravox does not provide a client-side event to clear server-held input buffers.
+        This clears any locally buffered input audio that hasn't been framed/sent.
+        Output audio buffering is cleared via server 'playback_clear_buffer' events.
+        """
+        # Drop any locally buffered input bytes
         self._bstream._buf.clear()
+
+        # Drop any pending samples queued in the resampler
+        if self._input_resampler is not None:
+            self._input_resampler = None
+
+        logger.warning(
+            "[ultravox] clear_audio: best-effort local input buffer clear; "
+            "server-side input clearing is not supported. Output buffering is "
+            "cleared via PlaybackClearBuffer."
+        )
 
     @utils.log_exceptions(logger=logger)
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
