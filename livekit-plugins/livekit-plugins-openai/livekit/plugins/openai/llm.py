@@ -103,6 +103,7 @@ class LLM(llm.LLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
+        _strict_tool_schema: bool = True,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -132,6 +133,7 @@ class LLM(llm.LLM):
             verbosity=verbosity,
         )
         self._provider_fmt = _provider_fmt or "openai"
+        self._strict_tool_schema = _strict_tool_schema
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -258,6 +260,7 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _strict_tool_schema=False,
         )
 
     @staticmethod
@@ -717,6 +720,7 @@ class LLM(llm.LLM):
             self,
             model=self._opts.model,
             provider_fmt=self._provider_fmt,
+            strict_tool_schema=self._strict_tool_schema,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -732,6 +736,7 @@ class LLMStream(llm.LLMStream):
         *,
         model: str | ChatModels,
         provider_fmt: str,
+        strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool | RawFunctionTool],
@@ -741,6 +746,7 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider_fmt = provider_fmt
+        self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
@@ -757,7 +763,11 @@ class LLMStream(llm.LLMStream):
 
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
-            fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
+            fnc_ctx = (
+                to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
+                if self._tools
+                else openai.NOT_GIVEN
+            )
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
                 logger.debug(
