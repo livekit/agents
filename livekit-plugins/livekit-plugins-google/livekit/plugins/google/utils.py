@@ -23,18 +23,27 @@ from .tools import _LLMTool
 __all__ = ["to_fnc_ctx"]
 
 
-def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.FunctionDeclaration]:
+def to_fnc_ctx(
+    fncs: list[FunctionTool | RawFunctionTool], *, use_parameters_json_schema: bool = True
+) -> list[types.FunctionDeclaration]:
     tools: list[types.FunctionDeclaration] = []
     for fnc in fncs:
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
-            tools.append(
-                types.FunctionDeclaration(
-                    name=info.name,
-                    description=info.raw_schema.get("description", ""),
-                    parameters_json_schema=info.raw_schema.get("parameters", {}),
+            fnc_kwargs = {
+                "name": info.name,
+                "description": info.raw_schema.get("description", ""),
+            }
+            if use_parameters_json_schema:
+                fnc_kwargs["parameters_json_schema"] = info.raw_schema.get("parameters", {})
+            else:
+                # https://github.com/googleapis/python-genai/issues/1147
+                fnc_kwargs["parameters"] = types.Schema.from_json_schema(
+                    json_schema=types.JSONSchema.model_validate(
+                        info.raw_schema.get("parameters", {})
+                    )
                 )
-            )
+            tools.append(types.FunctionDeclaration(**fnc_kwargs))
 
         elif is_function_tool(fnc):
             tools.append(_build_gemini_fnc(fnc))
