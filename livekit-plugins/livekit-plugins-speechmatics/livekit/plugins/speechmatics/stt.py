@@ -63,34 +63,34 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        base_url: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         operating_point: OperatingPoint = OperatingPoint.ENHANCED,
-        domain: str | None = None,
-        language: str = "en",
-        output_locale: str | None = None,
+        domain: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        output_locale: NotGivenOr[str] = NOT_GIVEN,
         enable_vad: bool = False,
         enable_partials: bool = True,
         enable_diarization: bool = False,
         max_delay: float = 1.0,
         end_of_utterance_silence_trigger: float = 0.5,
         end_of_utterance_mode: EndOfUtteranceMode = EndOfUtteranceMode.FIXED,
-        additional_vocab: list[AdditionalVocabEntry] | None = None,
-        punctuation_overrides: dict | None = None,
+        additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
+        punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
         diarization_sensitivity: float = 0.5,
         speaker_active_format: str = "{text}",
         speaker_passive_format: str = "{text}",
         prefer_current_speaker: bool = False,
-        focus_speakers: list[str] | None = None,
-        ignore_speakers: list[str] | None = None,
+        focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
+        ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
         focus_mode: DiarizationFocusMode = DiarizationFocusMode.RETAIN,
-        known_speakers: list[DiarizationKnownSpeaker] | None = None,
+        known_speakers: NotGivenOr[list[DiarizationKnownSpeaker]] = NOT_GIVEN,
         sample_rate: int = 16000,
         chunk_size: int = 160,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
-        transcription_config: TranscriptionConfig | None = None,  # Deprecated
-        audio_settings: AudioSettings | None = None,  # Deprecated
-        http_session: aiohttp.ClientSession | None = None,
+        transcription_config: NotGivenOr[TranscriptionConfig] = NOT_GIVEN,  # Deprecated
+        audio_settings: NotGivenOr[AudioSettings] = NOT_GIVEN,  # Deprecated
+        http_session: NotGivenOr[aiohttp.ClientSession] = NOT_GIVEN,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -100,7 +100,7 @@ class STT(stt.STT):
         )
 
         # Parse deprecated `transcription_config`
-        if transcription_config:
+        if is_given(transcription_config):
             logger.warning(
                 "`transcription_config` is deprecated. Use individual arguments instead (which override this argument)."
             )
@@ -130,11 +130,11 @@ class STT(stt.STT):
             base_url or os.getenv("SPEECHMATICS_RT_URL") or "wss://eu2.rt.speechmatics.com/v2"
         )
         self._operating_point: OperatingPoint = operating_point
-        self._domain: str | None = domain
+        self._domain: NotGivenOr[str] = domain
 
         # Language
-        self._language: str | None = language
-        self._output_locale: str | None = output_locale
+        self._language: str = language if is_given(language) else "en"
+        self._output_locale: NotGivenOr[str] = output_locale
 
         # Features
         self._enable_vad: bool = enable_vad
@@ -146,7 +146,7 @@ class STT(stt.STT):
         self._end_of_utterance_silence_trigger: float = end_of_utterance_silence_trigger
         self._end_of_utterance_mode: EndOfUtteranceMode = end_of_utterance_mode
         self._additional_vocab: list[AdditionalVocabEntry] = additional_vocab or []
-        self._punctuation_overrides: dict | None = punctuation_overrides
+        self._punctuation_overrides: NotGivenOr[dict] = punctuation_overrides
 
         # Diarization
         self._diarization_sensitivity: float = diarization_sensitivity
@@ -164,9 +164,9 @@ class STT(stt.STT):
         self._audio_encoding: AudioEncoding = audio_encoding
 
         # Check we have required attributes
-        if not self._api_key:
+        if not is_given(self._api_key):
             raise ValueError("Missing Speechmatics API key")
-        if not self._base_url:
+        if not is_given(self._base_url):
             raise ValueError("Missing Speechmatics base URL")
 
         # Complete configuration objects
@@ -181,10 +181,10 @@ class STT(stt.STT):
         )
 
         # Set of active stream
-        self._stream: stt.RecognizeStream | None = None
+        self._stream: NotGivenOr[stt.RecognizeStream] = NOT_GIVEN
 
         # HTTP session
-        self._http_session: aiohttp.ClientSession | None = http_session
+        self._http_session: NotGivenOr[aiohttp.ClientSession] = NOT_GIVEN
 
         # Lower logging of the SMX module
         logging.getLogger("speechmatics.rt.transport").setLevel(logging.WARNING)
@@ -231,8 +231,8 @@ class STT(stt.STT):
         # Transcription config
         transcription_config = TranscriptionConfig(
             language=self._language,
-            domain=self._domain,
-            output_locale=self._output_locale,
+            domain=self._domain if is_given(self._domain) else None,
+            output_locale=self._output_locale if is_given(self._output_locale) else None,
             operating_point=self._operating_point,
             diarization="speaker" if self._enable_diarization else None,
             enable_partials=self._enable_partials,
@@ -240,7 +240,7 @@ class STT(stt.STT):
         )
 
         # Additional vocab
-        if self._additional_vocab:
+        if is_given(self._additional_vocab):
             transcription_config.additional_vocab = [
                 {
                     "content": e.content,
@@ -271,7 +271,7 @@ class STT(stt.STT):
             )
 
         # Punctuation overrides
-        if self._punctuation_overrides:
+        if is_given(self._punctuation_overrides):
             transcription_config.punctuation_overrides = self._punctuation_overrides
 
         # Set config
@@ -279,9 +279,9 @@ class STT(stt.STT):
 
     def update_speakers(
         self,
-        focus_speakers: list[str] | None = None,
-        ignore_speakers: list[str] | None = None,
-        focus_mode: DiarizationFocusMode | None = None,
+        focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
+        ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
+        focus_mode: NotGivenOr[DiarizationFocusMode] = NOT_GIVEN,
     ) -> None:
         """Updates the speaker configuration.
 
@@ -315,16 +315,16 @@ class SpeechStream(stt.RecognizeStream):
 
         # Session
         self._speech_duration: float = 0
-        self._start_time: datetime.datetime | None = None
+        self._start_time: NotGivenOr[datetime.datetime] = NOT_GIVEN
 
         # Client
-        self._client: AsyncClient | None = None
+        self._client: NotGivenOr[AsyncClient] = NOT_GIVEN
 
         # Current utterance speech data
         self._speech_fragments: list[SpeechFragment] = []
 
         # EndOfUtterance fallback timer
-        self._end_of_utterance_timer: asyncio.Task | None = None
+        self._end_of_utterance_timer: NotGivenOr[asyncio.Task] = NOT_GIVEN
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -372,6 +372,8 @@ class SpeechStream(stt.RecognizeStream):
                 logger.debug("Speakers result received from STT")
                 logger.debug(message)
 
+        print(self._stt._transcription_config)
+
         # Start session
         await self._client.start_session(
             transcription_config=self._stt._transcription_config,
@@ -400,7 +402,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # TODO - handle the closing of the stream?
 
-    async def send_message(self, message: ClientMessageType | str, **kwargs: Any) -> None:
+    async def send_message(self, message: NotGivenOr[ClientMessageType], **kwargs: Any) -> None:
         """Send a message to the STT service.
 
         This sends a message to the STT service via the underlying transport. If the session
@@ -456,7 +458,7 @@ class SpeechStream(stt.RecognizeStream):
         real world time to that inside of the STT engine.
         """
         # Reset the end of utterance timer
-        if self._end_of_utterance_timer is not None:
+        if is_given(self._end_of_utterance_timer):
             self._end_of_utterance_timer.cancel()
 
         # Send after a delay
@@ -480,9 +482,9 @@ class SpeechStream(stt.RecognizeStream):
         await self._send_frames(finalized=True)
 
         # Reset the end of utterance timer
-        if self._end_of_utterance_timer:
+        if is_given(self._end_of_utterance_timer):
             self._end_of_utterance_timer.cancel()
-            self._end_of_utterance_timer = None
+            self._end_of_utterance_timer = NOT_GIVEN
 
     async def _send_frames(self, finalized: bool = False) -> None:
         """Send frames to the pipeline.
@@ -635,7 +637,7 @@ class SpeechStream(stt.RecognizeStream):
             List[SpeakerFragments]: The list of objects.
         """
         # Speaker groups
-        current_speaker: str | None = None
+        current_speaker: NotGivenOr[str] = NOT_GIVEN
         speaker_groups: list[list[SpeechFragment]] = [[]]
 
         # Group by speakers
@@ -659,7 +661,7 @@ class SpeechStream(stt.RecognizeStream):
     def _get_speaker_fragments_from_fragment_group(
         self,
         group: list[SpeechFragment],
-    ) -> SpeakerFragments | None:
+    ) -> NotGivenOr[SpeakerFragments]:
         """Take a group of fragments and piece together into SpeakerFragments.
 
         Each fragment for a given speaker is assembled into a string,

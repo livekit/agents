@@ -2,6 +2,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
 from speechmatics.rt import TranscriptionConfig
 
 __all__ = ["TranscriptionConfig"]
@@ -76,9 +80,9 @@ class SpeechFragment:
     is_punctuation: bool = False
     attaches_to: str = ""
     content: str = ""
-    speaker: str | None = None
+    speaker: NotGivenOr[str] = NOT_GIVEN
     confidence: float = 1.0
-    result: Any | None = None
+    result: NotGivenOr[Any] = NOT_GIVEN
 
 
 @dataclass
@@ -93,17 +97,17 @@ class SpeakerFragments:
         fragments: The list of SpeechFragment items.
     """
 
-    speaker_id: str | None = None
+    speaker_id: NotGivenOr[str] = NOT_GIVEN
     is_active: bool = False
-    timestamp: str | None = None
-    language: str | None = None
+    timestamp: NotGivenOr[str] = NOT_GIVEN
+    language: NotGivenOr[str] = NOT_GIVEN
     fragments: list[SpeechFragment] = field(default_factory=list)
 
     def __str__(self):
         """Return a string representation of the object."""
         return f"SpeakerFragments(speaker_id: {self.speaker_id}, timestamp: {self.timestamp}, language: {self.language}, text: {self._format_text()})"
 
-    def _format_text(self, format: str | None = None) -> str:
+    def _format_text(self, format: NotGivenOr[str] = NOT_GIVEN) -> str:
         """Wrap text with speaker ID in an optional f-string format.
 
         Args:
@@ -123,12 +127,14 @@ class SpeakerFragments:
                 content += " " + frag.content
 
         # Format the text, if format is provided
-        if format is None or self.speaker_id is None:
+        if format is NOT_GIVEN or self.speaker_id is NOT_GIVEN:
             return content
         return format.format(**{"speaker_id": self.speaker_id, "text": content})
 
     def _as_speech_data_attributes(
-        self, active_format: str | None = None, passive_format: str | None = None
+        self,
+        active_format: NotGivenOr[str] = NOT_GIVEN,
+        passive_format: NotGivenOr[str] = NOT_GIVEN,
     ) -> dict[str, Any]:
         """Return a dictionary of attributes for a TranscriptionFrame.
 
