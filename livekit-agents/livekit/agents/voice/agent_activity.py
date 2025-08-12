@@ -1254,7 +1254,8 @@ class AgentActivity(RecognitionHooks):
             # If a new user turn has already started, interrupt this one since it's now outdated
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
-            speech_handle.interrupt()
+            # await the interrupt to make sure user message is added to the chat context before the new task starts
+            await speech_handle.interrupt()
 
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
@@ -1484,15 +1485,17 @@ class AgentActivity(RecognitionHooks):
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
+
+        # add new message to chat context if the speech is scheduled
+        if new_message is not None and speech_handle.scheduled:
+            self._agent._chat_ctx.insert(new_message)
+            self._session._conversation_item_added(new_message)
+
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
             await text_tee.aclose()
             return
-
-        if new_message is not None:
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
 
         self._session._update_agent_state("thinking")
 
