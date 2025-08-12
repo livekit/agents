@@ -601,9 +601,8 @@ class RealtimeSession(
 
         reconnecting = False
         while not self._msg_ch.closed:
-            ws_conn = await self._create_ws_conn()
-
             try:
+                ws_conn = await self._create_ws_conn()
                 if reconnecting:
                     await _reconnect()
                     num_retries = 0  # reset the retry counter
@@ -661,10 +660,15 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
-        return await asyncio.wait_for(
-            self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
-            self._realtime_model._opts.conn_options.timeout,
-        )
+        try:
+            return await asyncio.wait_for(
+                self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
+                self._realtime_model._opts.conn_options.timeout,
+            )
+        except asyncio.TimeoutError as e:
+            raise APIConnectionError(
+                message="OpenAI Realtime API connection timed out",
+            ) from e
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False

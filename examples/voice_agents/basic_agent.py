@@ -1,12 +1,18 @@
 import logging
+from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
+from livekit import rtc
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
+    AgentFalseInterruptionEvent,
     AgentSession,
     JobContext,
     JobProcess,
+    MetricsCollectedEvent,
+    ModelSettings,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
@@ -15,7 +21,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import MetricsCollectedEvent
+from livekit.agents.voice.transcription.filters import filter_markdown
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -32,6 +38,7 @@ class MyAgent(Agent):
         super().__init__(
             instructions="Your name is Kelly. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
+            "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor.",
         )
 
@@ -39,6 +46,14 @@ class MyAgent(Agent):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
         self.session.generate_reply()
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        # TTS node allows us to process the text before it's sent to the model
+        # here we'll strip out markdown
+        filtered_text = filter_markdown(text)
+        return super().tts_node(filtered_text, model_settings)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -78,12 +93,21 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=openai.TTS(voice="ash"),
+        # allow the LLM to generate a response while waiting for the end of turn
+        preemptive_generation=True,
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )
 
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
+
+    # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
+    # when it's detected, you may resume the agent's speech
+    @session.on("agent_false_interruption")
+    def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
+        logger.info("false positive interruption, resuming")
+        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):

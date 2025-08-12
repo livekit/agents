@@ -44,8 +44,6 @@ from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
-BASE_URL = "https://api.deepgram.com/v1/listen"
-
 
 @dataclass
 class STTOptions:
@@ -63,6 +61,7 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
+    endpoint_url: str
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
@@ -89,7 +88,7 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        base_url: str = BASE_URL,
+        base_url: str = "https://api.deepgram.com/v1/listen",
         numerals: bool = False,
         mip_opt_out: bool = False,
     ) -> None:
@@ -130,7 +129,6 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
         )
-        self._base_url = base_url
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
@@ -158,6 +156,7 @@ class STT(stt.STT):
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
+            endpoint_url=base_url,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -191,7 +190,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                url=_to_deepgram_url(recognize_config, self._base_url, websocket=False),
+                url=_to_deepgram_url(recognize_config, self._opts.endpoint_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
                     "Authorization": f"Token {self._api_key}",
@@ -233,7 +232,7 @@ class STT(stt.STT):
             opts=config,
             api_key=self._api_key,
             http_session=self._ensure_session(),
-            base_url=self._base_url,
+            base_url=self._opts.endpoint_url,
         )
         self._streams.add(stream)
         return stream
@@ -256,6 +255,7 @@ class STT(stt.STT):
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = language
@@ -287,6 +287,8 @@ class STT(stt.STT):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(endpoint_url):
+            self._opts.endpoint_url = endpoint_url
 
         for stream in self._streams:
             stream.update_options(
@@ -304,6 +306,7 @@ class STT(stt.STT):
                 profanity_filter=profanity_filter,
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
+                endpoint_url=endpoint_url,
             )
 
     def _sanitize_options(
@@ -344,7 +347,7 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
-        self._base_url = base_url
+        self._opts.endpoint_url = base_url
         self._speaking = False
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
@@ -372,6 +375,7 @@ class SpeechStream(stt.SpeechStream):
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = language
@@ -403,6 +407,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(endpoint_url):
+            self._opts.endpoint_url = endpoint_url
 
         self._reconnect_event.set()
 
@@ -549,7 +555,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
-                    _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
+                    _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
                 ),
                 self._conn_options.timeout,

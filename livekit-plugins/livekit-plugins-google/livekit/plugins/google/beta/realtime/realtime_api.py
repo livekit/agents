@@ -428,7 +428,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._chat_ctx = chat_ctx.copy()
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
-        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(tools)
+        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
+            tools, use_parameters_json_schema=False
+        )
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
 
