@@ -92,6 +92,42 @@ class STT(stt.STT):
         audio_settings: NotGivenOr[AudioSettings] = NOT_GIVEN,  # Deprecated
         http_session: NotGivenOr[aiohttp.ClientSession] = NOT_GIVEN,
     ):
+        """
+        Create a new instance of Speechmatics STT.
+
+        Args:
+            api_key (NotGivenOr[str]): Speechmatics API key. Can be set via `api_key` argument or `SPEECHMATICS_API_KEY` environment variable
+            base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
+            operating_point (OperatingPoint): Operating point to use. Optional. Defaults to `OperatingPoint.ENHANCED`.
+            domain (NotGivenOr[str]): Domain to use. Optional.
+            language (NotGivenOr[str]): Language code for the STT model. Optional.
+            output_locale (NotGivenOr[str]): Output locale for the STT model. Optional.
+            enable_vad (bool): Whether to enable VAD. Optional. Defaults to False.
+            enable_partials (bool): Whether to enable partials. Optional. Defaults to True.
+            enable_diarization (bool): Whether to enable diarization. Optional. Defaults to False.
+            max_delay (float): Maximum delay for partials. Optional. Defaults to 1.0.
+            end_of_utterance_silence_trigger (float): End of utterance silence trigger. Optional. Defaults to 0.5.
+            end_of_utterance_mode (EndOfUtteranceMode): End of utterance mode. Optional. Defaults to `EndOfUtteranceMode.FIXED`.
+            additional_vocab (NotGivenOr[list[AdditionalVocabEntry]]): Additional vocabulary. Optional.
+            punctuation_overrides (NotGivenOr[dict]): Punctuation overrides. Optional.
+            diarization_sensitivity (float): Diarization sensitivity. Optional. Defaults to 0.5.
+            speaker_active_format (str): Speaker active format. Optional. Defaults to `{text}`.
+            speaker_passive_format (str): Speaker passive format. Optional. Defaults to `{text}`.
+            prefer_current_speaker (bool): Whether to prefer the current speaker. Optional. Defaults to False.
+            focus_speakers (NotGivenOr[list[str]]): List of speakers to focus on. Optional.
+            ignore_speakers (NotGivenOr[list[str]]): List of speakers to ignore. Optional.
+            focus_mode (DiarizationFocusMode): Focus mode. Optional. Defaults to `DiarizationFocusMode.RETAIN`.
+            known_speakers (NotGivenOr[list[DiarizationKnownSpeaker]]): List of known speakers. Optional.
+            sample_rate (int): Sample rate for the audio. Optional. Defaults to 16000.
+            chunk_size (int): Chunk size for the audio. Optional. Defaults to 160.
+            audio_encoding (AudioEncoding): Audio encoding for the audio. Optional. Defaults to `AudioEncoding.PCM_S16LE`.
+            transcription_config (NotGivenOr[TranscriptionConfig]): Transcription configuration (Deprecated). Optional.
+            audio_settings (NotGivenOr[AudioSettings]): Audio settings (Deprecated). Optional.
+            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            follow_redirects (bool): Whether to follow redirects in HTTP requests. Defaults to True.
+        """
+
+        # Initialize the base class
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
