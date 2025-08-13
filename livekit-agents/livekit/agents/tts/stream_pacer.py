@@ -141,10 +141,6 @@ class StreamPacerWrapper(SentenceStream):
                 generation_stopped and remaining_audio <= self._options.min_remaining_audio
             )
 
-            # If input ended, drain regardless of remaining_audio
-            if self._input_ended and self._sentences:
-                should_send = True
-
             if should_send and self._sentences:
                 batch: list[str] = []
                 while (
