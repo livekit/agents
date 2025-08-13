@@ -1403,7 +1403,9 @@ class AgentActivity(RecognitionHooks):
 
             if speech_handle._interrupted_by_user:
                 self._session._schedule_agent_false_interruption(
-                    AgentFalseInterruptionEvent(extra_instructions=None, message=msg)
+                    AgentFalseInterruptionEvent(
+                        extra_instructions=None, message=msg, speech_source="say"
+                    )
                 )
 
         if self._session.agent_state == "speaking":
@@ -1618,7 +1620,11 @@ class AgentActivity(RecognitionHooks):
 
             if speech_handle._interrupted_by_user:
                 self._session._schedule_agent_false_interruption(
-                    AgentFalseInterruptionEvent(extra_instructions=instructions, message=copy_msg)
+                    AgentFalseInterruptionEvent(
+                        extra_instructions=instructions,
+                        message=copy_msg,
+                        speech_source="generate_reply",
+                    )
                 )
 
             if self._session.agent_state == "speaking":
@@ -1997,7 +2003,11 @@ class AgentActivity(RecognitionHooks):
 
                 if speech_handle._interrupted_by_user:
                     self._session._schedule_agent_false_interruption(
-                        AgentFalseInterruptionEvent(extra_instructions=instructions, message=msg)
+                        AgentFalseInterruptionEvent(
+                            extra_instructions=instructions,
+                            message=msg,
+                            speech_source="generate_reply",
+                        )
                     )
 
             speech_handle._mark_generation_done()
