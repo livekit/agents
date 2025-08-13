@@ -532,9 +532,11 @@ class RealtimeSession(
 
     def interrupt(self) -> None:
         """Interrupt the current generation."""
-        # Ultravox doesn't have a specific interrupt message, but we can clear the buffer
         logger.debug("Interrupted current generation")
-        self.clear_audio()
+
+        # Finalize any active generation to stop streaming immediately
+        if self._current_generation and not self._current_generation._done:
+            self._mark_current_generation_done()
 
     def truncate(
         self,
@@ -1149,11 +1151,14 @@ class RealtimeSession(
                 self._current_generation.audio_ch.close()
                 # Create new audio channel for continued streaming
                 self._current_generation.audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+                modalities_future = asyncio.Future()
+                modalities_future.set_result(["text", "audio"])
                 self._current_generation.message_ch.send_nowait(
                     llm.MessageGeneration(
                         message_id=self._current_generation.response_id,
                         text_stream=self._current_generation.text_ch,
                         audio_stream=self._current_generation.audio_ch,
+                        modalities=modalities_future,
                     )
                 )
 
