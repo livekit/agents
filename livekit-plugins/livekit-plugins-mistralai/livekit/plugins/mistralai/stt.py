@@ -20,6 +20,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     APITimeoutError,
     stt,
 )
@@ -29,6 +30,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 from mistralai import Mistral
+from mistralai.models.sdkerror import SDKError
 
 from .models import STTModels
 
@@ -134,8 +136,10 @@ class STT(stt.STT):
                 alternatives=[sd],
             )
 
-        except Exception as e:
-            if "timeout" in str(e).lower():
-                raise APITimeoutError() from e
+        except SDKError as e:
+            if e.status_code in (408, 504):  # Request Timeout, Gateway Timeout
+                raise APITimeoutError() from None
             else:
-                raise APIConnectionError() from e
+                raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from None
+        except Exception as e:
+            raise APIConnectionError() from e
