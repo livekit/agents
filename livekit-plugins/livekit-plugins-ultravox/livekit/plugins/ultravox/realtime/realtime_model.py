@@ -534,8 +534,21 @@ class RealtimeSession(
         """Interrupt the current generation."""
         logger.debug("Interrupted current generation")
 
-        # Finalize any active generation to stop streaming immediately
+        # Only send barge-in if there's an active generation to interrupt
         if self._current_generation and not self._current_generation._done:
+            # Send programmatic interruption to server via text barge-in
+            if self._ws and not self._ws.closed:
+                # Use text barge-in with immediate urgency to interrupt
+                # deferResponse=true prevents Ultravox from generating a response
+                interrupt_msg = {
+                    "type": "input_text_message",  # Correct type per events.py
+                    "text": "(barge-in)",  # Clear indication this is an interruption
+                    "urgency": "immediate",
+                    "deferResponse": True,  # Don't generate a response, just stop
+                }
+                self._send_client_event(interrupt_msg)  # Direct call, already non-blocking
+
+            # Finalize the active generation
             self._mark_current_generation_done()
 
     def truncate(
