@@ -139,6 +139,10 @@ class VoiceActivityVideoSampler:
 
 
 def _default_false_interruption_cb(session: AgentSession, ev: AgentFalseInterruptionEvent) -> None:
+    if ev.speech_source == "say":
+        logger.info("false interruption detected on session.say(), ignoring")
+        return
+
     logger.info("resuming agent from interruption", extra={"instructions": ev.extra_instructions})
     session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
 
