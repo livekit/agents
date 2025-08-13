@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, tts
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool, tts
 from livekit.plugins import cartesia, deepgram, openai, silero  # noqa: F401
 
 logger = logging.getLogger("tts-text-pacing")
@@ -15,6 +15,25 @@ load_dotenv()
 #
 # NOTE: The default transcription sync relies on full audio length, so sync quality suffers when audio
 # generation is incomplete. Enable `use_tts_aligned_transcript` to improve sync quality if possible.
+
+
+class MyAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are a helpful assistant.",
+        )
+
+    @function_tool
+    async def lookup_weather(self, location: str):
+        """Called when the user asks for weather related information.
+
+        Args:
+            location: The location they are asking for
+        """
+
+        logger.info(f"Looking up weather for {location}")
+
+        return "sunny with a temperature of 70 degrees."
 
 
 async def entrypoint(ctx: JobContext):
@@ -35,7 +54,7 @@ async def entrypoint(ctx: JobContext):
         use_tts_aligned_transcript=True,
     )
 
-    await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
+    await session.start(agent=MyAgent(), room=ctx.room)
     session.generate_reply(instructions="say hello to the user")
 
 

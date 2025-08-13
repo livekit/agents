@@ -91,9 +91,8 @@ class StreamPacerWrapper(SentenceStream):
                 self._sentences.append(ev.token)
                 self._wakeup_event.set()
         finally:
-            if not self._wakeup_event.is_set():
-                self._wakeup_event.set()
             self._input_ended = True
+            self._wakeup_event.set()
 
     async def _send_task(self) -> None:
         audio_start_time = 0.0
