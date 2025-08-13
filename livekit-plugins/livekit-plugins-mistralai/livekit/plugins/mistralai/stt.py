@@ -138,8 +138,8 @@ class STT(stt.STT):
 
         except SDKError as e:
             if e.status_code in (408, 504):  # Request Timeout, Gateway Timeout
-                raise APITimeoutError() from None
+                raise APITimeoutError() from e
             else:
-                raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from None
+                raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
         except Exception as e:
             raise APIConnectionError() from e
