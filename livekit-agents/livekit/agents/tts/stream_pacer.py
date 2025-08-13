@@ -120,52 +120,49 @@ class StreamPacerWrapper(SentenceStream):
 
             audio_duration = self._audio_emitter.pushed_duration()
             curr_time = time.time()
+            if audio_duration > 0.0 and audio_start_time == 0.0:
+                audio_start_time = curr_time
 
-            # Detect a new generation window and reset window start
-            if audio_duration > prev_audio_duration:
-                if not generation_started or generation_stopped:
-                    audio_start_time = curr_time  # Reset window
+            # check if audio generation stopped
+            if curr_time - prev_check_time >= 0.1:
+                if prev_audio_duration < audio_duration:
                     generation_started = True
-                    generation_stopped = False
+                elif generation_started:
+                    generation_stopped = True
                 prev_audio_duration = audio_duration
-            elif generation_started and (curr_time - prev_check_time) >= 0.1:
-                generation_stopped = True
+                prev_check_time = curr_time
 
-            prev_check_time = curr_time
-
-            # Remaining audio relative to current window
-            remaining_audio = 0.0
-            if audio_start_time > 0.0:
-                remaining_audio = max(0.0, audio_start_time + audio_duration - curr_time)
-
-            should_send = first_sentence or (
-                generation_stopped and remaining_audio <= self._options.min_remaining_audio
+            remaining_audio = (
+                audio_start_time + audio_duration - curr_time if audio_start_time > 0.0 else 0.0
             )
-
-            if should_send and self._sentences:
+            if first_sentence or (
+                generation_stopped and remaining_audio <= self._options.min_remaining_audio
+            ):
                 batch: list[str] = []
-                while (
-                    self._sentences and sum(len(s) for s in batch) < self._options.max_text_length
-                ):
+                while self._sentences:
                     batch.append(self._sentences.pop(0))
-                text = " ".join(batch)
-                self._event_ch.send_nowait(TokenData(token=text))
-                logger.debug(
-                    "sent text to tts",
-                    extra={"text": text, "remaining_audio": remaining_audio},
-                )
+                    if (
+                        first_sentence  # send first sentence immediately
+                        or sum(len(s) for s in batch) >= self._options.max_text_length
+                    ):
+                        break
 
-                # Reset generation flags for next cycle
-                generation_started = False
-                generation_stopped = False
-                first_sentence = False
+                if batch:
+                    text = " ".join(batch)
+                    self._event_ch.send_nowait(TokenData(token=text))
+                    logger.debug(
+                        "sent text to tts",
+                        extra={"text": text, "remaining_audio": remaining_audio},
+                    )
+                    generation_started = False
+                    generation_stopped = False
+                    first_sentence = False
 
             # reset wakeup timer
             if generation_started and not generation_stopped:
                 wait_time = 0.2  # check more frequently when generation is in progress
             else:
-                wait_time = max(0.2, min(1.0, remaining_audio - self._options.min_remaining_audio))
-
+                wait_time = max(0.5, remaining_audio - self._options.min_remaining_audio)
             self._wakeup_timer = asyncio.get_event_loop().call_later(
                 wait_time, self._wakeup_event.set
             )
