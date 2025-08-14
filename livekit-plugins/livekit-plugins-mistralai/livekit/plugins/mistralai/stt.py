@@ -40,7 +40,6 @@ from .models import STTModels
 class _STTOptions:
     model: STTModels | str
     language: str
-    detect_language: bool
 
 
 class STT(stt.STT):
@@ -48,7 +47,6 @@ class STT(stt.STT):
         self,
         *,
         language: str = "en",
-        detect_language: bool = False,
         model: STTModels | str = "voxtral-mini-latest",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
@@ -58,19 +56,14 @@ class STT(stt.STT):
 
         Args:
             language: The language code to use for transcription (e.g., "en" for English).
-            detect_language: Whether to automatically detect the language.
             model: The MistralAI model to use for transcription, default is voxtral-mini-latest.
             api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
-        if detect_language:
-            language = ""
-
         self._opts = _STTOptions(
             language=language,
-            detect_language=detect_language,
             model=model,
         )
 
@@ -83,7 +76,6 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
-        detect_language: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the STT.
@@ -97,9 +89,6 @@ class STT(stt.STT):
             self._opts.model = model
         if is_given(language):
             self._opts.language = language
-        if is_given(detect_language):
-            self._opts.detect_language = detect_language
-            self._opts.language = ""
 
     async def _recognize_impl(
         self,
@@ -120,11 +109,11 @@ class STT(stt.STT):
                 language=self._opts.language if self._opts.language else None,
             )
 
-            sd = stt.SpeechData(text=resp.text, language=self._opts.language)
-
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[sd],
+                alternatives=[
+                    stt.SpeechData(text=resp.text, language=self._opts.language),
+                ],
             )
 
         except SDKError as e:
