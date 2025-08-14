@@ -2,11 +2,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
-)
-from livekit.agents.utils import is_given
 from speechmatics.rt import TranscriptionConfig
 
 __all__ = ["TranscriptionConfig"]
@@ -81,9 +76,9 @@ class SpeechFragment:
     is_punctuation: bool = False
     attaches_to: str = ""
     content: str = ""
-    speaker: NotGivenOr[str] = NOT_GIVEN
+    speaker: str | None = None
     confidence: float = 1.0
-    result: NotGivenOr[Any] = NOT_GIVEN
+    result: Any | None = None
 
 
 @dataclass
@@ -98,10 +93,10 @@ class SpeakerFragments:
         fragments: The list of SpeechFragment items.
     """
 
-    speaker_id: NotGivenOr[str] = NOT_GIVEN
+    speaker_id: str | None = None
     is_active: bool = False
-    timestamp: NotGivenOr[str] = NOT_GIVEN
-    language: NotGivenOr[str] = NOT_GIVEN
+    timestamp: str | None = None
+    language: str | None = None
     fragments: list[SpeechFragment] = field(default_factory=list)
 
     def __str__(self) -> str:
@@ -128,7 +123,7 @@ class SpeakerFragments:
                 content += " " + frag.content
 
         # Format the text, if format is provided
-        if is_given(self.speaker_id):
+        if self.speaker_id:
             return format.format(**{"speaker_id": self.speaker_id, "text": content})
 
         # Return the text
@@ -136,8 +131,8 @@ class SpeakerFragments:
 
     def _as_speech_data_attributes(
         self,
-        active_format: NotGivenOr[str] = NOT_GIVEN,
-        passive_format: NotGivenOr[str] = NOT_GIVEN,
+        active_format: str,
+        passive_format: str,
     ) -> dict[str, Any]:
         """Return a dictionary of attributes for a TranscriptionFrame.
 
@@ -148,11 +143,9 @@ class SpeakerFragments:
         Returns:
             dict[str, Any]: The dictionary of attributes.
         """
-        _active_format = active_format if is_given(active_format) else "{text}"
-        _passive_format = passive_format if is_given(passive_format) else _active_format
         return {
             "language": self.language,
-            "text": self._format_text(_active_format if self.is_active else _passive_format),
+            "text": self._format_text(active_format if self.is_active else passive_format),
             "speaker_id": self.speaker_id,
             "start_time": self.timestamp,
             "confidence": 1.0,
