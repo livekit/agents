@@ -169,7 +169,7 @@ class STT(stt.STT):
             audio_encoding = audio_encoding or audio_settings.encoding
 
         # Service parameters
-        self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY")
+        self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
         self._base_url: str = (
             base_url
             if is_given(base_url)
@@ -212,9 +212,9 @@ class STT(stt.STT):
         self._audio_encoding: AudioEncoding = audio_encoding
 
         # Check we have required attributes
-        if not is_given(self._api_key):
+        if not self._api_key:
             raise ValueError("Missing Speechmatics API key")
-        if not is_given(self._base_url):
+        if not self._base_url:
             raise ValueError("Missing Speechmatics base URL")
 
         # Complete configuration objects
@@ -731,7 +731,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Check there are results
         if not group:
-            return None
+            return NOT_GIVEN
 
         # Get the timing extremes
         start_time = min(frag.start_time for frag in group)

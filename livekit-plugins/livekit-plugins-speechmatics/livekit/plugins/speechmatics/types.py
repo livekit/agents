@@ -148,11 +148,11 @@ class SpeakerFragments:
         Returns:
             dict[str, Any]: The dictionary of attributes.
         """
-        if not passive_format:
-            passive_format = active_format
+        _active_format = active_format if is_given(active_format) else "{text}"
+        _passive_format = passive_format if is_given(passive_format) else _active_format
         return {
             "language": self.language,
-            "text": self._format_text(active_format if self.is_active else passive_format),
+            "text": self._format_text(_active_format if self.is_active else _passive_format),
             "speaker_id": self.speaker_id,
             "start_time": self.timestamp,
             "confidence": 1.0,
