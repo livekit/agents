@@ -25,7 +25,7 @@ classifiers = [
 dependencies = [
     "livekit-agents>=1.2.5",
     "aioboto3>=14.1.0",
-    "amazon-transcribe>=0.6.2",
+    "amazon-transcribe>=0.6.4",
 ]
 
 [project.optional-dependencies]
