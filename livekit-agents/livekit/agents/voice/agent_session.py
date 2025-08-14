@@ -812,7 +812,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
-            # _update_activity is called directy sometimes, update for redundancy
+            # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
             if new_activity == "start":
@@ -849,9 +849,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             elif new_activity == "resume":
                 await self._activity.resume()
 
-            if wait_on_enter:
-                assert self._activity._on_enter_task is not None
-                await asyncio.shield(self._activity._on_enter_task)
+        # move it outside the lock to allow calling _update_activity in on_enter of a new agent
+        if wait_on_enter:
+            assert self._activity._on_enter_task is not None
+            await asyncio.shield(self._activity._on_enter_task)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
