@@ -65,7 +65,6 @@ class STTOptions:
     domain: str | None = None
     language: str = "en"
     output_locale: str | None = None
-    enable_vad: bool = False
     enable_partials: bool = True
     enable_diarization: bool = False
     max_delay: float = 1.0
@@ -93,7 +92,6 @@ class STT(stt.STT):
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         output_locale: NotGivenOr[str] = NOT_GIVEN,
-        enable_vad: bool = False,
         enable_partials: bool = True,
         enable_diarization: bool = False,
         max_delay: float = 1.0,
@@ -120,35 +118,120 @@ class STT(stt.STT):
         Create a new instance of Speechmatics STT.
 
         Args:
-            api_key (str): Speechmatics API key. Can be set via `api_key` argument or `SPEECHMATICS_API_KEY` environment variable
-            base_url (str): Custom base URL for the API. Can be set via `base_url` argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
-            operating_point (OperatingPoint): Operating point to use. Optional. Defaults to `OperatingPoint.ENHANCED`.
+            api_key (str): Speechmatics API key. Can be set via `api_key` argument
+                or `SPEECHMATICS_API_KEY` environment variable
+
+            base_url (str): Custom base URL for the API. Can be set via `base_url`
+                argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
+
+            operating_point (OperatingPoint): Operating point for transcription accuracy
+                vs. latency tradeoff. It is recommended to use OperatingPoint.ENHANCED
+                for most use cases. Defaults to OperatingPoint.ENHANCED.
+
             domain (str): Domain to use. Optional.
-            language (str): Language code for the STT model. Optional.
-            output_locale (str): Output locale for the STT model. Optional.
-            enable_vad (bool): Whether to enable VAD. Optional. Defaults to False.
-            enable_partials (bool): Whether to enable partials. Optional. Defaults to True.
-            enable_diarization (bool): Whether to enable diarization. Optional. Defaults to False.
-            max_delay (float): Maximum delay for partials. Optional. Defaults to 1.0.
-            end_of_utterance_silence_trigger (float): End of utterance silence trigger. Optional. Defaults to 0.5.
-            end_of_utterance_mode (EndOfUtteranceMode): End of utterance mode. Optional. Defaults to `EndOfUtteranceMode.FIXED`.
-            additional_vocab (list[AdditionalVocabEntry]): Additional vocabulary. Optional.
-            punctuation_overrides (dict): Punctuation overrides. Optional.
-            diarization_sensitivity (float): Diarization sensitivity. Optional. Defaults to 0.5.
-            speaker_active_format (str): Speaker active format. Optional. Defaults to `{text}`.
-            speaker_passive_format (str): Speaker passive format. Optional. Defaults to `{text}`.
-            prefer_current_speaker (bool): Whether to prefer the current speaker. Optional. Defaults to False.
-            focus_speakers (list[str]): List of speakers to focus on. Optional.
-            ignore_speakers (list[str]): List of speakers to ignore. Optional.
-            focus_mode (DiarizationFocusMode): Focus mode. Optional. Defaults to `DiarizationFocusMode.RETAIN`.
-            known_speakers (list[DiarizationKnownSpeaker]): List of known speakers. Optional.
+
+            language (str): Language code for the STT model. Defaults to `en`. Optional.
+
+            output_locale (str): Output locale for the STT model, e.g. `en-GB`. Optional.
+
+            enable_partials (bool): Enable partial transcriptions. When enabled, the STT
+                engine will emit `INTERIM_TRANSCRIPT` events - useful for the visualisation
+                of real-time transcription. Defaults to True.
+
+            enable_diarization (bool): Enable speaker diarization. When enabled, the STT
+                engine will determine and attribute words to unique speakers. The
+                speaker_sensitivity parameter can be used to adjust the sensitivity of
+                diarization. Defaults to False.
+
+            max_delay (float): Maximum delay in seconds for transcription. This forces the
+                STT engine to speed up the processing of transcribed words and reduces the
+                interval between partial and final results. Lower values can have an impact on
+                accuracy. Defaults to 1.0.
+
+            end_of_utterance_silence_trigger (float): Maximum delay in seconds for end of
+                utterance trigger. The delay is used to wait for any further transcribed
+                words before emitting the `FINAL_TRANSCRIPT` events. The value must be
+                lower than `max_delay`. Defaults to 0.5.
+
+            end_of_utterance_mode (EndOfUtteranceMode): End of utterance delay mode. When
+                ADAPTIVE is used, the delay can be adjusted on the content of what the most
+                recent speaker has said, such as rate of speech and whether they have any
+                pauses or disfluencies. When FIXED is used, the delay is fixed to the value of
+                `end_of_utterance_delay`. Use of NONE disables end of utterance detection and
+                uses a fallback timer. Defaults to `EndOfUtteranceMode.FIXED`.
+
+            additional_vocab (list[AdditionalVocabEntry]): List of additional vocabulary entries.
+                If you supply a list of additional vocabulary entries, the this will increase the
+                weight of the words in the vocabulary and help the STT engine to better transcribe
+                the words. Defaults to [].
+
+            punctuation_overrides (dict): Punctuation overrides. This allows you to override
+                the punctuation in the STT engine. This is useful for languages that use different
+                punctuation than English. See documentation for more information.
+                Defaults to None.
+
+            diarization_sensitivity (float): Diarization sensitivity. A higher value increases
+                the sensitivity of diarization and helps when two or more speakers have similar voices.
+                Defaults to 0.5.
+
+            speaker_active_format (str): Formatter for active speaker ID. This formatter is used
+                to format the text output for individual speakers and ensures that the context is
+                clear for language models further down the pipeline. The attributes `text` and
+                `speaker_id` are available. The system instructions for the language model may need
+                to include any necessary instructions to handle the formatting.
+                Example: `@{speaker_id}: {text}`.
+                Defaults to transcription output.
+
+            speaker_passive_format (str): Formatter for passive speaker ID. As with the
+                speaker_active_format, the attributes `text` and `speaker_id` are available.
+                Example: `@{speaker_id} [background]: {text}`.
+                Defaults to transcription output.
+
+            prefer_current_speaker (bool): Prefer current speaker ID. When set to true, groups of
+                words close together are given extra weight to be identified as the same speaker.
+                Defaults to False.
+
+            focus_speakers (list[str]): List of speaker IDs to focus on. When enabled, only these
+                speakers are emitted as `FINAL_TRANSCRIPT` events and other speakers are considered
+                passive. Words from other speakers are still processed, but only emitted when a
+                focussed speaker has also said new words. A list of labels (e.g. `S1`, `S2`) or
+                identifiers of known speakers (e.g. `speaker_1`, `speaker_2`) can be used.
+                Defaults to [].
+
+            ignore_speakers (list[str]): List of speaker IDs to ignore. When enabled, these speakers
+                are excluded from the transcription and their words are not processed. Their speech
+                will not trigger any VAD or end of utterance detection. By default, any speaker
+                with a label starting and ending with double underscores will be excluded (e.g.
+                `__ASSISTANT__`).
+                Defaults to [].
+
+            focus_mode (DiarizationFocusMode): Speaker focus mode for diarization. When set to
+                `DiarizationFocusMode.RETAIN`, the STT engine will retain words spoken by other speakers
+                (not listed in `ignore_speakers`) and process them as passive speaker frames. When set to
+                `DiarizationFocusMode.IGNORE`, the STT engine will ignore words spoken by other speakers
+                and they will not be processed. Defaults to `DiarizationFocusMode.RETAIN`.
+
+            known_speakers (list[DiarizationKnownSpeaker]): List of known speaker labels and identifiers.
+                If you supply a list of labels and identifiers for speakers, then the STT engine will
+                use them to attribute any spoken words to that speaker. This is useful when you want to
+                attribute words to a specific speaker, such as the assistant or a specific user. Labels
+                and identifiers can be obtained from a running STT session and then used in subsequent
+                sessions. Identifiers are unique to each Speechmatics account and cannot be used across
+                accounts. Refer to our examples on the format of the known_speakers parameter.
+                Defaults to [].
+
             sample_rate (int): Sample rate for the audio. Optional. Defaults to 16000.
+
             chunk_size (int): Chunk size for the audio. Optional. Defaults to 160.
-            audio_encoding (AudioEncoding): Audio encoding for the audio. Optional. Defaults to `AudioEncoding.PCM_S16LE`.
+
+            audio_encoding (AudioEncoding): Audio encoding for the audio. Optional.
+                Defaults to `AudioEncoding.PCM_S16LE`.
+
             transcription_config (TranscriptionConfig): Transcription configuration (Deprecated). Optional.
+
             audio_settings (AudioSettings): Audio settings (Deprecated). Optional.
+
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            follow_redirects (bool): Whether to follow redirects in HTTP requests. Defaults to True.
         """
 
         # Initialize the base class
@@ -206,7 +289,6 @@ class STT(stt.STT):
             domain=domain if is_given(domain) else None,
             language=language if is_given(language) else "en",
             output_locale=output_locale if is_given(output_locale) else None,
-            enable_vad=enable_vad,
             enable_partials=enable_partials,
             enable_diarization=enable_diarization,
             max_delay=max_delay,
@@ -382,7 +464,9 @@ class STT(stt.STT):
 class SpeechStream(stt.RecognizeStream):
     def __init__(self, stt: STT, conn_options: APIConnectOptions) -> None:
         super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=stt._audio_format.sample_rate
+            stt=stt,
+            conn_options=conn_options,
+            sample_rate=stt._audio_format.sample_rate,
         )
 
         # Reference to STT object
