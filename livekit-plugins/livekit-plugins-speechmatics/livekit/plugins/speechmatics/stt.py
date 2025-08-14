@@ -486,7 +486,7 @@ class SpeechStream(stt.RecognizeStream):
         # Send frames
         asyncio.create_task(self._send_frames())
 
-    def _end_of_utterance_timer_start(self):
+    def _end_of_utterance_timer_start(self) -> None:
         """Start the timer for the end of utterance.
 
         This will use the STT's `end_of_utterance_silence_trigger` value and set
@@ -512,7 +512,7 @@ class SpeechStream(stt.RecognizeStream):
             send_after_delay(self._stt._end_of_utterance_silence_trigger * 2)
         )
 
-    async def _handle_end_of_utterance(self):
+    async def _handle_end_of_utterance(self) -> None:
         """Handle the end of utterance event.
 
         This will check for any running timers for end of utterance, reset them,
