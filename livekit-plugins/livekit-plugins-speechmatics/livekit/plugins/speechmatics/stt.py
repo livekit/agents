@@ -384,7 +384,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Recognition started event
         @self._client.on(ServerMessageType.RECOGNITION_STARTED)
-        def _evt_on_recognition_started(message: dict[str, Any]):
+        def _evt_on_recognition_started(message: dict[str, Any]) -> None:
             logger.debug(f"Recognition started (session: {message.get('id')})")
             self._start_time = datetime.datetime.now(datetime.timezone.utc)
 
@@ -392,19 +392,19 @@ class SpeechStream(stt.RecognizeStream):
         if self._stt._enable_partials:
 
             @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)
-            def _evt_on_partial_transcript(message: dict[str, Any]):
+            def _evt_on_partial_transcript(message: dict[str, Any]) -> None:
                 self._handle_transcript(message, is_final=False)
 
         # Final transcript event
         @self._client.on(ServerMessageType.ADD_TRANSCRIPT)
-        def _evt_on_final_transcript(message: dict[str, Any]):
+        def _evt_on_final_transcript(message: dict[str, Any]) -> None:
             self._handle_transcript(message, is_final=True)
 
         # End of Utterance
         if self._stt._end_of_utterance_mode == EndOfUtteranceMode.FIXED:
 
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)
-            def _evt_on_end_of_utterance(message: dict[str, Any]):
+            def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
                 logger.debug("End of utterance received from STT")
                 asyncio.create_task(self._handle_end_of_utterance())
 
@@ -412,11 +412,9 @@ class SpeechStream(stt.RecognizeStream):
         if self._stt._enable_diarization:
 
             @self._client.on(ServerMessageType.SPEAKERS_RESULT)
-            def _evt_on_speakers_result(message: dict[str, Any]):
+            def _evt_on_speakers_result(message: dict[str, Any]) -> None:
                 logger.debug("Speakers result received from STT")
                 logger.debug(message)
-
-        print(self._stt._transcription_config)
 
         # Start session
         await self._client.start_session(
@@ -461,9 +459,7 @@ class SpeechStream(stt.RecognizeStream):
             payload = {"message": message}
             payload.update(kwargs)
             logger.debug(f"Sending message to STT: {payload}")
-            asyncio.run_coroutine_threadsafe(
-                self._client.send_message(payload), self.get_event_loop()
-            )
+            asyncio.create_task(self._client.send_message(payload))
         except Exception as e:
             raise RuntimeError(f"error sending message to STT: {e}") from e
 
@@ -506,7 +502,7 @@ class SpeechStream(stt.RecognizeStream):
             self._end_of_utterance_timer.cancel()
 
         # Send after a delay
-        async def send_after_delay(delay: float):
+        async def send_after_delay(delay: float) -> None:
             await asyncio.sleep(delay)
             logger.debug("Fallback EndOfUtterance triggered.")
             asyncio.create_task(self._handle_end_of_utterance())
