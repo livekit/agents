@@ -169,9 +169,11 @@ class STT(stt.STT):
             audio_encoding = audio_encoding or audio_settings.encoding
 
         # Service parameters
-        self._api_key: str = api_key or os.getenv("SPEECHMATICS_API_KEY")
+        self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY")
         self._base_url: str = (
-            base_url or os.getenv("SPEECHMATICS_RT_URL") or "wss://eu2.rt.speechmatics.com/v2"
+            base_url
+            if is_given(base_url)
+            else os.getenv("SPEECHMATICS_RT_URL") or "wss://eu2.rt.speechmatics.com/v2"
         )
         self._operating_point: OperatingPoint = operating_point
         self._domain: NotGivenOr[str] = domain
@@ -197,10 +199,12 @@ class STT(stt.STT):
         self._speaker_active_format: str = speaker_active_format
         self._speaker_passive_format: str = speaker_passive_format
         self._prefer_current_speaker: bool = prefer_current_speaker
-        self._focus_speakers: list[str] = focus_speakers or []
-        self._ignore_speakers: list[str] = ignore_speakers or []
+        self._focus_speakers: list[str] = focus_speakers if is_given(focus_speakers) else []
+        self._ignore_speakers: list[str] = ignore_speakers if is_given(ignore_speakers) else []
         self._focus_mode: DiarizationFocusMode = focus_mode
-        self._known_speakers: list[DiarizationKnownSpeaker] = known_speakers or []
+        self._known_speakers: list[DiarizationKnownSpeaker] = (
+            known_speakers if is_given(known_speakers) else []
+        )
 
         # Audio settings
         self._sample_rate: int = sample_rate
@@ -342,11 +346,11 @@ class STT(stt.STT):
             raise ValueError("Diarization is not enabled")
 
         # Update the diarization configuration
-        if focus_speakers is not None:
+        if is_given(focus_speakers):
             self._focus_speakers = focus_speakers
-        if ignore_speakers is not None:
+        if is_given(ignore_speakers):
             self._ignore_speakers = ignore_speakers
-        if focus_mode is not None:
+        if is_given(focus_mode):
             self._focus_mode = focus_mode
 
 
