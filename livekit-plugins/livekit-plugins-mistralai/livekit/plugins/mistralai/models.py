@@ -8,7 +8,4 @@ ChatModels = Literal[
     "mistral-small-2407",
 ]
 
-STTModels = Literal[
-    "voxtral-small-latest",
-    "voxtral-mini-latest",
-]
+STTModels = Literal["voxtral-mini-latest",]
