@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Any, Callable, Generic, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
+import psutil
 import aiohttp
 import jwt
 from aiohttp import web
@@ -106,7 +107,10 @@ class _DefaultLoadCalc:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
-        logger.info("current load", extra={"load": cls._instance._m_avg.get_avg()})
+        logger.info("current load", extra={
+            "load": cls._instance._m_avg.get_avg(),
+            "default_percent": psutil.cpu_percent(0.5) / 100.0,
+        })
 
         return cls._instance._m_avg.get_avg()
 
