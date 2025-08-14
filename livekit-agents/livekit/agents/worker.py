@@ -106,6 +106,8 @@ class _DefaultLoadCalc:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
+        logger.info("current load", extra={"load": cls._instance._m_avg.get_avg()})
+
         return cls._instance._m_avg.get_avg()
 
 
