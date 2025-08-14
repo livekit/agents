@@ -17,6 +17,7 @@ from livekit.plugins import (
     deepgram,
     fal,
     google,
+    mistralai,
     openai,
     silero,
     speechmatics,
@@ -40,6 +41,7 @@ RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
     #     id="google.chirp_2",
     # ),
     pytest.param(lambda: openai.STT(), id="openai"),
+    pytest.param(lambda: mistralai.STT(), id="mistralai"),
     pytest.param(lambda: fal.WizperSTT(), id="fal"),
 ]
 
