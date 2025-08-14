@@ -2,12 +2,12 @@
 
 from livekit.agents import Plugin
 
-from .llm import LLM, LLMStream
+from .llm import LLM
 from .log import logger
 from .stt import STT
 from .version import __version__
 
-__all__ = ["LLM", "LLMStream", "STT", "__version__"]
+__all__ = ["LLM", "STT", "__version__"]
 
 
 class MistralAIPlugin(Plugin):
