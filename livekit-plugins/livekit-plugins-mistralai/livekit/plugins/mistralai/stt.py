@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from livekit import rtc
@@ -40,7 +41,6 @@ class _STTOptions:
     model: STTModels | str
     language: str
     detect_language: bool
-    prompt: NotGivenOr[str] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -49,8 +49,7 @@ class STT(stt.STT):
         *,
         language: str = "en",
         detect_language: bool = False,
-        model: STTModels | str = "voxtral-small-latest",
-        prompt: NotGivenOr[str] = NOT_GIVEN,
+        model: STTModels | str = "voxtral-mini-latest",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
     ):
@@ -60,8 +59,7 @@ class STT(stt.STT):
         Args:
             language: The language code to use for transcription (e.g., "en" for English).
             detect_language: Whether to automatically detect the language.
-            model: The MistralAI model to use for transcription (voxtral-small-latest or voxtral-mini-latest).
-            prompt: Optional text prompt to guide the transcription.
+            model: The MistralAI model to use for transcription, default is voxtral-mini-latest.
             api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
         """
@@ -74,11 +72,10 @@ class STT(stt.STT):
             language=language,
             detect_language=detect_language,
             model=model,
-            prompt=prompt,
         )
 
         self._client = client or Mistral(
-            api_key=api_key if is_given(api_key) else None,
+            api_key=api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY"),
         )
 
     def update_options(
@@ -87,7 +84,6 @@ class STT(stt.STT):
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
-        prompt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the STT.
@@ -96,7 +92,6 @@ class STT(stt.STT):
             language: The language to transcribe in.
             detect_language: Whether to automatically detect the language.
             model: The model to use for transcription.
-            prompt: Optional text prompt to guide the transcription.
         """
         if is_given(model):
             self._opts.model = model
@@ -105,8 +100,6 @@ class STT(stt.STT):
         if is_given(detect_language):
             self._opts.detect_language = detect_language
             self._opts.language = ""
-        if is_given(prompt):
-            self._opts.prompt = prompt
 
     async def _recognize_impl(
         self,
@@ -119,14 +112,12 @@ class STT(stt.STT):
             if is_given(language):
                 self._opts.language = language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
-            prompt = self._opts.prompt if is_given(self._opts.prompt) else None
 
             # MistralAI transcription API call
-            resp = await self._client.transcriptions.create(
+            resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
-                file=("audio.wav", data, "audio/wav"),
+                file={"content": data, "file_name": "audio.wav"},
                 language=self._opts.language if self._opts.language else None,
-                prompt=prompt,
             )
 
             sd = stt.SpeechData(text=resp.text, language=self._opts.language)

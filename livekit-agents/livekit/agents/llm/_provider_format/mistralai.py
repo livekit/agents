@@ -6,28 +6,17 @@ from livekit.agents import llm
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], Literal[None]]:
-    if isinstance(chat_ctx, llm.ChatContext):
-        messages = chat_ctx.to_dict().get("items", [])
-        messages_mistral: list[dict[str, Any]] = []
-        for element in messages:
-            content_list = element.get("content", [])
-            if (
-                not content_list
-                or not isinstance(content_list[0], str)
-                or not content_list[0].strip()
-            ):
-                continue
+    messages: list[dict[str, Any]] = []
 
-            content = content_list[0]
-            role = element.get("role")
+    for item in chat_ctx.items:
+        if item.type == "message":
+            messages.append({"role": item.role, "content": item.text_content})
+        elif item.type == "function_call":
+            pass
 
-            if role == "assistant":
-                messages_mistral.append({"role": "assistant", "content": content})
-            elif role == "user":
-                messages_mistral.append({"role": "user", "content": content})
-            elif role == "system":
-                messages_mistral.append({"role": "system", "content": content})
+    if inject_dummy_user_message and (not messages or messages[-1]["role"] not in ["user", "tool"]):
+        messages.append({"role": "user", "content": ""})
 
-    return messages_mistral, None
+    return messages, None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -21,7 +21,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from mistralai import ChatCompletionChoice, ChatCompletionStreamRequestMessages, Mistral
+from mistralai import ChatCompletionChoice, Mistral
 
 from .models import ChatModels
 
@@ -116,13 +116,10 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            messages_mistral = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            messages, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             async_response = await self._client.chat.stream_async(
-                messages=cast(list[ChatCompletionStreamRequestMessages], messages_mistral),
-                model=self._model,
-                **self._extra_kwargs,
+                messages=messages, model=self._model, **self._extra_kwargs
             )
-            print("Streaming Start")
             async for chunk in async_response:
                 for choice in chunk.data.choices:
                     chat_chunk = self._parse_choice(chunk.data.id, choice)
@@ -148,6 +145,8 @@ class LLMStream(llm.LLMStream):
         delta = getattr(choice, "delta", None)
         if not (delta and delta.content):
             return None
+
+        # choice.message.content
 
         return llm.ChatChunk(
             id=id,
