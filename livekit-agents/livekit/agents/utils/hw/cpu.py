@@ -45,9 +45,12 @@ class CGroupV2CPUMonitor(CPUMonitor):
         # period: The period of time in microseconds over which the quota applies.
         # If the quota is set to "max", it means the cgroup is allowed to use all available CPUs without restriction.  # noqa: E501
         # Otherwise, the quota is a number that represents the maximum CPU time in microseconds that the cgroup can use within a given period.  # noqa: E501
+        env_cpus = _cpu_count_from_env()
+        if env_cpus is not None:
+            return env_cpus
         quota, period = self._read_cpu_max()
         if quota == "max":
-            return _cpu_count_from_env() or psutil.cpu_count() or 1.0
+            return psutil.cpu_count() or 1.0
         return 1.0 * int(quota) / period
 
     def cpu_percent(self, interval: float = 0.5) -> float:
@@ -87,11 +90,14 @@ class CGroupV1CPUMonitor(CPUMonitor):
     def cpu_count(self) -> float:
         # often, cgroups v1 quota isn't set correctly, so we need to rely on an env var to
         # correctly determine the number of CPUs
-        # we do not want to use the node CPU count, as it could overstate the number available
-        # to the container
+        env_cpus = _cpu_count_from_env()
+        if env_cpus is not None:
+            return env_cpus
         quota, period = self._read_cfs_quota_and_period()
         if quota is None or quota < 0 or period is None or period <= 0:
-            return _cpu_count_from_env() or 2.0
+            # we do not want to use the node CPU count, as it could overstate the number
+            # available to the container
+            return 2.0
         return max(1.0 * quota / period, 1.0)
 
     def cpu_percent(self, interval: float = 0.5) -> float:
