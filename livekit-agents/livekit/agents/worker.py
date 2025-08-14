@@ -440,6 +440,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     return self._opts.load_fnc(self)  # type: ignore
 
                 self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+                logger.info(f"worker load: {self._worker_load}")
 
                 load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
                 default_num_idle_processes = _WorkerEnvOption.getvalue(
@@ -935,6 +936,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         update = agent.UpdateWorkerStatus(load=self._worker_load, status=status, job_count=job_cnt)
+        logger.info(f"update_worker_status: load: {self._worker_load}, status: {status}, job_count: {job_cnt}")
 
         # only log if status has changed
         if self._previous_status != status and not self._draining:
