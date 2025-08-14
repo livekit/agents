@@ -239,7 +239,7 @@ class STT(stt.STT):
             raise ValueError("Missing Speechmatics base URL")
 
         # Complete configuration objects
-        self._transcription_config: TranscriptionConfig = None
+        self._transcription_config: TranscriptionConfig | None = None
         self._process_config()
 
         # Set the audio settings
@@ -388,16 +388,16 @@ class SpeechStream(stt.RecognizeStream):
 
         # Session
         self._speech_duration: float = 0
-        self._start_time: datetime.datetime = None
+        self._start_time: datetime.datetime | None = None
 
         # Client
-        self._client: AsyncClient = None
+        self._client: AsyncClient | None = None
 
         # Current utterance speech data
         self._speech_fragments: list[SpeechFragment] = []
 
         # EndOfUtterance fallback timer
-        self._end_of_utterance_timer: asyncio.Task = None
+        self._end_of_utterance_timer: asyncio.Task | None = None
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -530,7 +530,7 @@ class SpeechStream(stt.RecognizeStream):
         real world time to that inside of the STT engine.
         """
         # Reset the end of utterance timer
-        if self._end_of_utterance_timer:
+        if self._end_of_utterance_timer is not None:
             self._end_of_utterance_timer.cancel()
 
         # Send after a delay
@@ -554,7 +554,7 @@ class SpeechStream(stt.RecognizeStream):
         await self._send_frames(finalized=True)
 
         # Reset the end of utterance timer
-        if self._end_of_utterance_timer:
+        if self._end_of_utterance_timer is not None:
             self._end_of_utterance_timer.cancel()
             self._end_of_utterance_timer = None
 
