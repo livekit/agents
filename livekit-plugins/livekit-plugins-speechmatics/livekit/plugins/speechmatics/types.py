@@ -76,9 +76,9 @@ class SpeechFragment:
     is_punctuation: bool = False
     attaches_to: str = ""
     content: str = ""
-    speaker: str | None = None
+    speaker: str = None
     confidence: float = 1.0
-    result: Any | None = None
+    result: Any = None
 
 
 @dataclass
@@ -93,10 +93,10 @@ class SpeakerFragments:
         fragments: The list of SpeechFragment items.
     """
 
-    speaker_id: str | None = None
+    speaker_id: str = None
     is_active: bool = False
-    timestamp: str | None = None
-    language: str | None = None
+    timestamp: str = None
+    language: str = None
     fragments: list[SpeechFragment] = field(default_factory=list)
 
     def __str__(self) -> str:

@@ -161,36 +161,44 @@ class STT(stt.STT):
 
         # Parse deprecated `transcription_config`
         if is_given(transcription_config):
+            # Show deprecation warning
             logger.warning(
                 "`transcription_config` is deprecated. Use individual arguments instead (which override this argument)."
             )
-            language = language if is_given(language) else transcription_config.language
-            output_locale = (
-                output_locale if is_given(output_locale) else transcription_config.output_locale
-            )
-            domain = domain if is_given(domain) else transcription_config.domain
-            operating_point = operating_point or transcription_config.operating_point
-            enable_diarization = enable_diarization or transcription_config.diarization == "speaker"
-            enable_partials = enable_partials or transcription_config.enable_partials
-            max_delay = max_delay or transcription_config.max_delay
+
+            # Fix the type
+            config: TranscriptionConfig = transcription_config
+
+            # Migrate settings over
+            language = language if is_given(language) else config.language
+            output_locale = output_locale if is_given(output_locale) else config.output_locale
+            domain = domain if is_given(domain) else config.domain
+            operating_point = operating_point or config.operating_point
+            enable_diarization = enable_diarization or config.diarization == "speaker"
+            enable_partials = enable_partials or config.enable_partials
+            max_delay = max_delay or config.max_delay
             additional_vocab = (
-                additional_vocab
-                if is_given(additional_vocab)
-                else transcription_config.additional_vocab
+                additional_vocab if is_given(additional_vocab) else config.additional_vocab
             )
             punctuation_overrides = (
                 punctuation_overrides
                 if is_given(punctuation_overrides)
-                else transcription_config.punctuation_overrides
+                else config.punctuation_overrides
             )
 
         # Parse deprecated `audio_settings`
         if is_given(audio_settings):
+            # Show deprecation warning
             logger.warning(
                 "`audio_settings` is deprecated. Use individual arguments instead (which override this argument)."
             )
-            sample_rate = sample_rate or audio_settings.sample_rate
-            audio_encoding = audio_encoding or audio_settings.encoding
+
+            # Fix the type
+            audio: AudioSettings = audio_settings
+
+            # Migrate settings over
+            sample_rate = sample_rate or audio.sample_rate
+            audio_encoding = audio_encoding or audio.encoding
 
         # STT options
         self._stt_options = STTOptions(
@@ -242,10 +250,10 @@ class STT(stt.STT):
         )
 
         # Set of active stream
-        self._stream: stt.RecognizeStream = None
+        self._stream: stt.RecognizeStream | None = None
 
         # HTTP session
-        self._http_session: aiohttp.ClientSession = None
+        self._http_session: aiohttp.ClientSession | None = None
 
         # Lower logging of the SMX module
         logging.getLogger("speechmatics.rt.transport").setLevel(logging.WARNING)
