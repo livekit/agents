@@ -5,6 +5,7 @@ from typing import Any
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
+    is_given,
 )
 from speechmatics.rt import TranscriptionConfig
 
@@ -103,7 +104,7 @@ class SpeakerFragments:
     language: NotGivenOr[str] = NOT_GIVEN
     fragments: list[SpeechFragment] = field(default_factory=list)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return a string representation of the object."""
         return f"SpeakerFragments(speaker_id: {self.speaker_id}, timestamp: {self.timestamp}, language: {self.language}, text: {self._format_text()})"
 
@@ -127,9 +128,11 @@ class SpeakerFragments:
                 content += " " + frag.content
 
         # Format the text, if format is provided
-        if format is NOT_GIVEN or self.speaker_id is NOT_GIVEN:
-            return content
-        return format.format(**{"speaker_id": self.speaker_id, "text": content})
+        if is_given(format) and is_given(self.speaker_id):
+            return format.format(**{"speaker_id": self.speaker_id, "text": content})
+
+        # Return the text
+        return content
 
     def _as_speech_data_attributes(
         self,

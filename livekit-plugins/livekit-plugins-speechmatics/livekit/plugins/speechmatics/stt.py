@@ -97,7 +97,7 @@ class STT(stt.STT):
 
         Args:
             api_key (NotGivenOr[str]): Speechmatics API key. Can be set via `api_key` argument or `SPEECHMATICS_API_KEY` environment variable
-            base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
+            base_url (NotGivenOr[str]): Custom base URL for the API. Can be set via `base_url` argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
             operating_point (OperatingPoint): Operating point to use. Optional. Defaults to `OperatingPoint.ENHANCED`.
             domain (NotGivenOr[str]): Domain to use. Optional.
             language (NotGivenOr[str]): Language code for the STT model. Optional.
@@ -140,16 +140,24 @@ class STT(stt.STT):
             logger.warning(
                 "`transcription_config` is deprecated. Use individual arguments instead (which override this argument)."
             )
-            language = language or transcription_config.language
-            output_locale = output_locale or transcription_config.output_locale
-            domain = domain or transcription_config.domain
+            language = language if is_given(language) else transcription_config.language
+            output_locale = (
+                output_locale if is_given(output_locale) else transcription_config.output_locale
+            )
+            domain = domain if is_given(domain) else transcription_config.domain
             operating_point = operating_point or transcription_config.operating_point
             enable_diarization = enable_diarization or transcription_config.diarization == "speaker"
             enable_partials = enable_partials or transcription_config.enable_partials
             max_delay = max_delay or transcription_config.max_delay
-            additional_vocab = additional_vocab or transcription_config.additional_vocab
+            additional_vocab = (
+                additional_vocab
+                if is_given(additional_vocab)
+                else transcription_config.additional_vocab
+            )
             punctuation_overrides = (
-                punctuation_overrides or transcription_config.punctuation_overrides
+                punctuation_overrides
+                if is_given(punctuation_overrides)
+                else transcription_config.punctuation_overrides
             )
 
         # Parse deprecated `audio_settings`
