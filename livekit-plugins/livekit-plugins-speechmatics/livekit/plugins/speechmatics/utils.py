@@ -1,6 +1,6 @@
 from urllib.parse import urlencode
 
-from speechmatics.rt import (
+from speechmatics.rt import (  # type: ignore
     __version__ as sdk_version,
 )
 

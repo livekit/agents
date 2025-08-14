@@ -35,7 +35,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from speechmatics.rt import (
+from speechmatics.rt import (  # type: ignore
     AsyncClient,
     AudioEncoding,
     AudioFormat,
@@ -276,6 +276,8 @@ class STT(stt.STT):
         """Create a new SpeechStream."""
 
         # Create a copy of the transcription config
+        if self._transcription_config is None:
+            raise RuntimeError("Transcription config not initialized")
         transcription_config = dataclasses.replace(self._transcription_config)
 
         # Set the language if given
@@ -491,7 +493,8 @@ class SpeechStream(stt.RecognizeStream):
             payload = {"message": message}
             payload.update(kwargs)
             logger.debug(f"Sending message to STT: {payload}")
-            asyncio.create_task(self._client.send_message(payload))
+            if self._client:
+                asyncio.create_task(self._client.send_message(payload))
         except Exception as e:
             raise RuntimeError(f"error sending message to STT: {e}") from e
 
