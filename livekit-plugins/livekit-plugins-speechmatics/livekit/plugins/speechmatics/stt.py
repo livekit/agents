@@ -229,7 +229,7 @@ class STT(stt.STT):
         self._base_url: str = (
             base_url
             if is_given(base_url)
-            else os.getenv("SPEECHMATICS_RT_URL") or "wss://eu2.rt.speechmatics.com/v2"
+            else os.getenv("SPEECHMATICS_RT_URL", "wss://eu2.rt.speechmatics.com/v2")
         )
 
         # Check we have required attributes
