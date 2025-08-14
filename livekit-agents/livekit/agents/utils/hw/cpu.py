@@ -22,7 +22,7 @@ class CPUMonitor(ABC):
         pass
 
 
-def _cpu_count_from_env() -> float | None:
+def _cpu_count_from_env() -> Optional[float]:
     try:
         if "NUM_CPUS" in os.environ:
             return float(os.environ["NUM_CPUS"])
