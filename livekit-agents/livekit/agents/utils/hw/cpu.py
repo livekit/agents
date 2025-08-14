@@ -92,7 +92,15 @@ class CGroupV1CPUMonitor(CPUMonitor):
         usage_seconds = usage_diff_ns / 1_000_000_000
         num_cpus = self.cpu_count()
         percent = usage_seconds / (interval * num_cpus)
-        logger.info("cpu percent", extra={"percent": percent, "usage_start": usage_start, "usage_end": usage_end, "num_cpus": num_cpus})
+        logger.info("cpu percent",
+                    extra={
+                        "percent": percent,
+                        "usage_start": usage_start,
+                        "usage_end": usage_end,
+                        "num_cpus": num_cpus,
+                        "default_percent": psutil.cpu_percent(interval) / 100.0,
+                    },
+                )
         return min(percent, 1.0)
 
     def _read_cfs_quota_and_period(self) -> tuple[Optional[int], Optional[int]]:
