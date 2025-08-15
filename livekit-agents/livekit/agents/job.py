@@ -370,9 +370,9 @@ class JobContext:
             return fut
 
         if isinstance(participant, rtc.RemoteParticipant):
-            assert (
-                participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-            ), "Participant must be a SIP participant"
+            assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+                "Participant must be a SIP participant"
+            )
             participant_identity = participant.identity
         else:
             participant_identity = participant
