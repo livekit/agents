@@ -32,11 +32,12 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .models import TTSLanguages, TTSSpeechEngine
+from .models import TTSLanguages, TTSSpeechEngine, TTSTextType
 from .utils import _strip_nones
 
 DEFAULT_SPEECH_ENGINE: TTSSpeechEngine = "generative"
 DEFAULT_VOICE = "Ruth"
+DEFAULT_TEXT_TYPE: TTSTextType = "text"
 
 
 @dataclass
@@ -47,6 +48,7 @@ class _TTSOptions:
     region: str | None
     sample_rate: int
     language: TTSLanguages | str | None
+    text_type: TTSTextType
 
 
 class TTS(tts.TTS):
@@ -56,6 +58,7 @@ class TTS(tts.TTS):
         voice: str = "Ruth",
         language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
         speech_engine: TTSSpeechEngine = "generative",
+        text_type: TTSTextType = "text",
         sample_rate: int = 16000,
         region: str | None = None,
         api_key: str | None = None,
@@ -96,6 +99,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
+            text_type=text_type,
             region=region or None,
             language=language or None,
             sample_rate=sample_rate,
@@ -130,7 +134,7 @@ class ChunkedStream(tts.ChunkedStream):
                             "OutputFormat": "mp3",
                             "Engine": self._opts.speech_engine,
                             "VoiceId": self._opts.voice,
-                            "TextType": "text",
+                            "TextType": self._opts.text_type,
                             "SampleRate": str(self._opts.sample_rate),
                             "LanguageCode": self._opts.language,
                         }
