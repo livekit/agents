@@ -37,6 +37,14 @@ class WizperSTT(stt.STT):
         self._opts = _STTOptions(language=language if is_given(language) else "en")
         self._fal_client = fal_client.AsyncClient(key=self._api_key)
 
+    @property
+    def model(self) -> str:
+        return "Wizper"
+
+    @property
+    def provider(self) -> str:
+        return "Fal"
+
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
             self._opts.language = language
@@ -51,9 +59,7 @@ class WizperSTT(stt.STT):
         try:
             if is_given(language):
                 self._opts.language = language
-            data_uri = fal_client.encode(
-                rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
-            )
+            data_uri = fal_client.encode(rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav")
             response = await self._fal_client.run(
                 "fal-ai/wizper",
                 arguments={

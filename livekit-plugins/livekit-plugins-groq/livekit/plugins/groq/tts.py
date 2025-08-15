@@ -95,6 +95,14 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Groq"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -174,8 +182,6 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
         except Exception as e:
             raise APIConnectionError() from e

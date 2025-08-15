@@ -92,13 +92,19 @@ class TTS(tts.TTS):
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
-                ),
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=50, keepalive_expiry=120),
             ),
         )
 
         self._prewarm_task: asyncio.Task | None = None
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
 
     def update_options(
         self,
@@ -160,9 +166,7 @@ class TTS(tts.TTS):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            timeout=timeout if timeout else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
         return TTS(
@@ -174,9 +178,7 @@ class TTS(tts.TTS):
             response_format=response_format,
         )
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
+    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def prewarm(self) -> None:
@@ -227,8 +229,6 @@ class ChunkedStream(tts.ChunkedStream):
         except openai.APITimeoutError:
             raise APITimeoutError() from None
         except openai.APIStatusError as e:
-            raise APIStatusError(
-                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
-            ) from None
+            raise APIStatusError(e.message, status_code=e.status_code, request_id=e.request_id, body=e.body) from None
         except Exception as e:
             raise APIConnectionError() from e

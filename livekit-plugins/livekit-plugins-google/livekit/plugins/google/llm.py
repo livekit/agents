@@ -82,9 +82,7 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
-        automatic_function_calling_config: NotGivenOr[
-            types.AutomaticFunctionCallingConfigOrDict
-        ] = NOT_GIVEN,
+        automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict] = NOT_GIVEN,
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
@@ -120,9 +118,7 @@ class LLM(llm.LLM):
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
         gcp_location: str | None = (
-            location
-            if is_given(location)
-            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+            location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
         )
         use_vertexai = (
             vertexai
@@ -158,9 +154,7 @@ class LLM(llm.LLM):
                 if not isinstance(_thinking_budget, int):
                     raise ValueError("thinking_budget inside thinking_config must be an integer")
                 if not (0 <= _thinking_budget <= 24576):
-                    raise ValueError(
-                        "thinking_budget inside thinking_config must be between 0 and 24576"
-                    )
+                    raise ValueError("thinking_budget inside thinking_config must be between 0 and 24576")
 
         self._opts = _LLMOptions(
             model=model,
@@ -191,6 +185,13 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        if self._client.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
+
     def chat(
         self,
         *,
@@ -199,9 +200,7 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[
-            types.SchemaUnion | type[llm_utils.ResponseFormatT]
-        ] = NOT_GIVEN,
+        response_format: NotGivenOr[types.SchemaUnion | type[llm_utils.ResponseFormatT]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> LLMStream:
@@ -210,9 +209,7 @@ class LLM(llm.LLM):
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
-        tool_choice = (
-            cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-        )
+        tool_choice = cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
             if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -335,8 +332,7 @@ class LLMStream(llm.LLMStream):
                     else None
                 ),
                 http_options=(
-                    self._llm._opts.http_options
-                    or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
+                    self._llm._opts.http_options or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
                 ),
                 **self._extra_kwargs,
             )

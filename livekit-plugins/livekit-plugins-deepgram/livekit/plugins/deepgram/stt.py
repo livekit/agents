@@ -126,9 +126,7 @@ class STT(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results))
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
@@ -160,6 +158,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Deepgram"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -309,9 +315,7 @@ class STT(stt.STT):
                 endpoint_url=endpoint_url,
             )
 
-    def _sanitize_options(
-        self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
-    ) -> STTOptions:
+    def _sanitize_options(self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN) -> STTOptions:
         config = dataclasses.replace(self._opts)
         if is_given(language):
             config.language = language
@@ -339,8 +343,7 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         if opts.detect_language or opts.language is None:
             raise ValueError(
-                "language detection is not supported in streaming mode, "
-                "please disable it and specify a language"
+                "language detection is not supported in streaming mode, " "please disable it and specify a language"
             )
 
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
@@ -683,9 +686,7 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
-def _validate_model(
-    model: DeepgramModels | str, language: NotGivenOr[DeepgramLanguages | str]
-) -> DeepgramModels | str:
+def _validate_model(model: DeepgramModels | str, language: NotGivenOr[DeepgramLanguages | str]) -> DeepgramModels | str:
     en_only_models = {
         "nova-2-meeting",
         "nova-2-phonecall",
@@ -698,9 +699,7 @@ def _validate_model(
         "nova-2-automotive",
     }
     if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
-        logger.warning(
-            f"{model} does not support language {language}, falling back to nova-2-general"
-        )
+        logger.warning(f"{model} does not support language {language}, falling back to nova-2-general")
         return "nova-2-general"
     return model
 
@@ -729,8 +728,7 @@ def _validate_keyterms(
         )
 
     if is_given(keyterms) and (
-        (model.startswith("nova-3") and language not in ("en-US", "en"))
-        or not model.startswith("nova-3")
+        (model.startswith("nova-3") and language not in ("en-US", "en")) or not model.startswith("nova-3")
     ):
         raise ValueError(
             "Keyterm Prompting is only available for English transcription using the Nova-3 Model. "

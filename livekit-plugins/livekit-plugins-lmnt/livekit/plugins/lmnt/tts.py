@@ -112,10 +112,7 @@ class TTS(tts.TTS):
         )
         api_key = api_key or os.environ.get("LMNT_API_KEY")
         if not api_key:
-            raise ValueError(
-                "LMNT API key is required. "
-                "Set it via environment variable or pass it as an argument."
-            )
+            raise ValueError("LMNT API key is required. " "Set it via environment variable or pass it as an argument.")
 
         if not language:
             language = "auto" if model == "blizzard" else "en"
@@ -133,6 +130,14 @@ class TTS(tts.TTS):
         )
 
         self._session = http_session
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "LMNT"
 
     def synthesize(
         self,

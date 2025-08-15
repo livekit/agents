@@ -131,6 +131,14 @@ class TTS(tts.TTS):
             temperature=temperature,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Inworld"
+
     def update_options(
         self,
         *,
@@ -258,8 +266,6 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
         except Exception as e:
             raise APIConnectionError() from e

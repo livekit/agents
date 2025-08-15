@@ -90,6 +90,14 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
+    def model(self) -> str:
+        return "Universal-Streaming"
+
+    @property
+    def provider(self) -> str:
+        return "AssemblyAI"
+
+    @property
     def session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -134,9 +142,7 @@ class STT(stt.STT):
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
         if is_given(min_end_of_turn_silence_when_confident):
-            self._opts.min_end_of_turn_silence_when_confident = (
-                min_end_of_turn_silence_when_confident
-            )
+            self._opts.min_end_of_turn_silence_when_confident = min_end_of_turn_silence_when_confident
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
 
@@ -183,9 +189,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
         if is_given(min_end_of_turn_silence_when_confident):
-            self._opts.min_end_of_turn_silence_when_confident = (
-                min_end_of_turn_silence_when_confident
-            )
+            self._opts.min_end_of_turn_silence_when_confident = min_end_of_turn_silence_when_confident
         if is_given(max_turn_silence):
             self._opts.max_turn_silence = max_turn_silence
 
@@ -297,9 +301,7 @@ class SpeechStream(stt.SpeechStream):
             "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident  # noqa: E501
             if is_given(self._opts.min_end_of_turn_silence_when_confident)
             else None,
-            "max_turn_silence": self._opts.max_turn_silence
-            if is_given(self._opts.max_turn_silence)
-            else None,
+            "max_turn_silence": self._opts.max_turn_silence if is_given(self._opts.max_turn_silence) else None,
         }
 
         headers = {
@@ -340,9 +342,7 @@ class SpeechStream(stt.SpeechStream):
                     usage_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.RECOGNITION_USAGE,
                         alternatives=[],
-                        recognition_usage=stt.RecognitionUsage(
-                            audio_duration=self._speech_duration
-                        ),
+                        recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
                     )
                     self._event_ch.send_nowait(usage_event)
                     self._speech_duration = 0

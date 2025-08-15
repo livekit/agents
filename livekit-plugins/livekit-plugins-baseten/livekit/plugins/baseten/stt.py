@@ -100,9 +100,7 @@ class STT(stt.STT):
         model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
 
         if not model_endpoint:
-            raise ValueError(
-                "The model endpoint is required, you can find it in the Baseten dashboard"
-            )
+            raise ValueError("The model endpoint is required, you can find it in the Baseten dashboard")
 
         self._model_endpoint = model_endpoint
 
@@ -120,6 +118,14 @@ class STT(stt.STT):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Baseten"
 
     @property
     def session(self) -> aiohttp.ClientSession:

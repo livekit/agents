@@ -82,8 +82,7 @@ class TTS(tts.TTS):
         api_key = api_key or os.environ.get("RESEMBLE_API_KEY")
         if not api_key:
             raise ValueError(
-                "Resemble API key is required, either as argument or set RESEMBLE_API_KEY"
-                " environment variable"
+                "Resemble API key is required, either as argument or set RESEMBLE_API_KEY" " environment variable"
             )
         self._api_key = api_key
 
@@ -105,6 +104,14 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Resemble"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
@@ -140,14 +147,10 @@ class TTS(tts.TTS):
         """  # noqa: E501
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
+    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -215,9 +218,7 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -279,17 +280,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
+            raise APIStatusError(message=e.message, status_code=e.status, request_id=request_id, body=None) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws(
-        self, input_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _run_ws(self, input_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 

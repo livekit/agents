@@ -14,6 +14,7 @@ from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
@@ -103,6 +104,18 @@ class LLM(
         """
         return "unknown"
 
+    @property
+    def provider(self) -> str:
+        """Get the provider name/identifier for this LLM instance.
+
+        Returns:
+            The provider name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their provider information.
+        """
+        return "unknown"
+
     @abstractmethod
     def chat(
         self,
@@ -150,9 +163,7 @@ class LLMStream(ABC):
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
         self._current_attempt_has_error = False
-        self._metrics_task = asyncio.create_task(
-            self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
-        )
+        self._metrics_task = asyncio.create_task(self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task")
 
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -266,12 +277,14 @@ class LLMStream(ABC):
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
+            metadata=Metadata(
+                model_name=self._llm.model,
+                model_provider=self._llm.provider,
+            ),
         )
         if self._llm_request_span:
             # livekit metrics attribute
-            self._llm_request_span.set_attribute(
-                trace_types.ATTR_LLM_METRICS, metrics.model_dump_json()
-            )
+            self._llm_request_span.set_attribute(trace_types.ATTR_LLM_METRICS, metrics.model_dump_json())
 
             # set gen_ai attributes
             self._llm_request_span.set_attributes(

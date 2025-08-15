@@ -66,8 +66,7 @@ class STT(stt.STT):
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
             raise ValueError(
-                "ElevenLabs API key is required, either as argument or "
-                "set ELEVEN_API_KEY environmental variable"
+                "ElevenLabs API key is required, either as argument or " "set ELEVEN_API_KEY environmental variable"
             )
         self._opts = _STTOptions(
             api_key=elevenlabs_api_key,
@@ -75,6 +74,14 @@ class STT(stt.STT):
             language_code=language_code if is_given(language_code) else "en",
         )
         self._session = http_session
+
+    @property
+    def model(self) -> str:
+        return "Scribe"
+
+    @property
+    def provider(self) -> str:
+        return "ElevenLabs"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

@@ -145,6 +145,14 @@ class TTS(tts.TTS):
         )
         self._session = http_session
 
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Speechify"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -262,9 +270,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
 
 def _get_headers(token: str, *, encoding: TTSEncoding | None = None) -> dict[str, str]:
     """Construct the headers for the Speechify API."""
-    headers = {
-        AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token
-    }
+    headers = {AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token}
 
     if encoding:
         accept = ""

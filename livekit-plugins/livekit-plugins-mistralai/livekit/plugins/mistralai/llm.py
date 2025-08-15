@@ -63,6 +63,10 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        return "MistralAI"
+
     def chat(
         self,
         *,
@@ -176,8 +180,6 @@ class LLMStream(llm.LLMStream):
                 call_id = tool.id or shortuuid("tool_call_")
 
                 chunk.delta.tool_calls.append(
-                    llm.FunctionToolCall(
-                        name=tool.function.name, arguments=arguments, call_id=call_id
-                    )
+                    llm.FunctionToolCall(name=tool.function.name, arguments=arguments, call_id=call_id)
                 )
         return chunk if chunk.delta else None

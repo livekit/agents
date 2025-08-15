@@ -109,6 +109,14 @@ class STT(stt.STT):
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Cartesia"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -121,9 +129,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError(
-            "Cartesia STT does not support batch recognition, use stream() instead"
-        )
+        raise NotImplementedError("Cartesia STT does not support batch recognition, use stream() instead")
 
     def stream(
         self,
@@ -160,9 +166,7 @@ class STT(stt.STT):
                 language=language,
             )
 
-    def _sanitize_options(
-        self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
-    ) -> STTOptions:
+    def _sanitize_options(self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN) -> STTOptions:
         """Create a sanitized copy of options with language override if provided."""
         config = STTOptions(
             model=self._opts.model,
