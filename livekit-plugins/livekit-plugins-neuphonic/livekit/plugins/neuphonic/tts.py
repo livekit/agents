@@ -77,9 +77,9 @@ class TTS(tts.TTS):
         base_url: str = "https://api.neuphonic.com",
     ) -> None:
         """
-        Create a new instance of NeuPhonic TTS.
+        Create a new instance of Neuphonic TTS.
 
-        See https://docs.neuphonic.com for more details on the NeuPhonic API.
+        See https://docs.neuphonic.com for more details on the Neuphonic API.
 
         Args:
             lang_code (TTSLangCodes | str, optional): The language code for synthesis. Defaults to "en".
@@ -87,11 +87,11 @@ class TTS(tts.TTS):
             voice_id (str, optional): The voice ID for the desired voice.
             speed (float, optional): The audio playback speed. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 22050.
-            api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
+            api_key (str, optional): The Neuphonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.basic.WordTokenizer().
             tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer().
-            base_url (str, optional): The base URL for the NeuPhonic API. Defaults to "https://api.neuphonic.com".
+            base_url (str, optional): The base URL for the Neuphonic API. Defaults to "https://api.neuphonic.com".
         """  # noqa: E501
 
         super().__init__(
@@ -364,17 +364,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("NeuPhonic websocket connection closed unexpectedly")
+                    raise APIStatusError("Neuphonic websocket connection closed unexpectedly")
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         resp = json.loads(msg.data)
                     except json.JSONDecodeError:
-                        logger.warning("Invalid JSON from NeuPhonic")
+                        logger.warning("Invalid JSON from Neuphonic")
                         continue
 
                     if resp.get("type") == "error":
-                        raise APIError(f"NeuPhonic returned error: {resp}")
+                        raise APIError(f"Neuphonic returned error: {resp}")
 
                     data = resp.get("data", {})
                     audio_data = data.get("audio")
@@ -384,7 +384,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             if b64data:  
                                 output_emitter.push(b64data)
                         except Exception as e:
-                            logger.warning("Failed to decode NeuPhonic audio data: %s", e)
+                            logger.warning("Failed to decode Neuphonic audio data: %s", e)
 
                     if data.get("stop") == True:
                         output_emitter.end_segment()
@@ -393,7 +393,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     pass
                 else:
-                    logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
+                    logger.warning("Unexpected Neuphonic message type: %s", msg.type)
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             tasks = [
