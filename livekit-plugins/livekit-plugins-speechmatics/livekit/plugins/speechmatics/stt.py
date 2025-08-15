@@ -20,6 +20,7 @@ import datetime
 import logging
 import os
 import re
+from functools import partial
 from typing import Any
 
 import aiohttp
@@ -39,7 +40,6 @@ from speechmatics.rt import (  # type: ignore
     AsyncClient,
     AudioEncoding,
     AudioFormat,
-    ClientMessageType,
     ConversationConfig,
     OperatingPoint,
     ServerMessageType,
@@ -404,7 +404,7 @@ class STT(stt.STT):
 
         # Diarization
         if self._stt_options.enable_diarization:
-            dz_cfg = {}
+            dz_cfg: dict[str, Any] = {}
             if self._stt_options.diarization_sensitivity is not None:
                 dz_cfg["speaker_sensitivity"] = self._stt_options.diarization_sensitivity
             if self._stt_options.prefer_current_speaker is not None:
@@ -470,7 +470,7 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         # Reference to STT object
-        self._stt = stt
+        self._stt: STT = stt
 
         # Session
         self._speech_duration: float = 0
@@ -483,7 +483,7 @@ class SpeechStream(stt.RecognizeStream):
         self._speech_fragments: list[SpeechFragment] = []
 
         # EndOfUtterance fallback timer
-        self._end_of_utterance_timer: asyncio.Task | None = None
+        self._end_of_utterance_timer: asyncio.TimerHandle | None = None
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -501,38 +501,28 @@ class SpeechStream(stt.RecognizeStream):
         opts = self._stt._stt_options
 
         # Recognition started event
-        @self._client.on(ServerMessageType.RECOGNITION_STARTED)
         def _evt_on_recognition_started(message: dict[str, Any]) -> None:
-            logger.debug(f"Recognition started (session: {message.get('id')})")
             self._start_time = datetime.datetime.now(datetime.timezone.utc)
+
+        self._client.on(ServerMessageType.RECOGNITION_STARTED, _evt_on_recognition_started)
 
         # Partial transcript event
         if opts.enable_partials:
-
-            @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)
-            def _evt_on_partial_transcript(message: dict[str, Any]) -> None:
-                self._handle_transcript(message, is_final=False)
+            self._client.on(
+                ServerMessageType.ADD_PARTIAL_TRANSCRIPT,
+                partial(self._handle_transcript, is_final=False),
+            )
 
         # Final transcript event
-        @self._client.on(ServerMessageType.ADD_TRANSCRIPT)
-        def _evt_on_final_transcript(message: dict[str, Any]) -> None:
-            self._handle_transcript(message, is_final=True)
+        self._client.on(
+            ServerMessageType.ADD_TRANSCRIPT, partial(self._handle_transcript, is_final=True)
+        )
 
         # End of Utterance
         if opts.end_of_utterance_mode == EndOfUtteranceMode.FIXED:
-
-            @self._client.on(ServerMessageType.END_OF_UTTERANCE)
-            def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
-                logger.debug("End of utterance received from STT")
-                asyncio.create_task(self._handle_end_of_utterance())
-
-        # Speaker Result
-        if opts.enable_diarization:
-
-            @self._client.on(ServerMessageType.SPEAKERS_RESULT)
-            def _evt_on_speakers_result(message: dict[str, Any]) -> None:
-                logger.debug("Speakers result received from STT")
-                logger.debug(message)
+            self._client.on(
+                ServerMessageType.END_OF_UTTERANCE, lambda _: self._handle_end_of_utterance()
+            )
 
         # Start session
         await self._client.start_session(
@@ -562,26 +552,6 @@ class SpeechStream(stt.RecognizeStream):
 
         # TODO - handle the closing of the stream?
 
-    async def send_message(self, message: NotGivenOr[ClientMessageType], **kwargs: Any) -> None:
-        """Send a message to the STT service.
-
-        This sends a message to the STT service via the underlying transport. If the session
-        is not running, this will raise an exception. Messages in the wrong format will also
-        cause an error.
-
-        Args:
-            message: Message to send to the STT service.
-            **kwargs: Additional arguments passed to the underlying transport.
-        """
-        try:
-            payload = {"message": message}
-            payload.update(kwargs)
-            logger.debug(f"Sending message to STT: {payload}")
-            if self._client:
-                asyncio.create_task(self._client.send_message(payload))
-        except Exception as e:
-            raise RuntimeError(f"error sending message to STT: {e}") from e
-
     def _handle_transcript(self, message: dict[str, Any], is_final: bool) -> None:
         """Handle the partial and final transcript events.
 
@@ -603,7 +573,7 @@ class SpeechStream(stt.RecognizeStream):
         self._end_of_utterance_timer_start()
 
         # Send frames
-        asyncio.create_task(self._send_frames())
+        self._send_frames()
 
     def _end_of_utterance_timer_start(self) -> None:
         """Start the timer for the end of utterance.
@@ -620,32 +590,27 @@ class SpeechStream(stt.RecognizeStream):
         if self._end_of_utterance_timer is not None:
             self._end_of_utterance_timer.cancel()
 
-        # Send after a delay
-        async def send_after_delay(delay: float) -> None:
-            await asyncio.sleep(delay)
-            logger.debug("Fallback EndOfUtterance triggered.")
-            asyncio.create_task(self._handle_end_of_utterance())
-
         # Start the timer
-        self._end_of_utterance_timer = asyncio.create_task(
-            send_after_delay(self._stt._stt_options.end_of_utterance_silence_trigger * 2)
+        self._end_of_utterance_timer = asyncio.get_event_loop().call_later(
+            self._stt._stt_options.end_of_utterance_silence_trigger * 2,
+            self._handle_end_of_utterance,
         )
 
-    async def _handle_end_of_utterance(self) -> None:
+    def _handle_end_of_utterance(self) -> None:
         """Handle the end of utterance event.
 
         This will check for any running timers for end of utterance, reset them,
         and then send a finalized frame to the pipeline.
         """
         # Send the frames
-        await self._send_frames(finalized=True)
+        self._send_frames(finalized=True)
 
         # Reset the end of utterance timer
         if self._end_of_utterance_timer is not None:
             self._end_of_utterance_timer.cancel()
             self._end_of_utterance_timer = None
 
-    async def _send_frames(self, finalized: bool = False) -> None:
+    def _send_frames(self, finalized: bool = False) -> None:
         """Send frames to the pipeline.
 
         Send speech frames to the pipeline. If VAD is enabled, then this will
@@ -857,6 +822,9 @@ class SpeechStream(stt.RecognizeStream):
         start_time = min(frag.start_time for frag in group)
 
         # Timestamp
+        if self._start_time is None:
+            self._start_time = datetime.datetime.now(datetime.timezone.utc)
+
         ts = (self._start_time + datetime.timedelta(seconds=start_time)).isoformat(
             timespec="milliseconds"
         )
