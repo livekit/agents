@@ -794,7 +794,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self._started:
             self._update_activity_atask = task = asyncio.create_task(
-                self._update_activity_task(self._agent), name="_update_activity_task"
+                self._update_activity_task(self._update_activity_atask, self._agent),
+                name="_update_activity_task",
             )
             run_state = self._global_run_state
             if run_state:
@@ -812,7 +813,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
-            # _update_activity is called directy sometimes, update for redundancy
+            # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
             if new_activity == "start":
@@ -849,18 +850,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             elif new_activity == "resume":
                 await self._activity.resume()
 
-            if wait_on_enter:
-                assert self._activity._on_enter_task is not None
-                await asyncio.shield(self._activity._on_enter_task)
+        # move it outside the lock to allow calling _update_activity in on_enter of a new agent
+        if wait_on_enter:
+            assert self._activity._on_enter_task is not None
+            await asyncio.shield(self._activity._on_enter_task)
 
     @utils.log_exceptions(logger=logger)
-    async def _update_activity_task(self, task: Agent) -> None:
+    async def _update_activity_task(
+        self, old_task: asyncio.Task[None] | None, agent: Agent
+    ) -> None:
+        if old_task is not None:
+            await old_task
+
         if self._root_span_context is not None:
             # restore the root span context so on_exit, on_enter, and future turns
             # are direct children of the root span, not nested under a tool call.
             otel_context.attach(self._root_span_context)
 
-        await self._update_activity(task)
+        await self._update_activity(agent)
 
     def _on_error(
         self,
