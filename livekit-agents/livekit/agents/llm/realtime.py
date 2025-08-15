@@ -153,7 +153,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     async def update_instructions(self, instructions: str) -> None: ...
 
     @abstractmethod
-    async def update_chat_ctx(self, chat_ctx: ChatContext) -> None: ...  # can raise RealtimeError on Timeout
+    async def update_chat_ctx(
+        self, chat_ctx: ChatContext
+    ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
     async def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Any]) -> None: ...
