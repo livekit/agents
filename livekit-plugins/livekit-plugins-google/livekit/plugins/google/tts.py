@@ -364,9 +364,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         streaming_config: texttospeech.StreamingSynthesizeConfig,
     ) -> None:
         @utils.log_exceptions(logger=logger)
-        async def input_generator() -> (
-            AsyncGenerator[texttospeech.StreamingSynthesizeRequest, None]
-        ):
+        async def input_generator() -> AsyncGenerator[
+            texttospeech.StreamingSynthesizeRequest, None
+        ]:
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 

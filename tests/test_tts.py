@@ -268,29 +268,27 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
     tts_stream = tts_v.synthesize(text=segment, conn_options=conn_options)
     audio_events = [event async for event in tts_stream]
 
-    assert all(
-        not event.is_final for event in audio_events[:-1]
-    ), "expected all audio events to be non-final"
+    assert all(not event.is_final for event in audio_events[:-1]), (
+        "expected all audio events to be non-final"
+    )
     # this test is no longer valid because we could flush in the middle of a synthesis
     # assert all(0.05 < event.frame.duration < 0.25 for event in audio_events[:-2]), (
     #     f"expected all frames to have a duration between 50ms and 250ms, got {[e.frame.duration for e in audio_events[:-1]]}"  # noqa: E501
     # )
-    assert (
-        0 < audio_events[-2].frame.duration < 0.25
-    ), (
+    assert 0 < audio_events[-2].frame.duration < 0.25, (
         f"expected second last frame to not be empty, got {audio_events[-2].frame.duration}"
     )  # now we flush then end_input, the second last frame might be a non-full frame from flush
 
     assert audio_events[-1].is_final, "expected last audio event to be final"
-    assert (
-        0 < audio_events[-1].frame.duration < 0.25
-    ), f"expected last frame to not be empty, got {audio_events[-1].frame.duration}"
+    assert 0 < audio_events[-1].frame.duration < 0.25, (
+        f"expected last frame to not be empty, got {audio_events[-1].frame.duration}"
+    )
 
     first_id = audio_events[0].request_id
     assert first_id, "expected to have a request_id"
-    assert all(
-        e.request_id == first_id for e in audio_events
-    ), "expected all frames to have the same request_id, "
+    assert all(e.request_id == first_id for e in audio_events), (
+        "expected all frames to have the same request_id, "
+    )
 
     frames = [event.frame for event in audio_events]
     await assert_valid_synthesized_audio(
@@ -326,9 +324,9 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
     finally:
         await tts_v.aclose()
 
-    assert (
-        metrics_collected_events.count == 1
-    ), f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+    assert metrics_collected_events.count == 1, (
+        f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+    )
     logger.info(f"metrics: {metrics_collected_events.events[0][0][0]}")
 
 
@@ -361,9 +359,9 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
 
         end_time = time.time()
         elapsed_time = end_time - start_time
-        assert (
-            1.5 <= elapsed_time <= 3.5
-        ), f"expected timeout around 2 seconds, got {elapsed_time:.2f}s"
+        assert 1.5 <= elapsed_time <= 3.5, (
+            f"expected timeout around 2 seconds, got {elapsed_time:.2f}s"
+        )
 
         # test retries
         error_events = EventCollector(tts_v, "error")
@@ -380,12 +378,12 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
         elapsed_time = end_time - start_time
 
         assert error_events.count == 4, "expected 4 errors, got {error_events.count}"
-        assert (
-            1 <= elapsed_time <= 3
-        ), f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
-        assert (
-            metrics_collected_events.count == 0
-        ), "expected 0 metrics collected events, got {metrics_collected_events.count}"
+        assert 1 <= elapsed_time <= 3, (
+            f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
+        )
+        assert metrics_collected_events.count == 0, (
+            "expected 0 metrics collected events, got {metrics_collected_events.count}"
+        )
     finally:
         await tts_v.aclose()
 
@@ -513,18 +511,18 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
         request_id = audio_events[0].request_id
         assert request_id, "expected to have a request_id"
-        assert all(
-            e.request_id == request_id for e in audio_events
-        ), "expected all frames to have the same request_id"
+        assert all(e.request_id == request_id for e in audio_events), (
+            "expected all frames to have the same request_id"
+        )
         assert all(e.segment_id for e in audio_events), "expected all events to have a segment_id"
 
         by_segment: dict[str, list[tts.SynthesizedAudio]] = defaultdict(list)
         for e in audio_events:
             by_segment[e.segment_id].append(e)
 
-        assert len(by_segment) == len(
-            segments
-        ), "expected one unique segment_id per pushed text segment"
+        assert len(by_segment) == len(segments), (
+            "expected one unique segment_id per pushed text segment"
+        )
 
         assert len(by_segment) >= 1, "expected at least one segment"
 
@@ -542,9 +540,9 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
             # )
 
             assert final.is_final, "last frame of a segment must be final"
-            assert all(
-                not e.is_final for e in non_final
-            ), "only the last frame within a segment may be final"
+            assert all(not e.is_final for e in non_final), (
+                "only the last frame within a segment may be final"
+            )
 
             assert 0 < final.frame.duration < 0.25, "expected final frame to be non-empty (<250 ms)"
 
@@ -553,13 +551,13 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
                 # The reason is that we flush after every request, and one segment can have multiple
                 # requests.
                 # So we may have smaller frames between requests that aren't final
-                assert all(
-                    0.00 < e.frame.duration < 0.25 for e in non_final
-                ), "expected non-final frames to be 0-250 ms"
+                assert all(0.00 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 0-250 ms"
+                )
             else:
-                assert all(
-                    0.05 < e.frame.duration < 0.25 for e in non_final
-                ), "expected non-final frames to be 50-250 ms"
+                assert all(0.05 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 50-250 ms"
+                )
 
             frames = [e.frame for e in segment_events]
             await assert_valid_synthesized_audio(
@@ -598,13 +596,13 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
         # called in streaming mode
 
         if isinstance(tts_v, tts.StreamAdapter):
-            assert (
-                metrics_collected_events.count >= 1
-            ), f"expected >=1 metrics collected event, got {metrics_collected_events.count}"
+            assert metrics_collected_events.count >= 1, (
+                f"expected >=1 metrics collected event, got {metrics_collected_events.count}"
+            )
         else:
-            assert (
-                metrics_collected_events.count == 1
-            ), f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+            assert metrics_collected_events.count == 1, (
+                f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+            )
 
         for event in metrics_collected_events.events:
             logger.info(f"metrics: {event[0][0]}")
@@ -688,9 +686,9 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
 
         end_time = time.time()
         elapsed_time = end_time - start_time
-        assert (
-            1.5 <= elapsed_time <= 3.5
-        ), f"expected timeout around 2 seconds, got {elapsed_time:.2f}s"
+        assert 1.5 <= elapsed_time <= 3.5, (
+            f"expected timeout around 2 seconds, got {elapsed_time:.2f}s"
+        )
 
         # test retries
         error_events = EventCollector(tts_v, "error")
@@ -712,12 +710,12 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         else:
             assert error_events.count == 4, f"expected 4 errors, got {error_events.count}"
 
-        assert (
-            1 <= elapsed_time <= 3
-        ), f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
-        assert (
-            metrics_collected_events.count == 0
-        ), f"expected 0 metrics collected events, got {metrics_collected_events.count}"
+        assert 1 <= elapsed_time <= 3, (
+            f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
+        )
+        assert metrics_collected_events.count == 0, (
+            f"expected 0 metrics collected events, got {metrics_collected_events.count}"
+        )
     finally:
         print("closing tts_v")
         await tts_v.aclose()
