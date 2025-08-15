@@ -142,7 +142,9 @@ class STT(
         for i in range(conn_options.max_retry + 1):
             try:
                 start_time = time.perf_counter()
-                event = await self._recognize_impl(buffer, language=language, conn_options=conn_options)
+                event = await self._recognize_impl(
+                    buffer, language=language, conn_options=conn_options
+                )
                 duration = time.perf_counter() - start_time
                 stt_metrics = STTMetrics(
                     request_id=event.request_id,
@@ -257,7 +259,9 @@ class RecognizeStream(ABC):
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
-        self._metrics_task = asyncio.create_task(self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task")
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
+        )
 
         self._num_retries = 0
         self._task = asyncio.create_task(self._main_task())
@@ -333,7 +337,9 @@ class RecognizeStream(ABC):
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
-                    metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
+                    metadata=Metadata(
+                        model_name=self._stt.model, model_provider=self._stt.provider
+                    ),
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)

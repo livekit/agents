@@ -55,7 +55,9 @@ class ProsodyConfig:
                 "fast",
                 "x-fast",
             ]:
-                raise ValueError("Prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'")
+                raise ValueError(
+                    "Prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'"
+                )
         if self.volume:
             if isinstance(self.volume, float) and not 0 <= self.volume <= 100:
                 raise ValueError("Prosody volume must be between 0 and 100")
@@ -77,7 +79,9 @@ class ProsodyConfig:
             "high",
             "x-high",
         ]:
-            raise ValueError("Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'")
+            raise ValueError(
+                "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
+            )
 
     def __post_init__(self) -> None:
         self.validate()
@@ -110,7 +114,10 @@ class _TTSOptions:
     auth_token: str | None = None
 
     def get_endpoint_url(self) -> str:
-        base = self.speech_endpoint or f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        base = (
+            self.speech_endpoint
+            or f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        )
         if self.deployment_id:
             return f"{base}?deploymentId={self.deployment_id}"
         return base

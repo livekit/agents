@@ -150,7 +150,9 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._sentence_tokenizer = tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
         self._stream_pacer: tts.SentenceStreamPacer | None = None
         if text_pacing is True:
             self._stream_pacer = tts.SentenceStreamPacer()
@@ -167,7 +169,9 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        url = self._opts.get_ws_url(f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}")
+        url = self._opts.get_ws_url(
+            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+        )
         return await asyncio.wait_for(session.ws_connect(url), timeout)
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -222,10 +226,14 @@ class TTS(tts.TTS):
                 extra={"model": self._opts.model, "speed": speed, "emotion": emotion},
             )
 
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
-    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
     async def aclose(self) -> None:
@@ -274,7 +282,9 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -338,7 +348,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError("Cartesia connection closed unexpectedly", request_id=request_id)
+                    raise APIStatusError(
+                        "Cartesia connection closed unexpectedly", request_id=request_id
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia message type %s", msg.type)
@@ -362,7 +374,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         word_timestamps["words"], word_timestamps["start"], word_timestamps["end"]
                     ):
                         word = f"{word} "  # TODO(long): any better way to format the words?
-                        output_emitter.push_timed_transcript(TimedString(text=word, start_time=start, end_time=end))
+                        output_emitter.push_timed_transcript(
+                            TimedString(text=word, start_time=start, end_time=end)
+                        )
                 elif data.get("type") == "error":
                     raise APIError(f"Cartesia returned error: {data}")
                 else:
@@ -384,7 +398,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 

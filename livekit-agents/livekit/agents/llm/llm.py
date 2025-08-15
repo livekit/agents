@@ -163,7 +163,9 @@ class LLMStream(ABC):
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
         self._current_attempt_has_error = False
-        self._metrics_task = asyncio.create_task(self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task")
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
+        )
 
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -284,7 +286,9 @@ class LLMStream(ABC):
         )
         if self._llm_request_span:
             # livekit metrics attribute
-            self._llm_request_span.set_attribute(trace_types.ATTR_LLM_METRICS, metrics.model_dump_json())
+            self._llm_request_span.set_attribute(
+                trace_types.ATTR_LLM_METRICS, metrics.model_dump_json()
+            )
 
             # set gen_ai attributes
             self._llm_request_span.set_attributes(

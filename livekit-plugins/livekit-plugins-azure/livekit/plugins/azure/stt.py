@@ -225,7 +225,9 @@ class SpeechStream(stt.SpeechStream):
             self._recognizer.start_continuous_recognition()
 
             try:
-                await asyncio.wait_for(self._session_started_event.wait(), self._conn_options.timeout)
+                await asyncio.wait_for(
+                    self._session_started_event.wait(), self._conn_options.timeout
+                )
 
                 async def process_input() -> None:
                     async for input in self._input_ch:
@@ -278,7 +280,9 @@ class SpeechStream(stt.SpeechStream):
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
                 self._event_ch.send_nowait,
-                stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]),
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
+                ),
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
@@ -385,14 +389,16 @@ def _create_speech_recognizer(
 
     kwargs: dict[str, Any] = {}
     if config.language and len(config.language) > 1:
-        kwargs["auto_detect_source_language_config"] = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
-            languages=config.language
+        kwargs["auto_detect_source_language_config"] = (
+            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
         )
     elif config.language and len(config.language) == 1:
         kwargs["language"] = config.language[0]
 
     audio_config = speechsdk.audio.AudioConfig(stream=stream)
-    speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config, **kwargs)
+    speech_recognizer = speechsdk.SpeechRecognizer(
+        speech_config=speech_config, audio_config=audio_config, **kwargs
+    )
 
     # Add phrase list for keyword boosting if provided
     if is_given(config.phrase_list) and isinstance(config.phrase_list, list) and config.phrase_list:

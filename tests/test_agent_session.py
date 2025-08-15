@@ -724,9 +724,9 @@ def check_timestamp(
     print(
         f"check_timestamp: t_event: {t_event}, t_target: {t_target}, max_abs_diff: {max_abs_diff}"
     )
-    assert abs(t_event - t_target) <= max_abs_diff, (
-        f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
-    )
+    assert (
+        abs(t_event - t_target) <= max_abs_diff
+    ), f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
 
 
 class FakeActions:

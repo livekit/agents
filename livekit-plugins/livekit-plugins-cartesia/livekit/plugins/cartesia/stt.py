@@ -129,7 +129,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError("Cartesia STT does not support batch recognition, use stream() instead")
+        raise NotImplementedError(
+            "Cartesia STT does not support batch recognition, use stream() instead"
+        )
 
     def stream(
         self,
@@ -166,7 +168,9 @@ class STT(stt.STT):
                 language=language,
             )
 
-    def _sanitize_options(self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN) -> STTOptions:
+    def _sanitize_options(
+        self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
+    ) -> STTOptions:
         """Create a sanitized copy of options with language override if provided."""
         config = STTOptions(
             model=self._opts.model,

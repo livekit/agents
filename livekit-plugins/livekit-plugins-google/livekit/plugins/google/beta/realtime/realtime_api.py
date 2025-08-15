@@ -216,7 +216,9 @@ class RealtimeModel(llm.RealtimeModel):
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
         gcp_location: str | None = (
-            location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+            location
+            if is_given(location)
+            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
         )
         use_vertexai = (
             vertexai
@@ -337,7 +339,9 @@ class RealtimeSession(llm.RealtimeSession):
         if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
             api_version = "v1alpha"
 
-        http_options = self._opts.http_options or types.HttpOptions(timeout=int(self._opts.conn_options.timeout * 1000))
+        http_options = self._opts.http_options or types.HttpOptions(
+            timeout=int(self._opts.conn_options.timeout * 1000)
+        )
         if api_version:
             http_options.api_version = api_version
 
@@ -437,7 +441,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._chat_ctx = chat_ctx.copy()
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
-        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(tools, use_parameters_json_schema=False)
+        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
+            tools, use_parameters_json_schema=False
+        )
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
 
@@ -473,7 +479,9 @@ class RealtimeSession(llm.RealtimeSession):
                 self._send_client_event(realtime_input)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        encoded_data = images.encode(frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS)
+        encoded_data = images.encode(
+            frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
+        )
         realtime_input = types.LiveClientRealtimeInput(
             media_chunks=[types.Blob(data=encoded_data, mime_type="image/jpeg")]
         )
@@ -487,7 +495,9 @@ class RealtimeSession(llm.RealtimeSession):
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if self._pending_generation_fut and not self._pending_generation_fut.done():
-            logger.warning("generate_reply called while another generation is pending, cancelling previous.")
+            logger.warning(
+                "generate_reply called while another generation is pending, cancelling previous."
+            )
             self._pending_generation_fut.cancel("Superseded by new generate_reply call")
 
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
@@ -511,7 +521,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         def _on_timeout() -> None:
             if not fut.done():
-                fut.set_exception(llm.RealtimeError("generate_reply timed out waiting for generation_created event."))
+                fut.set_exception(
+                    llm.RealtimeError(
+                        "generate_reply timed out waiting for generation_created event."
+                    )
+                )
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
 
@@ -537,7 +551,8 @@ class RealtimeSession(llm.RealtimeSession):
         # notifications to handle it
         if (
             self._opts.realtime_input_config
-            and self._opts.realtime_input_config.activity_handling == types.ActivityHandling.NO_INTERRUPTION
+            and self._opts.realtime_input_config.activity_handling
+            == types.ActivityHandling.NO_INTERRUPTION
         ):
             return
         self.start_user_activity()
@@ -586,7 +601,9 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
-                async with self._client.aio.live.connect(model=self._opts.model, config=config) as session:
+                async with self._client.aio.live.connect(
+                    model=self._opts.model, config=config
+                ) as session:
                     async with self._session_lock:
                         self._active_session = session
                         turns_dict, _ = self._chat_ctx.copy(
@@ -599,8 +616,12 @@ class RealtimeSession(llm.RealtimeSession):
                                 turn_complete=False,
                             )
                     # queue up existing chat context
-                    send_task = asyncio.create_task(self._send_task(session), name="gemini-realtime-send")
-                    recv_task = asyncio.create_task(self._recv_task(session), name="gemini-realtime-recv")
+                    send_task = asyncio.create_task(
+                        self._send_task(session), name="gemini-realtime-send"
+                    )
+                    recv_task = asyncio.create_task(
+                        self._recv_task(session), name="gemini-realtime-recv"
+                    )
                     restart_wait_task = asyncio.create_task(
                         self._session_should_close.wait(), name="gemini-restart-wait"
                     )
@@ -708,7 +729,9 @@ class RealtimeSession(llm.RealtimeSession):
                             response.session_resumption_update.resumable
                             and response.session_resumption_update.new_handle
                         ):
-                            self._session_resumption_handle = response.session_resumption_update.new_handle
+                            self._session_resumption_handle = (
+                                response.session_resumption_update.new_handle
+                            )
 
                     if response.server_content:
                         self._handle_server_content(response.server_content)
@@ -744,11 +767,17 @@ class RealtimeSession(llm.RealtimeSession):
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
-                max_output_tokens=self._opts.max_output_tokens if is_given(self._opts.max_output_tokens) else None,
+                max_output_tokens=self._opts.max_output_tokens
+                if is_given(self._opts.max_output_tokens)
+                else None,
                 top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
                 top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
-                presence_penalty=self._opts.presence_penalty if is_given(self._opts.presence_penalty) else None,
-                frequency_penalty=self._opts.frequency_penalty if is_given(self._opts.frequency_penalty) else None,
+                presence_penalty=self._opts.presence_penalty
+                if is_given(self._opts.presence_penalty)
+                else None,
+                frequency_penalty=self._opts.frequency_penalty
+                if is_given(self._opts.frequency_penalty)
+                else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
             if is_given(self._opts.instructions)
@@ -762,7 +791,9 @@ class RealtimeSession(llm.RealtimeSession):
             tools=tools_config,
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
-            session_resumption=types.SessionResumptionConfig(handle=self._session_resumption_handle),
+            session_resumption=types.SessionResumptionConfig(
+                handle=self._session_resumption_handle
+            ),
         )
 
         if is_given(self._opts.proactivity):
@@ -795,7 +826,9 @@ class RealtimeSession(llm.RealtimeSession):
             self._current_generation.audio_ch.close()
 
         msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-        msg_modalities.set_result(["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"])
+        msg_modalities.set_result(
+            ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
+        )
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
@@ -955,7 +988,9 @@ class RealtimeSession(llm.RealtimeSession):
             )
         self._mark_current_generation_done()
 
-    def _handle_tool_call_cancellation(self, tool_call_cancellation: types.LiveServerToolCallCancellation) -> None:
+    def _handle_tool_call_cancellation(
+        self, tool_call_cancellation: types.LiveServerToolCallCancellation
+    ) -> None:
         logger.warning(
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
@@ -972,7 +1007,9 @@ class RealtimeSession(llm.RealtimeSession):
             if current_gen._first_token_timestamp
             else -1
         )
-        duration = (current_gen._completed_timestamp or time.time()) - current_gen._created_timestamp
+        duration = (
+            current_gen._completed_timestamp or time.time()
+        ) - current_gen._created_timestamp
 
         def _token_details_map(
             token_details: list[types.ModalityTokenCount] | None,
@@ -1003,11 +1040,14 @@ class RealtimeSession(llm.RealtimeSession):
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,
             total_tokens=usage_metadata.total_token_count or 0,
-            tokens_per_second=(usage_metadata.response_token_count or 0) / duration if duration > 0 else 0,
+            tokens_per_second=(usage_metadata.response_token_count or 0) / duration
+            if duration > 0
+            else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 **_token_details_map(usage_metadata.prompt_tokens_details),
                 cached_tokens=sum(
-                    token_detail.token_count or 0 for token_detail in usage_metadata.cache_tokens_details or []
+                    token_detail.token_count or 0
+                    for token_detail in usage_metadata.cache_tokens_details or []
                 ),
                 cached_tokens_details=RealtimeModelMetrics.CachedTokenDetails(
                     **_token_details_map(usage_metadata.cache_tokens_details),
@@ -1016,12 +1056,16 @@ class RealtimeSession(llm.RealtimeSession):
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 **_token_details_map(usage_metadata.response_tokens_details),
             ),
-            metadata=Metadata(model_name=self._realtime_model.model, model_provider=self._realtime_model.provider),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
+            ),
         )
         self.emit("metrics_collected", metrics)
 
     def _handle_go_away(self, go_away: types.LiveServerGoAway) -> None:
-        logger.warning(f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}")
+        logger.warning(
+            f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
+        )
         # TODO(dz): this isn't a seamless reconnection just yet
         self._session_should_close.set()
 
@@ -1038,7 +1082,8 @@ class RealtimeSession(llm.RealtimeSession):
                 self._input_resampler = None
 
         if self._input_resampler is None and (
-            frame.sample_rate != INPUT_AUDIO_SAMPLE_RATE or frame.num_channels != INPUT_AUDIO_CHANNELS
+            frame.sample_rate != INPUT_AUDIO_SAMPLE_RATE
+            or frame.num_channels != INPUT_AUDIO_CHANNELS
         ):
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,

@@ -29,7 +29,9 @@ class _TTSOptions:
 
 class TTS(tts.TTS):
     def __init__(self, *, language: str = "en", voice: str = "lina"):
-        super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24_000, num_channels=1)
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24_000, num_channels=1
+        )
 
         self._opts = _TTSOptions(language=language, voice=voice)
         self._client = AsyncSpitch()
@@ -97,6 +99,8 @@ class ChunkedStream(tts.ChunkedStream):
         except spitch.APITimeoutError:
             raise APITimeoutError() from None
         except spitch.APIStatusError as e:
-            raise APIStatusError(e.message, status_code=e.status_code, request_id=request_id, body=e.body) from None
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=request_id, body=e.body
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e

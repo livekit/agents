@@ -82,7 +82,9 @@ class TTS(tts.TTS):
         model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
 
         if not model_endpoint:
-            raise ValueError("The model endpoint is required, you can find it in the Baseten dashboard")
+            raise ValueError(
+                "The model endpoint is required, you can find it in the Baseten dashboard"
+            )
 
         self._api_key = api_key
         self._model_endpoint = model_endpoint
@@ -118,7 +120,9 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
 
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             api_key=self._api_key,
@@ -181,6 +185,8 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e

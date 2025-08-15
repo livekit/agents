@@ -59,7 +59,9 @@ class WizperSTT(stt.STT):
         try:
             if is_given(language):
                 self._opts.language = language
-            data_uri = fal_client.encode(rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav")
+            data_uri = fal_client.encode(
+                rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
+            )
             response = await self._fal_client.run(
                 "fal-ai/wizper",
                 arguments={

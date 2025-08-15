@@ -139,7 +139,9 @@ class STT(stt.STT):
         """
         if not is_given(use_streaming):
             use_streaming = True
-        super().__init__(capabilities=stt.STTCapabilities(streaming=use_streaming, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=use_streaming, interim_results=True)
+        )
 
         self._location = location
         self._credentials_info = credentials_info
@@ -194,9 +196,13 @@ class STT(stt.STT):
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
         if is_given(self._credentials_info):
-            client = SpeechAsyncClient.from_service_account_info(self._credentials_info, client_options=client_options)
+            client = SpeechAsyncClient.from_service_account_info(
+                self._credentials_info, client_options=client_options
+            )
         elif is_given(self._credentials_file):
-            client = SpeechAsyncClient.from_service_account_file(self._credentials_file, client_options=client_options)
+            client = SpeechAsyncClient.from_service_account_file(
+                self._credentials_file, client_options=client_options
+            )
         else:
             client = SpeechAsyncClient(client_options=client_options)
         assert client is not None
@@ -434,7 +440,9 @@ class SpeechStream(stt.SpeechStream):
                     resp.speech_event_type
                     == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                 ):
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    )
                     has_started = True
 
                 if (
@@ -464,10 +472,14 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
                         if time.time() - self._session_connected_at > _max_session_duration:
-                            logger.debug("Google STT maximum connection time reached. Reconnecting...")
+                            logger.debug(
+                                "Google STT maximum connection time reached. Reconnecting..."
+                            )
                             self._pool.remove(client)
                             if has_started:
-                                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                )
                                 has_started = False
                             self._reconnect_event.set()
                             return
@@ -476,7 +488,9 @@ class SpeechStream(stt.SpeechStream):
                     resp.speech_event_type
                     == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
                 ):
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    )
                     has_started = False
 
         while True:
@@ -541,7 +555,9 @@ class SpeechStream(stt.SpeechStream):
                     if audio_pushed:
                         logger.debug("stream timed out, restarting.")
                 else:
-                    raise APIStatusError(f"{e.message} {e.details}", status_code=e.code or -1) from e
+                    raise APIStatusError(
+                        f"{e.message} {e.details}", status_code=e.code or -1
+                    ) from e
             except Exception as e:
                 raise APIConnectionError() from e
 
