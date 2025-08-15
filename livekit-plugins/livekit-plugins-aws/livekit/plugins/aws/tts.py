@@ -107,9 +107,15 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
         )
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
+    @property
+    def model(self) -> str:
+        return self._opts.speech_engine
+
+    @property
+    def provider(self) -> str:
+        return "Amazon Polly"
+
+    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
         return ChunkedStream(tts=self, text=text, conn_options=conn_options)
 
     def update_options(
@@ -131,9 +137,7 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self, *, tts: TTS, text: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> None:
+    def __init__(self, *, tts: TTS, text: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
         self._tts = tts
         self._opts = replace(tts._opts)

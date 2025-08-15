@@ -40,6 +40,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
@@ -190,9 +191,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
                 raise ValueError("Unable to load AWS credentials")
 
             creds = credentials.get_frozen_credentials()
-            logger.debug(
-                f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
-            )
+            logger.debug(f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***")
 
             identity = AWSCredentialsIdentity(
                 access_key_id=creds.access_key,
@@ -258,6 +257,14 @@ class RealtimeModel(llm.RealtimeModel):
             region=region if is_given(region) else "us-east-1",
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self.model_id
+
+    @property
+    def provider(self) -> str:
+        return "Amazon"
 
     def session(self) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
@@ -422,16 +429,10 @@ class RealtimeSession(  # noqa: F811
             for name, f in self.tools.function_tools.items():
                 if llm.tool_context.is_function_tool(f):
                     description = llm.tool_context.get_function_info(f).description
-                    input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
-                        "parameters"
-                    ]
+                    input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)["parameters"]
                 elif llm.tool_context.is_raw_function_tool(f):
-                    description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
-                        "description"
-                    )
-                    input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
-                        "parameters"
-                    ]
+                    description = llm.tool_context.get_raw_function_info(f).raw_schema.get("description")
+                    input_schema = llm.tool_context.get_raw_function_info(f).raw_schema["parameters"]
                 else:
                     continue
 
@@ -472,12 +473,8 @@ class RealtimeSession(  # noqa: F811
             assert self._bedrock_client is not None, "bedrock_client is None"
 
             logger.info("Initializing Bedrock stream")
-            self._stream_response = (
-                await self._bedrock_client.invoke_model_with_bidirectional_stream(
-                    InvokeModelWithBidirectionalStreamOperationInput(
-                        model_id=self._realtime_model.model_id
-                    )
-                )
+            self._stream_response = await self._bedrock_client.invoke_model_with_bidirectional_stream(
+                InvokeModelWithBidirectionalStreamOperationInput(model_id=self._realtime_model.model_id)
             )
 
             if not is_restart:
@@ -508,9 +505,7 @@ class RealtimeSession(  # noqa: F811
                             "Chat context not received after 500ms, proceeding with empty chat context"  # noqa: E501
                         )
 
-            logger.info(
-                f"Initializing Bedrock session with realtime options: {self._realtime_model._opts}"
-            )
+            logger.info(f"Initializing Bedrock session with realtime options: {self._realtime_model._opts}")
             # there is a 40-message limit on the chat context
             if len(self._chat_ctx.items) > MAX_MESSAGES:
                 logger.warning(
@@ -594,9 +589,7 @@ class RealtimeSession(  # noqa: F811
                 audio_ch=utils.aio.Chan(),
             )
             msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-            msg_modalities.set_result(
-                ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
-            )
+            msg_modalities.set_result(["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"])
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
@@ -621,16 +614,11 @@ class RealtimeSession(  # noqa: F811
             content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.user_messages[content_id] = self._current_generation.input_id
 
-        elif (
-            role == "ASSISTANT"
-            and "SPECULATIVE" in event_data["event"]["contentStart"]["additionalModelFields"]
-        ):
+        elif role == "ASSISTANT" and "SPECULATIVE" in event_data["event"]["contentStart"]["additionalModelFields"]:
             assert self._current_generation is not None, "current_generation is None"
 
             text_content_id = event_data["event"]["contentStart"]["contentId"]
-            self._current_generation.speculative_messages[text_content_id] = (
-                self._current_generation.response_id
-            )
+            self._current_generation.speculative_messages[text_content_id] = self._current_generation.response_id
 
     async def _handle_text_output_content_event(self, event_data: dict) -> None:
         """Stream partial text tokens into the current _MessageGeneration."""
@@ -648,9 +636,7 @@ class RealtimeSession(  # noqa: F811
                 logger.warning("Barge-in DETECTED but no previous message found")
                 return
 
-            logger.debug(
-                f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}"
-            )
+            logger.debug(f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}")
             if (item := self._chat_ctx.items[idx]).type == "message":
                 item.interrupted = True
             self._close_current_generation()
@@ -659,10 +645,7 @@ class RealtimeSession(  # noqa: F811
         # ignore events until turn starts
         if self._current_generation is not None:
             # TODO: rename event to llm.InputTranscriptionUpdated
-            if (
-                self._current_generation.user_messages.get(text_content_id)
-                == self._current_generation.input_id
-            ):
+            if self._current_generation.user_messages.get(text_content_id) == self._current_generation.input_id:
                 logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
                 # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)  # noqa: E501
                 # TODO: fix this
@@ -690,8 +673,7 @@ class RealtimeSession(  # noqa: F811
             prev_utterance = self._chat_ctx.items[-1]
             if prev_utterance.type == "message" and prev_utterance.role == role:
                 if isinstance(prev_content := prev_utterance.content[0], str) and (
-                    len(prev_content.encode("utf-8")) + len(text_content.encode("utf-8"))
-                    < MAX_MESSAGE_SIZE
+                    len(prev_content.encode("utf-8")) + len(text_content.encode("utf-8")) < MAX_MESSAGE_SIZE
                 ):
                     prev_utterance.content[0] = "\n".join([prev_content, text_content])
                 else:
@@ -709,8 +691,7 @@ class RealtimeSession(  # noqa: F811
         stop_reason = event_data["event"]["contentEnd"]["stopReason"]
         text_content_id = event_data["event"]["contentEnd"]["contentId"]
         if (
-            self._current_generation
-            is not None  # means that first utterance in the turn was an interrupt
+            self._current_generation is not None  # means that first utterance in the turn was an interrupt
             and self._current_generation.speculative_messages.get(text_content_id)
             == self._current_generation.response_id
             and stop_reason == "END_TURN"
@@ -724,9 +705,7 @@ class RealtimeSession(  # noqa: F811
         assert self._current_generation is not None, "current_generation is None"
 
         tool_use_content_id = event_data["event"]["contentStart"]["contentId"]
-        self._current_generation.tool_messages[tool_use_content_id] = (
-            self._current_generation.response_id
-        )
+        self._current_generation.tool_messages[tool_use_content_id] = self._current_generation.response_id
 
     # note: tool calls are synchronous for now
     async def _handle_tool_output_content_event(self, event_data: dict) -> None:
@@ -737,10 +716,7 @@ class RealtimeSession(  # noqa: F811
         tool_use_content_id = event_data["event"]["toolUse"]["contentId"]
         tool_use_id = event_data["event"]["toolUse"]["toolUseId"]
         tool_name = event_data["event"]["toolUse"]["toolName"]
-        if (
-            self._current_generation.tool_messages.get(tool_use_content_id)
-            == self._current_generation.response_id
-        ):
+        if self._current_generation.tool_messages.get(tool_use_content_id) == self._current_generation.response_id:
             args = event_data["event"]["toolUse"]["content"]
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
@@ -768,9 +744,7 @@ class RealtimeSession(  # noqa: F811
             )
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
             msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-            msg_modalities.set_result(
-                ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
-            )
+            msg_modalities.set_result(["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"])
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
@@ -789,17 +763,13 @@ class RealtimeSession(  # noqa: F811
         if self._current_generation is not None:
             log_event_data(event_data)
             audio_content_id = event_data["event"]["contentStart"]["contentId"]
-            self._current_generation.speculative_messages[audio_content_id] = (
-                self._current_generation.response_id
-            )
+            self._current_generation.speculative_messages[audio_content_id] = self._current_generation.response_id
 
     async def _handle_audio_output_content_event(self, event_data: dict) -> None:
         """Decode base64 audio from Bedrock and forward it to the audio stream."""
         if (
             self._current_generation is not None
-            and self._current_generation.speculative_messages.get(
-                event_data["event"]["audioOutput"]["contentId"]
-            )
+            and self._current_generation.speculative_messages.get(event_data["event"]["audioOutput"]["contentId"])
             == self._current_generation.response_id
         ):
             audio_content = event_data["event"]["audioOutput"]["content"]
@@ -819,9 +789,7 @@ class RealtimeSession(  # noqa: F811
         if (
             self._current_generation is not None
             and event_data["event"]["contentEnd"]["stopReason"] == "END_TURN"
-            and self._current_generation.speculative_messages.get(
-                event_data["event"]["contentEnd"]["contentId"]
-            )
+            and self._current_generation.speculative_messages.get(event_data["event"]["contentEnd"]["contentId"])
             == self._current_generation.response_id
         ):
             log_event_data(event_data)
@@ -892,6 +860,7 @@ class RealtimeSession(  # noqa: F811
                 audio_tokens=output_tokens["speechTokens"],
                 image_tokens=0,
             ),
+            metadata=Metadata(model_name=self._realtime_model.model, model_provider=self._realtime_model.provider),
         )
         self.emit("metrics_collected", metrics)
 
@@ -1068,9 +1037,7 @@ class RealtimeSession(  # noqa: F811
             self._tool_results_ch.send_nowait(
                 {
                     "tool_use_id": item.call_id,
-                    "tool_result": item.output
-                    if not item.is_error
-                    else f"{{'error': '{item.output}'}}",
+                    "tool_result": item.output if not item.is_error else f"{{'error': '{item.output}'}}",
                 }
             )
 
@@ -1086,9 +1053,7 @@ class RealtimeSession(  # noqa: F811
             await self._send_raw_event(event)
             # logger.debug(f"Sent tool event: {event}")
 
-    def _tool_choice_adapter(
-        self, tool_choice: llm.ToolChoice | None
-    ) -> dict[str, dict[str, str]] | None:
+    def _tool_choice_adapter(self, tool_choice: llm.ToolChoice | None) -> dict[str, dict[str, str]] | None:
         """Translate the LiveKit ToolChoice enum into Sonic's JSON schema."""
         if tool_choice == "auto":
             return {"auto": {}}
@@ -1170,9 +1135,7 @@ class RealtimeSession(  # noqa: F811
                 except utils.aio.channel.ChanEmpty:
                     pass
                 except utils.aio.channel.ChanClosed:
-                    logger.warning(
-                        "tool results channel closed, exiting audio input processing loop"
-                    )
+                    logger.warning("tool results channel closed, exiting audio input processing loop")
                     break
 
                 try:
@@ -1186,9 +1149,7 @@ class RealtimeSession(  # noqa: F811
                 except utils.aio.channel.ChanEmpty:
                     pass
                 except utils.aio.channel.ChanClosed:
-                    logger.warning(
-                        "audio input channel closed, exiting audio input processing loop"
-                    )
+                    logger.warning("audio input channel closed, exiting audio input processing loop")
                     break
 
             except asyncio.CancelledError:
@@ -1228,9 +1189,7 @@ class RealtimeSession(  # noqa: F811
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         logger.warning("unprompted generation is not supported by Nova Sonic's Realtime API")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
-        fut.set_exception(
-            llm.RealtimeError("unprompted generation is not supported by Nova Sonic's Realtime API")
-        )
+        fut.set_exception(llm.RealtimeError("unprompted generation is not supported by Nova Sonic's Realtime API"))
         return fut
 
     def commit_audio(self) -> None:

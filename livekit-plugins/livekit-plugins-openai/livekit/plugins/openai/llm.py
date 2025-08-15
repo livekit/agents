@@ -141,9 +141,7 @@ class LLM(llm.LLM):
             base_url=base_url if is_given(base_url) else None,
             max_retries=max_retries if is_given(max_retries) else 0,
             http_client=httpx.AsyncClient(
-                timeout=timeout
-                if timeout
-                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                timeout=timeout if timeout else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=50,
@@ -155,8 +153,11 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
 
     @staticmethod
     def with_azure(
@@ -202,9 +203,7 @@ class LLM(llm.LLM):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            timeout=timeout if timeout else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
         return LLM(
@@ -740,9 +739,7 @@ class LLM(llm.LLM):
         if is_given(self._opts.verbosity):
             extra["verbosity"] = self._opts.verbosity
 
-        parallel_tool_calls = (
-            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
-        )
+        parallel_tool_calls = parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
@@ -809,11 +806,7 @@ class LLMStream(llm.LLMStream):
 
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
-            fnc_ctx = (
-                to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
-                if self._tools
-                else openai.NOT_GIVEN
-            )
+            fnc_ctx = to_fnc_ctx(self._tools, strict=self._strict_tool_schema) if self._tools else openai.NOT_GIVEN
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
                 logger.debug(
@@ -875,9 +868,7 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_choice(
-        self, id: str, choice: Choice, thinking: asyncio.Event
-    ) -> llm.ChatChunk | None:
+    def _parse_choice(self, id: str, choice: Choice, thinking: asyncio.Event) -> llm.ChatChunk | None:
         delta = choice.delta
 
         # https://github.com/livekit/agents/issues/688

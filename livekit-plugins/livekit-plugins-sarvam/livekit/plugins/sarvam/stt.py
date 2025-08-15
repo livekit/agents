@@ -93,8 +93,7 @@ class STT(stt.STT):
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
             raise ValueError(
-                "Sarvam API key is required. "
-                "Provide it directly or set SARVAM_API_KEY environment variable."
+                "Sarvam API key is required. " "Provide it directly or set SARVAM_API_KEY environment variable."
             )
 
         self._opts = SarvamSTTOptions(
@@ -105,6 +104,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Sarvam"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -206,15 +213,11 @@ class STT(stt.STT):
                                 end_time = total_samples / sample_rate
                         elif hasattr(buffer, "duration"):
                             end_time = buffer.duration / 1000.0  # buffer.duration is in ms
-                        elif hasattr(buffer, "samples_per_channel") and hasattr(
-                            buffer, "sample_rate"
-                        ):
+                        elif hasattr(buffer, "samples_per_channel") and hasattr(buffer, "sample_rate"):
                             # Single AudioFrame
                             end_time = buffer.samples_per_channel / buffer.sample_rate
                     except Exception as duration_error:
-                        self._logger.warning(
-                            f"Could not calculate audio duration: {duration_error}"
-                        )
+                        self._logger.warning(f"Could not calculate audio duration: {duration_error}")
                         end_time = 0.0
 
                 alternatives = [

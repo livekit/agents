@@ -12,6 +12,7 @@ from typing import Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
@@ -95,6 +96,30 @@ class STT(
         return self._label
 
     @property
+    def model(self) -> str:
+        """Get the model name/identifier for this STT instance.
+
+        Returns:
+            The model name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their model information.
+        """
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """Get the provider name/identifier for this STT instance.
+
+        Returns:
+            The provider name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their provider information.
+        """
+        return "unknown"
+
+    @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
 
@@ -117,9 +142,7 @@ class STT(
         for i in range(conn_options.max_retry + 1):
             try:
                 start_time = time.perf_counter()
-                event = await self._recognize_impl(
-                    buffer, language=language, conn_options=conn_options
-                )
+                event = await self._recognize_impl(buffer, language=language, conn_options=conn_options)
                 duration = time.perf_counter() - start_time
                 stt_metrics = STTMetrics(
                     request_id=event.request_id,
@@ -128,6 +151,10 @@ class STT(
                     label=self._label,
                     audio_duration=calculate_audio_duration(buffer),
                     streamed=False,
+                    metadata=Metadata(
+                        model_name=self.model,
+                        model_provider=self.provider,
+                    ),
                 )
                 self.emit("metrics_collected", stt_metrics)
                 return event
@@ -230,9 +257,7 @@ class RecognizeStream(ABC):
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
-        self._metrics_task = asyncio.create_task(
-            self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
-        )
+        self._metrics_task = asyncio.create_task(self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task")
 
         self._num_retries = 0
         self._task = asyncio.create_task(self._main_task())
@@ -297,9 +322,9 @@ class RecognizeStream(ABC):
 
         async for ev in event_aiter:
             if ev.type == SpeechEventType.RECOGNITION_USAGE:
-                assert ev.recognition_usage is not None, (
-                    "recognition_usage must be provided for RECOGNITION_USAGE event"
-                )
+                assert (
+                    ev.recognition_usage is not None
+                ), "recognition_usage must be provided for RECOGNITION_USAGE event"
 
                 stt_metrics = STTMetrics(
                     request_id=ev.request_id,
@@ -308,6 +333,7 @@ class RecognizeStream(ABC):
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
+                    metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)

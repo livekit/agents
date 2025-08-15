@@ -14,6 +14,7 @@ from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIError
 from ..log import logger
@@ -85,6 +86,30 @@ class TTS(
         return self._label
 
     @property
+    def model(self) -> str:
+        """Get the model name/identifier for this TTS instance.
+
+        Returns:
+            The model name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their model information.
+        """
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """Get the provider name/identifier for this TTS instance.
+
+        Returns:
+            The provider name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their provider information.
+        """
+        return "unknown"
+
+    @property
     def capabilities(self) -> TTSCapabilities:
         return self._capabilities
 
@@ -101,9 +126,7 @@ class TTS(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream: ...
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> SynthesizeStream:
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
@@ -144,9 +167,7 @@ class ChunkedStream(ABC):
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
         self._current_attempt_has_error = False
-        self._metrics_task = asyncio.create_task(
-            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
-        )
+        self._metrics_task = asyncio.create_task(self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task")
         self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -194,11 +215,10 @@ class ChunkedStream(ABC):
             cancelled=self._synthesize_task.cancelled(),
             label=self._tts._label,
             streamed=False,
+            metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
         )
         if self._tts_request_span:
-            self._tts_request_span.set_attribute(
-                trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
-            )
+            self._tts_request_span.set_attribute(trace_types.ATTR_TTS_METRICS, metrics.model_dump_json())
         self._tts.emit("metrics_collected", metrics)
 
     async def collect(self) -> rtc.AudioFrame:
@@ -444,11 +464,10 @@ class SynthesizeStream(ABC):
                 cancelled=self._task.cancelled(),
                 label=self._tts._label,
                 streamed=True,
+                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
             )
             if self._tts_request_span:
-                self._tts_request_span.set_attribute(
-                    trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
-                )
+                self._tts_request_span.set_attribute(trace_types.ATTR_TTS_METRICS, metrics.model_dump_json())
             self._tts.emit("metrics_collected", metrics)
 
             audio_duration = 0.0
@@ -580,11 +599,7 @@ class AudioEmitter:
         self._audio_durations: list[float] = []  # track durations per segment
 
     def pushed_duration(self, idx: int = -1) -> float:
-        return (
-            self._audio_durations[idx]
-            if -len(self._audio_durations) <= idx < len(self._audio_durations)
-            else 0.0
-        )
+        return self._audio_durations[idx] if -len(self._audio_durations) <= idx < len(self._audio_durations) else 0.0
 
     @property
     def num_segments(self) -> int:
@@ -640,8 +655,7 @@ class AudioEmitter:
     def start_segment(self, *, segment_id: str) -> None:
         if not self._streaming:
             raise RuntimeError(
-                "start_segment() can only be called when SynthesizeStream is initialized "
-                "with stream=True"
+                "start_segment() can only be called when SynthesizeStream is initialized " "with stream=True"
             )
 
         return self.__start_segment(segment_id=segment_id)
@@ -659,8 +673,7 @@ class AudioEmitter:
     def end_segment(self) -> None:
         if not self._streaming:
             raise RuntimeError(
-                "end_segment() can only be called when SynthesizeStream is initialized "
-                "with stream=True"
+                "end_segment() can only be called when SynthesizeStream is initialized " "with stream=True"
             )
 
         return self.__end_segment()
@@ -869,9 +882,7 @@ class AudioEmitter:
 
                 if isinstance(data, AudioEmitter._StartSegment):
                     if segment_ctx:
-                        raise RuntimeError(
-                            "start_segment() called before the previous segment was ended"
-                        )
+                        raise RuntimeError("start_segment() called before the previous segment was ended")
 
                     self._audio_durations.append(0.0)
                     segment_ctx = AudioEmitter._SegmentContext(segment_id=data.segment_id)
@@ -882,9 +893,7 @@ class AudioEmitter:
                         if isinstance(data, (AudioEmitter._EndSegment, AudioEmitter._FlushSegment)):
                             continue  # empty segment, ignore
 
-                        raise RuntimeError(
-                            "start_segment() must be called before pushing audio data"
-                        )
+                        raise RuntimeError("start_segment() must be called before pushing audio data")
 
                 if self._is_raw_pcm:
                     if isinstance(data, bytes):
@@ -892,9 +901,7 @@ class AudioEmitter:
                             audio_byte_stream = audio.AudioByteStream(
                                 sample_rate=self._sample_rate,
                                 num_channels=self._num_channels,
-                                samples_per_channel=int(
-                                    self._sample_rate // 1000 * self._frame_size_ms
-                                ),
+                                samples_per_channel=int(self._sample_rate // 1000 * self._frame_size_ms),
                             )
 
                         for f in audio_byte_stream.push(data):

@@ -155,6 +155,14 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    @property
+    def model(self) -> str:
+        return "Chirp3"
+
+    @property
+    def provider(self) -> str:
+        return "Google Cloud Platform"
+
     def update_options(
         self,
         *,
@@ -213,16 +221,12 @@ class TTS(tts.TTS):
         assert self._client is not None
         return self._client
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
+    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     async def aclose(self) -> None:
@@ -297,10 +301,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
             enc_name = texttospeech.AudioEncoding._member_names_[encoding]
-            logger.warning(
-                f"encoding {enc_name} isn't supported by the streaming_synthesize, "
-                "fallbacking to PCM"
-            )
+            logger.warning(f"encoding {enc_name} isn't supported by the streaming_synthesize, " "fallbacking to PCM")
             encoding = texttospeech.AudioEncoding.PCM  # type: ignore
 
         output_emitter.initialize(
@@ -356,9 +357,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         streaming_config: texttospeech.StreamingSynthesizeConfig,
     ) -> None:
         @utils.log_exceptions(logger=logger)
-        async def input_generator() -> AsyncGenerator[
-            texttospeech.StreamingSynthesizeRequest, None
-        ]:
+        async def input_generator() -> AsyncGenerator[texttospeech.StreamingSynthesizeRequest, None]:
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 

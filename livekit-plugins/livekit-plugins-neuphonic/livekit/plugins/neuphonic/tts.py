@@ -96,6 +96,14 @@ class TTS(tts.TTS):
         )
         self._session = http_session
 
+    @property
+    def model(self) -> str:
+        return "Octave"
+
+    @property
+    def provider(self) -> str:
+        return "Neuphonic"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -134,9 +142,7 @@ class TTS(tts.TTS):
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
+    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
@@ -190,10 +196,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                     parsed_message = _parse_sse_message(message)
 
-                    if (
-                        parsed_message is not None
-                        and parsed_message.get("data", {}).get("audio") is not None
-                    ):
+                    if parsed_message is not None and parsed_message.get("data", {}).get("audio") is not None:
                         audio_bytes = base64.b64decode(parsed_message["data"]["audio"])
                         output_emitter.push(audio_bytes)
 
@@ -201,9 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -226,8 +227,6 @@ def _parse_sse_message(message: str) -> dict | None:
     message_dict: dict = json.loads(value)
 
     if message_dict.get("errors") is not None:
-        raise Exception(
-            f"received error status {message_dict['status_code']}: {message_dict['errors']}"
-        )
+        raise Exception(f"received error status {message_dict['status_code']}: {message_dict['errors']}")
 
     return message_dict

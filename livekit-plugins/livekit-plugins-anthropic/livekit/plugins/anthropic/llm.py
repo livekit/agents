@@ -118,6 +118,10 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
+
     def chat(
         self,
         *,
@@ -146,9 +150,7 @@ class LLM(llm.LLM):
 
         if tools:
             extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
-            tool_choice = (
-                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-            )
+            tool_choice = cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -164,9 +166,7 @@ class LLM(llm.LLM):
                         anthropic_tool_choice = None
                 if anthropic_tool_choice is not None:
                     parallel_tool_calls = (
-                        parallel_tool_calls
-                        if is_given(parallel_tool_calls)
-                        else self._opts.parallel_tool_calls
+                        parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
                     )
                     if is_given(parallel_tool_calls):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
@@ -176,8 +176,7 @@ class LLM(llm.LLM):
         messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
         if extra_data.system_messages:
             extra["system"] = [
-                anthropic.types.TextBlockParam(text=content, type="text")
-                for content in extra_data.system_messages
+                anthropic.types.TextBlockParam(text=content, type="text") for content in extra_data.system_messages
             ]
 
         # add cache control
@@ -187,11 +186,7 @@ class LLM(llm.LLM):
 
             seen_assistant = False
             for msg in reversed(messages):
-                if (
-                    msg["role"] == "assistant"
-                    and (content := msg["content"])
-                    and not seen_assistant
-                ):
+                if msg["role"] == "assistant" and (content := msg["content"]) and not seen_assistant:
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     seen_assistant = True
 
@@ -228,9 +223,7 @@ class LLMStream(llm.LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._awaitable_anthropic_stream = anthropic_stream
-        self._anthropic_stream: (
-            anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
-        ) = None
+        self._anthropic_stream: anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None = None
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -258,9 +251,7 @@ class LLMStream(llm.LLMStream):
                         retryable = False
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
-                prompt_token = (
-                    self._input_tokens + self._cache_creation_tokens + self._cache_read_tokens
-                )
+                prompt_token = self._input_tokens + self._cache_creation_tokens + self._cache_read_tokens
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
                         id=self._request_id,
