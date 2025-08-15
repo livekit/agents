@@ -144,10 +144,14 @@ class TTS(tts.TTS):
         if is_given(model):
             self._opts.model = model
 
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
-    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -208,7 +212,9 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(message=e.message, status_code=e.status, request_id=None, body=None) from None
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -259,13 +265,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(message=e.message, status_code=e.status, request_id=request_id, body=None) from None
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=request_id, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws(self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter) -> None:
+    async def _run_ws(
+        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
+    ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 

@@ -104,7 +104,9 @@ class STT(stt.STT):
             use_realtime: Whether to use the realtime transcription API. (default: False)
         """  # noqa: E501
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
+        )
         if detect_language:
             language = ""
 
@@ -201,7 +203,9 @@ class STT(stt.STT):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout if timeout else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
         return STT(
@@ -320,10 +324,14 @@ class STT(stt.STT):
             },
         }
         if self._opts.language:
-            realtime_config["session"]["input_audio_transcription"]["language"] = self._opts.language
+            realtime_config["session"]["input_audio_transcription"]["language"] = (
+                self._opts.language
+            )
 
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_noise_reduction"] = {"type": self._opts.noise_reduction_type}
+            realtime_config["session"]["input_audio_noise_reduction"] = {
+                "type": self._opts.noise_reduction_type
+            }
 
         query_params: dict[str, str] = {
             "intent": "transcription",
@@ -394,7 +402,9 @@ class STT(stt.STT):
         except openai.APITimeoutError:
             raise APITimeoutError() from None
         except openai.APIStatusError as e:
-            raise APIStatusError(e.message, status_code=e.status_code, request_id=e.request_id, body=e.body) from None
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -471,7 +481,9 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(message="OpenAI Realtime STT connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="OpenAI Realtime STT connection closed unexpectedly"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected OpenAI message type %s", msg.type)

@@ -270,7 +270,9 @@ def _synthesize_url(opts: _TTSOptions) -> str:
 
 def _get_headers(token: str, *, encoding: TTSEncoding | None = None) -> dict[str, str]:
     """Construct the headers for the Speechify API."""
-    headers = {AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token}
+    headers = {
+        AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token
+    }
 
     if encoding:
         accept = ""

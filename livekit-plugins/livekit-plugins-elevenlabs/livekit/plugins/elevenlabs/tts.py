@@ -229,10 +229,14 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
 
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
-    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -254,7 +258,9 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         voice_settings = (
-            _strip_nones(dataclasses.asdict(self._opts.voice_settings)) if is_given(self._opts.voice_settings) else None
+            _strip_nones(dataclasses.asdict(self._opts.voice_settings))
+            if is_given(self._opts.voice_settings)
+            else None
         )
         try:
             async with self._tts._ensure_session().post(
@@ -354,7 +360,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(message=e.message, status_code=e.status, request_id=request_id, body=None) from None
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=request_id, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -380,7 +388,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             "text": " ",
         }
         if is_given(self._opts.chunk_length_schedule):
-            init_pkt["generation_config"] = {"chunk_length_schedule": self._opts.chunk_length_schedule}
+            init_pkt["generation_config"] = {
+                "chunk_length_schedule": self._opts.chunk_length_schedule
+            }
         if is_given(self._opts.voice_settings):
             init_pkt["voice_settings"] = _strip_nones(dataclasses.asdict(self._opts.voice_settings))
         await ws_conn.send_str(json.dumps(init_pkt))
@@ -462,7 +472,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text_buffer += "".join(alignment["chars"])
                     start_times_ms += alignment["charStartTimesMs"]
                     durations_ms += alignment["charDurationsMs"]
-                    timed_words, text_buffer = _to_timed_words(text_buffer, start_times_ms, durations_ms)
+                    timed_words, text_buffer = _to_timed_words(
+                        text_buffer, start_times_ms, durations_ms
+                    )
                     output_emitter.push_timed_transcript(timed_words)
                     start_times_ms = start_times_ms[-len(text_buffer) :]
                     durations_ms = durations_ms[-len(text_buffer) :]
@@ -507,7 +519,10 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     voice_id = opts.voice_id
     model_id = opts.model
     output_format = opts.encoding
-    url = f"{base_url}/text-to-speech/{voice_id}/stream?" f"model_id={model_id}&output_format={output_format}"
+    url = (
+        f"{base_url}/text-to-speech/{voice_id}/stream?"
+        f"model_id={model_id}&output_format={output_format}"
+    )
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
     return url

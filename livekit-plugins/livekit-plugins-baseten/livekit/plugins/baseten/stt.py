@@ -100,7 +100,9 @@ class STT(stt.STT):
         model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
 
         if not model_endpoint:
-            raise ValueError("The model endpoint is required, you can find it in the Baseten dashboard")
+            raise ValueError(
+                "The model endpoint is required, you can find it in the Baseten dashboard"
+            )
 
         self._model_endpoint = model_endpoint
 

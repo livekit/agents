@@ -96,7 +96,11 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._config.language_model_name if is_given(self._config.language_model_name) else "unknown"
+        return (
+            self._config.language_model_name
+            if is_given(self._config.language_model_name)
+            else "unknown"
+        )
 
     @property
     def provider(self) -> str:
@@ -191,7 +195,9 @@ class SpeechStream(stt.SpeechStream):
         stream = transcript_event.transcript.results
         for resp in stream:
             if resp.start_time and resp.start_time == 0.0:
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                )
 
             if resp.end_time and resp.end_time > 0.0:
                 if resp.is_partial:

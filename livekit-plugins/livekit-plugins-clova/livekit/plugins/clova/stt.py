@@ -63,11 +63,15 @@ class STT(stt.STT):
 
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
         clova_secret = secret if is_given(secret) else os.environ.get("CLOVA_STT_SECRET_KEY")
-        self._invoke_url = invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
+        self._invoke_url = (
+            invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
+        )
         self._language = clova_languages_mapping.get(language, language)
         self._session = http_session
         if clova_secret is None:
-            raise ValueError("Clova STT secret key is required. It should be set with env CLOVA_STT_SECRET_KEY")
+            raise ValueError(
+                "Clova STT secret key is required. It should be set with env CLOVA_STT_SECRET_KEY"
+            )
         self._secret = clova_secret
         self.threshold = threshold
 
@@ -105,7 +109,9 @@ class STT(stt.STT):
             payload = json.dumps({"language": self._language, "completion": "sync"})
 
             buffer = merge_frames(buffer)
-            buffer_bytes = resample_audio(buffer.data.tobytes(), buffer.sample_rate, CLOVA_INPUT_SAMPLE_RATE)
+            buffer_bytes = resample_audio(
+                buffer.data.tobytes(), buffer.sample_rate, CLOVA_INPUT_SAMPLE_RATE
+            )
 
             io_buffer = io.BytesIO()
             with wave.open(io_buffer, "wb") as wav:
@@ -137,7 +143,9 @@ class STT(stt.STT):
                 if not text or "error" in response_data:
                     raise ValueError(f"Unexpected response: {response_data}")
                 if confidence < self.threshold:
-                    raise ValueError(f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping.")
+                    raise ValueError(
+                        f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
+                    )
                 logger.info(f"final event: {response_data}")
                 return self._transcription_to_speech_event(text=text)
 

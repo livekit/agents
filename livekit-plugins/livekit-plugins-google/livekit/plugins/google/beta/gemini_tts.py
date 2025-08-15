@@ -101,9 +101,13 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        gcp_project: str | None = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        gcp_project: str | None = (
+            project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        )
         gcp_location: str | None = (
-            location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+            location
+            if is_given(location)
+            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
         )
         use_vertexai = (
             vertexai
@@ -155,7 +159,9 @@ class TTS(tts.TTS):
         else:
             return "Gemini"
 
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def update_options(
@@ -207,7 +213,11 @@ class ChunkedStream(tts.ChunkedStream):
                 mime_type="audio/pcm",
             )
 
-            if not response.candidates or not (content := response.candidates[0].content) or not content.parts:
+            if (
+                not response.candidates
+                or not (content := response.candidates[0].content)
+                or not content.parts
+            ):
                 raise APIStatusError("No audio content generated")
 
             for part in content.parts:

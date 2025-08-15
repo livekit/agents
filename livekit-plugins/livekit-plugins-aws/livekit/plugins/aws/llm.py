@@ -97,7 +97,9 @@ class LLM(llm.LLM):
             region_name=region if is_given(region) else None,
         )
 
-        bedrock_model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
+        bedrock_model = (
+            model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
+        )
         if not bedrock_model:
             raise ValueError(
                 "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."  # noqa: E501
@@ -143,7 +145,9 @@ class LLM(llm.LLM):
                 return None
 
             tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
-            tool_choice = cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
+            tool_choice = (
+                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
+            )
             if is_given(tool_choice):
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                     tool_config["toolChoice"] = {"tool": {"name": tool_choice["function"]["name"]}}
@@ -261,7 +265,9 @@ class LLMStream(llm.LLMStream):
                     prompt_tokens=metadata["usage"]["inputTokens"],
                     total_tokens=metadata["usage"]["totalTokens"],
                     prompt_cached_tokens=(
-                        metadata["usage"]["cacheReadInputTokens"] if "cacheReadInputTokens" in metadata["usage"] else 0
+                        metadata["usage"]["cacheReadInputTokens"]
+                        if "cacheReadInputTokens" in metadata["usage"]
+                        else 0
                     ),
                 ),
             )

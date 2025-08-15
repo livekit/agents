@@ -173,7 +173,9 @@ class TTS(tts.TTS):
 
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
-            raise ValueError("Sarvam API key is required. Provide it directly or set SARVAM_API_KEY env var.")
+            raise ValueError(
+                "Sarvam API key is required. Provide it directly or set SARVAM_API_KEY env var."
+            )
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
@@ -211,7 +213,9 @@ class TTS(tts.TTS):
         return self._session
 
     # Implement the abstract synthesize method
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions | None = None) -> ChunkedStream:
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions | None = None
+    ) -> ChunkedStream:
         """Synthesize text to audio using Sarvam.ai TTS API."""
         if conn_options is None:
             conn_options = DEFAULT_API_CONNECT_OPTIONS
@@ -254,7 +258,9 @@ class ChunkedStream(tts.ChunkedStream):
                 if res.status != 200:
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
-                    raise APIStatusError(message=f"Sarvam TTS API Error: {error_text}", status_code=res.status)
+                    raise APIStatusError(
+                        message=f"Sarvam TTS API Error: {error_text}", status_code=res.status
+                    )
 
                 response_json = await res.json()
                 request_id = response_json.get("request_id", "")

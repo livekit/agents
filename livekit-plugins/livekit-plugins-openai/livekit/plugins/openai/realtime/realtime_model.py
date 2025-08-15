@@ -253,7 +253,9 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
-        is_azure = api_version is not None or entra_token is not None or azure_deployment is not None
+        is_azure = (
+            api_version is not None or entra_token is not None or azure_deployment is not None
+        )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None and not is_azure:
@@ -370,7 +372,8 @@ class RealtimeModel(llm.RealtimeModel):
         api_version = api_version or os.getenv("OPENAI_API_VERSION")
         if api_version is None:
             raise ValueError(
-                "Must provide either the `api_version` argument or the " "`OPENAI_API_VERSION` environment variable"
+                "Must provide either the `api_version` argument or the "
+                "`OPENAI_API_VERSION` environment variable"
             )
 
         if base_url is None:
@@ -515,7 +518,9 @@ def process_base_url(
     return new_url
 
 
-class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]):
+class RealtimeSession(
+    llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
+):
     """
     A session for the OpenAI Realtime API.
 
@@ -549,7 +554,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
         self._update_fnc_ctx_lock = asyncio.Lock()
 
         # 100ms chunks
-        self._bstream = utils.audio.AudioByteStream(SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10)
+        self._bstream = utils.audio.AudioByteStream(
+            SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
+        )
         self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
 
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
@@ -595,7 +602,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
                 raise APIConnectionError(
-                    message=("Failed to send message to OpenAI Realtime API during session re-connection"),
+                    message=(
+                        "Failed to send message to OpenAI Realtime API during session re-connection"
+                    ),
                 ) from e
 
             logger.debug("reconnected to OpenAI Realtime API")
@@ -622,7 +631,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                 else:
                     self._emit_error(e, recoverable=True)
 
-                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(num_retries)
+                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(
+                        num_retries
+                    )
                     logger.warning(
                         f"OpenAI Realtime API connection failed, retrying in {retry_interval}s",
                         exc_info=e,
@@ -679,7 +690,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
             async for msg in self._msg_ch:
                 try:
                     if isinstance(msg, BaseModel):
-                        msg = msg.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+                        msg = msg.model_dump(
+                            by_alias=True, exclude_unset=True, exclude_defaults=False
+                        )
 
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
@@ -739,13 +752,21 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                     elif event["type"] == "response.created":
                         self._handle_response_created(ResponseCreatedEvent.construct(**event))
                     elif event["type"] == "response.output_item.added":
-                        self._handle_response_output_item_added(ResponseOutputItemAddedEvent.construct(**event))
+                        self._handle_response_output_item_added(
+                            ResponseOutputItemAddedEvent.construct(**event)
+                        )
                     elif event["type"] == "response.content_part.added":
-                        self._handle_response_content_part_added(ResponseContentPartAddedEvent.construct(**event))
+                        self._handle_response_content_part_added(
+                            ResponseContentPartAddedEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.created":
-                        self._handle_conversion_item_created(ConversationItemCreatedEvent.construct(**event))
+                        self._handle_conversion_item_created(
+                            ConversationItemCreatedEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.deleted":
-                        self._handle_conversion_item_deleted(ConversationItemDeletedEvent.construct(**event))
+                        self._handle_conversion_item_deleted(
+                            ConversationItemDeletedEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
                             ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
@@ -761,13 +782,19 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                     elif event["type"] == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
                     elif event["type"] == "response.audio.delta":
-                        self._handle_response_audio_delta(ResponseAudioDeltaEvent.construct(**event))
+                        self._handle_response_audio_delta(
+                            ResponseAudioDeltaEvent.construct(**event)
+                        )
                     elif event["type"] == "response.audio_transcript.done":
-                        self._handle_response_audio_transcript_done(ResponseAudioTranscriptDoneEvent.construct(**event))
+                        self._handle_response_audio_transcript_done(
+                            ResponseAudioTranscriptDoneEvent.construct(**event)
+                        )
                     elif event["type"] == "response.audio.done":
                         self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
-                        self._handle_response_output_item_done(ResponseOutputItemDoneEvent.construct(**event))
+                        self._handle_response_output_item_done(
+                            ResponseOutputItemDoneEvent.construct(**event)
+                        )
                     elif event["type"] == "response.done":
                         self._handle_response_done(ResponseDoneEvent.construct(**event))
                     elif event["type"] == "error":
@@ -1017,11 +1044,16 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                 tool
                 for tool in tools
                 if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
-                or (is_raw_function_tool(tool) and get_raw_function_info(tool).name in retained_tool_names)
+                or (
+                    is_raw_function_tool(tool)
+                    and get_raw_function_info(tool).name in retained_tool_names
+                )
             ]
             self._tools = llm.ToolContext(retained_tools)
 
-    def _create_tools_update_event(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> SessionUpdateEvent:
+    def _create_tools_update_event(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    ) -> SessionUpdateEvent:
         oai_tools: list[session_update_event.SessionTool] = []
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
@@ -1033,7 +1065,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                 tool_desc = tool_info.raw_schema
                 tool_desc["type"] = "function"  # internally tagged
             else:
-                logger.error("OpenAI Realtime API doesn't support this tool type", extra={"tool": tool})
+                logger.error(
+                    "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
+                )
                 continue
 
             try:
@@ -1161,7 +1195,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                 # input audio changed to a different sample rate
                 self._input_resampler = None
 
-        if self._input_resampler is None and (frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS):
+        if self._input_resampler is None and (
+            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
+        ):
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
                 output_rate=SAMPLE_RATE,
@@ -1174,11 +1210,17 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
         else:
             yield frame
 
-    def _handle_input_audio_buffer_speech_started(self, _: InputAudioBufferSpeechStartedEvent) -> None:
+    def _handle_input_audio_buffer_speech_started(
+        self, _: InputAudioBufferSpeechStartedEvent
+    ) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
-    def _handle_input_audio_buffer_speech_stopped(self, _: InputAudioBufferSpeechStoppedEvent) -> None:
-        user_transcription_enabled = self._realtime_model._opts.input_audio_transcription is not None
+    def _handle_input_audio_buffer_speech_stopped(
+        self, _: InputAudioBufferSpeechStoppedEvent
+    ) -> None:
+        user_transcription_enabled = (
+            self._realtime_model._opts.input_audio_transcription is not None
+        )
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
@@ -1254,7 +1296,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
         assert event.item.id is not None, "item.id is None"
 
         try:
-            self._remote_chat_ctx.insert(event.previous_item_id, _openai_item_to_livekit_item(event.item))
+            self._remote_chat_ctx.insert(
+                event.previous_item_id, _openai_item_to_livekit_item(event.item)
+            )
         except ValueError as e:
             logger.warning(
                 f"failed to insert item `{event.item.id}`: {str(e)}",
@@ -1393,7 +1437,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
         for item_id, item_generation in self._current_generation.messages.items():
-            if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(remote_item.item, llm.ChatMessage):
+            if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
+                remote_item.item, llm.ChatMessage
+            ):
                 remote_item.item.content.append(item_generation.audio_transcript)
 
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -1401,7 +1447,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
         self._current_generation = None
 
         # calculate metrics
-        usage = event.response.usage.model_dump(exclude_defaults=True) if event.response.usage else {}
+        usage = (
+            event.response.usage.model_dump(exclude_defaults=True) if event.response.usage else {}
+        )
         ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = time.time() - created_timestamp
         metrics = RealtimeModelMetrics(
@@ -1437,7 +1485,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["openai_server_event_received"
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=0,
             ),
-            metadata=Metadata(model_name=self._realtime_model.model, model_provider=self._realtime_model.provider),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
+            ),
         )
         self.emit("metrics_collected", metrics)
         self._handle_response_done_but_not_complete(event)
@@ -1549,7 +1599,9 @@ def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
                 continue  # not supported for now
             elif isinstance(c, llm.AudioContent):
                 if conversation_item.role == "user":
-                    encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode("utf-8")
+                    encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
+                        "utf-8"
+                    )
 
                     content_list.append(
                         ConversationItemContent(
