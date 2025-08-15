@@ -815,6 +815,7 @@ class RealtimeSession(
             if wait_reconnect_task and wait_reconnect_task in done and self._current_generation:
                 # wait for the current generation to complete before reconnecting
                 await self._current_generation._done_fut
+                closing = True
 
         finally:
             await utils.aio.cancel_and_wait(*tasks)
