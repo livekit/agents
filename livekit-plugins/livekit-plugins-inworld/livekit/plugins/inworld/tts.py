@@ -131,6 +131,14 @@ class TTS(tts.TTS):
             temperature=temperature,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Inworld"
+
     def update_options(
         self,
         *,

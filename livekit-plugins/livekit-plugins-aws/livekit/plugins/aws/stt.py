@@ -94,6 +94,18 @@ class STT(stt.STT):
             region=region,
         )
 
+    @property
+    def model(self) -> str:
+        return (
+            self._config.language_model_name
+            if is_given(self._config.language_model_name)
+            else "unknown"
+        )
+
+    @property
+    def provider(self) -> str:
+        return "Amazon Transcribe"
+
     async def aclose(self) -> None:
         await super().aclose()
 

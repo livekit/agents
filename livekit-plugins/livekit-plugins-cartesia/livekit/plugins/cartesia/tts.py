@@ -159,6 +159,14 @@ class TTS(tts.TTS):
         elif isinstance(text_pacing, tts.SentenceStreamPacer):
             self._stream_pacer = text_pacing
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Cartesia"
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
