@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
+
 from livekit.agents import llm
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins import openai
@@ -45,7 +46,7 @@ class WebPlugin:
 class ProviderPreferences:
     """OpenRouter provider routing preferences."""
     order: list[str] | None = None
-    allow_fallbacks: bool | None = None  
+    allow_fallbacks: bool | None = None
     require_parameters: bool | None = None
     data_collection: Literal["allow", "deny"] | None = None
     only: list[str] | None = None
@@ -129,14 +130,14 @@ class LLM(llm.LLM):
 
         # Build OpenAI client with OpenRouter configuration
         import openai as oai_client
-        
+
         # Prepare headers for OpenRouter analytics
         headers = {}
         if site_url and site_url is not NOT_GIVEN:
             headers["HTTP-Referer"] = site_url
         if app_name and app_name is not NOT_GIVEN:
             headers["X-Title"] = app_name
-            
+
         # Create OpenAI client instance with custom headers
         client = oai_client.AsyncOpenAI(
             api_key=resolved_api_key,
@@ -144,7 +145,7 @@ class LLM(llm.LLM):
             default_headers=headers,
             timeout=timeout,
         )
-        
+
         # Create LiveKit OpenAI LLM wrapper with the configured client
         self._client = openai.LLM(
             model=model,
@@ -165,39 +166,39 @@ class LLM(llm.LLM):
         """Forward chat requests to the underlying OpenAI client with OpenRouter routing."""
         # Convert None to NOT_GIVEN for OpenAI plugin compatibility
         actual_tool_choice = tool_choice if tool_choice is not None else NOT_GIVEN
-        
+
         # Handle OpenRouter-specific routing features
         extra_kwargs = kwargs.get("extra_kwargs", {})
         if not isinstance(extra_kwargs, dict):
             extra_kwargs = {}
-            
+
         openrouter_body = {}
-        
+
         # Add provider preferences if specified
         if self._opts.provider_preferences:
             provider_dict = self._opts.provider_preferences.to_dict()
             if provider_dict:
                 openrouter_body["provider"] = provider_dict
                 logger.info(f"Using OpenRouter provider preferences: {provider_dict}")
-        
+
         # Handle fallback models (legacy support)
         if self._opts.fallback_models:
             # Use OpenRouter's models parameter for fallback routing
             models_list = [self._opts.model] + self._opts.fallback_models
             openrouter_body["models"] = models_list
             logger.info(f"Using OpenRouter models parameter: {models_list}")
-        
+
         # Add plugins if specified
         if self._opts.plugins:
             plugins_list = [plugin.to_dict() for plugin in self._opts.plugins]
             openrouter_body["plugins"] = plugins_list
             logger.info(f"Using OpenRouter plugins: {plugins_list}")
-        
+
         # Add OpenRouter body parameters via extra_body in extra_kwargs
         if openrouter_body:
             extra_kwargs["extra_body"] = openrouter_body
             kwargs["extra_kwargs"] = extra_kwargs
-        
+
         return self._client.chat(
             chat_ctx=chat_ctx,
             tools=tools,
@@ -209,4 +210,4 @@ class LLM(llm.LLM):
     def model(self) -> str:
         """Get the current model name."""
         return self._opts.model
-    
+

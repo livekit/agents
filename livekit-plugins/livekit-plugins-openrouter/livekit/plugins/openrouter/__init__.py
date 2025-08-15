@@ -20,7 +20,7 @@ from .version import __version__
 
 __all__ = [
     "LLM",
-    "ProviderPreferences", 
+    "ProviderPreferences",
     "WebPlugin",
     "logger",
     "__version__",
