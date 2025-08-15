@@ -2,7 +2,7 @@
 
 Access to 100+ AI models through OpenRouter's intelligent routing platform with support for provider routing, cost optimization, and web search capabilities.
 
-See [https://docs.livekit.io/agents/integrations/llm/](https://docs.livekit.io/agents/integrations/llm/) for more information.
+See [https://docs.livekit.io/agents/integrations/llm/](https://docs.livekit.io/agents/integrations/llm/) and [https://openrouter.ai/docs](https://openrouter.ai/docs) for more information.
 
 ## Installation
 
