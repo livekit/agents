@@ -39,7 +39,6 @@ from speechmatics.rt import (  # type: ignore
     AsyncClient,
     AudioEncoding,
     AudioFormat,
-    ClientMessageType,
     ConversationConfig,
     OperatingPoint,
     ServerMessageType,
@@ -444,7 +443,7 @@ class SpeechStream(stt.RecognizeStream):
         self._speech_fragments: list[SpeechFragment] = []
 
         # EndOfUtterance fallback timer
-        self._end_of_utterance_timer: asyncio.Task | None = None
+        self._end_of_utterance_timer: asyncio.TimerHandle | None = None
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -476,14 +475,7 @@ class SpeechStream(stt.RecognizeStream):
 
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)  # type: ignore
             def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
-                logger.debug("End of utterance received from STT", extra={"data": message})
-                asyncio.create_task(self._handle_end_of_utterance())
-
-        if opts.enable_diarization:
-
-            @self._client.on(ServerMessageType.SPEAKERS_RESULT)  # type: ignore
-            def _evt_on_speakers_result(message: dict[str, Any]) -> None:
-                logger.debug("Speakers result received from STT", extra={"data": message})
+                self._handle_end_of_utterance()
 
         await self._client.start_session(
             transcription_config=self._stt._transcription_config,
@@ -508,26 +500,6 @@ class SpeechStream(stt.RecognizeStream):
 
         # TODO - handle the closing of the stream?
 
-    async def send_message(self, message: NotGivenOr[ClientMessageType], **kwargs: Any) -> None:
-        """Send a message to the STT service.
-
-        This sends a message to the STT service via the underlying transport. If the session
-        is not running, this will raise an exception. Messages in the wrong format will also
-        cause an error.
-
-        Args:
-            message: Message to send to the STT service.
-            **kwargs: Additional arguments passed to the underlying transport.
-        """
-        try:
-            payload = {"message": message}
-            payload.update(kwargs)
-            logger.debug(f"Sending message to STT: {payload}")
-            if self._client:
-                asyncio.create_task(self._client.send_message(payload))
-        except Exception as e:
-            raise RuntimeError(f"error sending message to STT: {e}") from e
-
     def _handle_transcript(self, message: dict[str, Any], is_final: bool) -> None:
         """Handle the partial and final transcript events.
 
@@ -544,7 +516,7 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._end_of_utterance_timer_start()
-        asyncio.create_task(self._send_frames())
+        self._send_frames()
 
     def _end_of_utterance_timer_start(self) -> None:
         """Start the timer for the end of utterance.
@@ -565,24 +537,24 @@ class SpeechStream(stt.RecognizeStream):
         async def send_after_delay(delay: float) -> None:
             await asyncio.sleep(delay)
             logger.debug("Fallback EndOfUtterance triggered.")
-            asyncio.create_task(self._handle_end_of_utterance())
+            self._handle_end_of_utterance()
 
         self._end_of_utterance_timer = asyncio.create_task(
             send_after_delay(self._stt._stt_options.end_of_utterance_silence_trigger * 4)
         )
 
-    async def _handle_end_of_utterance(self) -> None:
+    def _handle_end_of_utterance(self) -> None:
         """Handle the end of utterance event.
 
         This will check for any running timers for end of utterance, reset them,
         and then send a finalized frame to the pipeline.
         """
-        await self._send_frames(finalized=True)
+        self._send_frames(finalized=True)
         if self._end_of_utterance_timer is not None:
             self._end_of_utterance_timer.cancel()
             self._end_of_utterance_timer = None
 
-    async def _send_frames(self, finalized: bool = False) -> None:
+    def _send_frames(self, finalized: bool = False) -> None:
         """Send frames to the pipeline.
 
         Send speech frames to the pipeline. If VAD is enabled, then this will
