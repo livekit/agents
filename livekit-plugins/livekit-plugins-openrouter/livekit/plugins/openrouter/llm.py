@@ -30,6 +30,7 @@ from .log import logger
 @dataclass
 class WebPlugin:
     """OpenRouter web search plugin configuration."""
+
     id: str = "web"
     max_results: int = 5
     search_prompt: str | None = None
@@ -45,6 +46,7 @@ class WebPlugin:
 @dataclass
 class ProviderPreferences:
     """OpenRouter provider routing preferences."""
+
     order: list[str] | None = None
     allow_fallbacks: bool | None = None
     require_parameters: bool | None = None
@@ -210,4 +212,3 @@ class LLM(llm.LLM):
     def model(self) -> str:
         """Get the current model name."""
         return self._opts.model
-
