@@ -357,22 +357,13 @@ class AgentActivity(RecognitionHooks):
 
                 with trace.use_span(start_span, end_on_exit=False):
                     if isinstance(self.llm, llm.LLM):
-                        self.llm.on("metrics_collected", self._on_metrics_collected)
-                        self.llm.on("error", self._on_error)
                         self.llm.prewarm()
 
                     if isinstance(self.stt, stt.STT):
-                        self.stt.on("metrics_collected", self._on_metrics_collected)
-                        self.stt.on("error", self._on_error)
                         self.stt.prewarm()
 
                     if isinstance(self.tts, tts.TTS):
-                        self.tts.on("metrics_collected", self._on_metrics_collected)
-                        self.tts.on("error", self._on_error)
                         self.tts.prewarm()
-
-                    if isinstance(self.vad, vad.VAD):
-                        self.vad.on("metrics_collected", self._on_metrics_collected)
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session()
@@ -396,6 +387,21 @@ class AgentActivity(RecognitionHooks):
 
     async def _start_session(self) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
+
+        if isinstance(self.llm, llm.LLM):
+            self.llm.on("metrics_collected", self._on_metrics_collected)
+            self.llm.on("error", self._on_error)
+
+        if isinstance(self.stt, stt.STT):
+            self.stt.on("metrics_collected", self._on_metrics_collected)
+            self.stt.on("error", self._on_error)
+
+        if isinstance(self.tts, tts.TTS):
+            self.tts.on("metrics_collected", self._on_metrics_collected)
+            self.tts.on("error", self._on_error)
+
+        if isinstance(self.vad, vad.VAD):
+            self.vad.on("metrics_collected", self._on_metrics_collected)
 
         if self.mcp_servers:
 
@@ -573,6 +579,32 @@ class AgentActivity(RecognitionHooks):
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
 
+        if isinstance(self.llm, llm.LLM):
+            self.llm.off("metrics_collected", self._on_metrics_collected)
+            self.llm.off("error", self._on_error)
+
+        if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
+            self._rt_session.off("generation_created", self._on_generation_created)
+            self._rt_session.off("input_speech_started", self._on_input_speech_started)
+            self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
+            self._rt_session.off(
+                "input_audio_transcription_completed",
+                self._on_input_audio_transcription_completed,
+            )
+            self._rt_session.off("metrics_collected", self._on_metrics_collected)
+            self._rt_session.off("error", self._on_error)
+
+        if isinstance(self.stt, stt.STT):
+            self.stt.off("metrics_collected", self._on_metrics_collected)
+            self.stt.off("error", self._on_error)
+
+        if isinstance(self.tts, tts.TTS):
+            self.tts.off("metrics_collected", self._on_metrics_collected)
+            self.tts.off("error", self._on_error)
+
+        if isinstance(self.vad, vad.VAD):
+            self.vad.off("metrics_collected", self._on_metrics_collected)
+
         if self._rt_session is not None:
             await self._rt_session.aclose()
 
@@ -588,31 +620,6 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
-
-            if isinstance(self.llm, llm.LLM):
-                self.llm.off("metrics_collected", self._on_metrics_collected)
-                self.llm.off("error", self._on_error)
-
-            if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
-                self._rt_session.off("generation_created", self._on_generation_created)
-                self._rt_session.off("input_speech_started", self._on_input_speech_started)
-                self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
-                self._rt_session.off(
-                    "input_audio_transcription_completed",
-                    self._on_input_audio_transcription_completed,
-                )
-                self._rt_session.off("error", self._on_error)
-
-            if isinstance(self.stt, stt.STT):
-                self.stt.off("metrics_collected", self._on_metrics_collected)
-                self.stt.off("error", self._on_error)
-
-            if isinstance(self.tts, tts.TTS):
-                self.tts.off("metrics_collected", self._on_metrics_collected)
-                self.tts.off("error", self._on_error)
-
-            if isinstance(self.vad, vad.VAD):
-                self.vad.off("metrics_collected", self._on_metrics_collected)
 
             await self._close_session()
 
