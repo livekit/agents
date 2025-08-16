@@ -705,7 +705,8 @@ class RealtimeSession(llm.RealtimeSession):
                         if response.server_content and response.server_content.interrupted:
                             # interrupt a generation already done
                             self._handle_input_speech_started()
-                            continue
+                            # reset the flag and still start a new generation in case it has any other content
+                            response.server_content.interrupted = False
 
                         if response.server_content or response.tool_call:
                             self._start_new_generation()
