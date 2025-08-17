@@ -80,8 +80,8 @@ class LLM(llm.LLM):
         model: str = "auto",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        site_url: NotGivenOr[str] = NOT_GIVEN,
-        app_name: NotGivenOr[str] = NOT_GIVEN,
+        site_url: NotGivenOr[str] = "https://livekit.io",
+        app_name: NotGivenOr[str] = "LiveKit",
         fallback_models: list[str] | None = None,
         provider_preferences: ProviderPreferences | None = None,
         plugins: list[WebPlugin] | None = None,
@@ -181,20 +181,20 @@ class LLM(llm.LLM):
             provider_dict = self._opts.provider_preferences.to_dict()
             if provider_dict:
                 openrouter_body["provider"] = provider_dict
-                logger.info(f"Using OpenRouter provider preferences: {provider_dict}")
+                logger.debug(f"Using OpenRouter provider preferences: {provider_dict}")
 
         # Handle fallback models (legacy support)
         if self._opts.fallback_models:
             # Use OpenRouter's models parameter for fallback routing
             models_list = [self._opts.model] + self._opts.fallback_models
             openrouter_body["models"] = models_list
-            logger.info(f"Using OpenRouter models parameter: {models_list}")
+            logger.debug(f"Using OpenRouter models parameter: {models_list}")
 
         # Add plugins if specified
         if self._opts.plugins:
             plugins_list = [plugin.to_dict() for plugin in self._opts.plugins]
             openrouter_body["plugins"] = plugins_list
-            logger.info(f"Using OpenRouter plugins: {plugins_list}")
+            logger.debug(f"Using OpenRouter plugins: {plugins_list}")
 
         # Add OpenRouter body parameters via extra_body in extra_kwargs
         if openrouter_body:
