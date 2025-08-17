@@ -67,8 +67,8 @@ class STTOptions:
     output_locale: str | None = None
     enable_partials: bool = True
     enable_diarization: bool = False
-    max_delay: float = 1.0
-    end_of_utterance_silence_trigger: float = 0.5
+    max_delay: float = 0.7
+    end_of_utterance_silence_trigger: float = 0.3
     end_of_utterance_mode: EndOfUtteranceMode = EndOfUtteranceMode.FIXED
     additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
     punctuation_overrides: dict = dataclasses.field(default_factory=dict)
@@ -157,7 +157,7 @@ class STT(stt.STT):
                 ADAPTIVE is used, the delay can be adjusted on the content of what the most
                 recent speaker has said, such as rate of speech and whether they have any
                 pauses or disfluencies. When FIXED is used, the delay is fixed to the value of
-                `end_of_utterance_delay`. Use of NONE disables end of utterance detection and
+                `end_of_utterance_silence_trigger`. Use of NONE disables end of utterance detection and
                 uses a fallback timer. Defaults to `EndOfUtteranceMode.FIXED`.
 
             additional_vocab (list[AdditionalVocabEntry]): List of additional vocabulary entries.
@@ -459,7 +459,7 @@ class SpeechStream(stt.RecognizeStream):
 
         @self._client.on(ServerMessageType.RECOGNITION_STARTED)  # type: ignore
         def _evt_on_recognition_started(message: dict[str, Any]) -> None:
-            logger.debug(f"Recognition started (session: {message.get('id')})")
+            logger.debug("Recognition started", extra={"data": message})
             self._start_time = datetime.datetime.now(datetime.timezone.utc)
 
         if opts.enable_partials:
@@ -476,15 +476,14 @@ class SpeechStream(stt.RecognizeStream):
 
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)  # type: ignore
             def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
-                logger.debug("End of utterance received from STT")
+                logger.debug("End of utterance received from STT", extra={"data": message})
                 asyncio.create_task(self._handle_end_of_utterance())
 
         if opts.enable_diarization:
 
             @self._client.on(ServerMessageType.SPEAKERS_RESULT)  # type: ignore
             def _evt_on_speakers_result(message: dict[str, Any]) -> None:
-                logger.debug("Speakers result received from STT")
-                logger.debug(message)
+                logger.debug("Speakers result received from STT", extra={"data": message})
 
         await self._client.start_session(
             transcription_config=self._stt._transcription_config,
@@ -552,7 +551,9 @@ class SpeechStream(stt.RecognizeStream):
 
         This will use the STT's `end_of_utterance_silence_trigger` value and set
         a timer to send the latest transcript to the pipeline. It is used as a
-        fallback from the EnfOfUtterance messages from the STT.
+        fallback from the EnfOfUtterance messages from the STT. Majority of the times,
+        the server should be sending the end of utterance messages. In the rare case
+        that it doesn't, we'll still time it out so that the pipeline doesn't hang.
 
         Note that the `end_of_utterance_silence_trigger` will be from when the
         last updated speech was received and this will likely be longer in
@@ -567,7 +568,7 @@ class SpeechStream(stt.RecognizeStream):
             asyncio.create_task(self._handle_end_of_utterance())
 
         self._end_of_utterance_timer = asyncio.create_task(
-            send_after_delay(self._stt._stt_options.end_of_utterance_silence_trigger * 2)
+            send_after_delay(self._stt._stt_options.end_of_utterance_silence_trigger * 4)
         )
 
     async def _handle_end_of_utterance(self) -> None:
