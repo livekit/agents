@@ -463,6 +463,7 @@ class SpeechStream(stt.RecognizeStream):
             self._start_time = datetime.datetime.now(datetime.timezone.utc)
 
         if opts.enable_partials:
+
             @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)  # type: ignore
             def _evt_on_partial_transcript(message: dict[str, Any]) -> None:
                 self._handle_transcript(message, is_final=False)
@@ -472,12 +473,14 @@ class SpeechStream(stt.RecognizeStream):
             self._handle_transcript(message, is_final=True)
 
         if opts.end_of_utterance_mode == EndOfUtteranceMode.FIXED:
+
             @self._client.on(ServerMessageType.END_OF_UTTERANCE)  # type: ignore
             def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
                 logger.debug("End of utterance received from STT")
                 asyncio.create_task(self._handle_end_of_utterance())
 
         if opts.enable_diarization:
+
             @self._client.on(ServerMessageType.SPEAKERS_RESULT)  # type: ignore
             def _evt_on_speakers_result(message: dict[str, Any]) -> None:
                 logger.debug("Speakers result received from STT")
