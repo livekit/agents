@@ -438,7 +438,8 @@ class SpeechStream(stt.RecognizeStream):
         # redefine types
         self._stt: STT = stt
         self._speech_duration: float = 0
-        self._start_time: datetime.datetime | None = None
+        # fill in with default value, it'll be reset when `RECOGNITION_STARTED` is received
+        self._start_time = datetime.datetime.now(datetime.timezone.utc)
         self._client: AsyncClient | None = None
         self._speech_fragments: list[SpeechFragment] = []
 
@@ -456,33 +457,28 @@ class SpeechStream(stt.RecognizeStream):
 
         opts = self._stt._stt_options
 
-        @self._client.on(ServerMessageType.RECOGNITION_STARTED)
+        @self._client.on(ServerMessageType.RECOGNITION_STARTED)  # type: ignore
         def _evt_on_recognition_started(message: dict[str, Any]) -> None:
             logger.debug(f"Recognition started (session: {message.get('id')})")
             self._start_time = datetime.datetime.now(datetime.timezone.utc)
 
         if opts.enable_partials:
-
-            @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)
+            @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)  # type: ignore
             def _evt_on_partial_transcript(message: dict[str, Any]) -> None:
                 self._handle_transcript(message, is_final=False)
 
-        @self._client.on(ServerMessageType.ADD_TRANSCRIPT)
+        @self._client.on(ServerMessageType.ADD_TRANSCRIPT)  # type: ignore
         def _evt_on_final_transcript(message: dict[str, Any]) -> None:
             self._handle_transcript(message, is_final=True)
 
-        # End of Utterance
         if opts.end_of_utterance_mode == EndOfUtteranceMode.FIXED:
-
-            @self._client.on(ServerMessageType.END_OF_UTTERANCE)
+            @self._client.on(ServerMessageType.END_OF_UTTERANCE)  # type: ignore
             def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
                 logger.debug("End of utterance received from STT")
                 asyncio.create_task(self._handle_end_of_utterance())
 
-        # Speaker Result
         if opts.enable_diarization:
-
-            @self._client.on(ServerMessageType.SPEAKERS_RESULT)
+            @self._client.on(ServerMessageType.SPEAKERS_RESULT)  # type: ignore
             def _evt_on_speakers_result(message: dict[str, Any]) -> None:
                 logger.debug("Speakers result received from STT")
                 logger.debug(message)
@@ -757,8 +753,8 @@ class SpeechStream(stt.RecognizeStream):
         if not group:
             return None
 
-        start_time = min(frag.start_time for frag in group)
-        ts = (self._start_time + datetime.timedelta(seconds=start_time)).isoformat(
+        min_frag_time = min(frag.start_time for frag in group)
+        ts = (self._start_time + datetime.timedelta(seconds=min_frag_time)).isoformat(
             timespec="milliseconds"
         )
 
