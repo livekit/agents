@@ -6,17 +6,19 @@ from .base import AgentMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TT
 
 @dataclass
 class UsageSummary:
-    llm_prompt_tokens: int
-    llm_prompt_cached_tokens: int
-    llm_completion_tokens: int
-    tts_characters_count: int
-    tts_audio_duration: float
-    stt_audio_duration: float
+    llm_prompt_tokens: int = 0
+    llm_prompt_cached_tokens: int = 0
+    llm_input_audio_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_output_audio_tokens: int = 0
+    tts_characters_count: int = 0
+    tts_audio_duration: float = 0.0
+    stt_audio_duration: float = 0.0
 
 
 class UsageCollector:
     def __init__(self) -> None:
-        self._summary = UsageSummary(0, 0, 0, 0, 0.0, 0.0)
+        self._summary = UsageSummary()
 
     def __call__(self, metrics: AgentMetrics) -> None:
         self.collect(metrics)
@@ -28,6 +30,8 @@ class UsageCollector:
             self._summary.llm_completion_tokens += metrics.completion_tokens
 
         elif isinstance(metrics, RealtimeModelMetrics):
+            self._summary.llm_input_audio_tokens += metrics.input_token_details.audio_tokens
+            self._summary.llm_output_audio_tokens += metrics.output_token_details.audio_tokens
             self._summary.llm_prompt_tokens += metrics.input_tokens
             self._summary.llm_prompt_cached_tokens += metrics.input_token_details.cached_tokens
             self._summary.llm_completion_tokens += metrics.output_tokens
