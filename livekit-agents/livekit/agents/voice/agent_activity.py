@@ -881,6 +881,10 @@ class AgentActivity(RecognitionHooks):
             await self._q_updated.wait()
             while self._speech_q:
                 _, _, speech = heapq.heappop(self._speech_q)
+                if speech.done():
+                    # skip done speech (interrupted when it's in the queue)
+                    self._current_speech = None
+                    continue
                 self._current_speech = speech
                 if self.min_consecutive_speech_delay > 0.0:
                     await asyncio.sleep(
@@ -1307,12 +1311,12 @@ class AgentActivity(RecognitionHooks):
         )
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
-        )
+        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
+        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(wait_for_authorization)
             return
 
         text_source: AsyncIterable[str] | None = None
@@ -1513,14 +1517,13 @@ class AgentActivity(RecognitionHooks):
 
         self._session._update_agent_state("thinking")
 
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
-        )
+        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
+        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks)
+            await utils.aio.cancel_and_wait(*tasks, wait_for_authorization)
             await text_tee.aclose()
             return
 
@@ -1748,9 +1751,10 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
-        )
+        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
+        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(wait_for_authorization)
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -1809,12 +1813,12 @@ class AgentActivity(RecognitionHooks):
         )
         tool_ctx = llm.ToolContext(self.tools)
 
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
-        )
+        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
+        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(wait_for_authorization)
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history
 
