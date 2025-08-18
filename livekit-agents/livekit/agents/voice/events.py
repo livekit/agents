@@ -116,6 +116,7 @@ class UserInputTranscribedEvent(BaseModel):
     transcript: str
     is_final: bool
     speaker_id: str | None = None
+    language: str | None = None
     created_at: float = Field(default_factory=time.time)
 
 

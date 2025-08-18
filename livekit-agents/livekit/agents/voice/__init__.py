@@ -1,4 +1,4 @@
-from . import io
+from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, VoiceActivityVideoSampler
 from .chat_cli import ChatCLI
@@ -49,6 +49,7 @@ __all__ = [
     "TranscriptSynchronizer",
     "io",
     "room_io",
+    "run_result",
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",

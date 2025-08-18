@@ -61,6 +61,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
+        voice_cloning_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
@@ -86,6 +87,7 @@ class TTS(tts.TTS):
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
@@ -115,13 +117,18 @@ class TTS(tts.TTS):
 
         lang = language if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
-        name = DEFAULT_VOICE_NAME if not is_given(voice_name) else voice_name
 
         voice_params = texttospeech.VoiceSelectionParams(
-            name=name,
             language_code=lang,
             ssml_gender=ssml_gender,
         )
+        if is_given(voice_cloning_key):
+            voice_params.voice_clone = texttospeech.VoiceCloneParams(
+                voice_clone_key=voice_cloning_key,
+            )
+        else:
+            voice_params.name = voice_name if is_given(voice_name) else DEFAULT_VOICE_NAME
+
         if not is_given(tokenizer):
             tokenizer = tokenize.blingfire.SentenceTokenizer()
 
