@@ -20,10 +20,6 @@
 
 Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/agents-js)
 
-## ✨ 1.0 release ✨
-
-This README reflects the 1.0 release. For documentation on the previous 0.x release, see the [0.x branch](https://github.com/livekit/agents/tree/0.x)
-
 ## What is Agents?
 
 <!--BEGIN_DESCRIPTION-->
@@ -38,11 +34,12 @@ agents that can see, hear, and understand.
 
 - **Flexible integrations**: A comprehensive ecosystem to mix and match the right STT, LLM, TTS, and Realtime API to suit your use case.
 - **Integrated job scheduling**: Built-in task scheduling and distribution with [dispatch APIs](https://docs.livekit.io/agents/build/dispatch/) to connect end users to agents.
-- **Extensive WebRTC clients**: Build client applications using LiveKit's open-source SDK ecosystem, supporting nearly all major platforms.
+- **Extensive WebRTC clients**: Build client applications using LiveKit's open-source SDK ecosystem, supporting all major platforms.
 - **Telephony integration**: Works seamlessly with LiveKit's [telephony stack](https://docs.livekit.io/sip/), allowing your agent to make calls to or receive calls from phones.
 - **Exchange data with clients**: Use [RPCs](https://docs.livekit.io/home/client/data/rpc/) and other [Data APIs](https://docs.livekit.io/home/client/data/) to seamlessly exchange data with clients.
 - **Semantic turn detection**: Uses a transformer model to detect when a user is done with their turn, helps to reduce interruptions.
 - **MCP support**: Native support for MCP. Integrate tools provided by MCP servers with one loc.
+- **Builtin test framework**: Write tests and use judges to ensure your agent is performing as expected.
 - **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
 
 ## Installation
@@ -190,6 +187,30 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 ...
+```
+
+### Testing
+
+Automated tests are essential for building reliable agents, especially with the non-deterministic behavior of LLMs. LiveKit Agents include native test integration to help you create dependable agents.
+
+```python
+@pytest.mark.asyncio
+async def test_no_availability() -> None:
+    llm = google.LLM()
+    async AgentSession(llm=llm) as sess:
+        await sess.start(MyAgent())
+        result = await sess.run(
+            user_input="Hello, I need to place an order."
+        )
+        result.expect.skip_next_event_if(type="message", role="assistant")
+        result.expect.next_event().is_function_call(name="start_order")
+        result.expect.next_event().is_function_call_output()
+        await (
+            result.expect.next_event()
+            .is_message(role="assistant")
+            .judge(llm, intent="assistant should be asking the user what they would like")
+        )
+
 ```
 
 ## Examples

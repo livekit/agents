@@ -61,6 +61,10 @@ class SpeechHandle:
         return self._id
 
     @property
+    def scheduled(self) -> bool:
+        return self._scheduled_fut.done()
+
+    @property
     def interrupted(self) -> bool:
         return self._interrupt_fut.done()
 
@@ -207,7 +211,8 @@ class SpeechHandle:
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
-            self._mark_generation_done()
+            if self._generations:
+                self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
 
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):

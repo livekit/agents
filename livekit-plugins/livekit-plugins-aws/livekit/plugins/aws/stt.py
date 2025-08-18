@@ -50,6 +50,7 @@ class STTOptions:
     enable_partial_results_stabilization: NotGivenOr[bool]
     partial_results_stability: NotGivenOr[str]
     language_model_name: NotGivenOr[str]
+    region: str
 
 
 class STT(stt.STT):
@@ -75,11 +76,6 @@ class STT(stt.STT):
 
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
-        self._region = region
-        self._client = TranscribeStreamingClient(
-            region=self._region,
-            credential_resolver=AwsCrtCredentialResolver(None),  # type: ignore
-        )
 
         self._config = STTOptions(
             language=language,
@@ -95,6 +91,7 @@ class STT(stt.STT):
             enable_partial_results_stabilization=enable_partial_results_stabilization,
             partial_results_stability=partial_results_stability,
             language_model_name=language_model_name,
+            region=region,
         )
 
     async def aclose(self) -> None:
@@ -115,12 +112,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        return SpeechStream(
-            stt=self,
-            client=self._client,
-            conn_options=conn_options,
-            opts=self._config,
-        )
+        return SpeechStream(stt=self, conn_options=conn_options, opts=self._config)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -128,15 +120,18 @@ class SpeechStream(stt.SpeechStream):
         self,
         stt: STT,
         opts: STTOptions,
-        client: TranscribeStreamingClient,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._client = client
 
     async def _run(self) -> None:
         while True:
+            client = TranscribeStreamingClient(
+                region=self._opts.region,
+                credential_resolver=AwsCrtCredentialResolver(None),  # type: ignore
+            )
+
             live_config = {
                 "language_code": self._opts.language,
                 "media_sample_rate_hz": self._opts.sample_rate,
@@ -153,7 +148,7 @@ class SpeechStream(stt.SpeechStream):
                 "language_model_name": self._opts.language_model_name,
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
-            stream = await self._client.start_stream_transcription(**filtered_config)  # type: ignore
+            stream = await client.start_stream_transcription(**filtered_config)  # type: ignore
 
             async def input_generator(stream: StartStreamTranscriptionEventStream) -> None:
                 async for frame in self._input_ch:
@@ -197,7 +192,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
+                            alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
@@ -205,20 +200,22 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
+                            alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
             if not resp.is_partial:
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
+    def _streaming_recognize_response_to_speech_data(self, resp: Result) -> stt.SpeechData:
+        confidence = 0.0
+        if resp.alternatives and (items := resp.alternatives[0].items):
+            confidence = items[0].confidence or 0.0
 
-def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData:
-    data = stt.SpeechData(
-        language="en-US",
-        start_time=resp.start_time if resp.start_time else 0.0,
-        end_time=resp.end_time if resp.end_time else 0.0,
-        text=resp.alternatives[0].transcript if resp.alternatives else "",
-    )
-
-    return data
+        return stt.SpeechData(
+            language=resp.language_code or self._opts.language,
+            start_time=resp.start_time if resp.start_time is not None else 0.0,
+            end_time=resp.end_time if resp.end_time is not None else 0.0,
+            text=resp.alternatives[0].transcript if resp.alternatives else "",
+            confidence=confidence,
+        )

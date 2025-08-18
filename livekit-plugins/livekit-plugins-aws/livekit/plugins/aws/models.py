@@ -46,3 +46,4 @@ TTSLanguages = Literal[
 ]
 
 TTSEncoding = Literal["mp3"]
+TTSTextType = Literal["text", "ssml"]
