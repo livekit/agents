@@ -518,9 +518,9 @@ class AudioRecognition:
 
         if isinstance(node, AsyncIterable):
             async for ev in node:
-                assert isinstance(
-                    ev, stt.SpeechEvent
-                ), f"STT node must yield SpeechEvent, got: {type(ev)}"
+                assert isinstance(ev, stt.SpeechEvent), (
+                    f"STT node must yield SpeechEvent, got: {type(ev)}"
+                )
                 await self._on_stt_event(ev)
 
     @utils.log_exceptions(logger=logger)
