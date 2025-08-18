@@ -64,6 +64,7 @@ class VADMetrics(BaseModel):
     idle_time: float
     inference_duration_total: float
     inference_count: int
+    metadata: Metadata | None = None
 
 
 class EOUMetrics(BaseModel):
@@ -86,6 +87,8 @@ class EOUMetrics(BaseModel):
     """The time the user stopped speaking."""
 
     speech_id: str | None = None
+
+    metadata: Metadata | None = None
 
 
 class RealtimeModelMetrics(BaseModel):

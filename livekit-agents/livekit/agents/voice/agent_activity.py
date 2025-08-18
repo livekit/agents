@@ -13,6 +13,7 @@ from opentelemetry import trace
 
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
+from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
@@ -1387,6 +1388,14 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt()
 
+        metadata: Metadata | None = None
+        if isinstance(self.turn_detection, str):
+            metadata = Metadata(model_name="unknown", model_provider=self.turn_detection)
+        elif self.turn_detection is not None:
+            metadata = Metadata(
+                model_name=self.turn_detection.model, model_provider=self.turn_detection.provider
+            )
+
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
             end_of_utterance_delay=info.end_of_utterance_delay,
@@ -1394,6 +1403,7 @@ class AgentActivity(RecognitionHooks):
             on_user_turn_completed_delay=callback_duration,
             speech_id=speech_handle.id,
             last_speaking_time=info.last_speaking_time,
+            metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
