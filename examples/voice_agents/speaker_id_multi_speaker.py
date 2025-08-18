@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, RoomInputOptions
-from livekit.plugins import openai, silero, speechmatics
+from livekit.agents.stt import MultiSpeakerHandler
+from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 
 # Load environment variables from .env file
 # Required: SPEECHMATICS_API_KEY, OPENAI_API_KEY
@@ -46,20 +47,17 @@ class Assistant(Agent):
 
 async def entrypoint(ctx: agents.JobContext) -> None:
     session = AgentSession(
-        stt=speechmatics.STT(
-            end_of_utterance_silence_trigger=0.7,
-            enable_diarization=True,
-            speaker_active_format="<{speaker_id}>{text}</{speaker_id}>",
-            additional_vocab=[
-                speechmatics.AdditionalVocabEntry(
-                    content="LiveKit",
-                    sounds_like=["live kit"],
-                ),
-            ],
-        ),
+        vad=silero.VAD.load(),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        vad=silero.VAD.load(),
+        stt=speechmatics.STT(enable_diarization=True),
+        # stt=deepgram.STT(model="nova-3", enable_diarization=True),
+        diarization_handler=MultiSpeakerHandler(
+            detect_primary_speaker=True,
+            suppress_background_speaker=False,  # set to True to suppress background speaker
+            primary_format="<{speaker_id}>{text}</{speaker_id}>",
+            background_format="<{speaker_id}>{text}</{speaker_id}>",
+        ),
     )
 
     await session.start(

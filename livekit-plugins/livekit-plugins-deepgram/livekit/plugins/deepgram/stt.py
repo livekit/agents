@@ -56,7 +56,7 @@ class STTOptions:
     smart_format: bool
     no_delay: bool
     endpointing_ms: int
-    speaker_diarization: bool
+    enable_diarization: bool
     filler_words: bool
     sample_rate: int
     num_channels: int
@@ -82,7 +82,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,
-        speaker_diarization: bool = False,
+        enable_diarization: bool = False,
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -150,7 +150,7 @@ class STT(stt.STT):
             smart_format=smart_format,
             no_delay=no_delay,
             endpointing_ms=endpointing_ms,
-            speaker_diarization=speaker_diarization,
+            enable_diarization=enable_diarization,
             filler_words=filler_words,
             sample_rate=sample_rate,
             num_channels=1,
@@ -189,7 +189,7 @@ class STT(stt.STT):
             "profanity_filter": config.profanity_filter,
             "numerals": config.numerals,
         }
-        if config.speaker_diarization:
+        if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
 
         if config.language:
@@ -255,7 +255,7 @@ class STT(stt.STT):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         no_delay: NotGivenOr[bool] = NOT_GIVEN,
         endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
-        speaker_diarization: NotGivenOr[bool] = NOT_GIVEN,
+        enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         filler_words: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -281,8 +281,8 @@ class STT(stt.STT):
             self._opts.no_delay = no_delay
         if is_given(endpointing_ms):
             self._opts.endpointing_ms = endpointing_ms
-        if is_given(speaker_diarization):
-            self._opts.speaker_diarization = speaker_diarization
+        if is_given(enable_diarization):
+            self._opts.enable_diarization = enable_diarization
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -378,7 +378,7 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         no_delay: NotGivenOr[bool] = NOT_GIVEN,
         endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
-        speaker_diarization: NotGivenOr[bool] = NOT_GIVEN,
+        enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         filler_words: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -404,8 +404,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.no_delay = no_delay
         if is_given(endpointing_ms):
             self._opts.endpointing_ms = endpointing_ms
-        if is_given(speaker_diarization):
-            self._opts.speaker_diarization = speaker_diarization
+        if is_given(enable_diarization):
+            self._opts.enable_diarization = enable_diarization
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -551,7 +551,7 @@ class SpeechStream(stt.SpeechStream):
             "profanity_filter": self._opts.profanity_filter,
             "numerals": self._opts.numerals,
             "mip_opt_out": self._opts.mip_opt_out,
-            "diarize": self._opts.speaker_diarization,
+            "diarize": self._opts.enable_diarization,
         }
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
@@ -663,7 +663,7 @@ def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.Spe
             end_time=alt["words"][-1]["end"] if alt["words"] else 0,
             confidence=alt["confidence"],
             text=alt["transcript"],
-            speaker_id=f"speaker_{speaker}" if speaker is not None else None,
+            speaker_id=f"S{speaker}" if speaker is not None else None,
         )
         if language == "multi" and "languages" in alt:
             sd.language = alt["languages"][0]  # TODO: handle multiple languages
