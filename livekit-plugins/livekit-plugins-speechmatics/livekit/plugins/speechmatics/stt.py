@@ -534,14 +534,12 @@ class SpeechStream(stt.RecognizeStream):
         if self._end_of_utterance_timer is not None:
             self._end_of_utterance_timer.cancel()
 
-        async def send_after_delay(delay: float) -> None:
-            await asyncio.sleep(delay)
+        def send_after_delay() -> None:
             logger.debug("Fallback EndOfUtterance triggered.")
             self._handle_end_of_utterance()
 
-        self._end_of_utterance_timer = asyncio.create_task(
-            send_after_delay(self._stt._stt_options.end_of_utterance_silence_trigger * 4)
-        )
+        delay = self._stt._stt_options.end_of_utterance_silence_trigger * 4
+        self._end_of_utterance_timer = asyncio.get_event_loop().call_later(delay, send_after_delay)
 
     def _handle_end_of_utterance(self) -> None:
         """Handle the end of utterance event.
