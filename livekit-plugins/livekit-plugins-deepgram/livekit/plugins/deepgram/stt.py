@@ -663,7 +663,7 @@ def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.Spe
             end_time=alt["words"][-1]["end"] if alt["words"] else 0,
             confidence=alt["confidence"],
             text=alt["transcript"],
-            speaker_id=f"speaker_{speaker}" if speaker else None,
+            speaker_id=f"speaker_{speaker}" if speaker is not None else None,
         )
         if language == "multi" and "languages" in alt:
             sd.language = alt["languages"][0]  # TODO: handle multiple languages
