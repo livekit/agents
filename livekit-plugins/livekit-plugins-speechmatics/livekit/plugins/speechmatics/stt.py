@@ -325,7 +325,7 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Speechmatics"
-        
+
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
