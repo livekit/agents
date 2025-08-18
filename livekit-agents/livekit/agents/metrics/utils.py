@@ -10,6 +10,13 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
     if logger is None:
         logger = default_logger
 
+    metadata: dict[str, str] = {}
+    if metrics.metadata:
+        metadata |= {
+            "model_name": metrics.metadata.model_name or "unknown",
+            "model_provider": metrics.metadata.model_provider or "unknown",
+        }
+
     if isinstance(metrics, LLMMetrics):
         logger.info(
             "LLM metrics",
@@ -19,7 +26,8 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "prompt_cached_tokens": metrics.prompt_cached_tokens,
                 "completion_tokens": metrics.completion_tokens,
                 "tokens_per_second": round(metrics.tokens_per_second, 2),
-            },
+            }
+            | metadata,
         )
     elif isinstance(metrics, RealtimeModelMetrics):
         logger.info(
@@ -31,7 +39,8 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "output_tokens": metrics.output_tokens,
                 "total_tokens": metrics.total_tokens,
                 "tokens_per_second": round(metrics.tokens_per_second, 2),
-            },
+            }
+            | metadata,
         )
     elif isinstance(metrics, TTSMetrics):
         logger.info(
@@ -39,7 +48,8 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             extra={
                 "ttfb": metrics.ttfb,
                 "audio_duration": round(metrics.audio_duration, 2),
-            },
+            }
+            | metadata,
         )
     elif isinstance(metrics, EOUMetrics):
         logger.info(
@@ -47,12 +57,14 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             extra={
                 "end_of_utterance_delay": round(metrics.end_of_utterance_delay, 2),
                 "transcription_delay": round(metrics.transcription_delay, 2),
-            },
+            }
+            | metadata,
         )
     elif isinstance(metrics, STTMetrics):
         logger.info(
             "STT metrics",
             extra={
                 "audio_duration": round(metrics.audio_duration, 2),
-            },
+            }
+            | metadata,
         )
