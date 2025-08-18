@@ -7,7 +7,7 @@ import datetime
 from dotenv import load_dotenv
 
 from livekit import agents
-from livekit.agents import Agent, AgentSession, RoomInputOptions
+from livekit.agents import Agent, AgentSession
 from livekit.agents.stt import MultiSpeakerHandler
 from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 
@@ -60,13 +60,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         ),
     )
 
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(),
-        room_input_options=RoomInputOptions(),
-    )
-
-    await ctx.connect()
+    await session.start(room=ctx.room, agent=Assistant())
 
     # Generate an initial greeting to start the conversation
     await session.generate_reply(

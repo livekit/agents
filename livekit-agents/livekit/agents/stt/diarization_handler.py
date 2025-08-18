@@ -61,12 +61,24 @@ class MultiSpeakerHandler(_DiarizationHandler):
     def __init__(
         self,
         *,
-        primary_format: str = "{text}",
-        background_format: str = "{text}",
         detect_primary_speaker: bool = True,
         suppress_background_speaker: bool = False,
         primary_detection_options: NotGivenOr[PrimaryDetectionOptions] = NOT_GIVEN,
+        primary_format: str = "{text}",
+        background_format: str = "{text}",
     ):
+        """Multi-speaker diarization handler. It detects the primary speaker based on RMS.
+        It can format the primary and background speakers separately, or suppress the background speaker.
+
+        Args:
+            detect_primary_speaker (bool, optional): Whether to detect primary speaker. Defaults to True.
+            suppress_background_speaker (bool, optional): Whether to suppress background speaker. Defaults to False.
+            primary_detection_options (PrimaryDetectionOptions, optional): Primary speaker detection options.
+            primary_format (str, optional): Format for primary speaker.
+                Supports {text} and {speaker_id} placeholders. Defaults to "{text}".
+            background_format (str, optional): Format for background speaker.
+                Supports {text} and {speaker_id} placeholders. Defaults to "{text}".
+        """
         self._primary_format = primary_format
         self._background_format = background_format
         self._detect_primary = detect_primary_speaker
