@@ -1740,7 +1740,11 @@ class AgentActivity(RecognitionHooks):
                     # TODO(long): should we mark the function call as failed to notify the LLM?
 
                 new_agent_task = sanitized_out.agent_task
-            self._session.emit("function_tools_executed", fnc_executed_ev)
+
+            try:
+                self._session.emit("function_tools_executed", fnc_executed_ev)
+            except StopResponse:
+                generate_tool_reply = False
 
             draining = self.scheduling_paused
             if not ignore_task_switch and new_agent_task is not None:
