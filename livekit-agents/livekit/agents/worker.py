@@ -58,6 +58,7 @@ from .version import __version__
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
+HEARTBEAT_INTERVAL = 30
 
 
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
@@ -650,6 +651,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     headers=headers,
                     params=params,
                     autoping=True,
+                    heartbeat=HEARTBEAT_INTERVAL,
                     proxy=self._opts.http_proxy or None,
                 )
 
