@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from livekit.agents.stt import SpeechData
 from speechmatics.rt import TranscriptionConfig  # type: ignore
 
 __all__ = ["TranscriptionConfig"]
@@ -88,22 +89,24 @@ class SpeakerFragments:
     """SpeechFragment items grouped by speaker_id.
 
     Parameters:
+        start_time: The start time of the fragments.
+        end_time: The end time of the fragments.
+        language: The language of the fragments. Defaults to `en`.
         speaker_id: The ID of the speaker.
-        is_active: Whether the speaker is active (emits frame).
-        timestamp: The timestamp of the frame.
-        language: The language of the frame.
+        is_active: Whether the speaker is active (emits frame). Defaults to `False`.
         fragments: The list of SpeechFragment items.
     """
 
+    start_time: float
+    end_time: float
+    language: str
     speaker_id: str | None = None
     is_active: bool = False
-    timestamp: str | None = None
-    language: str | None = None
     fragments: list[SpeechFragment] = field(default_factory=list)
 
     def __str__(self) -> str:
         """Return a string representation of the object."""
-        return f"SpeakerFragments(speaker_id: {self.speaker_id}, timestamp: {self.timestamp}, language: {self.language}, text: {self._format_text()})"
+        return f"SpeakerFragments(speaker_id: {self.speaker_id}, start_time: {self.start_time}, end_time: {self.end_time}, language: {self.language}, text: {self._format_text()})"
 
     def _format_text(self, format: str = "{text}") -> str:
         """Wrap text with speaker ID in an optional f-string format.
@@ -131,27 +134,24 @@ class SpeakerFragments:
         # Return the text
         return content
 
-    def _as_speech_data_attributes(
-        self,
-        active_format: str,
-        passive_format: str,
-    ) -> dict[str, Any]:
-        """Return a dictionary of attributes for a TranscriptionFrame.
+    def _as_speech_data(self, active_format: str, passive_format: str) -> SpeechData:
+        """Return a SpeechData from the fragments.
 
         Args:
             active_format: Format to wrap the text with.
             passive_format: Format to wrap the text with. Defaults to `active_format`.
 
         Returns:
-            dict[str, Any]: The dictionary of attributes.
+            SpeechData: The SpeechData object.
         """
-        return {
-            "language": self.language,
-            "text": self._format_text(active_format if self.is_active else passive_format),
-            "speaker_id": self.speaker_id,
-            "start_time": self.timestamp,
-            "confidence": 1.0,
-        }
+        return SpeechData(
+            language=self.language,
+            text=self._format_text(active_format if self.is_active else passive_format),
+            speaker_id=self.speaker_id,
+            start_time=self.start_time,
+            end_time=self.end_time,
+            confidence=1.0,
+        )
 
 
 @dataclass
