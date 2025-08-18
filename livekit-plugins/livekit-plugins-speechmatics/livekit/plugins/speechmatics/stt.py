@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import datetime
 import logging
 import os
 import re
@@ -438,7 +437,6 @@ class SpeechStream(stt.RecognizeStream):
         self._stt: STT = stt
         self._speech_duration: float = 0
         # fill in with default value, it'll be reset when `RECOGNITION_STARTED` is received
-        self._start_time = datetime.datetime.now(datetime.timezone.utc)
         self._client: AsyncClient | None = None
         self._speech_fragments: list[SpeechFragment] = []
 
@@ -459,7 +457,6 @@ class SpeechStream(stt.RecognizeStream):
         @self._client.on(ServerMessageType.RECOGNITION_STARTED)  # type: ignore
         def _evt_on_recognition_started(message: dict[str, Any]) -> None:
             logger.debug("Recognition started", extra={"data": message})
-            self._start_time = datetime.datetime.now(datetime.timezone.utc)
 
         if opts.enable_partials:
 
@@ -579,12 +576,10 @@ class SpeechStream(stt.RecognizeStream):
             final_event = stt.SpeechEvent(
                 type=event_type,
                 alternatives=[
-                    stt.SpeechData(
-                        **item._as_speech_data_attributes(
-                            self._stt._stt_options.speaker_active_format,
-                            self._stt._stt_options.speaker_passive_format,
-                        )
-                    )
+                    item._as_speech_data(
+                        self._stt._stt_options.speaker_active_format,
+                        self._stt._stt_options.speaker_passive_format,
+                    ),
                 ],
             )
             self._event_ch.send_nowait(final_event)
@@ -727,10 +722,8 @@ class SpeechStream(stt.RecognizeStream):
         if not group:
             return None
 
-        min_frag_time = min(frag.start_time for frag in group)
-        ts = (self._start_time + datetime.timedelta(seconds=min_frag_time)).isoformat(
-            timespec="milliseconds"
-        )
+        start_time = min(frag.start_time for frag in group)
+        end_time = max(frag.end_time for frag in group)
 
         # Determine if the speaker is considered active
         is_active = True
@@ -739,7 +732,8 @@ class SpeechStream(stt.RecognizeStream):
 
         return SpeakerFragments(
             speaker_id=group[0].speaker,
-            timestamp=ts,
+            start_time=start_time,
+            end_time=end_time,
             language=group[0].language,
             fragments=group,
             is_active=is_active,
