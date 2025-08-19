@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 
@@ -19,6 +20,7 @@ from pydantic import Field
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AudioConfig,
     BackgroundAudioPlayer,
@@ -26,14 +28,14 @@ from livekit.agents import (
     JobContext,
     RunContext,
     ToolError,
-    WorkerOptions,
-    cli,
     function_tool,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
+
+logger = logging.getLogger("drive-thru")
 
 
 @dataclass
@@ -392,9 +394,11 @@ async def new_userdata() -> Userdata:
     return userdata
 
 
-async def entrypoint(ctx: JobContext):
-    await ctx.connect()
+server = AgentServer()
 
+
+@server.rtc_session()
+async def drive_thru_agent(ctx: JobContext):
     userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
@@ -435,7 +439,3 @@ async def entrypoint(ctx: JobContext):
 
     await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
     await background_audio.start(room=ctx.room, agent_session=session)
-
-
-if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

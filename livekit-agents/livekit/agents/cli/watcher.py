@@ -16,7 +16,7 @@ from .. import utils
 from ..ipc import channel
 from ..log import DEV_LEVEL, logger
 from ..plugin import Plugin
-from ..worker import Worker
+from ..worker import AgentServer
 from . import proto
 
 
@@ -134,7 +134,7 @@ class WatchServer:
 class WatchClient:
     def __init__(
         self,
-        worker: Worker,
+        worker: AgentServer,
         cli_args: proto.CliArgs,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:

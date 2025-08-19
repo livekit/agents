@@ -26,7 +26,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "click~=8.1",
+    "typer>=0.15.1",
     "livekit>=1.0.12,<2",
     "livekit-api>=1.0.4,<2",
     "livekit-protocol~=1.0",
@@ -51,6 +51,9 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.34.1",
     "prometheus-client>=0.22",
 ]
+
+[project.scripts]
+lk-agents = "livekit.agents.cli:main"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.6.0, <2; python_version >= '3.10'"]

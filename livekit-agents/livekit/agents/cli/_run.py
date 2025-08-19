@@ -9,7 +9,7 @@ import threading
 
 from .. import utils
 from ..log import logger
-from ..worker import Worker
+from ..worker import AgentServer
 from . import proto
 from .log import setup_logging
 
@@ -50,7 +50,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
         print(_esc(34) + "=" * 50 + _esc(0))
         print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
 
-    worker = Worker(args.opts, devmode=args.devmode, register=args.register, loop=loop)
+    worker = AgentServer(args.opts, devmode=args.devmode, register=args.register, loop=loop)
 
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.1  # 100ms
@@ -74,7 +74,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
         # TODO(theomonnom): add_signal_handler is not implemented on win
         pass
 
-    async def _worker_run(worker: Worker) -> None:
+    async def _worker_run(worker: AgentServer) -> None:
         try:
             await worker.run()
         except Exception:
