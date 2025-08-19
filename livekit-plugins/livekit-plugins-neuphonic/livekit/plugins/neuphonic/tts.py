@@ -20,7 +20,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Optional, Union, cast
 
 import aiohttp
 
@@ -172,7 +171,7 @@ class TTS(tts.TTS):
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(speed):
-            self._opts.speed = cast(Optional[float], speed)
+            self._opts.speed = speed
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -381,12 +380,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if audio_data and audio_data != "":
                         try:
                             b64data = base64.b64decode(audio_data)
-                            if b64data:  
+                            if b64data:
                                 output_emitter.push(b64data)
                         except Exception as e:
                             logger.warning("Failed to decode Neuphonic audio data: %s", e)
 
-                    if data.get("stop") == True:
+                    if data.get("stop"):
                         output_emitter.end_segment()
                         break
 
