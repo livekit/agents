@@ -13,7 +13,6 @@ from livekit import rtc
 
 from .. import llm, stt, utils, vad
 from ..log import logger
-from ..stt.diarization_handler import _DiarizationHandler
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -75,7 +74,6 @@ class AudioRecognition:
         min_endpointing_delay: float,
         max_endpointing_delay: float,
         turn_detection_mode: TurnDetectionMode | None,
-        diarization_handler: _DiarizationHandler | None,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
@@ -92,7 +90,6 @@ class AudioRecognition:
         self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
-        self._diarization_handler = diarization_handler
 
         self._speaking = False
         self._last_speaking_time: float = 0
@@ -136,9 +133,6 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
-        if self._diarization_handler:
-            self._diarization_handler.push_audio(frame)
-
     async def aclose(self) -> None:
         await aio.cancel_and_wait(*self._tasks)
         if self._commit_user_turn_atask is not None:
@@ -166,8 +160,6 @@ class AudioRecognition:
             self._tasks.add(task)
             self._stt_atask = None
             self._stt_ch = None
-        if self._diarization_handler:
-            self._diarization_handler.reset()
 
     def update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
@@ -261,12 +253,6 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
-        if self._diarization_handler:
-            updated_ev = self._diarization_handler.on_stt_event(ev)
-            if updated_ev is None:
-                return
-            ev = updated_ev
-
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
@@ -319,7 +305,6 @@ class AudioRecognition:
                     self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            # print(ev)
             self._hooks.on_interim_transcript(ev)
             self._audio_interim_transcript = ev.alternatives[0].text
 
@@ -342,7 +327,6 @@ class AudioRecognition:
                 self._end_of_turn_task.cancel()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
-            # print(ev)
             self._hooks.on_vad_inference_done(ev)
             self._last_speaking_time = time.time() - ev.silence_duration
 

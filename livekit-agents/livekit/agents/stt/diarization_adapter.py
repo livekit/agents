@@ -1,36 +1,123 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import asyncio
+import contextlib
 from dataclasses import dataclass
 
 import numpy as np
 
 from livekit import rtc
 
-from .. import stt
+from .. import utils
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.audio import AudioByteStream
+from .stt import STT, RecognizeStream, SpeechData, SpeechEvent, SpeechEventType
 
 
-class _DiarizationHandler(ABC):
-    @abstractmethod
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        """Push audio frames to the processor"""
-        pass
+class DiarizationAdapter(STT):
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        detect_primary_speaker: bool = True,
+        suppress_background_speaker: bool = False,
+        primary_detection_options: NotGivenOr[PrimarySpeakerDetectionOptions] = NOT_GIVEN,
+        primary_format: str = "{text}",
+        background_format: str = "{text}",
+    ):
+        if not stt.capabilities.streaming:
+            raise ValueError(
+                "DiarizationAdapter only supports streaming STT with diarization enabled"
+            )
 
-    @abstractmethod
-    def on_stt_event(self, ev: stt.SpeechEvent) -> stt.SpeechEvent | None:
-        """Post-process the STT event to return the updated speech event, or None to skip"""
-        pass
+        super().__init__(capabilities=stt.capabilities)
+        self._stt = stt
 
-    def reset(self) -> None:  # noqa: B027
-        """Reset the handler"""
-        pass
+        self._detect_primary = detect_primary_speaker
+        self._suppress_background = suppress_background_speaker
+        self._opt = primary_detection_options or PrimarySpeakerDetectionOptions()
+        self._primary_format = primary_format
+        self._background_format = background_format
+
+    async def _recognize_impl(
+        self,
+        buffer: utils.AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SpeechEvent:
+        return await self._stt.recognize(buffer, language=language, conn_options=conn_options)
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        return DiarizationAdapterWrapper(
+            stt=self, wrapped_stt=self._stt, language=language, conn_options=conn_options
+        )
+
+
+class DiarizationAdapterWrapper(RecognizeStream):
+    def __init__(
+        self,
+        stt: DiarizationAdapter,
+        *,
+        wrapped_stt: STT,
+        language: NotGivenOr[str],
+        conn_options: APIConnectOptions,
+    ):
+        super().__init__(stt=stt, conn_options=conn_options)
+        self._wrapped_stt = wrapped_stt
+        self._language = language
+
+        self._detector = _PrimarySpeakerDetector(
+            detect_primary_speaker=stt._detect_primary,
+            suppress_background_speaker=stt._suppress_background,
+            primary_detection_options=stt._opt,
+            primary_format=stt._primary_format,
+            background_format=stt._background_format,
+        )
+
+    async def _run(self) -> None:
+        async def _forward_input(stream: RecognizeStream) -> None:
+            async for frame in self._input_ch:
+                if isinstance(frame, rtc.AudioFrame):
+                    stream.push_frame(frame)
+                    self._detector.push_audio(frame)
+                elif isinstance(frame, self._FlushSentinel):
+                    stream.flush()
+
+            with contextlib.suppress(RuntimeError):
+                stream.end_input()
+
+        async def _forward_output(stream: RecognizeStream) -> None:
+            async for ev in stream:
+                updated_ev = self._detector.on_stt_event(ev)
+                if updated_ev is not None:
+                    self._event_ch.send_nowait(updated_ev)
+
+        stream = self._wrapped_stt.stream(language=self._language, conn_options=self._conn_options)
+        tasks = [
+            asyncio.create_task(
+                _forward_input(stream), name="DiarizationAdapterWrapper.forward_input"
+            ),
+            asyncio.create_task(
+                _forward_output(stream), name="DiarizationAdapterWrapper.forward_output"
+            ),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+            await stream.aclose()
 
 
 @dataclass
-class PrimaryDetectionOptions:
+class PrimarySpeakerDetectionOptions:
     """Configuration for primary speaker detection"""
 
     frame_size_ms: int = 100
@@ -51,7 +138,7 @@ class PrimaryDetectionOptions:
     """Minimum threshold multiplier (candidate can be min_multiplier quieter)"""
 
 
-class MultiSpeakerHandler(_DiarizationHandler):
+class _PrimarySpeakerDetector:
     @dataclass
     class SpeakerData:
         speaker_id: str
@@ -63,12 +150,12 @@ class MultiSpeakerHandler(_DiarizationHandler):
         *,
         detect_primary_speaker: bool = True,
         suppress_background_speaker: bool = False,
-        primary_detection_options: NotGivenOr[PrimaryDetectionOptions] = NOT_GIVEN,
+        primary_detection_options: NotGivenOr[PrimarySpeakerDetectionOptions] = NOT_GIVEN,
         primary_format: str = "{text}",
         background_format: str = "{text}",
     ):
-        """Multi-speaker diarization handler. It detects the primary speaker based on RMS.
-        It can format the primary and background speakers separately, or suppress the background speaker.
+        """Multi-speaker diarization handler. It detects the primary speaker based on RMS,
+        formats the primary and background speakers separately, or suppresses the background speaker.
 
         Args:
             detect_primary_speaker (bool, optional): Whether to detect primary speaker. Defaults to True.
@@ -83,7 +170,7 @@ class MultiSpeakerHandler(_DiarizationHandler):
         self._background_format = background_format
         self._detect_primary = detect_primary_speaker
         self._suppress_background = suppress_background_speaker
-        self._opt = primary_detection_options or PrimaryDetectionOptions()
+        self._opt = primary_detection_options or PrimarySpeakerDetectionOptions()
 
         if self._suppress_background and not self._detect_primary:
             logger.warning(
@@ -91,12 +178,9 @@ class MultiSpeakerHandler(_DiarizationHandler):
             )
             self._suppress_background = False
 
-        self.reset()
-
-    def reset(self) -> None:
         self._pushed_duration: float = 0.0
         self._primary_speaker: str | None = None
-        self._speaker_data: dict[str, MultiSpeakerHandler.SpeakerData] = {}
+        self._speaker_data: dict[str, _PrimarySpeakerDetector.SpeakerData] = {}
         self._bstream: AudioByteStream | None = None
 
         self._rms_buffer: list[float] = []
@@ -125,12 +209,12 @@ class MultiSpeakerHandler(_DiarizationHandler):
         if len(self._rms_buffer) > self._max_rms_size:
             self._rms_buffer = self._rms_buffer[-self._max_rms_size :]
 
-    def on_stt_event(self, ev: stt.SpeechEvent) -> stt.SpeechEvent | None:
+    def on_stt_event(self, ev: SpeechEvent) -> SpeechEvent | None:
         if not ev.alternatives:
             return ev
 
         sd = ev.alternatives[0]
-        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+        if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
             self._update_primary_speaker(sd)
 
         if sd.speaker_id is None:
@@ -177,7 +261,7 @@ class MultiSpeakerHandler(_DiarizationHandler):
 
         return float(np.median(self._rms_buffer[start:end]))
 
-    def _update_primary_speaker(self, sd: stt.SpeechData) -> None:
+    def _update_primary_speaker(self, sd: SpeechData) -> None:
         if sd.speaker_id is None or not self._detect_primary:
             self._primary_speaker = None
             return
@@ -194,7 +278,7 @@ class MultiSpeakerHandler(_DiarizationHandler):
                 1 - self._opt.rms_smoothing_factor
             )
         else:
-            self._speaker_data[speaker_id] = MultiSpeakerHandler.SpeakerData(
+            self._speaker_data[speaker_id] = _PrimarySpeakerDetector.SpeakerData(
                 speaker_id=speaker_id,
                 last_activity_time=sd.end_time,
                 rms=rms,

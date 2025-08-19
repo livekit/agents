@@ -1,4 +1,4 @@
-from .diarization_handler import MultiSpeakerHandler
+from .diarization_adapter import DiarizationAdapter
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .stt import (
@@ -27,7 +27,7 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "STTError",
-    "MultiSpeakerHandler",
+    "DiarizationAdapter",
 ]
 
 # Cleanup docs of unexported modules
