@@ -20,8 +20,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Optional, cast
-
 import aiohttp
 
 from livekit.agents import (
