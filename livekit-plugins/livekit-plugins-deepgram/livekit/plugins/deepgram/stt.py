@@ -130,7 +130,9 @@ class STT(stt.STT):
         """  # noqa: E501
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=interim_results, diarization=enable_diarization
+            )
         )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")

@@ -64,6 +64,7 @@ class SpeechEvent:
 class STTCapabilities:
     streaming: bool
     interim_results: bool
+    diarization: bool = False
 
 
 class STTError(BaseModel):

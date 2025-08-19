@@ -15,7 +15,7 @@ from ..utils.audio import AudioByteStream
 from .stt import STT, RecognizeStream, SpeechData, SpeechEvent, SpeechEventType
 
 
-class DiarizationAdapter(STT):
+class MultiSpeakerAdapter(STT):
     def __init__(
         self,
         *,
@@ -26,10 +26,8 @@ class DiarizationAdapter(STT):
         primary_format: str = "{text}",
         background_format: str = "{text}",
     ):
-        if not stt.capabilities.streaming:
-            raise ValueError(
-                "DiarizationAdapter only supports streaming STT with diarization enabled"
-            )
+        if not stt.capabilities.diarization:
+            raise ValueError("MultiSpeakerAdapter needs STT with diarization capability")
 
         super().__init__(capabilities=stt.capabilities)
         self._stt = stt
@@ -55,15 +53,15 @@ class DiarizationAdapter(STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
-        return DiarizationAdapterWrapper(
+        return MultiSpeakerAdapterWrapper(
             stt=self, wrapped_stt=self._stt, language=language, conn_options=conn_options
         )
 
 
-class DiarizationAdapterWrapper(RecognizeStream):
+class MultiSpeakerAdapterWrapper(RecognizeStream):
     def __init__(
         self,
-        stt: DiarizationAdapter,
+        stt: MultiSpeakerAdapter,
         *,
         wrapped_stt: STT,
         language: NotGivenOr[str],

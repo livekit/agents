@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession
-from livekit.agents.stt import DiarizationAdapter
+from livekit.agents.stt import MultiSpeakerAdapter
 from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 
 # Load environment variables from .env file
@@ -50,7 +50,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         vad=silero.VAD.load(),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        stt=DiarizationAdapter(
+        stt=MultiSpeakerAdapter(
             stt=speechmatics.STT(enable_diarization=True),
             # stt=deepgram.STT(model="nova-3", enable_diarization=True),
             detect_primary_speaker=True,
