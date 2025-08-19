@@ -51,7 +51,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         llm=openai.LLM(),
         tts=openai.TTS(),
         stt=MultiSpeakerAdapter(
-            stt=speechmatics.STT(enable_diarization=True),
+            stt=speechmatics.STT(enable_diarization=True, end_of_utterance_silence_trigger=0.3),
             # stt=deepgram.STT(model="nova-3", enable_diarization=True),
             detect_primary_speaker=True,
             suppress_background_speaker=True,  # set to True to suppress background speaker
