@@ -1,3 +1,14 @@
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional
+
+from rich.columns import Columns
+from rich.console import Console
+from rich.live import Live
+from rich.spinner import Spinner
+from rich.text import Text
+
+import re
+import hashlib
 import asyncio
 import datetime
 import importlib
@@ -8,6 +19,7 @@ import sys
 import threading
 import time
 import traceback
+import textwrap
 from inspect import istraceback
 from pathlib import Path
 from types import FrameType
@@ -28,7 +40,8 @@ from livekit.agents.worker import AgentServer
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
-from ..voice import io
+from ..voice import io, AgentSession
+from ..voice.run_result import RunEvent
 from ..utils import aio
 from .discover import get_import_data
 from .readchar import key, readkey
@@ -81,8 +94,6 @@ def import_from_string(import_str: Any) -> Any:
         raise RuntimeError(message.format(attrs_str=attrs_str, module_str=module_str))
 
     return instance
-
-
 
 
 ConsoleMode = Literal["text", "audio"]
@@ -189,6 +200,7 @@ class AgentsConsole:
             "tag": "black on #1fd5f9",
             "label": "#8f83ff",
             "error": "red",
+            "lk-fg": "#1fd5f9",
             "log.name": Style.null(),
             "log.extra": Style(dim=True),
             "logging.level.notset": Style(dim=True),
@@ -227,19 +239,29 @@ class AgentsConsole:
 
         self._enabled = False
 
-    def acquire_io(
-        self, loop: asyncio.AbstractEventLoop
-    ) -> tuple[ConsoleAudioInput, ConsoleAudioOutput]:
+        self._text_mode_log_filter = TextModeLogFilter()
+        self._log_handler = RichLoggingHandler(self)
+
+    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
         with self._lock:
             if self._io_acquired:
                 raise RuntimeError("the ConsoleIO was already acquired by another session")
+
+            if asyncio.get_running_loop() != loop:
+                raise RuntimeError(
+                    "the ConsoleIO must be acquired in the same asyncio loop as the session"
+                )
 
             self._io_acquired = True
             self._io_loop = loop
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
             self._io_acquired_event.set()
-            return self._io_audio_input, self._io_audio_output
+            self._io_session = session
+
+        self._update_sess_io(
+            session, self.console_mode, self._io_audio_input, self._io_audio_output
+        )
 
     @property
     def enabled(self) -> bool:
@@ -253,6 +275,20 @@ class AgentsConsole:
     def io_acquired(self) -> bool:
         with self._lock:
             return self._io_acquired
+
+    @property
+    def io_session(self) -> AgentSession:
+        if not self._io_acquired:
+            raise RuntimeError("AgentsConsole is not acquired")
+
+        return self._io_session
+
+    @property
+    def io_loop(self) -> asyncio.AbstractEventLoop:
+        if not self._io_acquired:
+            raise RuntimeError("AgentsConsole is not acquired")
+
+        return self._io_loop
 
     def wait_for_io_acquisition(self) -> None:
         self._io_acquired_event.wait()
@@ -271,7 +307,45 @@ class AgentsConsole:
 
     @console_mode.setter
     def console_mode(self, mode: ConsoleMode) -> None:
-        self._console_mode = mode
+        with self._lock:
+            self._console_mode = mode
+
+            if not self._io_acquired:
+                return
+
+            self.io_loop.call_soon_threadsafe(
+                self._update_sess_io,
+                self.io_session,
+                mode,
+                self._io_audio_input,
+                self._io_audio_output,
+            )
+
+    def _update_sess_io(
+        self,
+        sess: AgentSession,
+        mode: ConsoleMode,
+        audio_input: ConsoleAudioInput,
+        audio_output: ConsoleAudioOutput,
+    ):
+        if asyncio.get_running_loop() != self.io_loop:
+            raise RuntimeError("_update_sess_io must be executed on the io_loop")
+
+        with self._lock:
+            if not self._io_acquired:
+                return
+
+            if self._io_session != sess or self._console_mode != mode:
+                return
+
+            if mode == "text":
+                sess.input.audio = None
+                sess.output.audio = None
+                self._log_handler.addFilter(self._text_mode_log_filter)
+            else:
+                sess.input.audio = audio_input
+                sess.output.audio = audio_output
+                self._log_handler.removeFilter(self._text_mode_log_filter)
 
     def print(self, child: RenderableType, *, tag: str = "", tag_style: Style | None = None):
         self.console.print(self._render_tag(child, tag=tag, tag_style=tag_style))
@@ -521,6 +595,7 @@ class FrequencyVisualizer:
         table = Table.grid(
             Column(width=len(label), no_wrap=True),
             Column(no_wrap=True, overflow="fold"),
+            Column(),
             padding=(0, 0, 0, 0),
             collapse_padding=True,
             pad_edge=False,
@@ -530,7 +605,11 @@ class FrequencyVisualizer:
         label_seg = Text(label, style=style)
 
         bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
-        table.add_row(Group(label_seg), Group(bar))
+        table.add_row(
+            Group(label_seg),
+            Group(bar),
+            Text.from_markup("  [bold]<Ctrl+T>[/bold] Text Mode", style="dim"),
+        )
         return table
 
 
@@ -692,13 +771,12 @@ def _silence_noisy_loggers() -> None:
             logger.setLevel(logging.WARN)
 
 
-def _configure_logger(agents_console: AgentsConsole | None, log_level: int | str) -> None:
+def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
     logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
 
     root = logging.getLogger()
-    if agents_console:
-        rich_handler = RichLoggingHandler(agents_console)
-        root.addHandler(rich_handler)
+    if c:
+        root.addHandler(c._log_handler)
         root.setLevel(log_level)
 
     _silence_noisy_loggers()
@@ -719,6 +797,21 @@ def _configure_logger(agents_console: AgentsConsole | None, log_level: int | str
 
     Plugin.emitter.on("plugin_registered", _configure_plugin_logger)
 
+
+class TextModeLogFilter(logging.Filter):
+    # We don't want to remove the DEBUG logs from the agents codebase since they're useful. But we now have duplicate content when using
+    # the text mode, so we logging.Filer
+    _patterns = [
+        re.compile(r"\bexecuting tool\b", re.IGNORECASE),
+        re.compile(r"\btools execution completed\b", re.IGNORECASE),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "livekit.agents":
+            return True
+
+        msg = record.getMessage()
+        return not any(rx.search(msg) for rx in self._patterns)
 
 
 def _print_audio_devices() -> None:
@@ -751,12 +844,12 @@ def _print_audio_devices() -> None:
 
 
 def prompt(
-    message: str, *, console: Console, key_read_cb: Callable[[str], Any] | None = None
+    message: str | Text, *, console: Console, key_read_cb: Callable[[str], Any] | None = None
 ) -> str:
     buffer: list[str] = []
 
     def render_prompt() -> Text:
-        return Text.assemble((message, "bold"), ("".join(buffer), "bold blue"))
+        return Text.assemble(message, ("".join(buffer), "bold blue"))
 
     with Live(render_prompt(), console=console, transient=True) as live:
         console.show_cursor(True)
@@ -787,6 +880,38 @@ def prompt(
     return "".join(buffer)
 
 
+UpdateFn = Callable[[Optional[str | Text]], None]
+
+
+@contextmanager
+def live_status(
+    console: Console,
+    text: str | Text,
+    *,
+    spinner: str = "line",
+    spinner_style: str = "bold blue",
+    refresh_per_second: int = 12,
+    transient: bool = True,
+) -> Iterator[UpdateFn]:
+    msg: Text = text if isinstance(text, Text) else Text(str(text))
+    spin = Spinner(spinner, style=spinner_style)
+
+    def _render() -> Columns:
+        return Columns([msg, spin], expand=False, equal=False, padding=(0, 1))
+
+    with Live(
+        _render(), console=console, refresh_per_second=refresh_per_second, transient=transient
+    ) as live:
+
+        def update(new_text: Optional[str | Text] = None) -> None:
+            nonlocal msg
+            if new_text is not None:
+                msg = new_text if isinstance(new_text, Text) else Text(str(new_text))
+                live.update(_render())
+
+        yield update
+
+
 def _text_mode(c: AgentsConsole):
     def _key_read(ch: str):
         if ch == key.CTRL_T:
@@ -794,7 +919,11 @@ def _text_mode(c: AgentsConsole):
 
     while True:
         try:
-            text = prompt("  User input: ", console=c.console, key_read_cb=_key_read)
+            text = prompt(
+                Text.from_markup("  [bold]User input[/bold]: "),
+                console=c.console,
+                key_read_cb=_key_read,
+            )
         except KeyboardInterrupt:
             break
 
@@ -802,7 +931,80 @@ def _text_mode(c: AgentsConsole):
             c.console.bell()
             continue
 
-        c.print(text, tag="User")
+        async def _generate() -> list[RunEvent]:
+            sess = await c.io_session.run(user_input=text)
+            return sess.events.copy()
+
+        h = asyncio.run_coroutine_threadsafe(_generate(), loop=c.io_loop)
+        c.print(text, tag="You")
+
+        with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
+            while not h.done():
+                time.sleep(0.1)
+
+        for event in h.result():
+            _print_run_event(c, event)
+
+
+AGENT_PALETTE: list[str] = ["#1FD5F9", "#09C338", "#1F5DF9", "#BA1FF9", "#F9AE1F", "#FA4C39"]
+
+
+def _agent_style(name: str) -> Style:
+    h = hashlib.blake2b(name.encode("utf-8"), digest_size=2).digest()
+    idx = int.from_bytes(h, "big") % len(AGENT_PALETTE)
+    return Style(color=AGENT_PALETTE[idx], bold=True)
+
+
+def _truncate_text(text: str, max_lines: int = 2, width: int = 80) -> str:
+    wrapped = textwrap.wrap(text, width=width)
+
+    if len(wrapped) <= max_lines:
+        return "\n".join(wrapped)
+
+    head_count = max_lines - 2
+    head = wrapped[:head_count]
+    tail = wrapped[-1:]
+
+    return "\n".join(head + ["..."] + tail)
+
+
+def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
+    if event.type == "function_call":
+        c.print(
+            Text.from_markup(
+                f"[bold]{event.item.name}[/bold] [dim](arguments: {event.item.arguments})[/dim]"
+            ),
+            tag="Tool",
+            tag_style=Style.parse("black on #6E9DFE"),
+        )
+    elif event.type == "function_call_output":
+        truncated_output = _truncate_text(event.item.output)
+        c.print(
+            Text.from_markup(f"Tool output: [dim]{event.item.name}\n {truncated_output}[/dim]"),
+            tag="Tool",
+            tag_style=Style.parse("black on #6E9DFE"),
+        )
+    elif event.type == "agent_handoff":
+        old_agent = event.old_agent
+        new_agent = event.new_agent
+
+        old_style = _agent_style(old_agent.__class__.__name__)
+        new_style = _agent_style(new_agent.__class__.__name__)
+        c.print(
+            Text.assemble(
+                Text(f"{old_agent.__class__.__name__}", style=old_style),
+                Text.from_markup(" [dim]->[/dim] "),
+                Text(f"{new_agent.__class__.__name__}", style=new_style),
+            ),
+            tag="Handoff",
+            tag_style=Style.parse("black on #6E9DFE"),
+        )
+
+    elif event.type == "message":
+        if event.item.text_content:
+            c.print(event.item.text_content, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+    else:
+        logger.warning(f"unknown RunEvent type {event.type}")
 
 
 def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None):
@@ -866,7 +1068,7 @@ class _ConsoleWorker:
                     self._shutdown_cb()
                     return
 
-            self._server._job_executor_type = JobExecutorType.THREAD
+            self._server._job_executor_type = JobExecutorType.THREAD  # TODO: better setter
 
             @self._server.once("worker_started")
             def _simulate_job() -> None:

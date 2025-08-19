@@ -19,9 +19,8 @@ from livekit.agents import (
     JobContext,
     RunContext,
     ToolError,
-    WorkerOptions,
+    AgentServer,
     beta,
-    cli,
     function_tool,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -152,7 +151,11 @@ class FrontDeskAgent(Agent):
         return "\n".join(lines) or "No slots available at the moment."
 
 
-async def entrypoint(ctx: JobContext):
+server = AgentServer()
+
+
+@server.realtime_session()
+async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
     timezone = "utc"
@@ -179,7 +182,3 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(agent=FrontDeskAgent(timezone=timezone), room=ctx.room)
-
-
-if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

@@ -430,7 +430,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         "is already set, overriding..."
                     )
 
-                self.input.audio, self.output.audio = c.acquire_io(loop=self._loop)
+                c.acquire_io(loop=self._loop, session=self)
             elif is_given(room) and not self._room_io:
                 room_input_options = copy.copy(
                     room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
@@ -983,10 +983,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._user_state
         self._user_state = state
-        self.emit(
-            "user_state_changed",
-            UserStateChangedEvent(old_state=old_state, new_state=state),
-        )
+        self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         self.emit("user_input_transcribed", ev)
