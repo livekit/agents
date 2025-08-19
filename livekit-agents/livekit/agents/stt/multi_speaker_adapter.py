@@ -152,7 +152,7 @@ class _PrimarySpeakerDetector:
         primary_format: str = "{text}",
         background_format: str = "{text}",
     ):
-        """Multi-speaker diarization handler. It detects the primary speaker based on RMS,
+        """Primary speaker detector. It detects the primary speaker based on RMS,
         formats the primary and background speakers separately, or suppresses the background speaker.
 
         Args:
