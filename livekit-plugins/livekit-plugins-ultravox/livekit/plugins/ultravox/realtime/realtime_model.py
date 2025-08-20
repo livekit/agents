@@ -298,7 +298,7 @@ class RealtimeSession(
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[UltravoxEventType, dict[str, Any]]]()
+        self._msg_ch = utils.aio.Chan[Union[UltravoxEventType, dict[str, Any], bytes]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
@@ -340,7 +340,7 @@ class RealtimeSession(
             # Close old channel before creating new one
             old_ch = self._msg_ch
             old_ch.close()
-            self._msg_ch = utils.aio.Chan[UltravoxEventType]()
+            self._msg_ch = utils.aio.Chan[Union[UltravoxEventType, dict[str, Any], bytes]]()
 
             # Clear pending generation state on restart
             if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -459,9 +459,8 @@ class RealtimeSession(
 
         for resampled_frame in self._resample_audio(frame):
             for audio_frame in self._bstream.write(resampled_frame.data.tobytes()):
-                if self._ws and not self._ws.closed:
-                    # Audio data is sent directly to the WebSocket
-                    asyncio.create_task(self._ws.send_bytes(audio_frame.data.tobytes()))
+                # Send audio data through message channel for proper ordering
+                self._send_audio_bytes(audio_frame.data.tobytes())
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push video frames (not supported by Ultravox)."""
@@ -471,6 +470,11 @@ class RealtimeSession(
         """Send an event to the Ultravox WebSocket."""
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _send_audio_bytes(self, audio_data: bytes) -> None:
+        """Send audio bytes to the Ultravox WebSocket via message channel."""
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._msg_ch.send_nowait(audio_data)
 
     @utils.log_exceptions(logger=logger)
     def generate_reply(
@@ -719,15 +723,24 @@ class RealtimeSession(
                 break
 
             try:
-                if isinstance(msg, dict):
+                if isinstance(msg, bytes):
+                    # Handle binary audio data
+                    self.emit("ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)})
+                    await self._ws.send_bytes(msg)
+                    if lk_ultravox_debug:
+                        logger.info(f">>> [audio bytes: {len(msg)} bytes]")
+                elif isinstance(msg, dict):
                     msg_dict = msg
+                    self.emit("ultravox_client_event_queued", msg_dict)
+                    await self._ws.send_str(json.dumps(msg_dict))
+                    if lk_ultravox_debug:
+                        logger.info(f">>> {msg_dict}")
                 else:
                     msg_dict = serialize_ultravox_event(msg)
-
-                self.emit("ultravox_client_event_queued", msg_dict)
-                await self._ws.send_str(json.dumps(msg_dict))
-                if lk_ultravox_debug:
-                    logger.info(f">>> {msg_dict}")
+                    self.emit("ultravox_client_event_queued", msg_dict)
+                    await self._ws.send_str(json.dumps(msg_dict))
+                    if lk_ultravox_debug:
+                        logger.info(f">>> {msg_dict}")
             except Exception as e:
                 logger.error(f"Error sending message: {e}", exc_info=True)
                 break
