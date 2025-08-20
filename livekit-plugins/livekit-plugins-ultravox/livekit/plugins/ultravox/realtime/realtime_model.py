@@ -136,6 +136,8 @@ class _ResponseGeneration:
     """The timestamp when the generation is completed"""
     _done: bool = False
     """Whether the generation is done (set when the turn is complete)"""
+    output_text: str = ""
+    """Accumulated output text from agent responses"""
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -303,7 +305,7 @@ class RealtimeSession(
 
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._current_generation: _ResponseGeneration | None = None
-        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+        self._chat_ctx = llm.ChatContext.empty()
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
@@ -375,7 +377,7 @@ class RealtimeSession(
             chat_ctx: The updated chat context to inject
         """
         # Compute the diff - only process new/changed items
-        diff_ops = compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
+        diff_ops = compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
         if not diff_ops.to_create:
             logger.debug("[ultravox] No new context items to inject")
@@ -416,17 +418,8 @@ class RealtimeSession(
             # Skip assistant messages (handled by Ultravox)
             # Skip function calls (handled by existing tool mechanism)
 
-        # Update remote context to track what we've sent
-        for previous_msg_id, msg_id in diff_ops.to_create:
-            item = chat_ctx.get_by_id(msg_id)
-            if (
-                item
-                and item.type == "message"
-                and item.role in ("system", "developer", "user")
-                and item.text_content
-            ):
-                # Use previous_msg_id from diff operations for correct ordering
-                self._remote_chat_ctx.insert(previous_msg_id, item)
+        # Update local chat context
+        self._chat_ctx = chat_ctx.copy()
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         """Update the available tools."""
@@ -453,7 +446,7 @@ class RealtimeSession(
     @property
     def chat_ctx(self) -> llm.ChatContext:
         """Get the current chat context."""
-        return self._remote_chat_ctx.to_chat_ctx()
+        return self._chat_ctx.copy()
 
     @property
     def tools(self) -> llm.ToolContext:
@@ -821,6 +814,14 @@ class RealtimeSession(
         gen.message_ch.close()
         gen._done = True
 
+        # Append assistant message to local chat context
+        if gen.output_text:
+            self._chat_ctx.add_message(
+                role="assistant",
+                content=gen.output_text,
+                id=gen.response_id,
+            )
+
         # Emit metrics for interrupted/completed generation
         self._emit_generation_metrics(interrupted=True)
 
@@ -855,6 +856,13 @@ class RealtimeSession(
         self._last_seen_ordinal = event.ordinal
 
         if event.role == "user":
+            if event.final and event.text:
+                # Keep local chat history in sync (append-only)
+                self._chat_ctx.add_message(
+                    role="user",
+                    content=event.text,
+                    id=f"msg_{event.ordinal}",
+                )
             # User transcription - emit input_audio_transcription_completed when final
             if event.final:
                 self.emit(
@@ -900,6 +908,7 @@ class RealtimeSession(
                         self._pending_generation_epoch = None
 
                 msg_gen.text_ch.send_nowait(event.delta)
+                msg_gen.output_text += event.delta
 
             # Handle final transcript
             if event.final:
