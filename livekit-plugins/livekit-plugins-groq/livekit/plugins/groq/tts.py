@@ -134,10 +134,10 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
             async with self._tts._ensure_session().post(

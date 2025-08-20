@@ -17,10 +17,11 @@
 See https://docs.livekit.io/agents/integrations/tts/cartesia/ for more information.
 """
 
+from .stt import STT
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "__version__"]
+__all__ = ["STT", "TTS", "ChunkedStream", "__version__"]
 
 from livekit.agents import Plugin
 
@@ -28,7 +29,7 @@ from .log import logger
 
 
 class CartesiaPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 

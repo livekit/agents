@@ -204,7 +204,6 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
                     asyncio.create_task(self._keepalive_task()),
-                    asyncio.create_task(self._finalize_if_no_tokens_task()),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
@@ -407,34 +406,3 @@ class SpeechStream(stt.SpeechStream):
                 logger.error(f"WebSocket error while receiving: {e}")
             except Exception as e:
                 logger.error(f"Unexpected error while receiving messages: {e}")
-
-    async def _finalize_if_no_tokens_task(self):
-        """Call finalize if no new tokens are received for a configured duration."""
-        if not self._ws or self._stt._params.auto_finalize_delay_ms is None:
-            return
-
-        try:
-            while True:
-                await asyncio.sleep(0.5)
-
-                if not self._ws:
-                    break
-
-                # Check if we have anything in queue to send.
-                if not self.audio_queue.empty():
-                    continue
-
-                # Check if enough time has passed since the last tokens were received.
-                if self._last_tokens_received:
-                    last_token_age_ms = (time.time() - self._last_tokens_received) * 1000
-
-                    if last_token_age_ms > self._stt._params.auto_finalize_delay_ms:
-                        # No new tokens received for a while, finalize the transcription.
-                        logger.debug("No pending frames, sending finalize message")
-                        self.audio_queue.put_nowait(FINALIZE_MESSAGE)
-                        self._last_tokens_received = None
-        except aiohttp.ClientConnectionError:
-            # Expected when closing the connection.
-            pass
-        except Exception as e:
-            logger.error(f"Error in _finalize_if_no_tokens_task_handler: {e}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import time
 import uuid
 from typing import TypeVar
@@ -21,3 +22,7 @@ def shortuuid(prefix: str = "") -> str:
 
 def is_given(obj: NotGivenOr[_T]) -> TypeGuard[_T]:
     return not isinstance(obj, NotGiven)
+
+
+def nodename() -> str:
+    return platform.node()

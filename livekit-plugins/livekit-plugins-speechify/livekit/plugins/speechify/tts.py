@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, replace
+from typing import cast
 
 import aiohttp
 
@@ -132,7 +133,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
-            voice_id=voice_id,
+            voice_id=voice_id or DEFAULT_VOICE_ID,
             language=language,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             token=speechify_token,
@@ -154,7 +155,7 @@ class TTS(tts.TTS):
         async with self._ensure_session().get(
             f"{self._opts.base_url}/voices", headers=_get_headers(self._opts.token)
         ) as resp:
-            return await resp.json()
+            return await resp.json()  # type: ignore
 
     def update_options(
         self,
@@ -172,7 +173,7 @@ class TTS(tts.TTS):
             language (NotGivenOr[str]): Language code for the TTS model.
         """
         if is_given(model):
-            self._opts.model = model
+            self._opts.model = cast(TTSModels, model)
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(language):
@@ -196,10 +197,10 @@ class ChunkedStream(tts.ChunkedStream):
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         data = {
             "input": self._input_text,
             "voice_id": self._opts.voice_id,
@@ -236,8 +237,8 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{_audio_format_from_encoding(self._opts.encoding)}",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+                async for chunk, _ in resp.content.iter_chunks():
+                    output_emitter.push(chunk)
 
                 output_emitter.flush()
 

@@ -8,8 +8,17 @@ from .base import EOUModelBase, _EUORunnerBase
 class _EUORunnerEn(_EUORunnerBase):
     INFERENCE_METHOD = "lk_end_of_utterance_en"
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("en")
+
+    def _normalize_text(self, text: str) -> str:
+        """
+        The english model is trained on the original chat context without normalization.
+        """
+        if not text:
+            return ""
+
+        return text
 
 
 class EnglishModel(EOUModelBase):

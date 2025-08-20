@@ -68,6 +68,7 @@ class AvatarRunner:
             video_queue_size_ms=self._queue_size_ms,
         )
         self._forward_video_atask: asyncio.Task[None] | None = None
+        self._room_connected_fut = asyncio.Future[None]()
 
     @property
     def av_sync(self) -> rtc.AVSynchronizer:
@@ -80,6 +81,11 @@ class AvatarRunner:
         await self._audio_recv.start()
         self._audio_recv.on("clear_buffer", self._on_clear_buffer)
 
+        self._room.on("reconnected", self._on_reconnected)
+        self._room.on("connection_state_changed", self._on_connection_state_changed)
+        if self._room.isconnected():
+            self._room_connected_fut.set_result(None)
+
         if not self._lazy_publish:
             await self._publish_track()
 
@@ -87,24 +93,30 @@ class AvatarRunner:
         self._read_audio_atask = asyncio.create_task(self._read_audio())
         self._forward_video_atask = asyncio.create_task(self._forward_video())
 
-        self._room.on("reconnected", self._on_reconnected)
+    async def wait_for_complete(self) -> None:
+        if not self._read_audio_atask or not self._forward_video_atask:
+            raise RuntimeError("AvatarRunner not started")
+
+        await asyncio.gather(
+            self._read_audio_atask,
+            self._forward_video_atask,
+        )
 
     async def _publish_track(self) -> None:
         async with self._lock:
+            await self._room_connected_fut
+
             audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
-            video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
             audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-            video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
             self._audio_publication = await self._room.local_participant.publish_track(
                 audio_track, audio_options
             )
+            await self._audio_publication.wait_for_subscription()
+
+            video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
+            video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
             self._video_publication = await self._room.local_participant.publish_track(
                 video_track, video_options
-            )
-
-            await asyncio.gather(
-                self._audio_publication.wait_for_subscription(),
-                self._video_publication.wait_for_subscription(),
             )
 
     @log_exceptions(logger=logger)
@@ -119,9 +131,6 @@ class AvatarRunner:
         """Forward video to the room through the AV synchronizer"""
 
         async for frame in self._video_gen:
-            if not self._video_publication:
-                await self._publish_track()
-
             if isinstance(frame, AudioSegmentEnd):
                 # notify the agent that the audio has finished playing
                 if self._audio_playing:
@@ -132,8 +141,14 @@ class AvatarRunner:
                     self._audio_playing = False
                     self._playback_position = 0.0
                     if asyncio.iscoroutine(notify_task):
-                        await notify_task
+                        # avoid blocking the video forwarding
+                        task = asyncio.create_task(notify_task)
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
                 continue
+
+            if not self._video_publication:
+                await self._publish_track()
 
             await self._av_sync.push(frame)
             if isinstance(frame, rtc.AudioFrame):
@@ -170,9 +185,15 @@ class AvatarRunner:
             self._republish_atask.cancel()
         self._republish_atask = asyncio.create_task(self._publish_track())
 
+    def _on_connection_state_changed(self, _: rtc.ConnectionState) -> None:
+        if self._room.isconnected() and not self._room_connected_fut.done():
+            self._room_connected_fut.set_result(None)
+
     async def aclose(self) -> None:
         self._room.off("reconnected", self._on_reconnected)
+        self._room.off("connection_state_changed", self._on_connection_state_changed)
 
+        await self._audio_recv.aclose()
         if self._forward_video_atask:
             await aio.cancel_and_wait(self._forward_video_atask)
         if self._read_audio_atask:

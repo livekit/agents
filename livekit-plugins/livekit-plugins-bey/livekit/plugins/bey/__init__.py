@@ -14,7 +14,7 @@
 
 """Bey plugin for LiveKit Agents
 
-See https://docs.livekit.io/integrations/avatar/bey/ for more information.
+See https://docs.livekit.io/agents/integrations/avatar/bey/ for more information.
 """
 
 from .avatar import AvatarSession, BeyException

@@ -58,11 +58,15 @@ from .version import __version__
 from .voice import (
     Agent,
     AgentEvent,
+    AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
     RunContext,
@@ -72,8 +76,20 @@ from .voice import (
     avatar,
     io,
 )
-from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
+from .voice.run_result import (
+    AgentHandoffEvent,
+    ChatMessageEvent,
+    EventAssert,
+    EventRangeAssert,
+    FunctionCallEvent,
+    FunctionCallOutputEvent,
+    RunAssert,
+    RunEvent,
+    RunResult,
+    mock_tools,
+)
 from .worker import (
     SimulateJobInfo,
     Worker,
@@ -117,14 +133,17 @@ __all__ = [
     "ChatMessage",
     "ChatRole",
     "ChatContent",
+    "CloseReason",
     "ErrorEvent",
     "CloseEvent",
     "ConversationItemAddedEvent",
     "AgentStateChangedEvent",
+    "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
     "MetricsCollectedEvent",
+    "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
     "StopResponse",
@@ -135,6 +154,7 @@ __all__ = [
     "AgentEvent",
     "ModelSettings",
     "Agent",
+    "AgentTask",
     "AssignmentTimeoutError",
     "APIConnectionError",
     "APIError",
@@ -148,6 +168,7 @@ __all__ = [
     "BackgroundAudioPlayer",
     "BuiltinAudioClip",
     "AudioConfig",
+    "PlayHandle",
     "SimulateJobInfo",
     "io",
     "avatar",
@@ -161,6 +182,17 @@ __all__ = [
     "utils",
     "vad",
     "voice",
+    # run_result
+    "mock_tools",
+    "EventAssert",
+    "EventRangeAssert",
+    "RunAssert",
+    "RunResult",
+    "RunEvent",
+    "ChatMessageEvent",
+    "FunctionCallEvent",
+    "FunctionCallOutputEvent",
+    "AgentHandoffEvent",
 ]
 
 # Cleanup docs of unexported modules

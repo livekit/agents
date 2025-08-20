@@ -1,8 +1,13 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import anthropic
 from livekit.agents import llm
-from livekit.agents.llm import FunctionTool
+from livekit.agents.llm import FunctionTool, RawFunctionTool
+from livekit.agents.llm.tool_context import (
+    get_raw_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 
 # We can define up to 4 cache breakpoints, we will add them at:
 # - the last tool definition
@@ -16,7 +21,7 @@ __all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
 
 
 def to_fnc_ctx(
-    fncs: list[FunctionTool], caching: Optional[Literal["ephemeral"]]
+    fncs: list[Union[FunctionTool, RawFunctionTool]], caching: Optional[Literal["ephemeral"]]
 ) -> list[anthropic.types.ToolParam]:
     tools: list[anthropic.types.ToolParam] = []
     for fnc in fncs:
@@ -28,10 +33,22 @@ def to_fnc_ctx(
     return tools
 
 
-def _build_anthropic_schema(function_tool: FunctionTool) -> anthropic.types.ToolParam:
-    fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
-    return anthropic.types.ToolParam(
-        name=fnc["name"],
-        description=fnc["description"] or "",
-        input_schema=fnc["parameters"],
-    )
+def _build_anthropic_schema(
+    function_tool: Union[FunctionTool, RawFunctionTool],
+) -> anthropic.types.ToolParam:
+    if is_function_tool(function_tool):
+        fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
+        return anthropic.types.ToolParam(
+            name=fnc["name"],
+            description=fnc["description"] or "",
+            input_schema=fnc["parameters"],
+        )
+    elif is_raw_function_tool(function_tool):
+        info = get_raw_function_info(function_tool)
+        return anthropic.types.ToolParam(
+            name=info.name,
+            description=info.raw_schema.get("description", ""),
+            input_schema=info.raw_schema.get("parameters", {}),
+        )
+    else:
+        raise ValueError("Invalid function tool")

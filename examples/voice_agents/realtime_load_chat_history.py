@@ -13,8 +13,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     chat_history = [
         {
             "role": "assistant",
@@ -41,12 +39,17 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     agent = Agent(
         instructions="You are a helpful travel planner.",
-        llm=openai.realtime.RealtimeModel(),
+        llm=openai.realtime.RealtimeModel(voice="alloy", model="gpt-4o-mini-realtime-preview"),
+        # OpenAI realtime API may response in only text when text-based chat context is loaded
+        # we will use the TTS model to generate audio output as fallback if this happens
+        # more details about this issue: https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
+        tts=openai.TTS(voice="alloy"),
         chat_ctx=chat_ctx,
     )
 
     await session.start(agent=agent, room=ctx.room)
 
+    logger.info("Generating reply...")
     session.interrupt()
     session.generate_reply()
 

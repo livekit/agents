@@ -40,7 +40,6 @@ from .log import logger
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
 DEFAULT_VOICE_UUID = "55592656"
-BUFFERED_WORDS_COUNT = 3
 
 
 @dataclass
@@ -89,7 +88,7 @@ class TTS(tts.TTS):
         self._api_key = api_key
 
         if tokenizer is None:
-            tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
+            tokenizer = tokenize.blingfire.SentenceTokenizer()
 
         if voice_uuid is None:
             voice_uuid = DEFAULT_VOICE_UUID
@@ -116,7 +115,7 @@ class TTS(tts.TTS):
             timeout,
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -166,10 +165,10 @@ class ChunkedStream(tts.ChunkedStream):
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
                 RESEMBLE_REST_API_URL,
@@ -233,11 +232,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -247,7 +246,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/mp3",
         )
 
-        async def _tokenize_input():
+        async def _tokenize_input() -> None:
             """tokenize text from the input_ch to words"""
             input_stream = None
             async for text in self._input_ch:
@@ -267,7 +266,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        async def _process_segments():
+        async def _process_segments() -> None:
             async for input_stream in self._segments_ch:
                 await self._run_ws(input_stream, output_emitter)
 
@@ -297,7 +296,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         last_index = 0
         input_ended = False
 
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal input_ended, last_index
             async for data in input_stream:
                 last_index += 1
@@ -314,7 +313,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             input_ended = True
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws.receive()
                 if msg.type in (

@@ -17,9 +17,11 @@ from livekit.plugins import (
     deepgram,
     fal,
     google,
+    mistralai,
     openai,
     silero,
     speechmatics,
+    spitch,
 )
 
 from .utils import make_test_speech, wer
@@ -39,6 +41,7 @@ RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
     #     id="google.chirp_2",
     # ),
     pytest.param(lambda: openai.STT(), id="openai"),
+    pytest.param(lambda: mistralai.STT(), id="mistralai"),
     pytest.param(lambda: fal.WizperSTT(), id="fal"),
 ]
 
@@ -85,6 +88,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     ),
     pytest.param(lambda: azure.STT(), id="azure"),
     pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
+    pytest.param(lambda: spitch.STT(), id="spitch"),
 ]
 
 

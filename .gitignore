@@ -146,6 +146,9 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# trunk
+.trunk/
+
 # Pyre type checker
 .pyre/
 
@@ -167,3 +170,6 @@ node_modules
 credentials.json
 pyrightconfig.json
 docs/
+
+# Database files
+*.db

@@ -17,18 +17,72 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 
+from .log import logger
+from .tools import _LLMTool
+
 __all__ = ["to_fnc_ctx"]
 
 
-def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.FunctionDeclaration]:
+def to_fnc_ctx(
+    fncs: list[FunctionTool | RawFunctionTool], *, use_parameters_json_schema: bool = True
+) -> list[types.FunctionDeclaration]:
     tools: list[types.FunctionDeclaration] = []
     for fnc in fncs:
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
-            tools.append(types.FunctionDeclaration(**info.raw_schema))
+            fnc_kwargs = {
+                "name": info.name,
+                "description": info.raw_schema.get("description", ""),
+            }
+            if use_parameters_json_schema:
+                fnc_kwargs["parameters_json_schema"] = info.raw_schema.get("parameters", {})
+            else:
+                # https://github.com/googleapis/python-genai/issues/1147
+                fnc_kwargs["parameters"] = types.Schema.from_json_schema(
+                    json_schema=types.JSONSchema.model_validate(
+                        info.raw_schema.get("parameters", {})
+                    )
+                )
+            tools.append(types.FunctionDeclaration(**fnc_kwargs))
 
         elif is_function_tool(fnc):
             tools.append(_build_gemini_fnc(fnc))
+
+    return tools
+
+
+def create_tools_config(
+    *,
+    function_tools: list[types.FunctionDeclaration] | None = None,
+    gemini_tools: list[_LLMTool] | None = None,
+) -> list[types.Tool]:
+    tools: list[types.Tool] = []
+
+    if function_tools:
+        tools.append(types.Tool(function_declarations=function_tools))
+
+    if gemini_tools:
+        for tool in gemini_tools:
+            if isinstance(tool, types.GoogleSearchRetrieval):
+                tools.append(types.Tool(google_search_retrieval=tool))
+            elif isinstance(tool, types.ToolCodeExecution):
+                tools.append(types.Tool(code_execution=tool))
+            elif isinstance(tool, types.GoogleSearch):
+                tools.append(types.Tool(google_search=tool))
+            elif isinstance(tool, types.UrlContext):
+                tools.append(types.Tool(url_context=tool))
+            elif isinstance(tool, types.GoogleMaps):
+                tools.append(types.Tool(google_maps=tool))
+            else:
+                logger.warning(f"Warning: Received unhandled tool type: {type(tool)}")
+                continue
+
+    if len(tools) > 1:
+        # https://github.com/google/adk-python/issues/53#issuecomment-2799538041
+        logger.warning(
+            "Multiple kinds of tools are not supported in Gemini. Only the first tool will be used."
+        )
+        tools = tools[:1]
 
     return tools
 
@@ -61,7 +115,7 @@ def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
-        parameters=json_schema,
+        parameters=types.Schema.model_validate(json_schema) if json_schema else None,
     )
 
 

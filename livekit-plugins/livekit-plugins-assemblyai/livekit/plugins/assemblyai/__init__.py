@@ -30,8 +30,8 @@ from livekit.agents import Plugin
 
 
 class AssemblyAIPlugin(Plugin):
-    def __init__(self):
-        super().__init__(__name__, __version__, __package__)
+    def __init__(self) -> None:
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(AssemblyAIPlugin())

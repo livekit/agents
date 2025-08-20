@@ -16,12 +16,17 @@ from __future__ import annotations
 
 import asyncio
 import weakref
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
-from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
+from google.cloud.texttospeech_v1.types import (
+    CustomPronunciations,
+    SsmlVoiceGender,
+    SynthesizeSpeechResponse,
+)
 from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, tokenize, tts, utils
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -29,7 +34,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import Gender, SpeechLanguages
 
-BUFFERED_WORDS_COUNT = 8
 NUM_CHANNELS = 1
 DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
 DEFAULT_LANGUAGE = "en-US"
@@ -45,6 +49,9 @@ class _TTSOptions:
     effects_profile_id: str
     speaking_rate: float
     tokenizer: tokenize.SentenceTokenizer
+    volume_gain_db: float
+    custom_pronunciations: CustomPronunciations | None
+    enable_ssml: bool
 
 
 class TTS(tts.TTS):
@@ -54,16 +61,20 @@ class TTS(tts.TTS):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
+        voice_cloning_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
+        volume_gain_db: float = 0.0,
         location: str = "global",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.LINEAR16,
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.OGG_OPUS,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
+        enable_ssml: bool = False,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -76,21 +87,28 @@ class TTS(tts.TTS):
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
             effects_profile_id (str): Optional identifier for selecting audio effects profiles to apply to the synthesized speech.
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
+            volume_gain_db (float, optional): Volume gain in decibels. Default is 0.0. In the range [-96.0, 16.0]. Strongly recommended not to exceed +10 (dB).
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
+            custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
+            enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        if enable_ssml and use_streaming:
+            raise ValueError("SSML support is not available for streaming synthesis")
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
@@ -99,15 +117,22 @@ class TTS(tts.TTS):
 
         lang = language if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
-        name = DEFAULT_VOICE_NAME if not is_given(voice_name) else voice_name
 
         voice_params = texttospeech.VoiceSelectionParams(
-            name=name,
             language_code=lang,
             ssml_gender=ssml_gender,
         )
+        if is_given(voice_cloning_key):
+            voice_params.voice_clone = texttospeech.VoiceCloneParams(
+                voice_cloning_key=voice_cloning_key,
+            )
+        else:
+            voice_params.name = voice_name if is_given(voice_name) else DEFAULT_VOICE_NAME
+
         if not is_given(tokenizer):
-            tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
+            tokenizer = tokenize.blingfire.SentenceTokenizer()
+
+        pronunciations = None if not is_given(custom_pronunciations) else custom_pronunciations
 
         self._opts = _TTSOptions(
             voice=voice_params,
@@ -117,6 +142,9 @@ class TTS(tts.TTS):
             effects_profile_id=effects_profile_id,
             speaking_rate=speaking_rate,
             tokenizer=tokenizer,
+            volume_gain_db=volume_gain_db,
+            custom_pronunciations=pronunciations,
+            enable_ssml=enable_ssml,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -127,6 +155,7 @@ class TTS(tts.TTS):
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
+        volume_gain_db: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -136,6 +165,7 @@ class TTS(tts.TTS):
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral").
             voice_name (str, optional): Specific voice name.
             speaking_rate (float, optional): Speed of speech.
+            volume_gain_db (float, optional): Volume gain in decibels.
         """
         params = {}
         if is_given(language):
@@ -150,6 +180,8 @@ class TTS(tts.TTS):
 
         if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
+        if is_given(volume_gain_db):
+            self._opts.volume_gain_db = volume_gain_db
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         api_endpoint = "texttospeech.googleapis.com"
@@ -195,13 +227,30 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    def _build_ssml(self) -> str:
+        ssml = "<speak>"
+        ssml += self._input_text
+        ssml += "</speak>"
+        return ssml
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            input = (
+                texttospeech.SynthesisInput(
+                    ssml=self._build_ssml(),
+                    custom_pronunciations=self._opts.custom_pronunciations,
+                )
+                if self._opts.enable_ssml
+                else texttospeech.SynthesisInput(
+                    text=self._input_text,
+                    custom_pronunciations=self._opts.custom_pronunciations,
+                )
+            )
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
-                input=texttospeech.SynthesisInput(text=self._input_text),
+                input=input,
                 voice=self._opts.voice,
                 audio_config=texttospeech.AudioConfig(
                     audio_encoding=self._opts.encoding,
@@ -209,6 +258,7 @@ class ChunkedStream(tts.ChunkedStream):
                     pitch=self._opts.pitch,
                     effects_profile_id=self._opts.effects_profile_id,
                     speaking_rate=self._opts.speaking_rate,
+                    volume_gain_db=self._opts.volume_gain_db,
                 ),
                 timeout=self._conn_options.timeout,
             )
@@ -230,11 +280,11 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
             enc_name = texttospeech.AudioEncoding._member_names_[encoding]
@@ -242,7 +292,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 f"encoding {enc_name} isn't supported by the streaming_synthesize, "
                 "fallbacking to PCM"
             )
-            encoding = texttospeech.AudioEncoding.PCM
+            encoding = texttospeech.AudioEncoding.PCM  # type: ignore
 
         output_emitter.initialize(
             request_id=utils.shortuuid(),
@@ -255,11 +305,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         streaming_config = texttospeech.StreamingSynthesizeConfig(
             voice=self._opts.voice,
             streaming_audio_config=texttospeech.StreamingAudioConfig(
-                audio_encoding=encoding, sample_rate_hertz=self._opts.sample_rate
+                audio_encoding=encoding,
+                sample_rate_hertz=self._opts.sample_rate,
+                speaking_rate=self._opts.speaking_rate,
             ),
+            custom_pronunciations=self._opts.custom_pronunciations,
         )
 
-        async def _tokenize_input():
+        async def _tokenize_input() -> None:
             input_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
@@ -274,7 +327,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        async def _run_segments():
+        async def _run_segments() -> None:
             async for input_stream in self._segments_ch:
                 await self._run_stream(input_stream, output_emitter, streaming_config)
 
@@ -289,12 +342,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_stream(
         self,
-        input_stream,
+        input_stream: tokenize.SentenceStream,
         output_emitter: tts.AudioEmitter,
         streaming_config: texttospeech.StreamingSynthesizeConfig,
-    ):
+    ) -> None:
         @utils.log_exceptions(logger=logger)
-        async def input_generator():
+        async def input_generator() -> AsyncGenerator[
+            texttospeech.StreamingSynthesizeRequest, None
+        ]:
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 
@@ -337,7 +392,7 @@ def _gender_from_str(gender: str) -> SsmlVoiceGender:
     return ssml_gender  # type: ignore
 
 
-def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding):
+def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
     if encoding == texttospeech.AudioEncoding.PCM:
         return "audio/pcm"
     elif encoding == texttospeech.AudioEncoding.LINEAR16:

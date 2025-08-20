@@ -44,4 +44,4 @@ This example integrates BitHuman directly within the agent worker process:
 - The BitHuman SDK processes the audio to generate realistic animations
 - Synchronized audio and video are published to the LiveKit room
 
-For more information about BitHuman SDK, refer to the [official documentation](https://docs.bithuman.io/api-reference/sdk/quick-start).
+For more information about BitHuman SDK, refer to the [official documentation](https://docs.bithuman.ai/#/).

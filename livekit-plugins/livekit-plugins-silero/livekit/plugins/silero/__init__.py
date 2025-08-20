@@ -14,7 +14,7 @@
 
 """Silero VAD plugin for LiveKit Agents
 
-See https://docs.livekit.io/build/turns/vad/ for more information.
+See https://docs.livekit.io/agents/build/turns/vad/ for more information.
 """
 
 from .vad import VAD, VADStream
@@ -28,7 +28,7 @@ from .log import logger
 
 
 class SileroPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 

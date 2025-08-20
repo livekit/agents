@@ -31,6 +31,7 @@ from .realtime import (
     RealtimeModel,
     RealtimeModelError,
     RealtimeSession,
+    RealtimeSessionReconnectedEvent,
 )
 from .tool_context import (
     FunctionTool,
@@ -85,6 +86,8 @@ __all__ = [
     "InputSpeechStoppedEvent",
     "GenerationCreatedEvent",
     "MessageGeneration",
+    "RealtimeSessionReconnectedEvent",
+    "RealtimeSessionRestoredEvent",
     "LLMError",
 ]
 

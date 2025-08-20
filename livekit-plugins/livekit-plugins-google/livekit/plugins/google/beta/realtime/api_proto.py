@@ -9,11 +9,12 @@ LiveAPIModels = Literal[
     "gemini-2.0-flash-exp",
     # models supported on Gemini API
     "gemini-2.0-flash-live-001",
+    "gemini-live-2.5-flash-preview",
     "gemini-2.5-flash-preview-native-audio-dialog",
     "gemini-2.5-flash-exp-native-audio-thinking-dialog",
 ]
 
-Voice = Literal["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Oru", "Zephyr"]
+Voice = Literal["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"]
 
 
 ClientEvents = Union[

@@ -83,7 +83,7 @@ class ProsodyConfig:
                 "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
             )
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.validate()
 
 
@@ -96,7 +96,7 @@ class StyleConfig:
         if self.degree is not None and not 0.1 <= self.degree <= 2.0:
             raise ValueError("Style degree must be between 0.1 and 2.0")
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.validate()
 
 
@@ -223,7 +223,7 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     def _build_ssml(self) -> str:
@@ -255,7 +255,7 @@ class ChunkedStream(tts.ChunkedStream):
         ssml += "</voice></speak>"
         return ssml
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         headers = {
             "Content-Type": "application/ssml+xml",
             "X-Microsoft-OutputFormat": SUPPORTED_OUTPUT_FORMATS[self._opts.sample_rate],
