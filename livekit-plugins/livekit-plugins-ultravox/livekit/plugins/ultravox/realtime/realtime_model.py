@@ -425,12 +425,10 @@ class RealtimeSession(
         """Update the available tools."""
         # Get current and new tool names for comparison
         current_tool_names = set(self._tools.function_tools.keys())
-        new_tool_names = {
-            tool.name for tool in tools if hasattr(tool, "name") and tool.name is not None
-        }
 
         # Always update the tools
         self._tools.update_tools(tools)
+        new_tool_names = set(self._tools.function_tools.keys())
 
         # Restart session only if tool set actually changed
         if current_tool_names != new_tool_names:
