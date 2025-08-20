@@ -52,6 +52,10 @@ class InputTextMessageEvent(UltravoxEvent):
 
     type: Literal["input_text_message"] = "input_text_message"
     text: str = Field(..., description="The content of the user message")
+    urgency: Literal["immediate", "soon", "later"] | None = Field(
+        None,
+        description="Message urgency level - immediate for barge-in, later for context updates",
+    )
     defer_response: bool | None = Field(
         None,
         alias="deferResponse",
