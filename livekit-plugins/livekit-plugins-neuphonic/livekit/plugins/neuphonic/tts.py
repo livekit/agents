@@ -20,8 +20,8 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-import aiohttp
 
+import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -157,7 +157,7 @@ class TTS(tts.TTS):
         """
         Update the Text-to-Speech (TTS) configuration options.
 
-        This method allows updating the TTS settings, including lang_code, voice_id, and speed.
+        This allows updating the TTS settings, including lang_code, voice_id, and speed.
         If any parameter is not provided, the existing value will be retained.
 
         Args:
@@ -282,7 +282,8 @@ def _parse_sse_message(message: str) -> dict | None:
 
     if message_dict.get("errors") is not None:
         raise Exception(
-            f"received error status {message_dict['status_code']}: {message_dict['errors']}"
+            f"received error status {message_dict['status_code']}:"
+            f"{message_dict['errors']}"
         )
 
     return message_dict
