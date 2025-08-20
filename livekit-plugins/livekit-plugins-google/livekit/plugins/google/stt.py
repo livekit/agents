@@ -563,8 +563,8 @@ def _recognize_response_to_speech_event(
 
     # not sure why start_offset and end_offset returns a timedelta
     try:
-        start_time = resp.results[0].alternatives[0].words[0].start_offset.total_seconds()
-        end_time = resp.results[-1].alternatives[0].words[-1].end_offset.total_seconds()
+        start_time = resp.results[0].alternatives[0].words[0].start_offset.total_seconds()  # type: ignore
+        end_time = resp.results[-1].alternatives[0].words[-1].end_offset.total_seconds()  # type: ignore
     except IndexError:
         start_time = end_time = 0
 
