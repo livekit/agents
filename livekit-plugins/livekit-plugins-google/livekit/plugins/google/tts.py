@@ -124,7 +124,7 @@ class TTS(tts.TTS):
         )
         if is_given(voice_cloning_key):
             voice_params.voice_clone = texttospeech.VoiceCloneParams(
-                voice_clone_key=voice_cloning_key,
+                voice_cloning_key=voice_cloning_key,
             )
         else:
             voice_params.name = voice_name if is_given(voice_name) else DEFAULT_VOICE_NAME
