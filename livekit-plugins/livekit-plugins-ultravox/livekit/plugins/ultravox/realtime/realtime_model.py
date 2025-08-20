@@ -362,17 +362,6 @@ class RealtimeSession(
         if is_given(tool_choice):
             logger.warning("Ultravox does not support dynamic tool choice updates")
 
-    def _safe_text_content(self, item: llm.ChatItem) -> str | None:
-        """Safely extract text content from a chat item.
-
-        Returns None if no valid text content is found.
-        """
-        if hasattr(item, "text_content") and item.text_content:
-            return item.text_content
-        elif item.content:
-            return str(item.content) if item.content else None
-        return None
-
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Update chat context using Ultravox deferred messages.
 
@@ -405,26 +394,24 @@ class RealtimeSession(
             if not item:
                 continue
 
-            if item.role in ("system", "developer"):
-                # System and developer messages become deferred instructions
-                content_text = self._safe_text_content(item)
-                if content_text:
+            if item.type == "message" and item.role in ("system", "developer"):
+                if item.text_content:
                     logger.debug(
-                        f"[ultravox] Injecting {item.role} instruction: {content_text[:100]}..."
+                        f"[ultravox] Injecting {item.role} instruction: {item.text_content[:100]}..."
                     )
                     self._send_client_event(
                         InputTextMessageEvent(
-                            text=f"<instruction>{content_text}</instruction>", defer_response=True
+                            text=f"<instruction>{item.text_content}</instruction>",
+                            defer_response=True,
                         )
                     )
 
-            elif item.role == "user":
+            elif item.type == "message" and item.role == "user":
                 # User messages sent normally
-                content_text = self._safe_text_content(item)
-                if content_text:
-                    logger.debug(f"[ultravox] Injecting user message: {content_text[:100]}...")
+                if item.text_content:
+                    logger.debug(f"[ultravox] Injecting user message: {item.text_content[:100]}...")
                     self._send_client_event(
-                        InputTextMessageEvent(text=content_text, defer_response=False)
+                        InputTextMessageEvent(text=item.text_content, defer_response=False)
                     )
             # Skip assistant messages (handled by Ultravox)
             # Skip function calls (handled by existing tool mechanism)
@@ -434,8 +421,9 @@ class RealtimeSession(
             item = chat_ctx.get_by_id(msg_id)
             if (
                 item
+                and item.type == "message"
                 and item.role in ("system", "developer", "user")
-                and self._safe_text_content(item)
+                and item.text_content
             ):
                 # Use previous_msg_id from diff operations for correct ordering
                 self._remote_chat_ctx.insert(previous_msg_id, item)
@@ -556,7 +544,6 @@ class RealtimeSession(
         *,
         message_id: str,
         audio_end_ms: int,
-        modalities: list[Literal["text", "audio"]],
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Ultravox has no server-side truncate; we simply ignore the request."""
@@ -805,15 +792,11 @@ class RealtimeSession(
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             _created_timestamp=time.perf_counter(),
         )
-        modalities_future = asyncio.Future()
-        modalities_future.set_result(["text", "audio"])
-
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
                 text_stream=self._current_generation.text_ch,
                 audio_stream=self._current_generation.audio_ch,
-                modalities=modalities_future,
             )
         )
         generation_ev = llm.GenerationCreatedEvent(
@@ -1164,14 +1147,11 @@ class RealtimeSession(
                 self._current_generation.audio_ch.close()
                 # Create new audio channel for continued streaming
                 self._current_generation.audio_ch = utils.aio.Chan[rtc.AudioFrame]()
-                modalities_future = asyncio.Future()
-                modalities_future.set_result(["text", "audio"])
                 self._current_generation.message_ch.send_nowait(
                     llm.MessageGeneration(
                         message_id=self._current_generation.response_id,
                         text_stream=self._current_generation.text_ch,
                         audio_stream=self._current_generation.audio_ch,
-                        modalities=modalities_future,
                     )
                 )
 
