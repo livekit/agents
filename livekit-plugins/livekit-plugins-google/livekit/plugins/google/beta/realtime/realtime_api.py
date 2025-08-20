@@ -708,7 +708,7 @@ class RealtimeSession(llm.RealtimeSession):
                             # reset the flag and still start a new generation in case it has any other content
                             response.server_content.interrupted = False
 
-                        if response.server_content or response.tool_call:
+                        if self._is_new_generation(response):
                             self._start_new_generation()
 
                     if response.session_resumption_update:
@@ -1091,3 +1091,16 @@ class RealtimeSession(llm.RealtimeSession):
                 recoverable=recoverable,
             ),
         )
+
+    def _is_new_generation(self, resp: types.LiveServerMessage) -> bool:
+        if resp.tool_call:
+            return True
+
+        if (sc := resp.server_content) and (
+            sc.model_turn
+            or (sc.output_transcription and sc.output_transcription.text is not None)
+            or (sc.input_transcription and sc.input_transcription.text is not None)
+        ):
+            return True
+
+        return False
