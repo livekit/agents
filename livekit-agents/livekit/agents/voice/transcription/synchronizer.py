@@ -161,6 +161,7 @@ class _SegmentSynchronizerImpl:
         self._speaking_rate_atask = asyncio.create_task(self._speaking_rate_task())
 
         self._playback_completed = False
+        self._interrupted = False
 
     @property
     def closed(self) -> bool:
@@ -269,6 +270,7 @@ class _SegmentSynchronizerImpl:
             logger.warning("_SegmentSynchronizerImpl.playback_finished called after close")
             return
 
+        self._interrupted = interrupted
         if not self._text_data.done or not self._audio_data.done:
             logger.warning(
                 "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done",
@@ -317,6 +319,11 @@ class _SegmentSynchronizerImpl:
             sentence = text_seg.token
             text_cursor = 0
             for word, _, end_pos in self._opts.split_words(sentence):
+                if not self._output_enabled_ev.is_set():
+                    await self._output_enabled_ev.wait()
+                    if self._interrupted:
+                        return
+
                 if self.closed and not self._playback_completed:
                     return
 
@@ -324,9 +331,6 @@ class _SegmentSynchronizerImpl:
                     self._out_ch.send_nowait(sentence[text_cursor:end_pos])
                     text_cursor = end_pos
                     continue
-
-                if not self._output_enabled_ev.is_set():
-                    await self._output_enabled_ev.wait()
 
                 word_hyphens = len(self._opts.hyphenate_word(word))
                 elapsed = time.time() - self._start_wall_time - self._paused_duration
@@ -380,13 +384,13 @@ class _SegmentSynchronizerImpl:
         if self.closed:
             return
 
-        self._output_enabled_ev.set()
         self._close_future.set_result(None)
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
         await self._text_data.sentence_stream.aclose()
         await self._audio_data.sr_stream.aclose()
         await self._capture_atask
         await self._speaking_rate_atask
+        self._output_enabled_ev.set()
 
 
 class TranscriptSynchronizer:

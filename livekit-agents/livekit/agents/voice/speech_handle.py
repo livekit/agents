@@ -25,9 +25,6 @@ class SpeechHandle:
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
 
-        self._play_enabled_event = asyncio.Event()
-        self._play_enabled_event.set()
-
         self._generations: list[asyncio.Future[None]] = []
 
         # internal tasks used by this generation
@@ -217,16 +214,3 @@ class SpeechHandle:
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._scheduled_fut.set_result(None)
-
-    def _mark_play_paused(self) -> None:
-        self._play_enabled_event.clear()
-
-    def _mark_play_enabled(self) -> None:
-        self._play_enabled_event.set()
-
-    async def wait_for_play_enabled(self) -> None:
-        await self._play_enabled_event.wait()
-
-    @property
-    def play_enabled(self) -> bool:
-        return self._play_enabled_event.is_set()

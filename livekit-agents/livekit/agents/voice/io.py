@@ -250,12 +250,12 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
             self.next_in_chain.on_detached()
 
     def pause(self) -> None:
-        """Pause the audio output"""
+        """Pause the audio playback"""
         if self.next_in_chain:
             self.next_in_chain.pause()
 
     def resume(self) -> None:
-        """Resume the audio output"""
+        """Resume the audio playback"""
         if self.next_in_chain:
             self.next_in_chain.resume()
 

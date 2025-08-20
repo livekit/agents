@@ -280,6 +280,7 @@ async def _audio_forwarding_task(
 ) -> None:
     resampler: rtc.AudioResampler | None = None
     try:
+        audio_output.resume()
         async for frame in tts_output:
             out.audio.append(frame)
 
@@ -305,6 +306,11 @@ async def _audio_forwarding_task(
             # (after completing the first frame)
             if not out.first_frame_fut.done():
                 out.first_frame_fut.set_result(None)
+
+        if resampler:
+            for frame in resampler.flush():
+                await audio_output.capture_frame(frame)
+
     finally:
         if isinstance(tts_output, _ACloseable):
             try:
@@ -312,15 +318,7 @@ async def _audio_forwarding_task(
             except Exception as e:
                 logger.error("error while closing tts output", exc_info=e)
 
-        if resampler:
-            try:
-                for frame in resampler.flush():
-                    await audio_output.capture_frame(frame)
-            except Exception as e:
-                logger.error("error while flushing resampler", exc_info=e)
-
         audio_output.flush()
-        # audio_output.resume()
 
 
 @dataclass

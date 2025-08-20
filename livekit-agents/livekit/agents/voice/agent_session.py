@@ -995,41 +995,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
-    # def _schedule_agent_false_interruption(self, ev: AgentFalseInterruptionEvent) -> None:
-    #     if self._opts.agent_false_interruption_timeout is None:
-    #         return
-
-    #     def _emit_event() -> None:
-    #         if self._agent_state != "listening" or self._user_state != "listening":
-    #             return
-
-    #         if self._opts.resume_false_interruption is True:
-    #             _default_false_interruption_cb(self, ev)
-    #         elif callable(self._opts.resume_false_interruption):
-    #             self._opts.resume_false_interruption(self, ev)
-
-    #         if self._events.get("agent_false_interruption"):
-    #             # deprecate warning
-    #             logger.warning(
-    #                 "`agent_false_interruption` event will be deprecated in future versions, "
-    #                 "use `resume_false_interruption` option of AgentSession instead."
-    #             )
-
-    #         self.emit("agent_false_interruption", ev)
-    #         self._false_interruption_timer = None
-
-    #     self._cancel_agent_false_interruption()
-    #     self._false_interruption_timer = self._loop.call_later(
-    #         self._opts.agent_false_interruption_timeout, _emit_event
-    #     )
-    #     self._false_interrupted_event = ev
-
-    # def _cancel_agent_false_interruption(self) -> None:
-    #     if self._false_interruption_timer is not None:
-    #         self._false_interruption_timer.cancel()
-    #         self._false_interruption_timer = None
-    #     self._false_interrupted_event = None
-
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
     def stt(self) -> stt.STT | None:

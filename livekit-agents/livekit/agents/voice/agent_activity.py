@@ -97,8 +97,10 @@ class AgentActivity(RecognitionHooks):
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
-        self._current_speech_paused = False
-        self._speech_resume_timer: asyncio.TimerHandle | None = None
+
+        self._paused_speech: SpeechHandle | None = None
+        self._playback_resume_timer: asyncio.TimerHandle | None = None
+        self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -618,6 +620,9 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
 
+        await self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
+        self._interrupt_paused_speech_task = None
+
     async def aclose(self) -> None:
         # `aclose` must only be called by AgentSession
 
@@ -1025,10 +1030,10 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state("speaking")
 
-        if self._speech_resume_timer:
+        if self._playback_resume_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
-            self._speech_resume_timer.cancel()
-            self._speech_resume_timer = None
+            self._playback_resume_timer.cancel()
+            self._playback_resume_timer = None
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state(
@@ -1037,25 +1042,32 @@ class AgentActivity(RecognitionHooks):
         )
 
         if (
-            self._current_speech
-            and not self._current_speech.interrupted
-            and self._current_speech_paused
+            self._paused_speech
+            and (timeout := self._session.options.agent_false_interruption_timeout) is not None
         ):
             # schedule a resume timer when user stops speaking if the speech was paused
-            self._schedule_speech_resume()
+            self._schedule_speech_resume(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
-        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
-            # ignore if turn_detection is enabled on the realtime model
-            return
-
         opt = self._session.options
 
         if ev.speech_duration < opt.min_interruption_duration:
+            return
+
+        use_pause = (
+            opt.resume_false_interruption and opt.agent_false_interruption_timeout is not None
+        )
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and not use_pause
+        ):
+            # ignore if turn_detection is enabled on the realtime model
             return
 
         if (
@@ -1077,11 +1089,12 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
-            if opt.resume_false_interruption and opt.agent_false_interruption_timeout is not None:
-                self._pause_current_speech()
+            if use_pause:
+                self._pause_speech(self._current_speech)
             else:
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
+
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
@@ -1111,7 +1124,10 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
-        self._cancel_paused_speech()  # cancel the paused speech if any
+
+        self._interrupt_paused_speech_task = asyncio.create_task(
+            self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
+        )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
         if (
@@ -1207,8 +1223,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": info.new_transcript},
                 )
                 return
-
-            self._cancel_paused_speech()
+            await self._interrupt_paused_speech()
             self._current_speech.interrupt()
 
             if self._rt_session is not None:
@@ -2130,59 +2145,47 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-    def _pause_current_speech(self) -> None:
-        if (
-            self._current_speech_paused
-            or not self._current_speech
-            or self._current_speech.interrupted
-        ):
-            return
+    def _pause_speech(self, speech_handle: SpeechHandle) -> None:
+        self._paused_speech = speech_handle
 
-        self._current_speech_paused = True
         if self._session.output.audio:
             self._session.output.audio.pause()
 
-        if self._speech_resume_timer:
-            self._speech_resume_timer.cancel()
-            self._speech_resume_timer = None
+        if self._playback_resume_timer:
+            self._playback_resume_timer.cancel()
+            self._playback_resume_timer = None
 
-        logger.info("current speech paused")
+    def _schedule_speech_resume(self, timeout: float) -> None:
+        if self._playback_resume_timer is not None:
+            self._playback_resume_timer.cancel()
 
-    def _schedule_speech_resume(self) -> None:
-        if self._session.options.agent_false_interruption_timeout is None:
-            return
-
-        if self._speech_resume_timer is not None:
-            self._speech_resume_timer.cancel()
-
-        def _resume_speech() -> None:
-            self._current_speech_paused = False
+        def _resume_playback() -> None:
             if self._session.output.audio:
                 self._session.output.audio.resume()
-            self._speech_resume_timer = None
+            self._paused_speech = None
+            self._playback_resume_timer = None
+            logger.debug("resumed false interrupted speech")
 
-        self._speech_resume_timer = asyncio.get_event_loop().call_later(
-            self._session.options.agent_false_interruption_timeout, _resume_speech
-        )
+        self._playback_resume_timer = asyncio.get_event_loop().call_later(timeout, _resume_playback)
 
-    def _cancel_paused_speech(self) -> None:
-        if (
-            not self._current_speech_paused
-            or not self._current_speech
-            or self._current_speech.interrupted
-        ):
+    async def _interrupt_paused_speech(self, old_task: asyncio.Task[None] | None = None) -> None:
+        if old_task is not None:
+            await old_task
+
+        if self._playback_resume_timer is not None:
+            self._playback_resume_timer.cancel()
+            self._playback_resume_timer = None
+
+        if not self._paused_speech:
             return
 
-        if self._speech_resume_timer is not None:
-            self._speech_resume_timer.cancel()
-            self._speech_resume_timer = None
+        if not self._paused_speech.interrupted and self._paused_speech.allow_interruptions:
+            # make sure the speech is done
+            await self._paused_speech.interrupt()
+        self._paused_speech = None
 
-        self._current_speech_paused = False
-        if self.session.output.audio:
-            self.session.output.audio.resume()
-
-        if self._current_speech.allow_interruptions:
-            self._current_speech.interrupt()
+        if self._session.output.audio:
+            self._session.output.audio.resume()
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

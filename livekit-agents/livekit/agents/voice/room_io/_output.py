@@ -46,8 +46,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._pushed_duration: float = 0.0
         self._interrupted: bool = False
 
-        self._play_enabled_ev = asyncio.Event()
-        self._play_enabled_ev.set()
+        self._playback_enabled = asyncio.Event()
+        self._playback_enabled.set()
 
     async def _publish_track(self) -> None:
         async with self._lock:
@@ -89,7 +89,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await self._flush_task
 
         self._pushed_duration += frame.duration
-        # await self._audio_source.capture_frame(frame)
         await self._audio_ch.send(frame)
 
     def flush(self) -> None:
@@ -112,23 +111,23 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
     def pause(self) -> None:
         super().pause()
-        self._play_enabled_ev.clear()
+        self._playback_enabled.clear()
 
     def resume(self) -> None:
         super().resume()
-        self._play_enabled_ev.set()
+        self._playback_enabled.set()
 
     async def _wait_for_playout(self) -> None:
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
 
-        async def _wait_playout() -> None:
+        async def _wait_buffered_audio() -> None:
             while not self._audio_ch.empty():
-                if not self._play_enabled_ev.is_set():
-                    await self._play_enabled_ev.wait()
+                if not self._playback_enabled.is_set():
+                    await self._playback_enabled.wait()
 
                 await self._audio_source.wait_for_playout()
 
-        wait_for_playout = asyncio.create_task(_wait_playout())
+        wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         await asyncio.wait(
             [wait_for_playout, wait_for_interruption],
             return_when=asyncio.FIRST_COMPLETED,
@@ -156,18 +155,17 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
-        paused = False
         async for frame in self._audio_ch:
-            if not self._play_enabled_ev.is_set():
-                if not paused:
-                    # pause the audio source immediately
-                    # TODO(long): save the frames in the queue and play them later
-                    self._audio_source.clear_queue()
+            if not self._playback_enabled.is_set():
+                self._audio_source.clear_queue()
+                await self._playback_enabled.wait()
+                # TODO(long): save the frames in the queue and play them later
+                # TODO(long): ignore frames from previous syllable
 
-                paused = True
-                await self._play_enabled_ev.wait()
+            if self._interrupted_event.is_set() or self._pushed_duration == 0:
+                # ignore frames if interrupted
+                continue
 
-            paused = False
             await self._audio_source.capture_frame(frame)
 
     def _on_reconnected(self) -> None:
