@@ -35,8 +35,8 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-from .models import TTSLangCodes
+from .log import logger  # noqa: I001
+from .models import TTSLangCodes  # noqa: I001
 
 API_AUTH_HEADER = "x-api-key"
 
