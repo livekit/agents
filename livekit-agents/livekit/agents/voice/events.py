@@ -120,12 +120,11 @@ class UserInputTranscribedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+# deprecated
 class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     message: ChatMessage | None
     """The `assistant` message that got interrupted"""
-    speech_source: Literal["say", "generate_reply"]
-    """Source indicating how the interrupted speech handle was created"""
     extra_instructions: str | None = None
     """Optional instructions originally passed to `AgentSession.generate_reply` via the `instructions` argument.
     Populated only if the user interrupted a speech response generated using `session.generate_reply`.

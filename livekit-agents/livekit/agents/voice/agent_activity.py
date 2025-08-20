@@ -42,7 +42,6 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
 )
 from .events import (
-    AgentFalseInterruptionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -1054,21 +1053,20 @@ class AgentActivity(RecognitionHooks):
             # ignore if turn_detection is enabled on the realtime model
             return
 
-        if ev.speech_duration < self._session.options.min_interruption_duration:
+        opt = self._session.options
+
+        if ev.speech_duration < opt.min_interruption_duration:
             return
 
         if (
             self.stt is not None
-            and self._session.options.min_interruption_words > 0
+            and opt.min_interruption_words > 0
             and self._audio_recognition is not None
         ):
             text = self._audio_recognition.current_transcript
 
             # TODO(long): better word splitting for multi-language
-            if (
-                len(split_words(text, split_character=True))
-                < self._session.options.min_interruption_words
-            ):
+            if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
 
         if self._rt_session is not None:
@@ -1079,15 +1077,12 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
-            if self._rt_session is not None:
-                self._rt_session.interrupt()
-
-            self._pause_current_speech()
-
-            # self._current_speech.interrupt()
-
-            # if self._current_speech.interrupted:
-            #     self._current_speech._mark_interrupted_by_user()
+            if opt.resume_false_interruption and opt.agent_false_interruption_timeout is not None:
+                self._pause_current_speech()
+            else:
+                if self._rt_session is not None:
+                    self._rt_session.interrupt()
+                self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1215,9 +1210,6 @@ class AgentActivity(RecognitionHooks):
 
             self._cancel_paused_speech()
             self._current_speech.interrupt()
-
-            # if self._current_speech.interrupted:
-            #     self._current_speech._mark_interrupted_by_user()
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
@@ -1451,13 +1443,6 @@ class AgentActivity(RecognitionHooks):
                 speech_handle._chat_items.append(msg)
                 self._session._conversation_item_added(msg)
 
-            if speech_handle._interrupted_by_user:
-                self._session._schedule_agent_false_interruption(
-                    AgentFalseInterruptionEvent(
-                        extra_instructions=None, message=msg, speech_source="say"
-                    )
-                )
-
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
@@ -1668,15 +1653,6 @@ class AgentActivity(RecognitionHooks):
                     self._session._conversation_item_added(copy_msg)
 
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
-
-            if speech_handle._interrupted_by_user:
-                self._session._schedule_agent_false_interruption(
-                    AgentFalseInterruptionEvent(
-                        extra_instructions=instructions,
-                        message=copy_msg,
-                        speech_source="generate_reply",
-                    )
-                )
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
@@ -2052,15 +2028,6 @@ class AgentActivity(RecognitionHooks):
                     speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)
                     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
-
-                if speech_handle._interrupted_by_user:
-                    self._session._schedule_agent_false_interruption(
-                        AgentFalseInterruptionEvent(
-                            extra_instructions=instructions,
-                            message=msg,
-                            speech_source="generate_reply",
-                        )
-                    )
 
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)
