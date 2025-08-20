@@ -40,7 +40,6 @@ from livekit.agents.types import (
 )
 
 from .log import logger
-from .models import SonioxModels
 
 # Base URL for Soniox Speech-to-Text API.
 BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
@@ -61,7 +60,7 @@ def is_end_token(token: dict) -> bool:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: SonioxModels | None = "stt-rt-preview"
+    model: str | None = "stt-rt-preview-v2"
     language_hints: list[str] | None = None
     context: str | None = None
 
