@@ -309,7 +309,16 @@ class RealtimeSession(
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
-        self._last_seen_ordinal: int = 0
+        
+        # Per-role ordinal gates and stable user turn tracking
+        self._last_seen_user_ordinal: int = -1
+        self._last_seen_agent_ordinal: int = -1
+        self._current_user_input_id: str | None = None
+        
+        # User transcript streaming state
+        self._user_text_by_ordinal: dict[int, str] = {}
+        self._current_user_ordinal: int | None = None
+        self._user_turn_open: bool = False
 
         self._bstream = utils.audio.AudioByteStream(
             self._opts.input_sample_rate,
@@ -409,11 +418,15 @@ class RealtimeSession(
                     )
 
             elif item.type == "message" and item.role == "user":
-                # User messages sent normally
+                # User messages sent as context (no response generation)
                 if item.text_content:
                     logger.debug(f"[ultravox] Injecting user message: {item.text_content[:100]}...")
                     self._send_client_event(
-                        InputTextMessageEvent(text=item.text_content, defer_response=False)
+                        InputTextMessageEvent(
+                            text=item.text_content,
+                            defer_response=True,
+                            urgency="later",
+                        )
                     )
             # Skip assistant messages (handled by Ultravox)
             # Skip function calls (handled by existing tool mechanism)
@@ -521,15 +534,10 @@ class RealtimeSession(
         if self._current_generation and not self._current_generation._done:
             # Send programmatic interruption to server via text barge-in
             if self._ws and not self._ws.closed:
-                # Use text barge-in with immediate urgency to interrupt
-                # deferResponse=true prevents Ultravox from generating a response
-                interrupt_msg = {
-                    "type": "input_text_message",  # Correct type per events.py
-                    "text": "(barge-in)",  # Clear indication this is an interruption
-                    "urgency": "immediate",
-                    "deferResponse": True,  # Don't generate a response, just stop
-                }
-                self._send_client_event(interrupt_msg)  # Direct call, already non-blocking
+                # Use typed event with immediate urgency; do not trigger a reply
+                self._send_client_event(
+                    InputTextMessageEvent(text="(barge-in)", urgency="immediate", defer_response=True)
+                )
 
             # Finalize the active generation
             self._mark_current_generation_done()
@@ -580,7 +588,9 @@ class RealtimeSession(
             # Clear restart signal for new session
             self._session_should_close.clear()
             # Reset ordinal tracking on reconnect to avoid stale event issues
-            self._last_seen_ordinal = 0
+            self._last_seen_user_ordinal = -1
+            self._last_seen_agent_ordinal = -1
+            self._current_user_input_id = None
 
             try:
                 # Close any existing WebSocket connection before creating new one
@@ -861,32 +871,74 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     def _handle_transcript_event(self, event: TranscriptEvent) -> None:
         """Handle transcript events from Ultravox."""
-        # Gate by ordinal to avoid late/stale events
-        if event.ordinal < self._last_seen_ordinal:
-            logger.debug(
-                f"Skipping stale TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_ordinal}"
-            )
-            return
-        self._last_seen_ordinal = event.ordinal
+        # Gate by ordinal per role to avoid late/stale events
+        if event.role == "user":
+            if event.ordinal < self._last_seen_user_ordinal:
+                logger.debug(
+                    f"Skipping stale user TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_user_ordinal}"
+                )
+                return
+            self._last_seen_user_ordinal = event.ordinal
+        elif event.role == "agent":
+            if event.ordinal < self._last_seen_agent_ordinal:
+                logger.debug(
+                    f"Skipping stale agent TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_agent_ordinal}"
+                )
+                return
+            self._last_seen_agent_ordinal = event.ordinal
 
         if event.role == "user":
-            if event.final and event.text:
-                # Keep local chat history in sync (append-only)
-                self._chat_ctx.add_message(
-                    role="user",
-                    content=event.text,
-                    id=f"msg_{event.ordinal}",
-                )
-            # User transcription - emit input_audio_transcription_completed when final
-            if event.final:
+            # Stream user deltas with stable item_id
+            if event.delta:
+                # On first delta of a new turn, set stable item_id
+                if self._current_user_input_id is None:
+                    self._current_user_input_id = utils.shortuuid("ultravox-user-")
+                
+                # Emit speech started on first delta for new ordinal
+                if not self._user_turn_open:
+                    self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+                    self._user_turn_open = True
+                
+                # Accumulate text for this ordinal
+                if event.ordinal not in self._user_text_by_ordinal:
+                    self._user_text_by_ordinal[event.ordinal] = ""
+                self._user_text_by_ordinal[event.ordinal] += event.delta
+                
+                # Emit partial transcript with stable item_id
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=f"msg_{event.ordinal}",
-                        transcript=event.text,
-                        is_final=True,
+                        item_id=self._current_user_input_id,
+                        transcript=self._user_text_by_ordinal[event.ordinal],
+                        is_final=False,
                     ),
                 )
+                
+            # Handle final transcript
+            if event.final:
+                # Ensure we have a stable id even if no delta was seen
+                if self._current_user_input_id is None:
+                    self._current_user_input_id = utils.shortuuid("ultravox-user-")
+                final_text = event.text or self._user_text_by_ordinal.pop(event.ordinal, "")
+                
+                # Append to local chat_ctx with stable item_id
+                if final_text and self._current_user_input_id:
+                    self._chat_ctx.add_message(
+                        role="user",
+                        content=final_text,
+                        id=self._current_user_input_id,
+                    )
+                
+                # Emit final transcript with same stable item_id
+                if self._current_user_input_id:
+                    self.emit(
+                        "input_audio_transcription_completed",
+                        llm.InputTranscriptionCompleted(
+                            item_id=self._current_user_input_id,
+                            transcript=final_text,
+                            is_final=True,
+                        ),
+                    )
         elif event.role == "agent":
             # ! The transcript for the first message isn't always complete for some reason
             if self._current_generation is None:
@@ -926,6 +978,11 @@ class RealtimeSession(
 
             # Handle final transcript
             if event.final:
+                # Agent final guard - handle cases when Ultravox sends only final text without deltas
+                if event.text and not msg_gen.output_text:
+                    msg_gen.text_ch.send_nowait(event.text)
+                    msg_gen.output_text = event.text
+                
                 msg_gen.text_ch.close()
                 msg_gen.audio_ch.close()
                 self._handle_response_done()
@@ -1014,7 +1071,8 @@ class RealtimeSession(
         """Handle state events from Ultravox."""
         logger.info(f"Ultravox state: {event.state}")
         if event.state == "listening":
-            self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+            # Don't emit input_speech_started here - now emitted on first user delta
+            pass
         elif event.state == "thinking":
             # Start generation when Ultravox begins processing (user finished speaking)
             # This is the proper TTFT start time: when user stops speaking and agent starts processing
@@ -1024,6 +1082,13 @@ class RealtimeSession(
                 )
                 self._start_new_generation()
         elif event.state == "speaking":
+            # Reset user turn state when agent starts speaking
+            self._user_turn_open = False
+            self._current_user_ordinal = None
+            self._current_user_input_id = None
+            # Clear any accumulated partials from previous user ordinals
+            self._user_text_by_ordinal.clear()
+            
             # Ensure we have a generation when Ultravox starts speaking
             # This handles cases where audio arrives before the generation is created
             if not self._current_generation or self._current_generation._done:
