@@ -655,19 +655,22 @@ class RealtimeSession(
                     self._session_should_close.wait(), name="_restart_wait"
                 )
 
-                # Wait for any task to complete
-                done, pending = await asyncio.wait(
-                    [send_task, recv_task, restart_wait_task], return_when=asyncio.FIRST_COMPLETED
-                )
+                try:
+                    # Wait for any task to complete
+                    done, _ = await asyncio.wait(
+                        [send_task, recv_task, restart_wait_task], return_when=asyncio.FIRST_COMPLETED
+                    )
 
-                # Cancel remaining tasks
-                for task in pending:
-                    await utils.aio.cancel_and_wait(task)
-
-                # Close current WebSocket
-                if self._ws:
-                    await self._ws.close()
-                    self._ws = None
+                    for task in done:
+                        if task != restart_wait_task:
+                            # propagate exception if any
+                            task.result()
+                finally:
+                    # Close current WebSocket
+                    if self._ws:
+                        await self._ws.close()
+                        self._ws = None
+                    await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
 
                 # If restart triggered, loop continues
                 # If msg_ch closed, exit loop
