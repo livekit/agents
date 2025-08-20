@@ -98,6 +98,8 @@ class AgentActivity(RecognitionHooks):
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
+        self._current_speech_paused = False
+        self._speech_resume_timer: asyncio.TimerHandle | None = None
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1024,11 +1026,24 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state("speaking")
 
+        if self._speech_resume_timer:
+            # cancel the timer when user starts speaking but leave the paused state unchanged
+            self._speech_resume_timer.cancel()
+            self._speech_resume_timer = None
+
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state(
             "listening",
             last_speaking_time=time.time() - ev.silence_duration,
         )
+
+        if (
+            self._current_speech
+            and not self._current_speech.interrupted
+            and self._current_speech_paused
+        ):
+            # schedule a resume timer when user stops speaking if the speech was paused
+            self._schedule_speech_resume()
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode in ("manual", "realtime_llm"):
@@ -1067,9 +1082,12 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
-            self._current_speech.interrupt()
-            if self._current_speech.interrupted:
-                self._current_speech._mark_interrupted_by_user()
+            self._pause_current_speech()
+
+            # self._current_speech.interrupt()
+
+            # if self._current_speech.interrupted:
+            #     self._current_speech._mark_interrupted_by_user()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1098,6 +1116,7 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+        self._cancel_paused_speech()  # cancel the paused speech if any
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
         if (
@@ -1194,9 +1213,11 @@ class AgentActivity(RecognitionHooks):
                 )
                 return
 
+            self._cancel_paused_speech()
             self._current_speech.interrupt()
-            if self._current_speech.interrupted:
-                self._current_speech._mark_interrupted_by_user()
+
+            # if self._current_speech.interrupted:
+            #     self._current_speech._mark_interrupted_by_user()
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
@@ -2141,6 +2162,60 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
+
+    def _pause_current_speech(self) -> None:
+        if (
+            self._current_speech_paused
+            or not self._current_speech
+            or self._current_speech.interrupted
+        ):
+            return
+
+        self._current_speech_paused = True
+        if self._session.output.audio:
+            self._session.output.audio.pause()
+
+        if self._speech_resume_timer:
+            self._speech_resume_timer.cancel()
+            self._speech_resume_timer = None
+
+        logger.info("current speech paused")
+
+    def _schedule_speech_resume(self) -> None:
+        if self._session.options.agent_false_interruption_timeout is None:
+            return
+
+        if self._speech_resume_timer is not None:
+            self._speech_resume_timer.cancel()
+
+        def _resume_speech() -> None:
+            self._current_speech_paused = False
+            if self._session.output.audio:
+                self._session.output.audio.resume()
+            self._speech_resume_timer = None
+
+        self._speech_resume_timer = asyncio.get_event_loop().call_later(
+            self._session.options.agent_false_interruption_timeout, _resume_speech
+        )
+
+    def _cancel_paused_speech(self) -> None:
+        if (
+            not self._current_speech_paused
+            or not self._current_speech
+            or self._current_speech.interrupted
+        ):
+            return
+
+        if self._speech_resume_timer is not None:
+            self._speech_resume_timer.cancel()
+            self._speech_resume_timer = None
+
+        self._current_speech_paused = False
+        if self.session.output.audio:
+            self.session.output.audio.resume()
+
+        if self._current_speech.allow_interruptions:
+            self._current_speech.interrupt()
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

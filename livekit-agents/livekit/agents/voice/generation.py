@@ -320,6 +320,7 @@ async def _audio_forwarding_task(
                 logger.error("error while flushing resampler", exc_info=e)
 
         audio_output.flush()
+        # audio_output.resume()
 
 
 @dataclass

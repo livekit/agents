@@ -143,6 +143,11 @@ class _SegmentSynchronizerImpl:
         self._start_wall_time: float | None = None
         self._start_fut: asyncio.Event = asyncio.Event()
 
+        self._paused_wall_time: float | None = None
+        self._paused_duration: float = 0.0
+        self._output_enabled_ev = asyncio.Event()
+        self._output_enabled_ev.set()
+
         self._speed = STANDARD_SPEECH_RATE * self._opts.speed  # hyphens per second
         self._speed_on_speaking_unit: float | None = None  # hyphens per speaking unit
         # a speaking unit is defined by the speaking rate estimation method, it's a relative unit
@@ -232,6 +237,17 @@ class _SegmentSynchronizerImpl:
 
         self._reestimate_speed()
 
+    def pause(self) -> None:
+        if self._paused_wall_time is None:
+            self._paused_wall_time = time.time()
+        self._output_enabled_ev.clear()
+
+    def resume(self) -> None:
+        if self._paused_wall_time is not None:
+            self._paused_duration += time.time() - self._paused_wall_time
+            self._paused_wall_time = None
+        self._output_enabled_ev.set()
+
     def _reestimate_speed(self) -> None:
         if not self._text_data.done or not self._audio_data.done:
             return
@@ -309,8 +325,11 @@ class _SegmentSynchronizerImpl:
                     text_cursor = end_pos
                     continue
 
+                if not self._output_enabled_ev.is_set():
+                    await self._output_enabled_ev.wait()
+
                 word_hyphens = len(self._opts.hyphenate_word(word))
-                elapsed = time.time() - self._start_wall_time
+                elapsed = time.time() - self._start_wall_time - self._paused_duration
 
                 target_hyphens: float | None = None
                 if (annotated := self._audio_data.sr_data_annotated) and (
@@ -361,6 +380,7 @@ class _SegmentSynchronizerImpl:
         if self.closed:
             return
 
+        self._output_enabled_ev.set()
         self._close_future.set_result(None)
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
         await self._text_data.sentence_stream.aclose()
@@ -569,6 +589,14 @@ class _SyncedAudioOutput(io.AudioOutput):
     def on_detached(self) -> None:
         super().on_detached()
         self._synchronizer._on_attachment_changed(audio_attached=False)
+
+    def pause(self) -> None:
+        super().pause()
+        self._synchronizer._impl.pause()
+
+    def resume(self) -> None:
+        super().resume()
+        self._synchronizer._impl.resume()
 
 
 class _SyncedTextOutput(io.TextOutput):

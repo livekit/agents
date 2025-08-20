@@ -25,6 +25,9 @@ class SpeechHandle:
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
 
+        self._play_enabled_event = asyncio.Event()
+        self._play_enabled_event.set()
+
         self._generations: list[asyncio.Future[None]] = []
 
         # indicate if the speech was interrupted by a user turn
@@ -220,3 +223,16 @@ class SpeechHandle:
 
     def _mark_interrupted_by_user(self) -> None:
         self._interrupted_by_user = True
+
+    def _mark_play_paused(self) -> None:
+        self._play_enabled_event.clear()
+
+    def _mark_play_enabled(self) -> None:
+        self._play_enabled_event.set()
+
+    async def wait_for_play_enabled(self) -> None:
+        await self._play_enabled_event.wait()
+
+    @property
+    def play_enabled(self) -> bool:
+        return self._play_enabled_event.is_set()
