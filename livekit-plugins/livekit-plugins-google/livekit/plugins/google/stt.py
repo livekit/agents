@@ -140,7 +140,7 @@ class STT(stt.STT):
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
-            denoiser_config(SpeechAdaptation): the denoiser config for recognition (default: None)
+            denoiser_config(DenoiserConfig): the denoiser config for recognition (default: None)
             speech_adaptation(SpeechAdaptation): the speech adaptation to use for recognition (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
@@ -523,6 +523,7 @@ class SpeechStream(stt.SpeechStream):
                                 sample_rate_hertz=self._config.sample_rate,
                                 audio_channel_count=1,
                             ),
+                            denoiser_config=self._config.denoiser_config,
                             adaptation=self._config.build_adaptation(),
                             language_codes=self._config.languages,
                             model=self._config.model,
