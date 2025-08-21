@@ -1418,6 +1418,8 @@ class AgentActivity(RecognitionHooks):
                 if audio_out is not None and audio_out.first_frame_fut.done():
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
+                else:
+                    forwarded_text = ""
 
             msg: llm.ChatMessage | None = None
             if forwarded_text:
