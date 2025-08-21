@@ -60,7 +60,7 @@ def is_end_token(token: dict) -> bool:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str | None = "stt-rt-preview-v2"
+    model: str | None = "stt-rt-preview"
     language_hints: list[str] | None = None
     context: str | None = None
 
