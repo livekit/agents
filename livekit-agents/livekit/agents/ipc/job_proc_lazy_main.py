@@ -1,25 +1,13 @@
 from __future__ import annotations
 
 from multiprocessing import current_process
-from types import TracebackType
 
 if current_process().name == "job_proc":
     import signal
-    import sys
 
     # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-
-    def _no_traceback_excepthook(
-        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
-    ) -> None:
-        if isinstance(exc_val, KeyboardInterrupt):
-            return
-        sys.__excepthook__(exc_type, exc_val, traceback)
-
-    sys.excepthook = _no_traceback_excepthook
-
 
 import asyncio
 import contextlib
@@ -75,21 +63,6 @@ def proc_main(args: ProcStartArgs) -> None:
         return  # initialization failed, exit (initialize will send an error to the worker)
 
     client.run()
-
-    import threading
-
-    # def loop_infinite():
-    #     while True:
-    #         pass
-
-    # t = threading.Thread(target=loop_infinite)
-    # t.start()
-
-    for t in threading.enumerate():
-        if t == threading.main_thread():
-            pass
-
-        # print(t.name, t.daemon, t.is_alive())  # , getattr(t, "creation_traceback", None))
 
 
 class _InfClient(InferenceExecutor):
