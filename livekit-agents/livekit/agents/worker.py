@@ -174,7 +174,7 @@ class WorkerOptions:
 
     drain_timeout: int = 1800
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
-    num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
+    num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
     )
     """Number of idle processes to keep warm."""
