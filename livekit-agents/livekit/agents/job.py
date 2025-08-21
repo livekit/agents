@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import functools
 import inspect
@@ -23,15 +24,17 @@ import multiprocessing as mp
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Any, Callable
+from typing import Any, Callable, cast
+
+from opentelemetry import trace
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
-from .cli import cli
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
+from .telemetry import trace_types, tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
@@ -79,6 +82,7 @@ class RunningJobInfo:
     url: str
     token: str
     worker_id: str
+    fake_job: bool
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -149,6 +153,9 @@ class JobContext:
             return record
 
         logging.setLogRecordFactory(record_factory)
+
+    def is_fake_job(self) -> bool:
+        return self._info.fake_job
 
     @property
     def inference_executor(self) -> InferenceExecutor:
@@ -283,7 +290,7 @@ class JobContext:
 
     def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if self.is_fake_job():
             logger.warning("job_ctx.delete_room() is not executed while in console mode")
             fut = asyncio.Future[api.DeleteRoomResponse]()
             fut.set_result(api.DeleteRoomResponse())
@@ -318,7 +325,7 @@ class JobContext:
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if self.is_fake_job():
             logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
             fut = asyncio.Future[api.SIPParticipantInfo]()
             fut.set_result(api.SIPParticipantInfo())
@@ -361,7 +368,7 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if self.is_fake_job():
             logger.warning(
                 "job_ctx.transfer_sip_participant() is not executed while in console mode"
             )
@@ -546,3 +553,129 @@ class JobRequest:
         )
 
         await self._on_accept(accept_arguments)
+
+
+@dataclass
+class _JobShutdownInfo:
+    user_initiated: bool
+    reason: str
+
+
+async def run_job(
+    job_entrypoint_fnc: Callable[[JobContext], Any],
+    *,
+    info: RunningJobInfo,
+    room: rtc.Room | None = None,
+    executor_type: JobExecutorType = JobExecutorType.THREAD,
+    user_arguments: Any | None = None,
+    http_proxy: str | None = None,
+    inference_executor: InferenceExecutor,
+) -> None:
+    is_fake_room = False
+    if not room:
+        from .ipc.mock_room import create_mock_room
+
+        is_fake_room = True
+        room = cast(rtc.Room, create_mock_room())
+
+    room._info.name = info.job.room.name
+    shutdown_fut: asyncio.Future[_JobShutdownInfo] = asyncio.Future()
+
+    ctx_connect_called = False
+    ctx_shutdown_called = False
+
+    @room.on("disconnected")
+    def _on_room_disconnected(*args: Any) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            shutdown_fut.set_result(
+                _JobShutdownInfo(user_initiated=False, reason="room disconnected")
+            )
+
+    def _on_ctx_connect() -> None:
+        ctx_connect_called = True
+
+    def _on_ctx_shutdown(reason: str) -> None:
+        ctx_shutdown_called = True
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            shutdown_fut.set_result(_JobShutdownInfo(user_initiated=True, reason=reason))
+
+    proc = JobProcess(
+        executor_type=executor_type, user_arguments=user_arguments, http_proxy=http_proxy
+    )
+    job_ctx = JobContext(
+        proc=proc,
+        info=info,
+        room=room,
+        inference_executor=inference_executor,
+        on_connect=_on_ctx_connect,
+        on_shutdown=_on_ctx_shutdown,
+    )
+
+    job_ctx_token = _JobContextVar.set(job_ctx)
+    http_context._new_session_ctx()
+
+    @tracer.start_as_current_span("job_entrypoint")
+    async def _traceable_entrypoint(job_ctx: JobContext) -> None:
+        job = job_ctx.job
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
+        current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
+        current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
+        await job_entrypoint_fnc(job_ctx)
+
+    job_task = asyncio.create_task(_traceable_entrypoint(job_ctx), name="job_user_entrypoint")
+
+    async def _warn_not_connected_task() -> None:
+        await asyncio.sleep(10)
+        if not ctx_connect_called and not ctx_shutdown_called:
+            logger.warning(
+                "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
+                "This may indicate that job_ctx.connect() was not called. "
+            )
+
+    if not is_fake_room:
+        warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
+        job_task.add_done_callback(lambda _: warn_unconnected_task.cancel())
+
+    def log_exception(t: asyncio.Task[Any]) -> None:
+        if not t.cancelled() and t.exception():
+            logger.error(
+                "unhandled exception while running the job task",
+                exc_info=t.exception(),
+            )
+        elif not ctx_connect_called and not ctx_shutdown_called:
+            if is_fake_room:
+                return
+
+            logger.warning(
+                "The job task completed without establishing a connection or performing a proper shutdown. "  # noqa: E501
+                "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."  # noqa: E501
+            )
+
+    job_task.add_done_callback(log_exception)
+
+    shutdown_info = await shutdown_fut
+    logger.debug(
+        "shutting down job task",
+        extra={
+            "reason": shutdown_info.reason,
+            "user_initiated": shutdown_info.user_initiated,
+        },
+    )
+
+    await room.disconnect()
+
+    try:
+        shutdown_tasks = []
+        for callback in job_ctx._shutdown_callbacks:
+            shutdown_tasks.append(
+                asyncio.create_task(callback(shutdown_info.reason), name="job_shutdown_callback")
+            )
+
+        await asyncio.gather(*shutdown_tasks)
+    except Exception:
+        logger.exception("error while shutting down the job")
+
+    await http_context._close_http_ctx()
+    _JobContextVar.reset(job_ctx_token)

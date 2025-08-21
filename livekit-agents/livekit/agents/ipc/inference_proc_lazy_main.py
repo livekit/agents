@@ -48,18 +48,13 @@ def proc_main(args: ProcStartArgs) -> None:
 
     inf_proc = _InferenceProc(args.runners)
 
-    client = _ProcClient(
-        args.mp_cch,
-        args.log_cch,
-        inf_proc.initialize,
-        inf_proc.entrypoint,
-    )
-
+    client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc.entrypoint)
     client.initialize_logger()
     try:
         client.initialize()
     except Exception:
         return  # initialization failed, exit (initialize will send an error to the worker)
+
     client.run()
 
 
@@ -113,13 +108,7 @@ class _InferenceProc:
             data = await loop.run_in_executor(
                 self._executor, self._runners[msg.method].run, msg.data
             )
-            await self._client.send(
-                proto.InferenceResponse(
-                    request_id=msg.request_id,
-                    data=data,
-                )
-            )
-
+            await self._client.send(proto.InferenceResponse(request_id=msg.request_id, data=data))
         except Exception as e:
             logger.exception("error running inference")
             await self._client.send(

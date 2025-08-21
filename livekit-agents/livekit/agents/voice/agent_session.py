@@ -21,8 +21,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import llm, stt, tts, utils, vad
-from ..cli import cli
+from .. import cli, llm, stt, tts, utils, vad
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
@@ -424,22 +423,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._update_agent_state("initializing")
 
             tasks: list[asyncio.Task[None]] = []
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
-                from .chat_cli import ChatCLI
 
-                if (
-                    self.input.audio is not None
-                    or self.output.audio is not None
-                    or self.output.transcription is not None
-                ):
+            c = cli.AgentsConsole.get_instance()
+            if c.enabled and not c.io_acquired:
+                if self.input.audio is not None or self.output.audio is not None:
                     logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
-                        "or output.transcription is already set, overriding.."
+                        "agent started with the console subcommand, but input.audio/output.audio "
+                        "is already set, overriding..."
                     )
 
-                chat_cli = ChatCLI(self)
-                tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
-
+                c.acquire_io(loop=self._loop, session=self)
             elif is_given(room) and not self._room_io:
                 room_input_options = copy.copy(
                     room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
@@ -1003,10 +996,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._user_state
         self._user_state = state
-        self.emit(
-            "user_state_changed",
-            UserStateChangedEvent(old_state=old_state, new_state=state),
-        )
+        self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         self.emit("user_input_transcribed", ev)

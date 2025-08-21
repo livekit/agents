@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
 import time
@@ -32,7 +33,7 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
 class _EUORunnerBase(_InferenceRunner):
     def __init__(self, model_type: EOUModelType):
         super().__init__()
-        self._model_revision = MODEL_REVISIONS[model_type]
+        self._model_rev = MODEL_REVISIONS[model_type]
 
     def _normalize_text(self, text: str) -> str:
         if not text:
@@ -65,10 +66,7 @@ class _EUORunnerBase(_InferenceRunner):
                 last_msg = msg
 
         convo_text = self._tokenizer.apply_chat_template(
-            new_chat_ctx,
-            add_generation_prompt=False,
-            add_special_tokens=False,
-            tokenize=False,
+            new_chat_ctx, add_generation_prompt=False, add_special_tokens=False, tokenize=False
         )
 
         # remove the EOU token from current utterance
@@ -77,16 +75,31 @@ class _EUORunnerBase(_InferenceRunner):
         return text  # type: ignore
 
     def initialize(self) -> None:
-        import onnxruntime as ort  # type: ignore
-        from huggingface_hub import errors
-        from transformers import AutoTokenizer  # type: ignore
+        logger = logging.getLogger("transformers")
+
+        class _SuppressSpecific(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                msg = record.getMessage()
+                return not msg.startswith(
+                    "None of PyTorch, TensorFlow >= 2.0, or Flax have been found."
+                )
+
+        filt = _SuppressSpecific()
+        # filter this log since it conflicts with the console CLI (since it directly prints to stdout)
+        logger.addFilter(filt)
+        try:
+            import onnxruntime as ort
+            from huggingface_hub import errors
+            from transformers import AutoTokenizer  # type: ignore
+        finally:
+            logger.removeFilter(filt)
 
         try:
             local_path_onnx = _download_from_hf_hub(
                 HG_MODEL,
                 ONNX_FILENAME,
                 subfolder="onnx",
-                revision=self._model_revision,
+                revision=self._model_rev,
                 local_files_only=True,
             )
             sess_options = ort.SessionOptions()
@@ -98,23 +111,19 @@ class _EUORunnerBase(_InferenceRunner):
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
-
             self._tokenizer = AutoTokenizer.from_pretrained(
-                HG_MODEL,
-                revision=self._model_revision,
-                local_files_only=True,
-                truncation_side="left",
+                HG_MODEL, revision=self._model_rev, local_files_only=True, truncation_side="left"
             )
 
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
-                f"Could not find model {HG_MODEL} with revision {self._model_revision}. "
+                f"Could not find model {HG_MODEL} with revision {self._model_rev}. "
                 "Make sure you have downloaded the model before running the agent. "
                 "Use `python3 your_agent.py download-files` to download the models."
             )
             raise RuntimeError(
                 "livekit-plugins-turn-detector initialization failed. "
-                f"Could not find model {HG_MODEL} with revision {self._model_revision}."
+                f"Could not find model {HG_MODEL} with revision {self._model_rev}."
             ) from None
 
     def run(self, data: bytes) -> bytes | None:
@@ -125,7 +134,6 @@ class _EUORunnerBase(_InferenceRunner):
             raise ValueError("chat_ctx is required on the inference input data")
 
         start_time = time.perf_counter()
-
         text = self._format_chat_ctx(chat_ctx)
         inputs = self._tokenizer(
             text,
@@ -134,15 +142,15 @@ class _EUORunnerBase(_InferenceRunner):
             max_length=MAX_HISTORY_TOKENS,
             truncation=True,
         )
-        # Run inference
+        # run inference
         outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
         eou_probability = outputs[0].flatten()[-1]
         end_time = time.perf_counter()
 
         result: dict[str, Any] = {
             "eou_probability": float(eou_probability),
-            "input": text,
             "duration": round(end_time - start_time, 3),
+            "input": text,
         }
         return json.dumps(result).encode()
 
@@ -179,8 +187,8 @@ class EOUModelBase(ABC):
         if language is None:
             return None
 
-        lang = language.lower()
         # try the full language code first
+        lang = language.lower()
         lang_data = self._languages.get(lang)
 
         # try the base language if the full language code is not found
@@ -190,6 +198,7 @@ class EOUModelBase(ABC):
 
         if not lang_data:
             return None
+
         # if a custom threshold is provided, use it
         if self._unlikely_threshold is not None:
             return self._unlikely_threshold
@@ -227,15 +236,10 @@ class EOUModelBase(ABC):
         json_data = json.dumps({"chat_ctx": messages}).encode()
 
         result = await asyncio.wait_for(
-            self._executor.do_inference(self._inference_method(), json_data),
-            timeout=timeout,
+            self._executor.do_inference(self._inference_method(), json_data), timeout=timeout
         )
-
         assert result is not None, "end_of_utterance prediction should always returns a result"
 
         result_json: dict[str, Any] = json.loads(result.decode())
-        logger.debug(
-            "eou prediction",
-            extra=result_json,
-        )
+        logger.debug("eou prediction", extra=result_json)
         return result_json["eou_probability"]  # type: ignore

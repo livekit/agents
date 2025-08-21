@@ -26,7 +26,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "click~=8.1",
+    "typer>=0.15.1",
     "livekit>=1.0.12,<2",
     "livekit-api>=1.0.4,<2",
     "livekit-protocol~=1.0",
