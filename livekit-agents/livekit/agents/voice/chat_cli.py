@@ -458,7 +458,9 @@ class ChatCLI:
 
     def _check_mic_received_audio(self) -> None:
         if self._input_stream is not None and not self._mic_received_audio:
-            logger.error("No audio input detected. Check microphone permissions in your System Preferences.")
+            logger.error(
+                "No audio input detected. Check microphone permissions in your System Preferences."
+            )
 
     def _print_audio_mode(self) -> None:
         amplitude_db = _normalize_db(self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX)
