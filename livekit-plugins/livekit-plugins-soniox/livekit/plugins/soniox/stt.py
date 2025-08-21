@@ -66,12 +66,11 @@ class STTOptions:
 
     num_channels: int = 1
     sample_rate: int = 16000
-    auto_finalize_delay_ms: int = 3000
+
+    enable_language_identification: bool = True
 
     enable_non_final_tokens: bool = True
-    max_non_final_tokens_duration_ms: int = 800
-
-    enable_endpoint_detection: bool = True
+    max_non_final_tokens_duration_ms: int | None = None
 
     client_reference_id: str | None = None
 
@@ -166,18 +165,22 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self):
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
         initial configuration."""
+        # If VAD was passed, disable endpoint detection, otherwise enable it.
+        enable_endpoint_detection = not self._stt._vad_stream
+
         # Create initial config object.
         config = {
             "api_key": self._stt._api_key,
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
             "num_channels": self._stt._params.num_channels or 1,
-            "enable_endpoint_detection": self._stt._params.enable_endpoint_detection,
+            "enable_endpoint_detection": enable_endpoint_detection,
             "sample_rate": self._stt._params.sample_rate,
             "language_hints": self._stt._params.language_hints,
             "context": self._stt._params.context,
             "enable_non_final_tokens": self._stt._params.enable_non_final_tokens,
             "max_non_final_tokens_duration_ms": self._stt._params.max_non_final_tokens_duration_ms,
+            "enable_language_identification": self._stt._params.enable_language_identification,
             "client_reference_id": self._stt._params.client_reference_id,
         }
         # Connect to the Soniox Speech-to-Text API.
@@ -319,16 +322,23 @@ class SpeechStream(stt.SpeechStream):
 
         # Transcription frame will be only sent after we get the "endpoint" event.
         final_transcript_buffer = ""
+        # Language code sent by Soniox if language detection is enabled (e.g. "en", "de", "fr")
+        final_transcript_language: str = ""
 
         def send_endpoint_transcript():
-            nonlocal final_transcript_buffer
+            nonlocal final_transcript_buffer, final_transcript_language
             if final_transcript_buffer:
                 event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(text=final_transcript_buffer, language=None)],
+                    alternatives=[
+                        stt.SpeechData(
+                            text=final_transcript_buffer, language=final_transcript_language
+                        )
+                    ],
                 )
                 self._event_ch.send_nowait(event)
                 final_transcript_buffer = ""
+                final_transcript_language = ""
 
         # Method handles receiving messages from the Soniox Speech-to-Text API.
         while self._ws:
@@ -349,6 +359,7 @@ class SpeechStream(stt.SpeechStream):
 
                             # We will only send the final tokens after we get the "endpoint" event.
                             non_final_transcription = ""
+                            non_final_transcription_language: str = ""
 
                             for token in tokens:
                                 if token["is_final"]:
@@ -359,8 +370,19 @@ class SpeechStream(stt.SpeechStream):
                                         send_endpoint_transcript()
                                     else:
                                         final_transcript_buffer += token["text"]
+
+                                        # Soniox provides language for each token,
+                                        # LiveKit requires only a single language for the entire transcription chunk.
+                                        # Current heuristic is to take the first language we see.
+                                        if token.get("language") and not final_transcript_language:
+                                            final_transcript_language = token.get("language")
                                 else:
                                     non_final_transcription += token["text"]
+                                    if (
+                                        token.get("language")
+                                        and not non_final_transcription_language
+                                    ):
+                                        non_final_transcription_language = token.get("language")
 
                             if final_transcript_buffer or non_final_transcription:
                                 event = stt.SpeechEvent(
@@ -368,7 +390,9 @@ class SpeechStream(stt.SpeechStream):
                                     alternatives=[
                                         stt.SpeechData(
                                             text=final_transcript_buffer + non_final_transcription,
-                                            language=None,
+                                            language=final_transcript_language
+                                            if final_transcript_language
+                                            else non_final_transcription_language,
                                         )
                                     ],
                                 )
