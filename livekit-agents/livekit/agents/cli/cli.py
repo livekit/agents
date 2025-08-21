@@ -206,6 +206,7 @@ class AgentsConsole:
             "logging.level.debug": Style(color="cyan"),
             "logging.level.info": Style(color="green"),
             "logging.level.warning": Style(color="yellow"),
+            "logging.level.dev": Style(color="blue"),
             "logging.level.error": Style(color="red", bold=True),
             "logging.level.critical": Style(color="red", bold=True, reverse=True),
         }
