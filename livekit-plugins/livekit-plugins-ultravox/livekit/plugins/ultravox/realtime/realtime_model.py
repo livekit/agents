@@ -437,11 +437,11 @@ class RealtimeSession(
                     )
 
             elif item.type == "message" and item.role == "user":
-                # User messages sent normally
+                # Inject user message as context; do not trigger an immediate response
                 if item.text_content:
                     logger.debug(f"[ultravox] Injecting user message: {item.text_content[:100]}...")
                     self._send_client_event(
-                        InputTextMessageEvent(text=item.text_content, defer_response=False)
+                        InputTextMessageEvent(text=item.text_content, defer_response=True)
                     )
             elif item.type == "function_call_output":
                 # Bridge tool result back to Ultravox using the original invocationId
