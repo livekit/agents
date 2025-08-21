@@ -9,6 +9,7 @@ from rich.text import Text
 
 
 from collections import OrderedDict
+import os
 import re
 import pathlib
 import hashlib
@@ -1412,15 +1413,20 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             reload=reload,
         )
 
+        c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
 
-        if not reload:
+        term_program = os.environ.get("TERM_PROGRAM")
+
+        if term_program == "iTerm.app" and args.reload:
+            c.print("[error]Auto-reload is not supported on the iTerm2 terminal, disabling...")
+            args.reload = False
+
+        if not args.reload:
             _run_worker(server=server, args=args)
             return
 
         from .watcher import WatchServer
-
-        c = AgentsConsole.get_instance()
-        _configure_logger(c, log_level.value)
 
         main_file = pathlib.Path(sys.argv[0]).parent
 
@@ -1430,9 +1436,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         watch_server = WatchServer(_run_worker, server, main_file, args, loop=loop)
 
         def _handle_exit(sig: int, frame: FrameType | None) -> None:
-            print("main child")
             asyncio.run_coroutine_threadsafe(watch_server.aclose(), loop=loop)
-            raise KeyboardInterrupt
 
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)

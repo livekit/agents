@@ -94,10 +94,7 @@ class WatchServer:
             await watchfiles.arun_process(
                 *watch_paths,
                 target=self._worker_runner,
-                args=(
-                    self._server,
-                    self._cli_args,
-                ),
+                args=(self._server, self._cli_args),
                 watch_filter=watchfiles.filters.PythonFilter(),
                 callback=self._on_reload,
             )
