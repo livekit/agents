@@ -48,9 +48,9 @@ class PingEvent(UltravoxEvent):
 
 
 class InputTextMessageEvent(UltravoxEvent):
-    """User message sent via text."""
+    """User message sent via text (UserTextMessage in Ultravox docs)."""
 
-    type: Literal["input_text_message"] = "input_text_message"
+    type: Literal["user_text_message"] = "user_text_message"
     text: str = Field(..., description="The content of the user message")
     urgency: Literal["immediate", "soon", "later"] | None = Field(
         None,

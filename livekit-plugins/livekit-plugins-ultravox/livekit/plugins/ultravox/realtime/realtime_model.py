@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
 import aiohttp
-from pydantic import ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
@@ -63,6 +62,10 @@ OUTPUT_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 ULTRAVOX_BASE_URL = "https://api.ultravox.ai/api"
 lk_ultravox_debug = os.getenv("LK_ULTRAVOX_DEBUG", "false").lower() == "true"
+# Review verification flag to A/B tool-turn close strategies: this should be removed before merging
+#   - "close_on_result": close the tool-turn after bridging client_tool_result (default)
+#   - "close_on_invocation": close the tool-turn immediately when tool is invoked
+lk_ultravox_tool_turn_mode = os.getenv("LK_ULTRAVOX_TOOL_TURN_MODE", "close_on_result").lower()
 
 
 def _validate_model(requested_model: str) -> str:
@@ -213,8 +216,8 @@ class RealtimeModel(llm.RealtimeModel):
                 # Ultravox manages the turn detection internally
                 turn_detection=True,
                 user_transcription=True,
-                auto_tool_reply_generation=False,
-                audio_output=True,  # Ultravox streams speech, so set True
+                auto_tool_reply_generation=True,
+                audio_output=True,
             )
         )
 
@@ -324,6 +327,14 @@ class RealtimeSession(
         self._session_should_close = asyncio.Event()
         self._ws_session_lock = asyncio.Lock()
 
+        # Review verification: per-invocation timing trace
+        self._tool_turn_debug: dict[str, dict[str, Any]] = {}
+
+        if lk_ultravox_debug:
+            logger.debug(
+                f"[ultravox.review] init session; tool_turn_mode={lk_ultravox_tool_turn_mode}"
+            )
+
     async def _close_active_ws_session(self) -> None:
         async with self._ws_session_lock:
             if self._ws:
@@ -379,6 +390,23 @@ class RealtimeSession(
         # Compute the diff - only process new/changed items
         diff_ops = compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
+        # debugging to  verify function call bridging
+        if lk_ultravox_debug:
+            try:
+                created_summaries: list[str] = []
+                for _, msg_id in diff_ops.to_create:
+                    item = chat_ctx.get_by_id(msg_id)
+                    item_type = getattr(item, "type", "?") if item is not None else "<missing>"
+                    created_summaries.append(f"{item_type}:{msg_id}")
+                logger.debug(
+                    f"[ultravox.review] update_chat_ctx.to_create: count={len(diff_ops.to_create)} "
+                    f"items={created_summaries}"
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[ultravox.review] update_chat_ctx.to_create: summary error: {e}"
+                )
+
         if not diff_ops.to_create:
             logger.debug("[ultravox] No new context items to inject")
             return
@@ -415,8 +443,53 @@ class RealtimeSession(
                     self._send_client_event(
                         InputTextMessageEvent(text=item.text_content, defer_response=False)
                     )
-            # Skip assistant messages (handled by Ultravox)
-            # Skip function calls (handled by existing tool mechanism)
+            elif item.type == "function_call_output":
+                # Bridge tool result back to Ultravox using the original invocationId
+                if lk_ultravox_debug:
+                    logger.debug(
+                        f"[ultravox] bridging tool result: invocationId={item.call_id} "
+                        f"is_error={getattr(item, 'is_error', False)} "
+                        f"result_len={len(str(getattr(item, 'output', '') or ''))}"
+                    )
+
+                tool_result = ClientToolResultEvent(
+                    invocationId=item.call_id,
+                    agent_reaction="speaks",
+                )
+
+                if getattr(item, "is_error", False):
+                    tool_result.error_type = "implementation-error"
+                    tool_result.error_message = getattr(item, "error_message", None) or str(
+                        getattr(item, "output", "")
+                    )
+                else:
+                    tool_result.result = str(getattr(item, "output", ""))
+
+                self._send_client_event(tool_result)
+
+                # Review verification: log timing between invocation and result bridge
+                if lk_ultravox_debug:
+                    now = time.perf_counter()
+                    info = self._tool_turn_debug.get(item.call_id)
+                    if info is not None and "invocation_received_at" in info:
+                        dt = now - info["invocation_received_at"]
+                        logger.debug(
+                            f"[ultravox.review] tool_result_bridged: id={item.call_id} dt={dt:.3f}s gen_id={info.get('gen_id')} mode={info.get('mode')}"
+                        )
+                    else:
+                        logger.debug(
+                            f"[ultravox.review] tool_result_bridged: id={item.call_id} dt=? (no invocation trace)"
+                        )
+
+                # Close generation per selected strategy
+                if lk_ultravox_tool_turn_mode == "close_on_result":
+                    if self._current_generation and not self._current_generation._done:
+                        if lk_ultravox_debug:
+                            logger.debug(
+                                f"[ultravox.review] close_on_result: closing generation after client_tool_result id={item.call_id}"
+                            )
+                        self._mark_current_generation_done()
+
 
         # Update local chat context
         self._chat_ctx = chat_ctx.copy()
@@ -524,10 +597,10 @@ class RealtimeSession(
                 # Use text barge-in with immediate urgency to interrupt
                 # deferResponse=true prevents Ultravox from generating a response
                 interrupt_msg = {
-                    "type": "input_text_message",  # Correct type per events.py
-                    "text": "(barge-in)",  # Clear indication this is an interruption
+                    "type": "user_text_message",
+                    "text": "(barge-in)",
                     "urgency": "immediate",
-                    "deferResponse": True,  # Don't generate a response, just stop
+                    "deferResponse": True,
                 }
                 self._send_client_event(interrupt_msg)  # Direct call, already non-blocking
 
@@ -730,6 +803,7 @@ class RealtimeSession(
                     # Handle binary audio data
                     self.emit("ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)})
                     await self._ws.send_bytes(msg)
+                    # You will want to comment these logs when in debugging mode as they are noisy
                     if lk_ultravox_debug:
                         logger.info(f">>> [audio bytes: {len(msg)} bytes]")
                 elif isinstance(msg, dict):
@@ -1055,9 +1129,11 @@ class RealtimeSession(
 
     def _handle_tool_invocation_event(self, event: ClientToolInvocationEvent) -> None:
         """Handle tool invocation events from Ultravox."""
-        logger.info(
-            f"[ultravox] executing tool directly: {event.tool_name} with params {event.parameters}"
-        )
+        if lk_ultravox_debug:
+            logger.debug(
+                f"[ultravox] tool_invocation received: tool={event.tool_name} "
+                f"invocationId={event.invocation_id} params_keys={list(event.parameters.keys())}"
+            )
 
         # Emit FunctionCall to maintain framework compatibility
         function_call = llm.FunctionCall(
@@ -1070,78 +1146,33 @@ class RealtimeSession(
             self._start_new_generation()
         self._current_generation.function_ch.send_nowait(function_call)
 
-        # Execute tool directly and send result to Ultravox immediately
-        asyncio.create_task(self._execute_tool_and_send_result(event))
-
-    async def _execute_tool_and_send_result(self, event: ClientToolInvocationEvent) -> None:
-        """Execute a tool directly and send the result to Ultravox immediately."""
-        try:
-            # Find the tool by name
-            tool = None
-            for t in self._tools.function_tools.values():
-                if is_function_tool(t):
-                    info = get_function_info(t)
-                    if info.name == event.tool_name:
-                        tool = t
-                        break
-                elif is_raw_function_tool(t):
-                    info = get_raw_function_info(t)
-                    if info.name == event.tool_name:
-                        tool = t
-                        break
-
-            if not tool:
-                logger.error(f"[ultravox] tool '{event.tool_name}' not found")
-                result = f"Error: Tool '{event.tool_name}' not found"
-            else:
-                logger.info(f"[ultravox] executing tool: {event.tool_name}")
-
-                # Execute the tool
-                if is_function_tool(tool):
-                    # For regular function tools, convert parameters to proper types first
-                    converted_params = await self._convert_tool_parameters(tool, event.parameters)
-                    result = await tool(**converted_params)
-                elif is_raw_function_tool(tool):
-                    # For raw function tools, call with just the parameters dict
-                    result = await tool(event.parameters)
-                else:
-                    result = "Error: Unknown tool type"
-
-                logger.info(f"[ultravox] tool execution result: {result}")
-
-            # Send result to Ultravox immediately
-            await self.send_tool_result(event.invocation_id, str(result))
-
-        except Exception as e:
-            logger.error(f"[ultravox] error executing tool {event.tool_name}: {e}", exc_info=True)
-            error_msg = f"Error executing tool: {e}"
-            await self.send_tool_result(event.invocation_id, error_msg)
-
-    async def _convert_tool_parameters(
-        self, tool: llm.FunctionTool, raw_params: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Convert raw parameters to the proper types expected by the tool."""
-        try:
-            # Get the Pydantic model for this tool's parameters
-            model = function_arguments_to_pydantic_model(tool)
-
-            # Parse and validate the parameters using the Pydantic model
-            validated_params = model.model_validate(raw_params)
-
-            # Convert back to dict with proper types
-            return validated_params.model_dump()
-
-        except ValidationError as e:
-            logger.warning(f"[ultravox] parameter validation failed for {tool.__name__}: {e}")
-            logger.info(f"[ultravox] falling back to raw parameters: {raw_params}")
-            # Fallback to raw parameters if validation fails - the tool itself should handle invalid values
-            return raw_params
-        except Exception as e:
-            logger.error(
-                f"[ultravox] error converting parameters for {tool.__name__}: {e}", exc_info=True
+        if lk_ultravox_debug:
+            logger.debug(
+                f"[ultravox] emitted FunctionCall; will close tool turn after tool_result bridge: "
+                f"invocationId={event.invocation_id}"
             )
-            # Fallback to raw parameters if conversion fails
-            return raw_params
+
+        if lk_ultravox_debug:
+            gen_id = (
+                self._current_generation.response_id if self._current_generation else "<none>"
+            )
+            self._tool_turn_debug[event.invocation_id] = {
+                "invocation_received_at": time.perf_counter(),
+                "gen_id": gen_id,
+                "mode": lk_ultravox_tool_turn_mode,
+            }
+            logger.debug(
+                f"[ultravox.review] tool_invocation: id={event.invocation_id} mode={lk_ultravox_tool_turn_mode} gen_id={gen_id}"
+            )
+
+        if lk_ultravox_tool_turn_mode == "close_on_invocation":
+            # Strict reviewer mode: close as soon as tool is invoked
+            if lk_ultravox_debug:
+                logger.debug(
+                    f"[ultravox.review] close_on_invocation: closing generation immediately for id={event.invocation_id}"
+                )
+            self._mark_current_generation_done()
+
 
     def _handle_pong_event(self, event: PongEvent) -> None:
         """Handle pong events from Ultravox."""
@@ -1163,30 +1194,14 @@ class RealtimeSession(
         """
         logger.debug("[ultravox] Received PlaybackClearBuffer - clearing audio buffer")
 
-        # Clear the current audio generation if exists
-        if self._current_generation and not self._current_generation._done:
-            # Close and recreate audio channel to clear any buffered audio
-            if not self._current_generation.audio_ch.closed:
-                self._current_generation.audio_ch.close()
-                # Create new audio channel for continued streaming
-                self._current_generation.audio_ch = utils.aio.Chan[rtc.AudioFrame]()
-                self._current_generation.message_ch.send_nowait(
-                    llm.MessageGeneration(
-                        message_id=self._current_generation.response_id,
-                        text_stream=self._current_generation.text_ch,
-                        audio_stream=self._current_generation.audio_ch,
-                    )
-                )
-
-        # Also clear local audio buffer
+        # Best-effort: clear local input buffer (output playout buffer is managed
+        # downstream in the agent audio pipeline).
         self.clear_audio()
 
     def _handle_debug_event(self, event: DebugEvent) -> None:
         """Handle debug events from Ultravox."""
         if lk_ultravox_debug:
             logger.debug(f"[ultravox] Debug: {event.message}")
-        # Could also emit as a custom event for advanced debugging
-        # self.emit("debug_message", event.message)
 
     @utils.log_exceptions(logger=logger)
     def _handle_audio_data(self, audio_data: bytes) -> None:
@@ -1270,8 +1285,10 @@ class RealtimeSession(
 
     async def send_tool_result(self, call_id: str, result: str) -> None:
         """Send tool execution result back to Ultravox."""
-        logger.info(f"[ultravox] send_tool_result called: call_id={call_id}, result={result}")
-        logger.info(f"[ultravox] sending tool result for {call_id}: {result}")
+        if lk_ultravox_debug:
+            preview = (result[:200] + "...") if isinstance(result, str) and len(result) > 200 else result
+            logger.debug(f"[ultravox] send_tool_result: call_id={call_id} preview={preview!r}")
+
         event = ClientToolResultEvent(
             invocationId=call_id,
             result=result,
