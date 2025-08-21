@@ -24,6 +24,7 @@ from typing import cast
 
 import av
 import av.container
+from av.error import EOFError as AvEOFError
 
 from livekit import rtc
 
@@ -221,6 +222,9 @@ class AudioStreamDecoder:
                             samples_per_channel=int(f.samples / nchannels),
                         ),
                     )
+        except AvEOFError:
+            logger.warning("EOF reached while decoding audio (likely buffer underrun)")
+            pass
 
         except Exception:
             logger.exception("error decoding audio")
