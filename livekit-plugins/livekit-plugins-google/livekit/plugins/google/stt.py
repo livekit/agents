@@ -102,7 +102,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        languages: LanguageCode = "en-US",  # Google STT can accept multiple languages
+        languages: LanguageCode | "auto" = "en-US",  # Google STT can accept multiple languages
         detect_language: bool = True,
         interim_results: bool = True,
         punctuate: bool = True,
