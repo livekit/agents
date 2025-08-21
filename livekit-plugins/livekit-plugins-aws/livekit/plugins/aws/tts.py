@@ -32,11 +32,12 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .models import TTSLanguages, TTSSpeechEngine
+from .models import TTSLanguages, TTSSpeechEngine, TTSTextType
 from .utils import _strip_nones
 
 DEFAULT_SPEECH_ENGINE: TTSSpeechEngine = "generative"
 DEFAULT_VOICE = "Ruth"
+DEFAULT_TEXT_TYPE: TTSTextType = "text"
 
 
 @dataclass
@@ -47,6 +48,7 @@ class _TTSOptions:
     region: str | None
     sample_rate: int
     language: TTSLanguages | str | None
+    text_type: TTSTextType
 
 
 class TTS(tts.TTS):
@@ -56,6 +58,7 @@ class TTS(tts.TTS):
         voice: str = "Ruth",
         language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
         speech_engine: TTSSpeechEngine = "generative",
+        text_type: TTSTextType = "text",
         sample_rate: int = 16000,
         region: str | None = None,
         api_key: str | None = None,
@@ -71,10 +74,11 @@ class TTS(tts.TTS):
         See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
 
         Args:
-            Voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
-            language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
+            voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
+            language (TTSLanguages, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
+            speech_engine(TTSSpeechEngine, optional): The engine to use for the synthesis. Defaults to "generative".
+            text_type(TTSTextType, optional): Type of text to synthesize. Use "ssml" for SSML-enhanced text. Defaults to "text".
             sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
-            speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
             region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
@@ -96,6 +100,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
+            text_type=text_type,
             region=region or None,
             language=language or None,
             sample_rate=sample_rate,
@@ -130,7 +135,7 @@ class ChunkedStream(tts.ChunkedStream):
                             "OutputFormat": "mp3",
                             "Engine": self._opts.speech_engine,
                             "VoiceId": self._opts.voice,
-                            "TextType": "text",
+                            "TextType": self._opts.text_type,
                             "SampleRate": str(self._opts.sample_rate),
                             "LanguageCode": self._opts.language,
                         }

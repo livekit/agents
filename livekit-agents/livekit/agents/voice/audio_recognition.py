@@ -45,7 +45,9 @@ class _TurnDetector(Protocol):
     async def unlikely_threshold(self, language: str | None) -> float | None: ...
     async def supports_language(self, language: str | None) -> bool: ...
 
-    async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
+    async def predict_end_of_turn(
+        self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
+    ) -> float: ...
 
 
 class RecognitionHooks(Protocol):
@@ -349,21 +351,29 @@ class AudioRecognition:
             user_turn_span = self._ensure_user_turn_span()
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
-                    logger.debug("Turn detector does not support language %s", self._last_language)
+                    logger.info("Turn detector does not support language %s", self._last_language)
                 else:
                     with (
                         trace.use_span(user_turn_span),
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
-                        end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
-                        unlikely_threshold = await turn_detector.unlikely_threshold(
-                            self._last_language
-                        )
-                        if (
-                            unlikely_threshold is not None
-                            and end_of_turn_probability < unlikely_threshold
-                        ):
-                            endpointing_delay = self._max_endpointing_delay
+                        # if there are failures, we should not hold the pipeline up
+                        end_of_turn_probability = 0.0
+                        unlikely_threshold: float | None = None
+                        try:
+                            end_of_turn_probability = await turn_detector.predict_end_of_turn(
+                                chat_ctx
+                            )
+                            unlikely_threshold = await turn_detector.unlikely_threshold(
+                                self._last_language
+                            )
+                            if (
+                                unlikely_threshold is not None
+                                and end_of_turn_probability < unlikely_threshold
+                            ):
+                                endpointing_delay = self._max_endpointing_delay
+                        except Exception:
+                            logger.exception("Error predicting end of turn")
 
                         eou_detection_span.set_attributes(
                             {

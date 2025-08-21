@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, cast
@@ -20,8 +21,14 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
-from mistralai import ChatCompletionChoice, ChatCompletionStreamRequestMessages, Mistral
+from livekit.agents.utils import is_given, shortuuid
+from livekit.plugins.openai.utils import to_fnc_ctx
+from mistralai import (
+    ChatCompletionStreamRequestMessagesTypedDict,
+    CompletionResponseStreamChoice,
+    Mistral,
+    ToolTypedDict,
+)
 
 from .models import ChatModels
 
@@ -43,7 +50,6 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
-        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         super().__init__()
         self._opts = _LLMOptions(
@@ -51,7 +57,6 @@ class LLM(llm.LLM):
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
         )
-        self._provider_fmt = _provider_fmt or "mistralai"
         self._client = Mistral(api_key=api_key or os.environ.get("MISTRAL_API_KEY"))
 
     @property
@@ -77,12 +82,22 @@ class LLM(llm.LLM):
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
 
+        if is_given(parallel_tool_calls):
+            extra["parallel_tool_calls"] = parallel_tool_calls
+
+        if is_given(tool_choice):
+            extra["tool_choice"] = tool_choice
+
+        if is_given(response_format):
+            extra["response_format"] = response_format
+
         return LLMStream(
             self,
             model=self._opts.model,
             client=self._client,
             chat_ctx=chat_ctx,
-            provider_fmt=self._provider_fmt,
+            tools=tools or [],
+            conn_options=conn_options,
             extra_kwargs=extra,
         )
 
@@ -94,20 +109,16 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | ChatModels,
-        provider_fmt: str,
         client: Mistral,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        if tools is None:
-            tools = []
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._client = client
         self._llm = llm
-        self._provider_fmt = provider_fmt
         self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
@@ -116,19 +127,24 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            messages_mistral = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            messages, _ = self._chat_ctx.to_provider_format(format="mistralai")
+            tools = to_fnc_ctx(self._tools, strict=True)
+
             async_response = await self._client.chat.stream_async(
-                messages=cast(list[ChatCompletionStreamRequestMessages], messages_mistral),
+                messages=cast(list[ChatCompletionStreamRequestMessagesTypedDict], messages),
+                tools=cast(list[ToolTypedDict], tools),
                 model=self._model,
+                timeout_ms=int(self._conn_options.timeout * 1000),
                 **self._extra_kwargs,
             )
-            print("Streaming Start")
-            async for chunk in async_response:
-                for choice in chunk.data.choices:
-                    chat_chunk = self._parse_choice(chunk.data.id, choice)
-                    if chat_chunk is not None:
-                        retryable = False
-                        self._event_ch.send_nowait(chat_chunk)
+            async for ev in async_response:
+                if not ev.data.choices:
+                    continue
+                choice = ev.data.choices[0]
+                chat_chunk = self._parse_choice(ev.data.id, choice)
+                if chat_chunk is not None:
+                    retryable = False
+                    self._event_ch.send_nowait(chat_chunk)
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
@@ -143,13 +159,25 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_choice(self, id: str, choice: ChatCompletionChoice) -> ChatChunk | None:
-        # 1) get the streaming delta
-        delta = getattr(choice, "delta", None)
-        if not (delta and delta.content):
-            return None
+    def _parse_choice(self, id: str, choice: CompletionResponseStreamChoice) -> ChatChunk | None:
+        chunk = llm.ChatChunk(id=id)
+        if choice.delta.content and isinstance(choice.delta.content, str):
+            # TODO: support thinking chunks
+            chunk.delta = llm.ChoiceDelta(content=choice.delta.content, role="assistant")
 
-        return llm.ChatChunk(
-            id=id,
-            delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
-        )
+        if choice.delta.tool_calls:
+            if not chunk.delta:
+                chunk.delta = llm.ChoiceDelta(role="assistant")
+
+            for tool in choice.delta.tool_calls:
+                arguments = tool.function.arguments
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments)
+                call_id = tool.id or shortuuid("tool_call_")
+
+                chunk.delta.tool_calls.append(
+                    llm.FunctionToolCall(
+                        name=tool.function.name, arguments=arguments, call_id=call_id
+                    )
+                )
+        return chunk if chunk.delta else None

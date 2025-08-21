@@ -74,7 +74,7 @@ class MCPServer(ABC):
 
         tools = await self._client.list_tools()
         lk_tools = [
-            self._make_function_tool(tool.name, tool.description, tool.inputSchema)
+            self._make_function_tool(tool.name, tool.description, tool.inputSchema, tool.meta)
             for tool in tools.tools
         ]
 
@@ -83,7 +83,11 @@ class MCPServer(ABC):
         return lk_tools
 
     def _make_function_tool(
-        self, name: str, description: str | None, input_schema: dict[str, Any]
+        self,
+        name: str,
+        description: str | None,
+        input_schema: dict[str, Any],
+        meta: dict[str, Any] | None,
     ) -> MCPTool:
         async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
             # In case (somehow), the tool is called after the MCPServer aclose.
@@ -110,10 +114,15 @@ class MCPServer(ABC):
                 "This might indicate an issue with internal processing."
             )
 
-        return function_tool(
-            _tool_called,
-            raw_schema={"name": name, "description": description, "parameters": input_schema},
-        )
+        raw_schema = {
+            "name": name,
+            "description": description,
+            "parameters": input_schema,
+        }
+        if meta:
+            raw_schema["meta"] = meta
+
+        return function_tool(_tool_called, raw_schema=raw_schema)
 
     async def aclose(self) -> None:
         try:

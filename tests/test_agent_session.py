@@ -5,6 +5,8 @@ import contextlib
 import time
 from typing import Any
 
+import pytest
+
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -40,12 +42,14 @@ class MyAgent(Agent):
         *,
         generate_reply_on_enter: bool = False,
         say_on_user_turn_completed: bool = False,
+        on_user_turn_completed_delay: float = 0.0,
     ) -> None:
         super().__init__(
             instructions=("You are a helpful assistant."),
         )
         self.generate_reply_on_enter = generate_reply_on_enter
         self.say_on_user_turn_completed = say_on_user_turn_completed
+        self.on_user_turn_completed_delay = on_user_turn_completed_delay
 
         self._close_session_task: asyncio.Task[None] | None = None
 
@@ -71,6 +75,9 @@ class MyAgent(Agent):
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         if self.say_on_user_turn_completed:
             self.session.say("session.say from on_user_turn_completed")
+
+        if self.on_user_turn_completed_delay > 0.0:
+            await asyncio.sleep(self.on_user_turn_completed_delay)
 
 
 SESSION_TIMEOUT = 60.0
@@ -493,6 +500,102 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[6].type == "message"
     assert agent.chat_ctx.items[6].role == "assistant"
     assert agent.chat_ctx.items[6].text_content == "Goodbye! have a nice day!"
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, expected_latency",
+    [
+        (True, 0.8),
+        (False, 1.1),
+    ],
+)
+async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
+    actions.add_tts(3.0, ttfb=0.3)
+    # preemptive_generation enabled: e2e latency is 0.2+0.3+0.3=0.8s
+    # preemptive_generation disabled: e2e latency is 0.5+0.3+3.0=1.1s
+
+    session = create_session(
+        actions, speed_factor=speed, extra_kwargs={"preemptive_generation": preemptive_generation}
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    assert len(agent_state_events) == 4
+    assert agent_state_events[0].old_state == "initializing"
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    check_timestamp(
+        agent_state_events[2].created_at - t_origin,
+        t_target=2.0 + expected_latency,
+        speed_factor=speed,
+        max_abs_diff=0.2,
+    )
+    assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, on_user_turn_completed_delay",
+    [
+        (False, 0.0),
+        (False, 2.0),
+        (True, 0.0),
+        (True, 2.0),
+    ],
+)
+async def test_interrupt_during_on_user_turn_completed(
+    preemptive_generation: bool, on_user_turn_completed_delay: float
+) -> None:
+    """
+    Test interrupt during preemptive generation and on_user_turn_completed.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Tell me a story", stt_delay=0.2)
+    actions.add_llm("Here is a story for you...", ttft=0.1, duration=0.3)
+    actions.add_tts(10.0, ttfb=1.0)  # latency after end of turn: 1.3s
+    actions.add_user_speech(2.6, 3.0, "about a firefighter.")  # interrupt before speaking
+    actions.add_llm("Here is a story about a firefighter...", ttft=0.1, duration=0.3)
+    actions.add_tts(10.0, ttfb=0.3)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"preemptive_generation": preemptive_generation},
+    )
+    agent = MyAgent(on_user_turn_completed_delay=on_user_turn_completed_delay / speed)
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(agent_state_events) == 4
+    assert agent_state_events[0].old_state == "initializing"
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    assert agent_state_events[3].new_state == "listening"
+
+    assert len(conversation_events) == 3
+    assert conversation_events[0].item.type == "message"
+    assert conversation_events[0].item.role == "user"
+    assert conversation_events[0].item.text_content == "Tell me a story"
+    assert conversation_events[1].item.type == "message"
+    assert conversation_events[1].item.role == "user"
+    assert conversation_events[1].item.text_content == "about a firefighter."
+    assert conversation_events[2].item.type == "message"
+    assert conversation_events[2].item.role == "assistant"
+    assert conversation_events[2].item.text_content == "Here is a story about a firefighter..."
 
 
 # helpers

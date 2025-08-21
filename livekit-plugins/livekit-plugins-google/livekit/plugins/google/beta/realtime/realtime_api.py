@@ -428,7 +428,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._chat_ctx = chat_ctx.copy()
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
-        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(tools)
+        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
+            tools, use_parameters_json_schema=False
+        )
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
 
@@ -699,10 +701,15 @@ class RealtimeSession(llm.RealtimeSession):
                         break
 
                 async for response in session.receive():
-                    if (not self._current_generation or self._current_generation._done) and (
-                        response.server_content or response.tool_call
-                    ):
-                        self._start_new_generation()
+                    if not self._current_generation or self._current_generation._done:
+                        if response.server_content and response.server_content.interrupted:
+                            # interrupt a generation already done
+                            self._handle_input_speech_started()
+                            # reset the flag and still start a new generation in case it has any other content
+                            response.server_content.interrupted = False
+
+                        if self._is_new_generation(response):
+                            self._start_new_generation()
 
                     if response.session_resumption_update:
                         if (
@@ -1084,3 +1091,16 @@ class RealtimeSession(llm.RealtimeSession):
                 recoverable=recoverable,
             ),
         )
+
+    def _is_new_generation(self, resp: types.LiveServerMessage) -> bool:
+        if resp.tool_call:
+            return True
+
+        if (sc := resp.server_content) and (
+            sc.model_turn
+            or (sc.output_transcription and sc.output_transcription.text is not None)
+            or (sc.input_transcription and sc.input_transcription.text is not None)
+        ):
+            return True
+
+        return False

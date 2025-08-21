@@ -67,6 +67,7 @@ class STTOptions:
     punctuate: bool
     spoken_punctuation: bool
     enable_word_time_offsets: bool
+    enable_word_confidence: bool
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
@@ -99,6 +100,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = False,
         enable_word_time_offsets: bool = True,
+        enable_word_confidence: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
         sample_rate: int = 16000,
@@ -122,6 +124,7 @@ class STT(stt.STT):
             punctuate(bool): whether to punctuate the audio (default: True)
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
             enable_word_time_offsets(bool): whether to enable word time offsets (default: True)
+            enable_word_confidence(bool): whether to enable word confidence (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
@@ -162,6 +165,7 @@ class STT(stt.STT):
             punctuate=punctuate,
             spoken_punctuation=spoken_punctuation,
             enable_word_time_offsets=enable_word_time_offsets,
+            enable_word_confidence=enable_word_confidence,
             model=model,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
@@ -243,6 +247,7 @@ class STT(stt.STT):
                 enable_automatic_punctuation=config.punctuate,
                 enable_spoken_punctuation=config.spoken_punctuation,
                 enable_word_time_offsets=config.enable_word_time_offsets,
+                enable_word_confidence=config.enable_word_confidence,
             ),
             model=config.model,
             language_codes=config.languages,
@@ -557,8 +562,11 @@ def _recognize_response_to_speech_event(
         confidence += result.alternatives[0].confidence
 
     # not sure why start_offset and end_offset returns a timedelta
-    start_offset = resp.results[0].alternatives[0].words[0].start_offset
-    end_offset = resp.results[-1].alternatives[0].words[-1].end_offset
+    try:
+        start_time = resp.results[0].alternatives[0].words[0].start_offset.total_seconds()  # type: ignore
+        end_time = resp.results[-1].alternatives[0].words[-1].end_offset.total_seconds()  # type: ignore
+    except IndexError:
+        start_time = end_time = 0
 
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
@@ -567,8 +575,8 @@ def _recognize_response_to_speech_event(
         alternatives=[
             stt.SpeechData(
                 language=lg,
-                start_time=start_offset.total_seconds(),  # type: ignore
-                end_time=end_offset.total_seconds(),  # type: ignore
+                start_time=start_time,
+                end_time=end_time,
                 confidence=confidence,
                 text=text,
             )
