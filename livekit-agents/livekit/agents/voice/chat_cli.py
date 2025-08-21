@@ -28,6 +28,8 @@ MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
 INPUT_DB_MAX = 0.0
 FPS = 16
+MIC_CHECK_DELAY = 5.0
+MIN_RMS = 2.0
 
 
 AEC_RING_BUFFER_SIZE = 24000 * 4
@@ -192,6 +194,7 @@ class ChatCLI:
         self._input_delay = 0.0
 
         self._main_atask: asyncio.Task[None] | None = None
+        self._mic_received_audio: bool = False
 
         self._input_audio: io.AudioInput = _AudioInput(self)
         self._output_audio: io.AudioOutput = (
@@ -297,6 +300,8 @@ class ChatCLI:
             )
             self._input_stream.start()
             self._session.input.audio = self._input_audio
+            self._loop.call_later(MIC_CHECK_DELAY, self._check_mic_received_audio)
+
         elif self._input_stream is not None:
             self._input_stream.stop()
             self._input_stream.close()
@@ -395,6 +400,8 @@ class ChatCLI:
             rms = np.sqrt(np.mean(in_data_aec.astype(np.float32) ** 2))
             max_int16 = np.iinfo(np.int16).max
             self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
+            if rms > MIN_RMS:
+                self._mic_received_audio = True
 
             self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, capture_frame_for_aec)
 
@@ -448,6 +455,10 @@ class ChatCLI:
                 self._print_text_mode()
 
             await asyncio.sleep(max(0, next_frame - time.perf_counter()))
+
+    def _check_mic_received_audio(self) -> None:
+        if self._input_stream is not None and not self._mic_received_audio:
+            logger.error("No audio input detected. Check microphone permissions in your System Preferences.")
 
     def _print_audio_mode(self) -> None:
         amplitude_db = _normalize_db(self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX)
