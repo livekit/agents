@@ -849,10 +849,16 @@ class RealtimeSession(
 
             elif msg.type == aiohttp.WSMsgType.BINARY:
                 self._handle_audio_data(msg.data)
-            elif msg.type == aiohttp.WSMsgType.CLOSED:
-                if not self._closing:
-                    logger.error(f"Ultravox WebSocket connection closed unexpectedly: {msg}")
-                break
+            elif msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                # If we're already closing due to send loop shutdown, just return
+                if self._closing:
+                    return
+                # Unexpected close
+                raise APIConnectionError(message="Ultravox S2S connection closed unexpectedly")
             elif msg.type == aiohttp.WSMsgType.ERROR:
                 logger.error(f"Ultravox WebSocket error: {self._ws.exception()}")
                 break
