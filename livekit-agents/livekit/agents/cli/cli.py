@@ -7,11 +7,15 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
+
+from collections import OrderedDict
 import re
+import pathlib
 import hashlib
 import asyncio
 import datetime
 import importlib
+import enum
 import json
 import logging
 import signal
@@ -43,8 +47,13 @@ from ..job import JobExecutorType
 from ..voice import io, AgentSession
 from ..voice.run_result import RunEvent
 from ..utils import aio
-from .discover import get_import_data
+from ..plugin import Plugin
+from ..log import logger
+from . import proto
+
+# from .discover import get_import_data
 from .readchar import key, readkey
+
 
 TRACE_LOG_LEVEL = 5
 
@@ -53,10 +62,8 @@ if TYPE_CHECKING:
 
 HANDLED_SIGNALS = (
     signal.SIGINT,  # Unix signal 2. Sent by Ctrl+C.
-    signal.SIGTERM,  # Unix signal 15. Sent by `kill <pid>`.
+    signal.SIGTERM,
 )
-if sys.platform == "win32":  # pragma: py-not-win32
-    HANDLED_SIGNALS += (signal.SIGBREAK,)  # Windows signal 21. Sent by Ctrl+Break.
 
 
 class _ToggleMode(Exception):
@@ -68,32 +75,32 @@ class _ExitCli(Exception):
 
 
 # from https://github.com/encode/uvicorn/blob/c1144fd4f130388cffc05ee17b08747ce8c1be11/uvicorn/importer.py#L9C1-L34C20
-def import_from_string(import_str: Any) -> Any:
-    if not isinstance(import_str, str):
-        return import_str
+# def import_from_string(import_str: Any) -> Any:
+#     if not isinstance(import_str, str):
+#         return import_str
 
-    module_str, _, attrs_str = import_str.partition(":")
-    if not module_str or not attrs_str:
-        message = 'Import string "{import_str}" must be in format "<module>:<attribute>".'
-        raise RuntimeError(message.format(import_str=import_str))
+#     module_str, _, attrs_str = import_str.partition(":")
+#     if not module_str or not attrs_str:
+#         message = 'Import string "{import_str}" must be in format "<module>:<attribute>".'
+#         raise RuntimeError(message.format(import_str=import_str))
 
-    try:
-        module = importlib.import_module(module_str)
-    except ModuleNotFoundError as exc:
-        if exc.name != module_str:
-            raise exc from None
-        message = 'Could not import module "{module_str}".'
-        raise RuntimeError(message.format(module_str=module_str))
+#     try:
+#         module = importlib.import_module(module_str)
+#     except ModuleNotFoundError as exc:
+#         if exc.name != module_str:
+#             raise exc from None
+#         message = 'Could not import module "{module_str}".'
+#         raise RuntimeError(message.format(module_str=module_str)) from None
 
-    instance = module
-    try:
-        for attr_str in attrs_str.split("."):
-            instance = getattr(instance, attr_str)
-    except AttributeError:
-        message = 'Attribute "{attrs_str}" not found in module "{module_str}".'
-        raise RuntimeError(message.format(attrs_str=attrs_str, module_str=module_str))
+#     instance = module
+#     try:
+#         for attr_str in attrs_str.split("."):
+#             instance = getattr(instance, attr_str)
+#     except AttributeError:
+#         message = 'Attribute "{attrs_str}" not found in module "{module_str}".'
+#         raise RuntimeError(message.format(attrs_str=attrs_str, module_str=module_str)) from None
 
-    return instance
+#     return instance
 
 
 ConsoleMode = Literal["text", "audio"]
@@ -632,6 +639,35 @@ class JsonEncoder(json.JSONEncoder):
                 return None
 
 
+class JsonFormatter(logging.Formatter):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Formats a log record and serializes to json"""
+        message_dict: dict[str, Any] = {}
+        message_dict["level"] = record.levelname
+        message_dict["name"] = record.name
+        message_dict["message"] = record.getMessage()
+
+        if record.exc_info and not message_dict.get("exc_info"):
+            message_dict["exc_info"] = self.formatException(record.exc_info)
+        if not message_dict.get("exc_info") and record.exc_text:
+            message_dict["exc_info"] = record.exc_text
+        if record.stack_info and not message_dict.get("stack_info"):
+            message_dict["stack_info"] = self.formatStack(record.stack_info)
+
+        log_record: dict[str, Any] = OrderedDict()
+        log_record.update(message_dict)
+        _merge_record_extra(record, log_record)
+
+        log_record["timestamp"] = datetime.datetime.fromtimestamp(
+            record.created, tz=datetime.timezone.utc
+        )
+
+        return json.dumps(log_record, cls=JsonEncoder, ensure_ascii=False)
+
+
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
 _RESERVED_ATTRS: tuple[str, ...] = (
@@ -777,7 +813,12 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
     root = logging.getLogger()
     if c:
         root.addHandler(c._log_handler)
-        root.setLevel(log_level)
+    else:
+        handler = logging.StreamHandler(sys.stdout)
+        root.addHandler(handler)
+        handler.setFormatter(JsonFormatter())
+
+    root.setLevel(log_level)
 
     _silence_noisy_loggers()
 
@@ -931,11 +972,11 @@ def _text_mode(c: AgentsConsole):
             c.console.bell()
             continue
 
-        async def _generate() -> list[RunEvent]:
+        async def _generate(text: str) -> list[RunEvent]:
             sess = await c.io_session.run(user_input=text)
             return sess.events.copy()
 
-        h = asyncio.run_coroutine_threadsafe(_generate(), loop=c.io_loop)
+        h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
         c.print(text, tag="You")
 
         with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
@@ -1039,9 +1080,9 @@ def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: st
 
 
 class _ConsoleWorker:
-    def __init__(self, *, import_string: str, shutdown_cb: Callable) -> None:
+    def __init__(self, *, server: AgentServer, shutdown_cb: Callable) -> None:
         self._loop = asyncio.new_event_loop()
-        self._import_string = import_string
+        self._server = server
         self._shutdown_cb = shutdown_cb
         self._lock = threading.Lock()
         self._closed = False
@@ -1049,8 +1090,6 @@ class _ConsoleWorker:
     def start(self) -> None:
         self._thread = threading.Thread(target=self._worker_thread)
         self._thread.start()
-
-        self._server: AgentServer = import_from_string(self._import_string)
 
     def join(self) -> None:
         self._thread.join()
@@ -1087,7 +1126,7 @@ class _ConsoleWorker:
 
 def _run_console(
     *,
-    path: Union[Path, None] = None,
+    server: AgentServer,
     input_device: str | None,
     output_device: str | None,
     mode: ConsoleMode,
@@ -1100,13 +1139,13 @@ def _run_console(
 
     c.print("Starting console mode 🚀", tag="Agents")
     c.print(" ")
-    c.print(
-        "Searching for package file structure from directories with [blue]__init__.py[/blue] files"
-    )
+    # c.print(
+    #     "Searching for package file structure from directories with [blue]__init__.py[/blue] files"
+    # )
     try:
-        import_data = get_import_data(path=path)
-        c.print(f"Importing from {import_data.module_data.extra_sys_path}")
-        c.print(" ")
+        # import_data = get_import_data(path=path)
+        # c.print(f"Importing from {import_data.module_data.extra_sys_path}")
+        # c.print(" ")
 
         c._validate_device_or_raise(input_device=input_device, output_device=output_device)
 
@@ -1132,9 +1171,7 @@ def _run_console(
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)
 
-        console_worker = _ConsoleWorker(
-            import_string=import_data.import_string, shutdown_cb=_on_worker_shutdown
-        )
+        console_worker = _ConsoleWorker(server=server, shutdown_cb=_on_worker_shutdown)
         console_worker.start()
 
         # TODO: wait for a session request the agents console context before showing any of the mode
@@ -1164,103 +1201,277 @@ def _run_console(
         raise typer.Exit(code=1) from None
 
 
-app = typer.Typer(rich_markup_mode="rich")
+def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False) -> None:
+    c: AgentsConsole | None = None
+    if args.devmode:
+        c = AgentsConsole.get_instance()  # colored logs
+
+    if not jupyter:
+
+        def _handle_exit(sig: int, frame: FrameType | None) -> None:
+            nonlocal exit_triggered
+            if not exit_triggered:
+                exit_triggered = True
+                raise _ExitCli()
+
+        for sig in HANDLED_SIGNALS:
+            signal.signal(sig, _handle_exit)
+
+    _configure_logger(c, args.log_level)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    loop.slow_callback_duration = 0.1  # 100ms
+    exit_triggered = False
+
+    async def _worker_run(worker: AgentServer) -> None:
+        try:
+            await server.run(devmode=args.devmode)
+        except Exception:
+            logger.exception("worker failed")
+
+    watch_client = None
+    if args.reload:
+        from .watcher import WatchClient
+
+        watch_client = WatchClient(server, args, loop=loop)
+        watch_client.start()
+
+    try:
+        main_task = loop.create_task(_worker_run(server), name="worker_main_task_cli")
+        try:
+            loop.run_until_complete(main_task)
+        except _ExitCli:
+            pass
+
+        try:
+            exit_triggered = False  # allow a new _ExitCLI raise
+            if not args.devmode:
+                loop.run_until_complete(server.drain())
+
+            loop.run_until_complete(server.aclose())
+
+            if watch_client:
+                loop.run_until_complete(watch_client.aclose())
+        except _ExitCli:
+            if not jupyter:
+                logger.warning("exiting forcefully")
+                import os
+
+                os._exit(1)  # TODO(theomonnom): add aclose(force=True) in worker
+    finally:
+        if jupyter:
+            loop.close()  # close can only be called from the main thread
+            return  # noqa: B012
+
+        try:
+            tasks = asyncio.all_tasks(loop)
+            for task in tasks:
+                task.cancel()
+
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            loop.close()
 
 
-@app.command()
-def console(
-    path: Annotated[
-        Union[Path, None],
-        typer.Argument(
-            help="A path to a Python file or package directory (with [blue]__init__.py[/blue] files) containing a [bold]Agents[/bold] app. If not provided, a default set of paths will be tried."
-        ),
-    ] = None,
-    *,
-    input_device: Annotated[
-        Union[str, None],
-        typer.Option(
-            help="Numeric input device ID or input device name substring(s)",
-        ),
-    ] = None,
-    output_device: Annotated[
-        Union[str, None],
-        typer.Option(
-            help="Numeric output device ID or output device name substring(s)",
-        ),
-    ] = None,
-    list_devices: Annotated[
-        bool,
-        typer.Option(
-            help="List all available input and output audio devices.",
-        ),
-    ] = False,
-    text: Annotated[
-        bool,
-        typer.Option(help="Whether to start the console in text mode"),
-    ] = False,
-) -> None:
-    """
-    Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
-    """
-    if list_devices:
-        _print_audio_devices()
-        raise typer.Exit()
+def _build_cli(server: AgentServer) -> typer.Typer:
+    class LogLevel(str, enum.Enum):
+        trace = "TRACE"
+        debug = "DEBUG"
+        info = "INFO"
+        warn = "WARN"
+        error = "ERROR"
+        critical = "CRITICAL"
 
-    if input_device and input_device.isdigit():
-        input_device = int(input_device)  # type: ignore
+    app = typer.Typer(rich_markup_mode="rich")
 
-    if output_device and output_device.isdigit():
-        output_device = int(output_device)  # type: ignore
+    @app.command()
+    def console(
+        *,
+        input_device: Annotated[
+            Union[str, None],
+            typer.Option(
+                help="Numeric input device ID or input device name substring(s)",
+            ),
+        ] = None,
+        output_device: Annotated[
+            Union[str, None],
+            typer.Option(
+                help="Numeric output device ID or output device name substring(s)",
+            ),
+        ] = None,
+        list_devices: Annotated[
+            bool,
+            typer.Option(
+                help="List all available input and output audio devices.",
+            ),
+        ] = False,
+        text: Annotated[
+            bool,
+            typer.Option(help="Whether to start the console in text mode"),
+        ] = False,
+    ) -> None:
+        """
+        Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
+        """
+        if list_devices:
+            _print_audio_devices()
+            raise typer.Exit()
 
-    _run_console(
-        path=path,
-        input_device=input_device,
-        output_device=output_device,
-        mode="text" if text else "audio",
-    )
+        if input_device and input_device.isdigit():
+            input_device = int(input_device)  # type: ignore
+
+        if output_device and output_device.isdigit():
+            output_device = int(output_device)  # type: ignore
+
+        _run_console(
+            server=server,
+            input_device=input_device,
+            output_device=output_device,
+            mode="text" if text else "audio",
+        )
+
+    @app.command()
+    def start(
+        *,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(help="Set the log level", case_sensitive=False),
+        ] = "info",
+        url: Annotated[
+            str | None,
+            typer.Option(
+                help="The WebSocket URL of your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_URL",
+            ),
+        ] = None,
+        api_key: Annotated[
+            str | None,
+            typer.Option(
+                help="API key for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_KEY",
+            ),
+        ] = None,
+        api_secret: Annotated[
+            str | None,
+            typer.Option(
+                help="API secret for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_SECRET",
+            ),
+        ] = None,
+    ) -> None:
+        _run_worker(
+            server=server,
+            args=proto.CliArgs(
+                log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
+            ),
+        )
+
+    @app.command()
+    def dev(
+        *,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(help="Set the log level", case_sensitive=False),
+        ] = "info",
+        reload: Annotated[
+            bool,
+            typer.Option(help="Enable auto-reload of the server when (code) files change."),
+        ] = True,
+        url: Annotated[
+            str | None,
+            typer.Option(
+                help="The WebSocket URL of your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_URL",
+            ),
+        ] = None,
+        api_key: Annotated[
+            str | None,
+            typer.Option(
+                help="API key for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_KEY",
+            ),
+        ] = None,
+        api_secret: Annotated[
+            str | None,
+            typer.Option(
+                help="API secret for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_SECRET",
+            ),
+        ] = None,
+    ) -> None:
+        args = proto.CliArgs(
+            log_level=log_level.value,
+            url=url,
+            api_key=api_key,
+            api_secret=api_secret,
+            devmode=True,
+            reload=reload,
+        )
 
 
-@app.command()
-def start() -> None:
-    pass
+        if not reload:
+            _run_worker(server=server, args=args)
+            return
+
+        from .watcher import WatchServer
+
+        c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
+
+        main_file = pathlib.Path(sys.argv[0]).parent
+
+        loop = asyncio.get_event_loop()
+        asyncio.set_event_loop(loop)
+
+        watch_server = WatchServer(_run_worker, server, main_file, args, loop=loop)
+
+        def _handle_exit(sig: int, frame: FrameType | None) -> None:
+            print("main child")
+            asyncio.run_coroutine_threadsafe(watch_server.aclose(), loop=loop)
+            raise KeyboardInterrupt
+
+        for sig in HANDLED_SIGNALS:
+            signal.signal(sig, _handle_exit)
+
+        async def _run_loop() -> None:
+            await watch_server.run()
+
+        try:
+            loop = asyncio.get_event_loop()
+            asyncio.set_event_loop(loop)
+
+            loop.run_until_complete(_run_loop())
+        except _ExitCli:
+            raise typer.Exit() from None
+
+    @app.command()
+    def download_files() -> None:
+        c = AgentsConsole.get_instance()
+        c.enabled = True
+
+        _configure_logger(c, logging.DEBUG)
+
+        try:
+            # import_data = get_import_data(path=path)
+            # c.print(f"Importing from {import_data.module_data.extra_sys_path}")
+            # c.print(" ")
+
+            for plugin in Plugin.registered_plugins:
+                logger.info(f"Downloading files for {plugin}")
+                plugin.download_files()
+
+        except CLIError as e:
+            c.print(" ")
+            c.print(f"[error]{e}")
+            c.print(" ")
+            raise typer.Exit(code=1) from None
+
+    return app
 
 
-@app.command()
-def dev(
-    path: Annotated[
-        Union[Path, None],
-        typer.Argument(
-            help="A path to a Python file or package directory (with [blue]__init__.py[/blue] files) containing a [bold]Agents[/bold] app. If not provided, a default set of paths will be tried."
-        ),
-    ] = None,
-    *,
-    reload: Annotated[
-        bool,
-        typer.Option(help="Enable auto-reload of the server when (code) files change."),
-    ] = True,
-    url: Annotated[
-        str | None,
-        typer.Option(
-            help="The WebSocket URL of your LiveKit server or Cloud project.", envvar="LIVEKIT_URL"
-        ),
-    ] = None,
-    api_key: Annotated[
-        str | None,
-        typer.Option(
-            help="API key for authenticating with your LiveKit server or Cloud project.",
-            envvar="LIVEKIT_API_KEY",
-        ),
-    ] = None,
-    api_secret: Annotated[
-        str | None,
-        typer.Option(
-            help="API secret for authenticating with your LiveKit server or Cloud project.",
-            envvar="LIVEKIT_API_SECRET",
-        ),
-    ] = None,
-) -> None:
-    pass
-
-
-def main() -> None:
-    app()
+def run_app(server: AgentServer) -> None:
+    _build_cli(server)()

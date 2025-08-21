@@ -52,7 +52,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .types import NOT_GIVEN, NotGivenOr
-from .utils import http_server
+from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -602,9 +602,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def active_jobs(self) -> list[RunningJobInfo]:
         return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]
 
-    async def drain(self, timeout: int | None = None) -> None:
+    async def drain(self, timeout: NotGivenOr[int | None] = NOT_GIVEN) -> None:
         """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
 
+        timeout = timeout if is_given(timeout) else self._drain_timeout
+            
         async with self._lock:
             if self._draining:
                 return

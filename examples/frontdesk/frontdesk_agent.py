@@ -22,6 +22,7 @@ from livekit.agents import (
     AgentServer,
     beta,
     function_tool,
+    cli,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -182,3 +183,6 @@ async def frontdesk_agent(ctx: JobContext):
     )
 
     await session.start(agent=FrontDeskAgent(timezone=timezone), room=ctx.room)
+
+if __name__ == "__main__":
+    cli.run_app(server)

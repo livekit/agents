@@ -9,26 +9,21 @@ from livekit.protocol import agent
 
 from ..ipc import channel
 from ..job import JobAcceptArguments, RunningJobInfo
-from ..worker import WorkerOptions, SimulateJobInfo
 
 
 @dataclass
 class CliArgs:
-    opts: WorkerOptions
     log_level: str
-    devmode: bool
-    asyncio_debug: bool
-    watch: bool
 
-    console: bool = False
-    # whether to run the worker in console mode (console subcommand
-    record: bool = False
+    url: str | None
+    api_key: str | None
+    api_secret: str | None
 
-    # register the worker to the worker pool
-    register: bool = True
+    devmode: bool = False
+    reload: bool = False
 
-    simulate_job: SimulateJobInfo | str | None = None
-
+    simulate_job: str | None = None
+    # internal states  
     # amount of time this worker has been reloaded
     reload_count: int = 0
 
