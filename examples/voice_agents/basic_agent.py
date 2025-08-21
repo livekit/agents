@@ -22,7 +22,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.transcription.filters import filter_markdown
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, kitten, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -79,6 +79,7 @@ class MyAgent(Agent):
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["tts"] = kitten.TTS(speed=1.5)
 
 
 async def entrypoint(ctx: JobContext):
@@ -92,7 +93,7 @@ async def entrypoint(ctx: JobContext):
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(voice="ash"),
+        tts=ctx.proc.userdata["tts"],
         # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,
         # use LiveKit's turn detection model
