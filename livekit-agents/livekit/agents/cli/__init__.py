@@ -1,5 +1,4 @@
-from .cli import run_app, AgentsConsole
-
+from .cli import AgentsConsole, run_app
 
 __all__ = ["run_app", "AgentsConsole"]
 

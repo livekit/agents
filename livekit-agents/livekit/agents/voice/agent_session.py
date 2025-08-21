@@ -21,7 +21,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import llm, stt, tts, utils, vad, cli
+from .. import cli, llm, stt, tts, utils, vad
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger

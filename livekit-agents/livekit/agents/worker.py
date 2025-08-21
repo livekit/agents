@@ -606,7 +606,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
 
         timeout = timeout if is_given(timeout) else self._drain_timeout
-            
+
         async with self._lock:
             if self._draining:
                 return

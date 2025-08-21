@@ -1,40 +1,32 @@
-from contextlib import contextmanager
-from typing import Callable, Iterator, Optional
-
-from rich.columns import Columns
-from rich.console import Console
-from rich.live import Live
-from rich.spinner import Spinner
-from rich.text import Text
-
-
-from collections import OrderedDict
-import os
-import re
-import pathlib
-import hashlib
 import asyncio
 import datetime
-import importlib
 import enum
+import hashlib
 import json
 import logging
+import os
+import pathlib
+import re
 import signal
 import sys
+import textwrap
 import threading
 import time
 import traceback
-import textwrap
+from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from inspect import istraceback
-from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
 
 import numpy as np
 import typer
+from rich.columns import Columns
 from rich.console import Console, ConsoleRenderable, Group, RenderableType
 from rich.live import Live
 from rich.segment import Segment
+from rich.spinner import Spinner
 from rich.style import Style
 from rich.table import Column, Table
 from rich.text import Text
@@ -45,16 +37,15 @@ from livekit.agents.worker import AgentServer
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
-from ..voice import io, AgentSession
-from ..voice.run_result import RunEvent
-from ..utils import aio
-from ..plugin import Plugin
 from ..log import logger
+from ..plugin import Plugin
+from ..utils import aio
+from ..voice import AgentSession, io
+from ..voice.run_result import RunEvent
 from . import proto
 
 # from .discover import get_import_data
 from .readchar import key, readkey
-
 
 TRACE_LOG_LEVEL = 5
 

@@ -23,7 +23,7 @@ class CliArgs:
     reload: bool = False
 
     simulate_job: str | None = None
-    # internal states  
+    # internal states
     # amount of time this worker has been reloaded
     reload_count: int = 0
 

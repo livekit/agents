@@ -28,8 +28,8 @@ from livekit.agents import (
     JobContext,
     RunContext,
     ToolError,
-    function_tool,
     cli,
+    function_tool,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -440,6 +440,7 @@ async def drive_thru_agent(ctx: JobContext):
 
     await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
     await background_audio.start(room=ctx.room, agent_session=session)
+
 
 if __name__ == "__main__":
     cli.run_app(server)
