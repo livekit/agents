@@ -1408,6 +1408,7 @@ class AgentActivity(RecognitionHooks):
             forwarded_text = text_out.text if text_out else ""
             if speech_handle.interrupted and audio_output is not None:
                 playback_ev = await audio_output.wait_for_playout()
+
                 if audio_out is not None and audio_out.first_frame_fut.done():
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
