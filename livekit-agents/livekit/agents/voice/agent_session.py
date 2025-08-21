@@ -78,7 +78,7 @@ class VoiceOptions:
     user_away_timeout: float | None
     agent_false_interruption_timeout: float | None
     min_consecutive_speech_delay: float
-    use_tts_aligned_transcript: bool
+    use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
 
 
@@ -158,7 +158,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         agent_false_interruption_timeout: float | None = 4.0,
         min_consecutive_speech_delay: float = 0.0,
-        use_tts_aligned_transcript: bool = False,
+        use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -227,7 +227,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
-                is ``False``.
+                is ``False``. When NOT_GIVEN, it will be enabled for non-streaming TTS
+                and disabled for streaming TTS.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
             preemptive_generation (bool):
@@ -415,7 +416,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
             current_span.set_attribute(
-                trace_types.ATTR_SESSION_OPTIONS, json.dumps(asdict(self._opts))
+                trace_types.ATTR_SESSION_OPTIONS,
+                json.dumps({k: v for k, v in asdict(self._opts).items() if is_given(v)}),
             )
 
             self._agent = agent
