@@ -280,11 +280,8 @@ class SpeechStream(stt.SpeechStream):
                     self._stt._vad_stream.push_frame(data)
 
             if isinstance(data, rtc.AudioFrame):
-                # Combine audio frames to get a single frame with all raw PCM data.
-                combined_frame = rtc.combine_audio_frames(data)
-
-                # Get the raw bytes from the combined frame.
-                pcm_data = combined_frame.data.tobytes()
+                # Get the raw bytes from the audio frame.
+                pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
 
     async def _send_audio_task(self):
