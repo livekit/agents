@@ -72,8 +72,8 @@ class STTOptions:
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
+    denoiser_config: DenoiserConfig = None
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
-    denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN
     speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
@@ -115,8 +115,8 @@ class STT(stt.STT):
         min_confidence_threshold: float = _default_min_confidence,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        denoiser_config: DenoiserConfig = None,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
-        denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
@@ -319,8 +319,8 @@ class STT(stt.STT):
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
+        denoiser_config: DenoiserConfig = None,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
-        denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
@@ -394,8 +394,8 @@ class SpeechStream(stt.SpeechStream):
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
+        denoiser_config: DenoiserConfig = None,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
-        denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
