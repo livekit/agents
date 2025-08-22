@@ -24,7 +24,6 @@ class ConnectionPool(Generic[T]):
         mark_refreshed_on_get: bool = False,
         connect_cb: Optional[Callable[[float], Awaitable[T]]] = None,
         close_cb: Optional[Callable[[T], Awaitable[None]]] = None,
-        connect_timeout: float = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
 
@@ -40,14 +39,13 @@ class ConnectionPool(Generic[T]):
         self._close_cb = close_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
-        self._connect_timeout = connect_timeout
 
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
 
         self._prewarm_task: Optional[weakref.ref[asyncio.Task[None]]] = None
 
-    async def _connect(self, timeout: float) -> T:
+    async def _connect(self) -> T:
         """Create a new connection.
 
         Returns:
@@ -58,7 +56,7 @@ class ConnectionPool(Generic[T]):
         """
         if self._connect_cb is None:
             raise NotImplementedError("Must provide connect_cb or implement connect()")
-        connection = await self._connect_cb(timeout)
+        connection = await self._connect_cb()
         self._connections[connection] = time.time()
         return connection
 
@@ -69,13 +67,13 @@ class ConnectionPool(Generic[T]):
         self._to_close.clear()
 
     @asynccontextmanager
-    async def connection(self, *, timeout: float) -> AsyncGenerator[T, None]:
+    async def connection(self) -> AsyncGenerator[T, None]:
         """Get a connection from the pool and automatically return it when done.
 
         Yields:
             An active connection object
         """
-        conn = await self.get(timeout=timeout)
+        conn = await self.get()
         try:
             yield conn
         except BaseException:
@@ -84,7 +82,7 @@ class ConnectionPool(Generic[T]):
         else:
             self.put(conn)
 
-    async def get(self, *, timeout: float) -> T:
+    async def get(self) -> T:
         """Get an available connection or create a new one if needed.
 
         Returns:
@@ -106,7 +104,7 @@ class ConnectionPool(Generic[T]):
             # connection expired; mark it for resetting.
             self.remove(conn)
 
-        return await self._connect(timeout)
+        return await self._connect()
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.
@@ -162,7 +160,7 @@ class ConnectionPool(Generic[T]):
 
         async def _prewarm_impl() -> None:
             if not self._connections:
-                conn = await self._connect(timeout=self._connect_timeout)
+                conn = await self._connect()
                 self._available.add(conn)
 
         task = asyncio.create_task(_prewarm_impl())

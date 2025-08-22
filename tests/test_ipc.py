@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import asyncio
 import ctypes
 import io
@@ -66,7 +67,10 @@ def _echo_main(mp_cch):
 async def test_async_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
-    proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    if sys.platform == "win32":
+        proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    else:
+        proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 
@@ -90,7 +94,10 @@ def test_sync_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = utils.aio.duplex_unix._Duplex.open(mp_pch)
 
-    proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    if sys.platform == "win32":
+        proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    else:
+        proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 

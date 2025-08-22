@@ -39,7 +39,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         mp_ctx: BaseContext,
         memory_warn_mb: float,
         memory_limit_mb: float,
-        http_proxy: str | None,
+        http_proxy: str | None = None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
