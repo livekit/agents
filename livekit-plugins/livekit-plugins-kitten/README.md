@@ -1,10 +1,29 @@
-# LiveKit Kitten Plugin
+# Kitten plugin for LiveKit Agents
 
-A LiveKit Agents TTS plugin for the local ONNX-based Kitten engine.
+Support for voice synthesis with [KittenTTS](https://github.com/KittenML/KittenTTS), a local ONNX-based text-to-speech engine.
 
-https://github.com/KittenML/KittenTTS
+## Installation
 
-# usage
+```bash
+pip install livekit-plugins-kitten
+```
 
-1. python myagent.py download-files
-2. python myagent.py console
+## Usage
+
+Before using the plugin, you need to download the model files:
+
+```bash
+python myagent.py download-files
+```
+
+Then you can use the TTS in your agent:
+
+```python
+from livekit.plugins import kitten
+
+tts = kitten.TTS(
+    model_name="KittenML/kitten-tts-nano-0.2",
+    voice="expr-voice-5-m",
+    speed=1.0
+)
+```

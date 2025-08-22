@@ -1,19 +1,30 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
 from typing import Final
 
-from livekit.agents import APIConnectOptions, tts, utils
+from livekit.agents import APIConnectionError, APIConnectOptions, tts, utils
 from livekit.agents.job import get_job_context
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    NotGivenOr,
 )
-from livekit.agents.utils import is_given
 
-from .model import HG_MODEL, resolve_model_name
+from .models import HG_MODEL, TTSModels, TTSVoices, resolve_model_name
 from .runner import _KittenRunner
 
 SAMPLE_RATE: Final[int] = 24000
@@ -22,8 +33,8 @@ NUM_CHANNELS: Final[int] = 1
 
 @dataclass
 class _TTSOptions:
-    model_name: str
-    voice: str
+    model_name: TTSModels | str
+    voice: TTSVoices | str
     speed: float
 
 
@@ -31,8 +42,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model_name: str = HG_MODEL,
-        voice: str = "expr-voice-5-m",
+        model_name: TTSModels | str = HG_MODEL,
+        voice: TTSVoices | str = "expr-voice-5-m",
         speed: float = 1.0,
     ) -> None:
         super().__init__(
@@ -46,20 +57,6 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
         )
-
-    def update_options(
-        self,
-        *,
-        model_name: NotGivenOr[str] = NOT_GIVEN,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        speed: NotGivenOr[float] = NOT_GIVEN,
-    ) -> None:
-        if is_given(model_name):
-            self._opts.model_name = resolve_model_name(model_name)
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(speed):
-            self._opts.speed = speed
 
     def synthesize(
         self,
@@ -86,14 +83,18 @@ class ChunkedStream(tts.ChunkedStream):
 
         executor = get_job_context().inference_executor
 
-        payload = {
-            "text": self._input_text,
-            "voice": self._opts.voice,
-            "speed": self._opts.speed,
-        }
-        data = json.dumps(payload).encode()
-        result = await executor.do_inference(_KittenRunner.INFERENCE_METHOD, data)
-        assert result is not None
+        try:
+            payload = {
+                "text": self._input_text,
+                "voice": self._opts.voice,
+                "speed": self._opts.speed,
+            }
+            data = json.dumps(payload).encode()
+            result = await executor.do_inference(_KittenRunner.INFERENCE_METHOD, data)
+            if result is None:
+                raise APIConnectionError("Failed to get result from inference executor")
 
-        output_emitter.push(result)
-        output_emitter.flush()
+            output_emitter.push(result)
+            output_emitter.flush()
+        except Exception as e:
+            raise APIConnectionError(f"Kitten TTS synthesis failed: {e}") from e

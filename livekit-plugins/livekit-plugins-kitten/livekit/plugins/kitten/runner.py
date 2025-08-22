@@ -1,8 +1,23 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import json
 import math
 import os
+import time
 
 import numpy as np
 import phonemizer
@@ -10,7 +25,8 @@ import phonemizer
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.utils import hw
 
-from .model import (
+from .log import logger
+from .models import (
     HG_MODEL,
     ONNX_FILENAME,
     VOICES_FILENAME,
@@ -111,10 +127,16 @@ class _KittenRunner(_InferenceRunner):
         return pcm16.tobytes()
 
     def run(self, data: bytes) -> bytes | None:
+        start_time = time.perf_counter()
+
         payload = json.loads(data)
         text = payload["text"]
         voice = payload.get("voice")
         speed = float(payload.get("speed", 1.0))
+
+        if not text or not text.strip():
+            logger.warning("empty text provided for synthesis")
+            return None
 
         if voice not in self._voices:
             raise ValueError(f"unknown voice: {voice}")
@@ -132,11 +154,32 @@ class _KittenRunner(_InferenceRunner):
         style = self._voices[voice].astype("float32")
         speed_arr = np.array([speed], dtype=np.float32)
 
+        inference_start = time.perf_counter()
         outputs = self._session.run(
             None, {"input_ids": input_ids, "style": style, "speed": speed_arr}
         )
+        inference_end = time.perf_counter()
+        inference_duration = inference_end - inference_start
+
         waveform = outputs[0]
-        return self._to_pcm16_bytes(waveform)
+        result = self._to_pcm16_bytes(waveform)
+        end_time = time.perf_counter()
+
+        total_duration = end_time - start_time
+
+        logger.debug(
+            "kitten tts synthesis completed",
+            extra={
+                "text_length": len(text),
+                "token_count": len(tokens),
+                "voice": voice,
+                "speed": speed,
+                "total_duration": round(total_duration, 3),
+                "inference_duration": round(inference_duration, 3),
+            },
+        )
+
+        return result
 
 
 _InferenceRunner.register_runner(_KittenRunner)
