@@ -308,7 +308,6 @@ class AudioRecognition:
                     silence_duration=0.0
                 )
                 self._hooks.on_start_of_speech(start_vad_event)
-                
                 # Also trigger inference done event for interruption logic
                 inference_vad_event = vad.VADEvent(
                     type=vad.VADEventType.INFERENCE_DONE,
