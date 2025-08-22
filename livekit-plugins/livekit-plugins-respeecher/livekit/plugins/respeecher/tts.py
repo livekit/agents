@@ -21,7 +21,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
 
@@ -44,6 +43,7 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "LiveKit-Plugin-Respeecher-Version"
 API_VERSION = "2025-08-20"
 API_BASE_URL = "https://api.respeecher.com"
+
 
 @dataclass
 class _TTSOptions:
@@ -113,7 +113,6 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-
     async def list_voices(self) -> list[Voice]:
         """List available voices from Respeecher API"""
         async with self._ensure_session().get(
@@ -138,7 +137,7 @@ class TTS(tts.TTS):
                 )
 
             if len(voices) == 0:
-                raise APIError(f"No voices are available")
+                raise APIError("No voices are available")
 
             return voices
 
@@ -172,9 +171,9 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
-        
+
         self._streams.clear()
-        
+
         if self._session:
             await self._session.close()
             self._session = None
@@ -187,26 +186,31 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-    
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the TTS synthesis"""
-        
-        json_data = {
-            "transcript": self._input_text,
-            "voice": {
-                "id": self._tts._opts.voice_id,
-            },
-            "output_format": {
-                "sample_rate": self._tts._opts.sample_rate,
-                "encoding": self._tts._opts.encoding,
-            }
-        }
-        
-        if is_given(self._tts._opts.voice_settings) and self._tts._opts.voice_settings.sampling_param:
-            json_data["voice"]["sampling_param"] = dataclasses.asdict(self._tts._opts.voice_settings.sampling_param)
 
-        http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
-        try:
+        async def _http_operation():
+            json_data = {
+                "transcript": self._input_text,
+                "voice": {
+                    "id": self._tts._opts.voice_id,
+                },
+                "output_format": {
+                    "sample_rate": self._tts._opts.sample_rate,
+                    "encoding": self._tts._opts.encoding,
+                },
+            }
+
+            if (
+                is_given(self._tts._opts.voice_settings)
+                and self._tts._opts.voice_settings.sampling_param
+            ):
+                json_data["voice"]["sampling_param"] = dataclasses.asdict(
+                    self._tts._opts.voice_settings.sampling_param
+                )
+
+            http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
             async with self._tts._ensure_session().post(
                 http_url,
                 headers={
@@ -215,7 +219,6 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json=json_data,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
 
@@ -230,7 +233,9 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.push(data)
 
                 output_emitter.flush()
-                
+
+        try:
+            await asyncio.wait_for(_http_operation(), timeout=self._conn_options.timeout)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -259,9 +264,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         ws_url = self._tts._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         full_ws_url = f"{ws_url}{self._tts._opts.model}/tts/websocket?api_key={self._tts._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
-        
-        try:
+
+        async def _ws_operation():
             async with self._tts._ensure_session().ws_connect(full_ws_url) as ws:
+
                 @utils.log_exceptions(logger=logger)
                 async def send_task() -> None:
                     async for input in self._input_ch:
@@ -276,14 +282,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 "output_format": {
                                     "encoding": self._tts._opts.encoding,
                                     "sample_rate": self._tts._opts.sample_rate,
-                                }
+                                },
                             }
-                            if is_given(self._tts._opts.voice_settings) and self._tts._opts.voice_settings.sampling_param:
-                                generate_request["voice"]["sampling_param"] = dataclasses.asdict(self._tts._opts.voice_settings.sampling_param)
+                            if (
+                                is_given(self._tts._opts.voice_settings)
+                                and self._tts._opts.voice_settings.sampling_param
+                            ):
+                                generate_request["voice"]["sampling_param"] = dataclasses.asdict(
+                                    self._tts._opts.voice_settings.sampling_param
+                                )
 
                             self._mark_started()
                             await ws.send_str(json.dumps(generate_request))
-                    
+
                     # Send final message with continue=False to signal end of stream
                     end_request = {
                         "context_id": request_id,
@@ -295,11 +306,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "output_format": {
                             "encoding": self._tts._opts.encoding,
                             "sample_rate": self._tts._opts.sample_rate,
-                        }
+                        },
                     }
-                    if is_given(self._tts._opts.voice_settings) and self._tts._opts.voice_settings.sampling_param:
-                        end_request["voice"]["sampling_param"] = dataclasses.asdict(self._tts._opts.voice_settings.sampling_param)
-                    
+                    if (
+                        is_given(self._tts._opts.voice_settings)
+                        and self._tts._opts.voice_settings.sampling_param
+                    ):
+                        end_request["voice"]["sampling_param"] = dataclasses.asdict(
+                            self._tts._opts.voice_settings.sampling_param
+                        )
+
                     await ws.send_str(json.dumps(end_request))
 
                 @utils.log_exceptions(logger=logger)
@@ -329,7 +345,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             if current_segment_id is None:
                                 current_segment_id = request_id
                                 output_emitter.start_segment(segment_id=current_segment_id)
-                            
+
                             audio_data = base64.b64decode(data["data"])
                             output_emitter.push(audio_data)
                         elif data.get("type") == "done":
@@ -337,7 +353,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             if current_segment_id is not None:
                                 output_emitter.end_segment()
                                 current_segment_id = None
-                            
+
                             output_emitter.end_input()
                             return
                         else:
@@ -347,12 +363,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     asyncio.create_task(send_task()),
                     asyncio.create_task(recv_task()),
                 ]
-                
+
                 try:
                     await asyncio.gather(*tasks)
                 finally:
                     await utils.aio.gracefully_cancel(*tasks)
-                    
+
+        try:
+            await asyncio.wait_for(_ws_operation(), timeout=self._conn_options.timeout)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
