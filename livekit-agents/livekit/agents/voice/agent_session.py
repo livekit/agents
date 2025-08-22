@@ -658,8 +658,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
-    def update_options(self) -> None:
-        pass
+    def update_options(
+        self,
+        *,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
+        """
+        Update the options for the agent session.
+
+        Args:
+            min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
+            max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+        """
+        if is_given(min_endpointing_delay):
+            self._opts.min_endpointing_delay = min_endpointing_delay
+        if is_given(max_endpointing_delay):
+            self._opts.max_endpointing_delay = max_endpointing_delay
+
+        if self._activity is not None:
+            self._activity.update_options(
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            )
 
     def say(
         self,

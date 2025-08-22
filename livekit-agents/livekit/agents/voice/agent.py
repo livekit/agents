@@ -49,6 +49,8 @@ class Agent:
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         self._instructions = instructions
@@ -62,6 +64,8 @@ class Agent:
         self._allow_interruptions = allow_interruptions
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
+        self._min_endpointing_delay = min_endpointing_delay
+        self._max_endpointing_delay = max_endpointing_delay
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -536,6 +540,25 @@ class Agent:
         return self._allow_interruptions
 
     @property
+    def min_endpointing_delay(self) -> NotGivenOr[float]:
+        """
+        Minimum time-in-seconds the agent must wait after a potential end-of-utterance signal
+        before it declares the user’s turn complete.
+
+        If this property was set at Agent creation, it will be used at runtime instead of the session's value.
+        """
+        return self._min_endpointing_delay
+
+    @property
+    def max_endpointing_delay(self) -> NotGivenOr[float]:
+        """
+        Maximum time-in-seconds the agent will wait before terminating the turn.
+
+        If this property was set at Agent creation, it will be used at runtime instead of the session's value.
+        """
+        return self._max_endpointing_delay
+
+    @property
     def min_consecutive_speech_delay(self) -> NotGivenOr[float]:
         """
         Retrieves the minimum consecutive speech delay for the agent.
@@ -590,6 +613,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         super().__init__(
@@ -603,6 +628,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             tts=tts,
             mcp_servers=mcp_servers,
             allow_interruptions=allow_interruptions,
+            min_endpointing_delay=min_endpointing_delay,
+            max_endpointing_delay=max_endpointing_delay,
         )
 
         self.__started = False

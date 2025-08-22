@@ -232,6 +232,22 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
+    def min_endpointing_delay(self) -> float:
+        return (
+            self._agent.min_endpointing_delay
+            if is_given(self._agent.min_endpointing_delay)
+            else self._session.options.min_endpointing_delay
+        )
+
+    @property
+    def max_endpointing_delay(self) -> float:
+        return (
+            self._agent.max_endpointing_delay
+            if is_given(self._agent.max_endpointing_delay)
+            else self._session.options.max_endpointing_delay
+        )
+
+    @property
     def realtime_llm_session(self) -> llm.RealtimeSession | None:
         return self._rt_session
 
@@ -299,12 +315,24 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
             )
 
-    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
         if utils.is_given(tool_choice):
             self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
+
+        if self._audio_recognition:
+            self._audio_recognition.update_options(
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            )
 
     def _create_speech_task(
         self,
@@ -493,8 +521,8 @@ class AgentActivity(RecognitionHooks):
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
-            min_endpointing_delay=self._session.options.min_endpointing_delay,
-            max_endpointing_delay=self._session.options.max_endpointing_delay,
+            min_endpointing_delay=self.min_endpointing_delay,
+            max_endpointing_delay=self.max_endpointing_delay,
             turn_detection_mode=self._turn_detection_mode,
         )
         self._audio_recognition.start()
