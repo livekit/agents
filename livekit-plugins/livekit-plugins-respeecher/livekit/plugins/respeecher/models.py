@@ -1,5 +1,5 @@
-from typing import Literal, Optional
 from dataclasses import dataclass
+from typing import Literal, Optional
 
 TTSModels = Literal[
     # Respeecher's English model, multilanguage models will be added later
@@ -11,22 +11,22 @@ TTSEncoding = Literal[
     "pcm_f32le",
 ]
 
-TTSLanguages = Literal[
-    "en",
-]
+TTSLanguages = Literal["en"]
 
 TTSSampleRates = [
-    8000, 
-    11025, 
-    16000, 
-    22050, 
-    44100,  
+    8000,
+    11025,
+    16000,
+    22050,
+    44100,
     48000,
 ]
+
 
 @dataclass
 class SamplingParam:
     """Check https://space.respeecher.com/docs/api/tts/sampling-params-guide for details"""
+
     seed: Optional[int] = None
     temparature: Optional[float] = None
     top_k: Optional[int] = None
@@ -36,14 +36,18 @@ class SamplingParam:
     repetition_penalty: Optional[float] = None
     frequency_penalty: Optional[float] = None
 
+
 @dataclass
 class VoiceSettings:
     """Voice settings for Respeecher TTS"""
+
     sampling_param: Optional[SamplingParam] = None
-    
-@dataclass  
+
+
+@dataclass
 class Voice:
     """Voice model for Respeecher"""
+
     id: str
     gender: Optional[str] = None
     accent: Optional[str] = None
