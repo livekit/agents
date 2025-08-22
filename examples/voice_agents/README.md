@@ -6,7 +6,7 @@ This directory contains a comprehensive collection of voice-based agent examples
 
 ### 🚀 Getting Started
 
-- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with OpenAI integration and metrics collection
+- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with metrics collection
 
 ### 🛠️ Tool Integration & Function Calling
 
@@ -19,7 +19,7 @@ This directory contains a comprehensive collection of voice-based agent examples
 
 - [`weather_agent.py`](./weather_agent.py) - OpenAI Realtime API with function calls for weather information
 - [`gemini_video_agent.py`](./gemini_video_agent.py) - Google Gemini with multimodal video and voice capabilities
-- [`realtime_joke_teller.py`](./realtime_joke_teller.py) - Amazon Nova Sonic TTS with real-time function calls
+- [`realtime_joke_teller.py`](./realtime_joke_teller.py) - Amazon Nova Sonic real-time model with function calls
 - [`realtime_load_chat_history.py`](./realtime_load_chat_history.py) - Loading previous chat history into real-time models
 - [`realtime_turn_detector.py`](./realtime_turn_detector.py) - Using LiveKit's turn detection with real-time models
 - [`realtime_with_tts.py`](./realtime_with_tts.py) - Combining external TTS providers with real-time models
