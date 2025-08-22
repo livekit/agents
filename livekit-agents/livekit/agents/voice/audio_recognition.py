@@ -45,9 +45,7 @@ class _TurnDetector(Protocol):
     async def unlikely_threshold(self, language: str | None) -> float | None: ...
     async def supports_language(self, language: str | None) -> bool: ...
 
-    async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
-    ) -> float: ...
+    async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
 
 
 class RecognitionHooks(Protocol):
@@ -296,12 +294,41 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(ev)
             self._audio_interim_transcript = ev.alternatives[0].text
 
+        elif ev.type == stt.SpeechEventType.START_OF_SPEECH:
+            # Handle START_OF_SPEECH for interruptions (similar to VAD logic)
+            with trace.use_span(self._ensure_user_turn_span()):
+                # Create a fake VAD event for hooks compatibility
+                start_vad_event = vad.VADEvent(
+                    type=vad.VADEventType.START_OF_SPEECH,
+                    samples_index=0,
+                    timestamp=0.0,
+                    speech_duration=1.0,
+                    silence_duration=0.0
+                )
+                self._hooks.on_start_of_speech(start_vad_event)
+                
+                # Also trigger inference done event for interruption logic
+                inference_vad_event = vad.VADEvent(
+                    type=vad.VADEventType.INFERENCE_DONE,
+                    samples_index=0,
+                    timestamp=0.0,
+                    speech_duration=1.0,  # Set to 1.0 to pass min_interruption_duration check
+                    silence_duration=0.0
+                )
+                self._hooks.on_vad_inference_done(inference_vad_event)
+
+            self._speaking = True
+            self._user_turn_committed = False  # Reset turn commitment for new turn
+            self._last_speaking_time = time.time()
+
+            if self._end_of_turn_task is not None:
+                self._end_of_turn_task.cancel()
+
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+            self._speaking = False  # Reset speaking flag
             self._user_turn_committed = True
-            if not self._speaking:
-                # start response after vad fires END_OF_SPEECH to avoid vad interruption
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+            self._run_eou_detection(chat_ctx)
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -351,29 +378,21 @@ class AudioRecognition:
             user_turn_span = self._ensure_user_turn_span()
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
-                    logger.info("Turn detector does not support language %s", self._last_language)
+                    logger.debug("Turn detector does not support language %s", self._last_language)
                 else:
                     with (
                         trace.use_span(user_turn_span),
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
-                        # if there are failures, we should not hold the pipeline up
-                        end_of_turn_probability = 0.0
-                        unlikely_threshold: float | None = None
-                        try:
-                            end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                chat_ctx
-                            )
-                            unlikely_threshold = await turn_detector.unlikely_threshold(
-                                self._last_language
-                            )
-                            if (
-                                unlikely_threshold is not None
-                                and end_of_turn_probability < unlikely_threshold
-                            ):
-                                endpointing_delay = self._max_endpointing_delay
-                        except Exception:
-                            logger.exception("Error predicting end of turn")
+                        end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
+                        unlikely_threshold = await turn_detector.unlikely_threshold(
+                            self._last_language
+                        )
+                        if (
+                            unlikely_threshold is not None
+                            and end_of_turn_probability < unlikely_threshold
+                        ):
+                            endpointing_delay = self._max_endpointing_delay
 
                         eou_detection_span.set_attributes(
                             {
