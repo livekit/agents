@@ -106,6 +106,15 @@ class STT(stt.STT):
             ) as response:
                 response_json = await response.json()
                 extracted_text = response_json.get("text")
+
+                speaker_id = None
+                start_time, end_time = 0, 0
+                words = response_json.get("words")
+                if words:
+                    speaker_id = words[0].get("speaker_id", None)
+                    start_time = min(w.get('start', 0) for w in words)
+                    end_time = max(w.get("end", 0) for w in words)
+
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -118,10 +127,28 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
-        return self._transcription_to_speech_event(text=extracted_text)
+        return self._transcription_to_speech_event(
+            text=extracted_text,
+            start_time=start_time,
+            end_time=end_time,
+            speaker_id=speaker_id,
+        )
 
-    def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
+    def _transcription_to_speech_event(
+            self,
+            text: str,
+            start_time: float,
+            end_time: float,
+            speaker_id: str|None,
+        ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=text, language=self._opts.language_code)],
+            alternatives=[
+                stt.SpeechData(
+                    text=text, language=self._opts.language_code,
+                    speaker_id=speaker_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            ],
         )
