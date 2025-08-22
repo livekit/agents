@@ -112,7 +112,7 @@ class STT(stt.STT):
                 words = response_json.get("words")
                 if words:
                     speaker_id = words[0].get("speaker_id", None)
-                    start_time = min(w.get('start', 0) for w in words)
+                    start_time = min(w.get("start", 0) for w in words)
                     end_time = max(w.get("end", 0) for w in words)
 
         except asyncio.TimeoutError as e:
@@ -135,17 +135,18 @@ class STT(stt.STT):
         )
 
     def _transcription_to_speech_event(
-            self,
-            text: str,
-            start_time: float,
-            end_time: float,
-            speaker_id: str|None,
-        ) -> stt.SpeechEvent:
+        self,
+        text: str,
+        start_time: float,
+        end_time: float,
+        speaker_id: str | None,
+    ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
                 stt.SpeechData(
-                    text=text, language=self._opts.language_code,
+                    text=text,
+                    language=self._opts.language_code,
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
