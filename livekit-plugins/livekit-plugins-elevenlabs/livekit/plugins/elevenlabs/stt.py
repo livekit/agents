@@ -100,7 +100,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                f"{API_BASE_URL_V1}/speech-to-text",
+                f"{self._opts.base_url}/speech-to-text",
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
