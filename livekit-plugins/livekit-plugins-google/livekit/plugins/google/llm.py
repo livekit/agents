@@ -157,10 +157,6 @@ class LLM(llm.LLM):
             if _thinking_budget is not None:
                 if not isinstance(_thinking_budget, int):
                     raise ValueError("thinking_budget inside thinking_config must be an integer")
-                if not (0 <= _thinking_budget <= 24576):
-                    raise ValueError(
-                        "thinking_budget inside thinking_config must be between 0 and 24576"
-                    )
 
         self._opts = _LLMOptions(
             model=model,
