@@ -31,7 +31,6 @@ from livekit.agents import (
     APIStatusError,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -342,7 +341,6 @@ class SpeechStream(stt.SpeechStream):
                     return
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                 self._event_ch.send_nowait(final_event)
-                
                 # Reset flag for next turn
                 self._start_of_speech_sent = False
 
