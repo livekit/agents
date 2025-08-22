@@ -324,7 +324,9 @@ class SpeechStream(stt.SpeechStream):
 
             # Emit START_OF_SPEECH when we receive the first word (only once per turn)
             if len(words) == 1 and not self._start_of_speech_sent:
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                )
                 self._start_of_speech_sent = True
 
             if transcript and end_of_turn:

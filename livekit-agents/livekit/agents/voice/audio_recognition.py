@@ -305,7 +305,7 @@ class AudioRecognition:
                     samples_index=0,
                     timestamp=0.0,
                     speech_duration=1.0,
-                    silence_duration=0.0
+                    silence_duration=0.0,
                 )
                 self._hooks.on_start_of_speech(start_vad_event)
                 # Also trigger inference done event for interruption logic
@@ -314,7 +314,7 @@ class AudioRecognition:
                     samples_index=0,
                     timestamp=0.0,
                     speech_duration=1.0,  # Set to 1.0 to pass min_interruption_duration check
-                    silence_duration=0.0
+                    silence_duration=0.0,
                 )
                 self._hooks.on_vad_inference_done(inference_vad_event)
 
