@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import io
 import os
 import pathlib
-import io
 import wave
-
-import asyncio
 from collections.abc import AsyncGenerator
 
 import jiwer as tr
