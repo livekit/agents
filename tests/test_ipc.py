@@ -5,7 +5,6 @@ import ctypes
 import io
 import multiprocessing as mp
 import socket
-import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -67,10 +66,7 @@ def _echo_main(mp_cch):
 async def test_async_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
-    if sys.platform == "win32":
-        proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
-    else:
-        proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
+    proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 
@@ -94,10 +90,7 @@ def test_sync_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = utils.aio.duplex_unix._Duplex.open(mp_pch)
 
-    if sys.platform == "win32":
-        proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
-    else:
-        proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
+    proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 
@@ -193,7 +186,7 @@ async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
 
 
 async def test_proc_pool():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     loop = asyncio.get_running_loop()
     num_idle_processes = 3
     pool = ipc.proc_pool.ProcPool(
@@ -238,7 +231,7 @@ async def test_proc_pool():
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(created_q, num_idle_processes)
     await _wait_for_elements(start_q, num_idle_processes)
@@ -272,7 +265,7 @@ async def test_proc_pool():
 
 
 async def test_slow_initialization():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     loop = asyncio.get_running_loop()
     num_idle_processes = 2
     pool = ipc.proc_pool.ProcPool(
@@ -308,7 +301,7 @@ async def test_slow_initialization():
         pids.append(proc.pid)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
@@ -351,7 +344,7 @@ def _create_proc(
 
 
 async def test_shutdown_no_job():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     await proc.start()
     await proc.initialize()
@@ -364,7 +357,7 @@ async def test_shutdown_no_job():
 
 
 async def test_job_slow_shutdown():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 10.0
 
@@ -383,7 +376,7 @@ async def test_job_slow_shutdown():
 
 
 async def test_job_graceful_shutdown():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 1.0
     await proc.start()
