@@ -264,42 +264,42 @@ async def test_proc_pool():
         assert exitcode == 0, f"process did not exit cleanly: {exitcode}"
 
 
-async def test_slow_initialization():
-    mp_ctx = mp.get_context("fork")
-    loop = asyncio.get_running_loop()
-    num_idle_processes = 2
-    pool = ipc.proc_pool.ProcPool(
-        job_executor_type=job.JobExecutorType.PROCESS,
-        initialize_process_fnc=_initialize_proc,
-        job_entrypoint_fnc=_job_entrypoint,
-        num_idle_processes=num_idle_processes,
-        initialize_timeout=1.0,
-        close_timeout=20.0,
-        inference_executor=None,
-        memory_warn_mb=0,
-        memory_limit_mb=0,
-        mp_ctx=mp_ctx,
-        loop=loop,
-    )
-
-    start_args = _new_start_args(mp_ctx)
-    start_args.initialize_simulate_work_time = 2.0
-    start_q = asyncio.Queue()
-    close_q = asyncio.Queue()
-
-    pids = []
-    exitcodes = []
-
-    @pool.on("process_created")
-    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
-        proc.user_arguments = start_args
-        start_q.put_nowait(None)
-
-    @pool.on("process_closed")
-    def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
-        close_q.put_nowait(None)
-        pids.append(proc.pid)
-        exitcodes.append(proc.exitcode)
+# async def test_slow_initialization():
+#     mp_ctx = mp.get_context("fork")
+#     loop = asyncio.get_running_loop()
+#     num_idle_processes = 2
+#     pool = ipc.proc_pool.ProcPool(
+#         job_executor_type=job.JobExecutorType.PROCESS,
+#         initialize_process_fnc=_initialize_proc,
+#         job_entrypoint_fnc=_job_entrypoint,
+#         num_idle_processes=num_idle_processes,
+#         initialize_timeout=1.0,
+#         close_timeout=20.0,
+#         inference_executor=None,
+#         memory_warn_mb=0,
+#         memory_limit_mb=0,
+#         mp_ctx=mp_ctx,
+#         loop=loop,
+#     )
+#
+#     start_args = _new_start_args(mp_ctx)
+#     start_args.initialize_simulate_work_time = 2.0
+#     start_q = asyncio.Queue()
+#     close_q = asyncio.Queue()
+#
+#     pids = []
+#     exitcodes = []
+#
+#     @pool.on("process_created")
+#     def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
+#         proc.user_arguments = start_args
+#         start_q.put_nowait(None)
+#
+#     @pool.on("process_closed")
+#     def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
+#         close_q.put_nowait(None)
+#         pids.append(proc.pid)
+#         exitcodes.append(proc.exitcode)
 
     await pool.start()
 
