@@ -86,6 +86,7 @@ jobs:
             speechify,
             hume,
             inworld,
+            soniox,
           ]
 
     runs-on: ubuntu-latest
@@ -133,6 +134,7 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
         working-directory: tests
         run: make test
 
