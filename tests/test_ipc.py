@@ -199,6 +199,7 @@ async def test_proc_pool():
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -278,6 +279,7 @@ async def test_proc_pool():
 #         inference_executor=None,
 #         memory_warn_mb=0,
 #         memory_limit_mb=0,
+#         http_proxy=None,
 #         mp_ctx=mp_ctx,
 #         loop=loop,
 #     )
@@ -300,21 +302,21 @@ async def test_proc_pool():
 #         close_q.put_nowait(None)
 #         pids.append(proc.pid)
 #         exitcodes.append(proc.exitcode)
-
-    await pool.start()
-
-    await _wait_for_elements(start_q, num_idle_processes)
-    await _wait_for_elements(close_q, num_idle_processes)
-
-    # after initialization failure, warmup should be retried
-    await _wait_for_elements(start_q, num_idle_processes)
-    await pool.aclose()
-
-    for pid in pids:
-        assert not psutil.pid_exists(pid)
-
-    for exitcode in exitcodes:
-        assert exitcode != 0, "process should have been killed"
+#
+#     await pool.start()
+#
+#     await _wait_for_elements(start_q, num_idle_processes)
+#     await _wait_for_elements(close_q, num_idle_processes)
+#
+#     # after initialization failure, warmup should be retried
+#     await _wait_for_elements(start_q, num_idle_processes)
+#     await pool.aclose()
+#
+#     for pid in pids:
+#         assert not psutil.pid_exists(pid)
+#
+#     for exitcode in exitcodes:
+#         assert exitcode != 0, "process should have been killed"
 
 
 def _create_proc(
@@ -335,6 +337,7 @@ def _create_proc(
         ping_interval=2.5,
         ping_timeout=10.0,
         high_ping_threshold=1.0,
+        http_proxy=None,
         inference_executor=None,
         mp_ctx=mp_ctx,
         loop=loop,
