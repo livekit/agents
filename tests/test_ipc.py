@@ -86,7 +86,7 @@ async def test_async_channel():
     proc.join()
 
 
-def test_sync_channel():
+async def test_sync_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = utils.aio.duplex_unix._Duplex.open(mp_pch)
 
@@ -105,6 +105,9 @@ def test_sync_channel():
     )
 
     pch.close()
+    await asyncio.sleep(0.5)
+    proc.terminate()
+    proc.join()
 
 
 def _generate_fake_job() -> job.RunningJobInfo:
@@ -266,7 +269,7 @@ async def test_proc_pool():
 
 
 # async def test_slow_initialization():
-#     mp_ctx = mp.get_context("fork")
+#     mp_ctx = mp.get_context("spawn")
 #     loop = asyncio.get_running_loop()
 #     num_idle_processes = 2
 #     pool = ipc.proc_pool.ProcPool(
@@ -317,7 +320,7 @@ async def test_proc_pool():
 #
 #     for exitcode in exitcodes:
 #         assert exitcode != 0, "process should have been killed"
-
+#
 
 def _create_proc(
     *,
