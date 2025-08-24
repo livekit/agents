@@ -23,7 +23,6 @@ from livekit.agents.voice.events import (
     MetricsCollectedEvent,
     UserInputTranscribedEvent,
 )
-from livekit.agents import metrics 
 from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
