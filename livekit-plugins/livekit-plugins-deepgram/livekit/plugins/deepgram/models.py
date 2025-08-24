@@ -35,6 +35,8 @@ DeepgramModels = Literal[
     "whisper-large",
 ]
 
+V2Models = Literal["flux-general-en"]
+
 DeepgramLanguages = Literal[
     "zh",
     "zh-CN",
