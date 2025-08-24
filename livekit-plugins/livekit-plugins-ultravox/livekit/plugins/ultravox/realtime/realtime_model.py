@@ -61,11 +61,7 @@ INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 ULTRAVOX_BASE_URL = "https://api.ultravox.ai/api"
-lk_ultravox_debug = os.getenv("LK_ULTRAVOX_DEBUG", "false").lower() == "true"
-# Review verification flag to A/B tool-turn close strategies: this should be removed before merging
-#   - "close_on_result": close the tool-turn after bridging client_tool_result (default)
-#   - "close_on_invocation": close the tool-turn immediately when tool is invoked
-lk_ultravox_tool_turn_mode = os.getenv("LK_ULTRAVOX_TOOL_TURN_MODE", "close_on_result").lower()
+lk_ultravox_debug = os.getenv("LK_ULTRAVOX_DEBUG", "true").lower() == "true"
 
 
 def _validate_model(requested_model: str) -> str:
@@ -312,7 +308,9 @@ class RealtimeSession(
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
-        self._last_seen_ordinal: int = 0
+        # Track last seen ordinals per role to avoid cross-role drops
+        self._last_seen_user_ord: int = -1
+        self._last_seen_agent_ord: int = -1
 
         self._bstream = utils.audio.AudioByteStream(
             self._opts.input_sample_rate,
@@ -327,13 +325,8 @@ class RealtimeSession(
         self._session_should_close = asyncio.Event()
         self._ws_session_lock = asyncio.Lock()
 
-        # Review verification: per-invocation timing trace
+        # Debug-only per-invocation timing trace
         self._tool_turn_debug: dict[str, dict[str, Any]] = {}
-
-        if lk_ultravox_debug:
-            logger.debug(
-                f"[ultravox.review] init session; tool_turn_mode={lk_ultravox_tool_turn_mode}"
-            )
 
     async def _close_active_ws_session(self) -> None:
         async with self._ws_session_lock:
@@ -390,22 +383,9 @@ class RealtimeSession(
         # Compute the diff - only process new/changed items
         diff_ops = compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
-        # debugging to  verify function call bridging
+        #  debug: count of created items
         if lk_ultravox_debug:
-            try:
-                created_summaries: list[str] = []
-                for _, msg_id in diff_ops.to_create:
-                    item = chat_ctx.get_by_id(msg_id)
-                    item_type = getattr(item, "type", "?") if item is not None else "<missing>"
-                    created_summaries.append(f"{item_type}:{msg_id}")
-                logger.debug(
-                    f"[ultravox.review] update_chat_ctx.to_create: count={len(diff_ops.to_create)} "
-                    f"items={created_summaries}"
-                )
-            except Exception as e:
-                logger.debug(
-                    f"[ultravox.review] update_chat_ctx.to_create: summary error: {e}"
-                )
+            logger.debug(f"[ultravox] update_chat_ctx: to_create={len(diff_ops.to_create)}")
 
         if not diff_ops.to_create:
             logger.debug("[ultravox] No new context items to inject")
@@ -467,29 +447,9 @@ class RealtimeSession(
 
                 self._send_client_event(tool_result)
 
-                # Review verification: log timing between invocation and result bridge
+                #  debug: tool result bridged
                 if lk_ultravox_debug:
-                    now = time.perf_counter()
-                    info = self._tool_turn_debug.get(item.call_id)
-                    if info is not None and "invocation_received_at" in info:
-                        dt = now - info["invocation_received_at"]
-                        logger.debug(
-                            f"[ultravox.review] tool_result_bridged: id={item.call_id} dt={dt:.3f}s gen_id={info.get('gen_id')} mode={info.get('mode')}"
-                        )
-                    else:
-                        logger.debug(
-                            f"[ultravox.review] tool_result_bridged: id={item.call_id} dt=? (no invocation trace)"
-                        )
-
-                # Close generation per selected strategy
-                if lk_ultravox_tool_turn_mode == "close_on_result":
-                    if self._current_generation and not self._current_generation._done:
-                        if lk_ultravox_debug:
-                            logger.debug(
-                                f"[ultravox.review] close_on_result: closing generation after client_tool_result id={item.call_id}"
-                            )
-                        self._mark_current_generation_done()
-
+                    logger.debug(f"[ultravox] tool_result_bridged: id={item.call_id}")
 
         # Update local chat context
         self._chat_ctx = chat_ctx.copy()
@@ -653,7 +613,8 @@ class RealtimeSession(
             # Clear restart signal for new session
             self._session_should_close.clear()
             # Reset ordinal tracking on reconnect to avoid stale event issues
-            self._last_seen_ordinal = 0
+            self._last_seen_user_ord = -1
+            self._last_seen_agent_ord = -1
 
             try:
                 # Close any existing WebSocket connection before creating new one
@@ -735,7 +696,8 @@ class RealtimeSession(
                 try:
                     # Wait for any task to complete
                     done, _ = await asyncio.wait(
-                        [send_task, recv_task, restart_wait_task], return_when=asyncio.FIRST_COMPLETED
+                        [send_task, recv_task, restart_wait_task],
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
 
                     for task in done:
@@ -801,23 +763,25 @@ class RealtimeSession(
             try:
                 if isinstance(msg, bytes):
                     # Handle binary audio data
-                    self.emit("ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)})
+                    self.emit(
+                        "ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)}
+                    )
                     await self._ws.send_bytes(msg)
                     # You will want to comment these logs when in debugging mode as they are noisy
-                    if lk_ultravox_debug:
-                        logger.info(f">>> [audio bytes: {len(msg)} bytes]")
+                    # if lk_ultravox_debug:
+                    #     logger.info(f">>> [audio bytes: {len(msg)} bytes]")
                 elif isinstance(msg, dict):
                     msg_dict = msg
                     self.emit("ultravox_client_event_queued", msg_dict)
                     await self._ws.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
-                        logger.info(f">>> {msg_dict}")
+                        logger.debug(f">>> {msg_dict}")
                 else:
                     msg_dict = serialize_ultravox_event(msg)
                     self.emit("ultravox_client_event_queued", msg_dict)
                     await self._ws.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
-                        logger.info(f">>> {msg_dict}")
+                        logger.debug(f">>> {msg_dict}")
             except Exception as e:
                 logger.error(f"Error sending message: {e}", exc_info=True)
                 break
@@ -840,7 +804,7 @@ class RealtimeSession(
                     data = json.loads(msg.data)
                     self.emit("ultravox_server_event_received", data)
                     if lk_ultravox_debug:
-                        logger.info(f"<<< {data}")
+                        logger.debug(f"<<< {data}")
                     event = parse_ultravox_event(data)
                     self._handle_ultravox_event(event)
 
@@ -893,6 +857,9 @@ class RealtimeSession(
         )
         self.emit("generation_created", generation_ev)
 
+        if lk_ultravox_debug:
+            logger.debug(f"[ultravox] start_generation id={response_id}")
+
     @utils.log_exceptions(logger=logger)
     def _mark_current_generation_done(self) -> None:
         if not self._current_generation:
@@ -941,13 +908,29 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     def _handle_transcript_event(self, event: TranscriptEvent) -> None:
         """Handle transcript events from Ultravox."""
-        # Gate by ordinal to avoid late/stale events
-        if event.ordinal < self._last_seen_ordinal:
+        if lk_ultravox_debug:
+            kind = "delta" if event.delta else ("text" if event.text else "empty")
             logger.debug(
-                f"Skipping stale TranscriptEvent with ordinal {event.ordinal} <= {self._last_seen_ordinal}"
+                f"[ultravox] transcript role={event.role} medium={event.medium} ord={event.ordinal} final={event.final} kind={kind} text_len={len(event.text or '')} delta_len={len(event.delta or '')}"
             )
-            return
-        self._last_seen_ordinal = event.ordinal
+
+        # Gate by ordinal to avoid late/stale events (scoped per role to avoid dropping cross-role finals)
+        if event.role == "user":
+            if event.ordinal < self._last_seen_user_ord:
+                if lk_ultravox_debug:
+                    logger.debug(
+                        f"[ultravox] skip_stale_user ord={event.ordinal} < last_user={self._last_seen_user_ord}"
+                    )
+                return
+            self._last_seen_user_ord = event.ordinal
+        elif event.role == "agent":
+            if event.ordinal < self._last_seen_agent_ord:
+                if lk_ultravox_debug:
+                    logger.debug(
+                        f"[ultravox] skip_stale_agent ord={event.ordinal} < last_agent={self._last_seen_agent_ord}"
+                    )
+                return
+            self._last_seen_agent_ord = event.ordinal
 
         if event.role == "user":
             if event.final and event.text:
@@ -959,6 +942,10 @@ class RealtimeSession(
                 )
             # User transcription - emit input_audio_transcription_completed when final
             if event.final:
+                if lk_ultravox_debug:
+                    logger.debug(
+                        f"[ultravox] user_final ord={event.ordinal} text_len={len(event.text or '')}"
+                    )
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
@@ -974,8 +961,9 @@ class RealtimeSession(
 
             msg_gen = self._current_generation
 
-            # Handle incremental transcript updates (delta)
-            if event.delta:
+            # Handle incremental transcript updates (delta or non-final text)
+            incremental_text = event.delta or (event.text if not event.final else None)
+            if incremental_text:
                 # Set first token timestamp on first text delta (TTFT measurement)
                 if msg_gen._first_token_timestamp is None:
                     msg_gen._first_token_timestamp = time.perf_counter()
@@ -1001,8 +989,13 @@ class RealtimeSession(
                         self._pending_generation_fut = None
                         self._pending_generation_epoch = None
 
-                msg_gen.text_ch.send_nowait(event.delta)
-                msg_gen.output_text += event.delta
+                msg_gen.text_ch.send_nowait(incremental_text)
+                msg_gen.output_text += incremental_text
+                if lk_ultravox_debug:
+                    preview = incremental_text[:40].replace("\n", " ") if incremental_text else ""
+                    logger.debug(
+                        f"[ultravox] agent_text ord={event.ordinal} len={len(incremental_text)} preview={preview!r}"
+                    )
 
             # Handle final transcript
             if event.final:
@@ -1094,6 +1087,10 @@ class RealtimeSession(
         """Handle state events from Ultravox."""
         logger.info(f"Ultravox state: {event.state}")
         if event.state == "listening":
+            if lk_ultravox_debug:
+                logger.debug("[ultravox] state=listening")
+            # NOTE: currently emitting input_speech_started here; suspected to cause sandwiching
+            # Keeping behavior for now to validate hypothesis via logs
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
         elif event.state == "thinking":
             # Start generation when Ultravox begins processing (user finished speaking)
@@ -1129,9 +1126,9 @@ class RealtimeSession(
                 self._pending_generation_fut = None
                 self._pending_generation_epoch = None
 
-            self.emit(
-                "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
-            )
+            # Do not emit input_speech_stopped here; rely on user final transcript events.
+            if lk_ultravox_debug:
+                logger.debug("[ultravox] state=speaking (no input_speech_stopped)")
 
     def _handle_tool_invocation_event(self, event: ClientToolInvocationEvent) -> None:
         """Handle tool invocation events from Ultravox."""
@@ -1153,32 +1150,22 @@ class RealtimeSession(
         self._current_generation.function_ch.send_nowait(function_call)
 
         if lk_ultravox_debug:
-            logger.debug(
-                f"[ultravox] emitted FunctionCall; will close tool turn after tool_result bridge: "
-                f"invocationId={event.invocation_id}"
-            )
+            logger.debug(f"[ultravox] emitted FunctionCall id={event.invocation_id}")
 
         if lk_ultravox_debug:
-            gen_id = (
-                self._current_generation.response_id if self._current_generation else "<none>"
-            )
+            gen_id = self._current_generation.response_id if self._current_generation else "<none>"
             self._tool_turn_debug[event.invocation_id] = {
                 "invocation_received_at": time.perf_counter(),
                 "gen_id": gen_id,
-                "mode": lk_ultravox_tool_turn_mode,
             }
+            logger.debug(f"[ultravox] tool_invocation trace: id={event.invocation_id} gen_id={gen_id}")
+
+        # Always close tool turn immediately upon invocation
+        if lk_ultravox_debug:
             logger.debug(
-                f"[ultravox.review] tool_invocation: id={event.invocation_id} mode={lk_ultravox_tool_turn_mode} gen_id={gen_id}"
+                f"[ultravox] close_on_invocation: closing generation for tool id={event.invocation_id}"
             )
-
-        if lk_ultravox_tool_turn_mode == "close_on_invocation":
-            # Strict reviewer mode: close as soon as tool is invoked
-            if lk_ultravox_debug:
-                logger.debug(
-                    f"[ultravox.review] close_on_invocation: closing generation immediately for id={event.invocation_id}"
-                )
-            self._mark_current_generation_done()
-
+        self._mark_current_generation_done()
 
     def _handle_pong_event(self, event: PongEvent) -> None:
         """Handle pong events from Ultravox."""
@@ -1292,7 +1279,9 @@ class RealtimeSession(
     async def send_tool_result(self, call_id: str, result: str) -> None:
         """Send tool execution result back to Ultravox."""
         if lk_ultravox_debug:
-            preview = (result[:200] + "...") if isinstance(result, str) and len(result) > 200 else result
+            preview = (
+                (result[:200] + "...") if isinstance(result, str) and len(result) > 200 else result
+            )
             logger.debug(f"[ultravox] send_tool_result: call_id={call_id} preview={preview!r}")
 
         event = ClientToolResultEvent(

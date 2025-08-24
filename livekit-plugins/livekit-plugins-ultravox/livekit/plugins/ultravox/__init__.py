@@ -15,13 +15,8 @@
 
 """OpenAI plugin for LiveKit Agents
 
-Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
+Support for Ultravox Realtime API
 
-Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras,
-Fireworks, Perplexity, Telnyx, xAI, Ollama, and DeepSeek.
-
-See https://docs.livekit.io/agents/integrations/openai/ and
-https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
 from . import realtime
