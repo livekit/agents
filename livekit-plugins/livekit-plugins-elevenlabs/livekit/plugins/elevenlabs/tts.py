@@ -341,6 +341,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         connection = await self._tts.current_connection()
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(self, output_emitter, waiter)
+        started_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -380,6 +381,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     _SynthesizeContent(self._context_id, formatted_text, flush=False)
                 )
                 self._mark_started()
+                if not started_event.is_set():
+                    started_event.set()
 
             if xml_content:
                 logger.warning("ElevenLabs stream ended with incomplete xml content")
@@ -391,11 +394,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         stream_t = asyncio.create_task(_sentence_stream_task())
 
         try:
-            # wait for completion or error signaled by the connection
-            print(f"waiting for timeout: {self._conn_options.timeout}")
+            # start clock on the timeout only after we've pushed some input
+            await started_event.wait()
             await asyncio.wait_for(waiter, self._conn_options.timeout)
         except asyncio.TimeoutError as e:
-            print("timeout error")
             raise APITimeoutError() from e
         except Exception as e:
             raise APIStatusError("Could not synthesize.") from e
