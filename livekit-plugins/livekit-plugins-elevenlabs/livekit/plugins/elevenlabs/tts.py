@@ -392,11 +392,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             # wait for completion or error signaled by the connection
+            print(f"waiting for timeout: {self._conn_options.timeout}")
             await asyncio.wait_for(waiter, self._conn_options.timeout)
         except asyncio.TimeoutError as e:
+            print("timeout error")
             raise APITimeoutError() from e
         except Exception as e:
-            raise APIStatusError() from e
+            raise APIStatusError("Could not synthesize.") from e
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
@@ -531,7 +533,7 @@ class _Connection:
                         await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
-                    pkt = {
+                    pkt: dict[str, Any] = {
                         "text": msg.text,
                         "context_id": msg.context_id,
                     }
