@@ -224,9 +224,10 @@ class TTS(tts.TTS):
                 return self._current_connection
 
             session = self._ensure_session()
-            self._current_connection = _Connection(self._opts, session)
-            await self._current_connection.connect()
-            return self._current_connection
+            conn = _Connection(self._opts, session)
+            await conn.connect()
+            self._current_connection = conn
+            return conn
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -337,8 +338,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=self._context_id)
 
-        # register this stream
-        connection = await self._tts.current_connection()
+        connection: _Connection
+        try:
+            connection = await asyncio.wait_for(self._tts.current_connection(), self._conn_options.timeout)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except Exception as e:
+            raise APIConnectionError("could not connect to ElevenLabs") from e
+
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(self, output_emitter, waiter)
         started_event = asyncio.Event()
