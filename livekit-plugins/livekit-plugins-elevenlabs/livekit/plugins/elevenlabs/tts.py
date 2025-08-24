@@ -393,6 +393,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             # wait for completion or error signaled by the connection
             await asyncio.wait_for(waiter, self._conn_options.timeout)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except Exception as e:
+            raise APIStatusError() from e
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
@@ -547,7 +551,7 @@ class _Connection:
             logger.warning("send loop error", exc_info=e)
         finally:
             if not self._closed:
-                await self._close()
+                await self.aclose()
 
     async def _recv_loop(self) -> None:
         """Receive loop - processes messages from WebSocket"""
