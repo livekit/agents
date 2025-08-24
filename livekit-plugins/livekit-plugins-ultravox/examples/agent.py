@@ -23,6 +23,7 @@ from livekit.agents.voice.events import (
     MetricsCollectedEvent,
     UserInputTranscribedEvent,
 )
+from livekit.agents import metrics 
 from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
@@ -289,6 +290,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev: MetricsCollectedEvent) -> None:
+        # Use framework helper for consistent formatting
         logger.info(f"metrics_collected: {ev}")
 
     @session.on("user_input_transcribed")

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpenAI plugin for LiveKit Agents
+"""Ultravox plugin for LiveKit Agents
 
 Support for Ultravox Realtime API
 
