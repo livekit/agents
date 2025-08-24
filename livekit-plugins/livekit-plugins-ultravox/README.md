@@ -18,6 +18,12 @@ You'll need an API key from Ultravox. Set it as an environment variable:
 export ULTRAVOX_API_KEY="your_api_key_here"
 ```
 
+Optional: enable debug logs for the plugin (disabled by default):
+
+```bash
+export LK_ULTRAVOX_DEBUG=true
+```
+
 ## Basic Usage
 
 ### Simple Voice Assistant
@@ -98,20 +104,33 @@ if __name__ == "__main__":
 
 ## Configuration Options
 
-### Ultravox API (/api/call)  Parameters
+### Ultravox API (/api/calls) Parameters
 
 ```python
 RealtimeModel(
-    model_id="fixie-ai/ultravox",           # Ultravox model to use
-    voice="Mark",                           # Voice for TTS (Mark, Emma, etc.)
+    model_id="fixie-ai/ultravox",         # Model to use (warn + pass-through if unknown)
+    voice="Mark",                         # Voice to use (warn + pass-through if unknown)
     api_key=None,                          # API key (defaults to env var)
     base_url=None,                         # API base URL (defaults to Ultravox API)
     system_prompt="You are helpful.",      # System prompt
     input_sample_rate=16000,               # Input audio sample rate
-    output_sample_rate=24000,              # Output audio sample rate  
-    client_buffer_size_ms=60,              # Audio buffer size
+    output_sample_rate=24000,              # Output audio sample rate
+    client_buffer_size_ms=60,              # Audio buffer size (min 200ms used on WS)
     http_session=None,                     # Custom HTTP session
 )
+
+Notes:
+- Unknown models/voices: the plugin logs a warning and sends them as-is; the server validates.
+- Metrics: the plugin emits a single `metrics_collected` event per generation. To log them,
+  add a listener in your app and call the helper:
+
+```python
+from livekit.agents import metrics
+
+@session.on("metrics_collected")
+def on_metrics_collected(ev):
+    metrics.log_metrics(ev.metrics)
+```
 ```
 
 
