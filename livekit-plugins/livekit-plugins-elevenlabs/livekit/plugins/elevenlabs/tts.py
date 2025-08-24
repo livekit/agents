@@ -340,7 +340,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection
         try:
-            connection = await asyncio.wait_for(self._tts.current_connection(), self._conn_options.timeout)
+            connection = await asyncio.wait_for(
+                self._tts.current_connection(), self._conn_options.timeout
+            )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
