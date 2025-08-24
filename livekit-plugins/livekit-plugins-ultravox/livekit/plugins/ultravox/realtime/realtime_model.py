@@ -63,12 +63,15 @@ NUM_CHANNELS = 1
 ULTRAVOX_BASE_URL = "https://api.ultravox.ai/api"
 lk_ultravox_debug = os.getenv("LK_ULTRAVOX_DEBUG", "false").lower() == "true"
 
+
 def _normalize_model(value: str | None) -> str:
     """Normalize model value with warnings for unknown models."""
     if not value:
         return DEFAULT_MODEL
     if value not in AVAILABLE_MODELS:
-        logger.warning("[ultravox] Unrecognized model '%s'; sending as-is (server validates).", value)
+        logger.warning(
+            "[ultravox] Unrecognized model '%s'; sending as-is (server validates).", value
+        )
     return value
 
 
@@ -77,7 +80,9 @@ def _normalize_voice(value: str | None) -> str:
     if not value:
         return DEFAULT_VOICE
     if value not in AVAILABLE_VOICES:
-        logger.warning("[ultravox] Unrecognized voice '%s'; sending as-is (server validates).", value)
+        logger.warning(
+            "[ultravox] Unrecognized voice '%s'; sending as-is (server validates).", value
+        )
     return value
 
 
@@ -313,7 +318,7 @@ class RealtimeSession(
         self._session_should_close = asyncio.Event()
         self._ws_session_lock = asyncio.Lock()
 
-    # Helper function to fix TTFT issue : TTFT was showing -1.0 seconds during function calls 
+    # Helper function to fix TTFT issue : TTFT was showing -1.0 seconds during function calls
     def _pick_created_timestamp(self) -> float:
         """Pick a creation timestamp anchored to the most recent user-final if fresh.
 
@@ -1140,7 +1145,9 @@ class RealtimeSession(
 
         if lk_ultravox_debug and self._current_generation is not None:
             gen_id = self._current_generation.response_id
-            logger.debug(f"[ultravox] tool_invocation trace: id={event.invocation_id} gen_id={gen_id}")
+            logger.debug(
+                f"[ultravox] tool_invocation trace: id={event.invocation_id} gen_id={gen_id}"
+            )
 
         # Always close tool turn immediately upon invocation
         if lk_ultravox_debug:
@@ -1185,7 +1192,9 @@ class RealtimeSession(
             # Check if we have a current generation before processing audio
             if not self._current_generation or self._current_generation._done:
                 if lk_ultravox_debug:
-                    logger.debug("[ultravox] Received audio data but no current generation, ignoring")
+                    logger.debug(
+                        "[ultravox] Received audio data but no current generation, ignoring"
+                    )
                 return
 
             # Set first token timestamp when we receive first audio from Ultravox (TTFT measurement)
