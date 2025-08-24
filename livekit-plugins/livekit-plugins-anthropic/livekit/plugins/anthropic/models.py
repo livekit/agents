@@ -3,9 +3,9 @@ from typing import Literal
 # https://docs.anthropic.com/en/docs/about-claude/model-deprecations#model-status
 
 ChatModels = Literal[
-    "claude-3-5-sonnet-20240620", # deprecated
-    "claude-3-opus-20240229",     # deprecated
-    "claude-3-5-sonnet-20241022", # deprecated
+    "claude-3-5-sonnet-20240620",  # deprecated
+    "claude-3-opus-20240229",  # deprecated
+    "claude-3-5-sonnet-20241022",  # deprecated
     "claude-3-haiku-20240307",
     "claude-3-5-haiku-20241022",
     "claude-3-7-sonnet-20250219",
