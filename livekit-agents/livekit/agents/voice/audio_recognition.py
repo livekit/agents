@@ -52,9 +52,9 @@ class _TurnDetector(Protocol):
 
 
 class RecognitionHooks(Protocol):
-    def on_start_of_speech(self, ev: vad.VADEvent | None = None) -> None: ...
+    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
-    def on_end_of_speech(self, ev: vad.VADEvent | None = None) -> None: ...
+    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
@@ -354,7 +354,7 @@ class AudioRecognition:
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_end_of_speech()
+                self._hooks.on_end_of_speech(None)
 
             self._speaking = False
             self._user_turn_committed = True
@@ -365,7 +365,7 @@ class AudioRecognition:
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_start_of_speech()
+                self._hooks.on_start_of_speech(None)
 
             self._speaking = True
             self._last_speaking_time = time.time()
