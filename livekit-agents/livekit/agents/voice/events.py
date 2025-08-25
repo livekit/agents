@@ -120,6 +120,7 @@ class UserInputTranscribedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+# TODO(long): deprecated, remove it in next versions
 class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     message: ChatMessage | None

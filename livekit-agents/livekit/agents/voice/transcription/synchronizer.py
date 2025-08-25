@@ -143,6 +143,11 @@ class _SegmentSynchronizerImpl:
         self._start_wall_time: float | None = None
         self._start_fut: asyncio.Event = asyncio.Event()
 
+        self._paused_wall_time: float | None = None
+        self._paused_duration: float = 0.0
+        self._output_enabled_ev = asyncio.Event()
+        self._output_enabled_ev.set()
+
         self._speed = STANDARD_SPEECH_RATE * self._opts.speed  # hyphens per second
         self._speed_on_speaking_unit: float | None = None  # hyphens per speaking unit
         # a speaking unit is defined by the speaking rate estimation method, it's a relative unit
@@ -156,6 +161,7 @@ class _SegmentSynchronizerImpl:
         self._speaking_rate_atask = asyncio.create_task(self._speaking_rate_task())
 
         self._playback_completed = False
+        self._interrupted = False
 
     @property
     def closed(self) -> bool:
@@ -232,6 +238,17 @@ class _SegmentSynchronizerImpl:
 
         self._reestimate_speed()
 
+    def pause(self) -> None:
+        if self._paused_wall_time is None:
+            self._paused_wall_time = time.time()
+        self._output_enabled_ev.clear()
+
+    def resume(self) -> None:
+        if self._paused_wall_time is not None:
+            self._paused_duration += time.time() - self._paused_wall_time
+            self._paused_wall_time = None
+        self._output_enabled_ev.set()
+
     def _reestimate_speed(self) -> None:
         if not self._text_data.done or not self._audio_data.done:
             return
@@ -253,6 +270,7 @@ class _SegmentSynchronizerImpl:
             logger.warning("_SegmentSynchronizerImpl.playback_finished called after close")
             return
 
+        self._interrupted = interrupted
         if not self._text_data.done or not self._audio_data.done:
             logger.warning(
                 "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done",
@@ -301,6 +319,11 @@ class _SegmentSynchronizerImpl:
             sentence = text_seg.token
             text_cursor = 0
             for word, _, end_pos in self._opts.split_words(sentence):
+                if not self._output_enabled_ev.is_set():
+                    await self._output_enabled_ev.wait()
+                    if self._interrupted:
+                        return
+
                 if self.closed and not self._playback_completed:
                     return
 
@@ -310,7 +333,7 @@ class _SegmentSynchronizerImpl:
                     continue
 
                 word_hyphens = len(self._opts.hyphenate_word(word))
-                elapsed = time.time() - self._start_wall_time
+                elapsed = time.time() - self._start_wall_time - self._paused_duration
 
                 target_hyphens: float | None = None
                 if (annotated := self._audio_data.sr_data_annotated) and (
@@ -367,6 +390,7 @@ class _SegmentSynchronizerImpl:
         await self._audio_data.sr_stream.aclose()
         await self._capture_atask
         await self._speaking_rate_atask
+        self._output_enabled_ev.set()
 
 
 class TranscriptSynchronizer:
@@ -569,6 +593,14 @@ class _SyncedAudioOutput(io.AudioOutput):
     def on_detached(self) -> None:
         super().on_detached()
         self._synchronizer._on_attachment_changed(audio_attached=False)
+
+    def pause(self) -> None:
+        super().pause()
+        self._synchronizer._impl.pause()
+
+    def resume(self) -> None:
+        super().resume()
+        self._synchronizer._impl.resume()
 
 
 class _SyncedTextOutput(io.TextOutput):
