@@ -1720,10 +1720,7 @@ class AgentActivity(RecognitionHooks):
             new_agent_task: Agent | None = None
             ignore_task_switch = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
-                function_calls=[],
-                function_call_outputs=[],
-                _reply_required=False,
-                _handoff_required=False,
+                function_calls=[], function_call_outputs=[]
             )
             for sanitized_out in tool_output.output:
                 if sanitized_out.fnc_call_out is not None:
@@ -1749,7 +1746,7 @@ class AgentActivity(RecognitionHooks):
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
-            if new_agent_task and not ignore_task_switch and fnc_executed_ev._handoff_required:
+            if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
 
@@ -2103,10 +2100,7 @@ class AgentActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
-                function_calls=[],
-                function_call_outputs=[],
-                _reply_required=False,
-                _handoff_required=False,
+                function_calls=[], function_call_outputs=[]
             )
             new_agent_task: Agent | None = None
             ignore_task_switch = False
@@ -2136,7 +2130,7 @@ class AgentActivity(RecognitionHooks):
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
-            if new_agent_task and not ignore_task_switch and fnc_executed_ev._handoff_required:
+            if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
 
