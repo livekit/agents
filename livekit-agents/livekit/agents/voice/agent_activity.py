@@ -1049,13 +1049,17 @@ class AgentActivity(RecognitionHooks):
 
     # region recognition hooks
 
-    def on_start_of_speech(self, ev: vad.VADEvent) -> None:
+    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
 
-    def on_end_of_speech(self, ev: vad.VADEvent) -> None:
+    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
+        speaking_time = time.time()
+        if ev is not None:
+            speaking_time = time.time() - ev.silence_duration
+
         self._session._update_user_state(
             "listening",
-            last_speaking_time=time.time() - ev.silence_duration,
+            last_speaking_time=speaking_time,
         )
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
