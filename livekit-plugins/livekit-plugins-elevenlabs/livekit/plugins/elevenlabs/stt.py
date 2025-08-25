@@ -42,6 +42,7 @@ class _STTOptions:
     api_key: str
     base_url: str
     language_code: str = "en"
+    tag_audio_events: bool = True
 
 
 class STT(stt.STT):
@@ -51,6 +52,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         language_code: NotGivenOr[str] = NOT_GIVEN,
+        tag_audio_events: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -60,6 +62,7 @@ class STT(stt.STT):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the STT model. Optional.
+            tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription. Default is True.
         """  # noqa: E501
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
 
@@ -73,6 +76,7 @@ class STT(stt.STT):
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             language_code=language_code if is_given(language_code) else "en",
+            tag_audio_events=tag_audio_events,
         )
         self._session = http_session
 
@@ -97,6 +101,7 @@ class STT(stt.STT):
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", "scribe_v1")
         form.add_field("language_code", self._opts.language_code)
+        form.add_field("tag_audio_events", self._opts.tag_audio_events)
 
         try:
             async with self._ensure_session().post(
