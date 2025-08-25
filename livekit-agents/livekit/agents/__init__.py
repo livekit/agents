@@ -91,8 +91,7 @@ from .voice.run_result import (
     mock_tools,
 )
 from .worker import (
-    SimulateJobInfo,
-    Worker,
+    AgentServer,
     WorkerOptions,
     WorkerPermissions,
     WorkerType,
@@ -113,7 +112,7 @@ def __getattr__(name: str) -> typing.Any:
 
 __all__ = [
     "__version__",
-    "Worker",
+    "AgentServer",
     "WorkerOptions",
     "WorkerType",
     "WorkerPermissions",
@@ -169,7 +168,6 @@ __all__ = [
     "BuiltinAudioClip",
     "AudioConfig",
     "PlayHandle",
-    "SimulateJobInfo",
     "io",
     "avatar",
     "cli",
