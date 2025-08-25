@@ -18,6 +18,7 @@ import asyncio
 import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -39,6 +40,9 @@ DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
 
+# Input types for TTS synthesis
+InputType = Literal["text", "markup"]
+
 
 @dataclass
 class _TTSOptions:
@@ -52,6 +56,7 @@ class _TTSOptions:
     volume_gain_db: float
     custom_pronunciations: CustomPronunciations | None
     enable_ssml: bool
+    input_type: InputType
 
 
 class TTS(tts.TTS):
@@ -75,6 +80,7 @@ class TTS(tts.TTS):
         custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
         enable_ssml: bool = False,
+        input_type: InputType = "text",
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -100,6 +106,7 @@ class TTS(tts.TTS):
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
+            input_type (InputType, optional): Input type for synthesis. "text" for plain text, "markup" for SSML/markup. Default is "text".
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
@@ -145,6 +152,7 @@ class TTS(tts.TTS):
             volume_gain_db=volume_gain_db,
             custom_pronunciations=pronunciations,
             enable_ssml=enable_ssml,
+            input_type=input_type,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -156,6 +164,7 @@ class TTS(tts.TTS):
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         volume_gain_db: NotGivenOr[float] = NOT_GIVEN,
+        input_type: NotGivenOr[InputType] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -166,7 +175,8 @@ class TTS(tts.TTS):
             voice_name (str, optional): Specific voice name.
             speaking_rate (float, optional): Speed of speech.
             volume_gain_db (float, optional): Volume gain in decibels.
-        """
+            input_type (InputType, optional): Input type for synthesis. "text" for plain text, "markup" for SSML/markup.
+        """  # noqa: E501
         params = {}
         if is_given(language):
             params["language_code"] = str(language)
@@ -182,6 +192,9 @@ class TTS(tts.TTS):
             self._opts.speaking_rate = speaking_rate
         if is_given(volume_gain_db):
             self._opts.volume_gain_db = volume_gain_db
+
+        if is_given(input_type):
+            self._opts.input_type = input_type  # type: ignore
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         api_endpoint = "texttospeech.googleapis.com"
@@ -227,29 +240,31 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = tts._opts
+        self._client = tts._ensure_client()
 
     def _build_ssml(self) -> str:
-        ssml = "<speak>"
-        ssml += self._input_text
-        ssml += "</speak>"
-        return ssml
+        """Build SSML markup for the input text."""
+        return f"<speak>{self._input_text}</speak>"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            input = (
-                texttospeech.SynthesisInput(
-                    ssml=self._build_ssml(),
-                    custom_pronunciations=self._opts.custom_pronunciations,
+            # Determine input based on enable_ssml or input_type
+            if self._opts.enable_ssml:
+                input = (
+                    texttospeech.SynthesisInput(ssml=self._build_ssml(),custom_pronunciations=self._opts.custom_pronunciations,)
+                    if self._opts.enable_ssml
+                    else texttospeech.SynthesisInput(text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations,)
                 )
-                if self._opts.enable_ssml
-                else texttospeech.SynthesisInput(
-                    text=self._input_text,
-                    custom_pronunciations=self._opts.custom_pronunciations,
-                )
-            )
-            response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
+            else:
+                synthesis_input_params = {}
+                if self._opts.input_type == "markup":
+                    synthesis_input_params["markup"] = self._input_text
+                else:
+                    synthesis_input_params["text"] = self._input_text
+                input = texttospeech.SynthesisInput(**synthesis_input_params)
+
+            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
                 input=input,
                 voice=self._opts.voice,
                 audio_config=texttospeech.AudioConfig(
@@ -355,8 +370,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 async for input in input_stream:
                     self._mark_started()
+                    streaming_input_params = {}
+                    if self._opts.input_type == "markup":
+                        streaming_input_params["markup"] = input.token
+                    else:
+                        streaming_input_params["text"] = input.token
+
                     yield texttospeech.StreamingSynthesizeRequest(
-                        input=texttospeech.StreamingSynthesisInput(text=input.token)
+                        input=texttospeech.StreamingSynthesisInput(**streaming_input_params)
                     )
 
             except Exception:
