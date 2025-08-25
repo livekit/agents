@@ -93,6 +93,7 @@ speechmatics = ["livekit-plugins-speechmatics>=1.2.6"]
 spitch = ["livekit-plugins-spitch>=1.2.6"]
 tavus = ["livekit-plugins-tavus>=1.2.6"]
 turn-detector = ["livekit-plugins-turn-detector>=1.2.6"]
+ten = ["livekit-plugins-ten>=1.0.0"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
