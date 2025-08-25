@@ -1,11 +1,13 @@
-"""LiveKit plugin for Mistral AI models. Currently only supports ChatModels"""
+"""LiveKit plugin for Mistral AI models. Supports Chat and STT models"""
 
 from livekit.agents import Plugin
 
+from .llm import LLM
 from .log import logger
+from .stt import STT
 from .version import __version__
 
-__all__ = ["LLM", "LLMStream", "__version__"]
+__all__ = ["LLM", "STT", "__version__"]
 
 
 class MistralAIPlugin(Plugin):

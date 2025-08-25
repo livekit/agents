@@ -78,7 +78,7 @@ class VoiceOptions:
     user_away_timeout: float | None
     agent_false_interruption_timeout: float | None
     min_consecutive_speech_delay: float
-    use_tts_aligned_transcript: bool
+    use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
 
 
@@ -158,7 +158,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         agent_false_interruption_timeout: float | None = 4.0,
         min_consecutive_speech_delay: float = 0.0,
-        use_tts_aligned_transcript: bool = False,
+        use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -227,7 +227,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
-                is ``False``.
+                is ``False``. When NOT_GIVEN, it will be enabled for non-streaming TTS
+                and disabled for streaming TTS.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
             preemptive_generation (bool):
@@ -415,7 +416,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
             current_span.set_attribute(
-                trace_types.ATTR_SESSION_OPTIONS, json.dumps(asdict(self._opts))
+                trace_types.ATTR_SESSION_OPTIONS,
+                json.dumps({k: v for k, v in asdict(self._opts).items() if is_given(v)}),
             )
 
             self._agent = agent
@@ -656,8 +658,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
-    def update_options(self) -> None:
-        pass
+    def update_options(
+        self,
+        *,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
+        """
+        Update the options for the agent session.
+
+        Args:
+            min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
+            max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+        """
+        if is_given(min_endpointing_delay):
+            self._opts.min_endpointing_delay = min_endpointing_delay
+        if is_given(max_endpointing_delay):
+            self._opts.max_endpointing_delay = max_endpointing_delay
+
+        if self._activity is not None:
+            self._activity.update_options(
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            )
 
     def say(
         self,
@@ -794,7 +817,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self._started:
             self._update_activity_atask = task = asyncio.create_task(
-                self._update_activity_task(self._agent), name="_update_activity_task"
+                self._update_activity_task(self._update_activity_atask, self._agent),
+                name="_update_activity_task",
             )
             run_state = self._global_run_state
             if run_state:
@@ -812,7 +836,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
-            # _update_activity is called directy sometimes, update for redundancy
+            # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
             if new_activity == "start":
@@ -849,18 +873,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             elif new_activity == "resume":
                 await self._activity.resume()
 
-            if wait_on_enter:
-                assert self._activity._on_enter_task is not None
-                await asyncio.shield(self._activity._on_enter_task)
+        # move it outside the lock to allow calling _update_activity in on_enter of a new agent
+        if wait_on_enter:
+            assert self._activity._on_enter_task is not None
+            await asyncio.shield(self._activity._on_enter_task)
 
     @utils.log_exceptions(logger=logger)
-    async def _update_activity_task(self, task: Agent) -> None:
+    async def _update_activity_task(
+        self, old_task: asyncio.Task[None] | None, agent: Agent
+    ) -> None:
+        if old_task is not None:
+            await old_task
+
         if self._root_span_context is not None:
             # restore the root span context so on_exit, on_enter, and future turns
             # are direct children of the root span, not nested under a tool call.
             otel_context.attach(self._root_span_context)
 
-        await self._update_activity(task)
+        await self._update_activity(agent)
 
     def _on_error(
         self,

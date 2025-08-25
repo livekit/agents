@@ -729,7 +729,10 @@ def _validate_keyterms(
         )
 
     if is_given(keyterms) and (
-        (model.startswith("nova-3") and language not in ("en-US", "en"))
+        (
+            model.startswith("nova-3")
+            and language not in ("en-US", "en", "de", "nl", "sv", "sv-SE", "da", "da-DK")
+        )
         or not model.startswith("nova-3")
     ):
         raise ValueError(
