@@ -32,7 +32,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._track_name = track_name
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200)
-        self._audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
         self._subscribed_fut = asyncio.Future[None]()
@@ -89,7 +89,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await self._flush_task
 
         self._pushed_duration += frame.duration
-        await self._audio_ch.send(frame)
+        await self._audio_buf.send(frame)
 
     def flush(self) -> None:
         super().flush()
@@ -122,7 +122,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
 
         async def _wait_buffered_audio() -> None:
-            while not self._audio_ch.empty():
+            while not self._audio_buf.empty():
                 if not self._playback_enabled.is_set():
                     await self._playback_enabled.wait()
 
@@ -138,12 +138,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
         pushed_duration = self._pushed_duration
 
         if interrupted:
-            queued_frames: list[rtc.AudioFrame] = []
-            while not self._audio_ch.empty():
-                queued_frames.append(self._audio_ch.recv_nowait())
-            queued_duration = (
-                sum(frame.duration for frame in queued_frames) + self._audio_source.queued_duration
-            )
+            queued_duration = self._audio_source.queued_duration
+            while not self._audio_buf.empty():
+                queued_duration += self._audio_buf.recv_nowait().duration
 
             pushed_duration = max(pushed_duration - queued_duration, 0)
             self._audio_source.clear_queue()
@@ -156,7 +153,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
-        async for frame in self._audio_ch:
+        async for frame in self._audio_buf:
             if not self._playback_enabled.is_set():
                 self._audio_source.clear_queue()
                 await self._playback_enabled.wait()
@@ -164,6 +161,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 # TODO(long): ignore frames from previous syllable
 
             if self._interrupted_event.is_set() or self._pushed_duration == 0:
+                if self._interrupted_event.is_set() and self._flush_task:
+                    await self._flush_task
+
                 # ignore frames if interrupted
                 continue
 

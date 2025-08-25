@@ -278,37 +278,29 @@ async def _audio_forwarding_task(
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
 ) -> None:
-    resampler: rtc.AudioResampler | None = None
+    bstream: utils.audio.AudioByteStream | None = None
     try:
         audio_output.resume()
+        if audio_output.sample_rate is not None:
+            tts_output = utils.audio.resample_audio_frames(tts_output, audio_output.sample_rate)
+
         async for frame in tts_output:
             out.audio.append(frame)
 
-            if (
-                not out.first_frame_fut.done()
-                and audio_output.sample_rate is not None
-                and frame.sample_rate != audio_output.sample_rate
-                and resampler is None
-            ):
-                resampler = rtc.AudioResampler(
-                    input_rate=frame.sample_rate,
-                    output_rate=audio_output.sample_rate,
+            if not bstream:
+                bstream = utils.audio.AudioByteStream(
+                    sample_rate=frame.sample_rate,
                     num_channels=frame.num_channels,
+                    samples_per_channel=frame.sample_rate // 10,  # 100ms
                 )
 
-            if resampler:
-                for f in resampler.push(frame):
-                    await audio_output.capture_frame(f)
-            else:
-                await audio_output.capture_frame(frame)
+            for f in bstream.push(frame.data):
+                await audio_output.capture_frame(f)
+                if not out.first_frame_fut.done():
+                    out.first_frame_fut.set_result(None)
 
-            # set the first frame future if not already set
-            # (after completing the first frame)
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(None)
-
-        if resampler:
-            for frame in resampler.flush():
+        if bstream:
+            for frame in bstream.flush():
                 await audio_output.capture_frame(frame)
 
     finally:
