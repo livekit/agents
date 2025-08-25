@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from re import S
 import sys
 import threading
 import time
@@ -141,6 +142,7 @@ class _AudioOutput(io.AudioOutput):
 
         with self._output_lock:
             self._output_buf.clear()
+            self._paused_buf.clear()
 
         if self._pushed_duration > 0.0:
             if self._dispatch_handle is not None:
