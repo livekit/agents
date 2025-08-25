@@ -777,7 +777,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return handle
 
-    def interrupt(self, force: bool = False) -> asyncio.Future[None]:
+    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
         Returns:

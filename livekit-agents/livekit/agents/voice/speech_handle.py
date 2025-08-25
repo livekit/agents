@@ -100,7 +100,7 @@ class SpeechHandle:
     def done(self) -> bool:
         return self._done_fut.done()
 
-    def interrupt(self, force: bool = False) -> SpeechHandle:
+    def interrupt(self, *, force: bool = False) -> SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:

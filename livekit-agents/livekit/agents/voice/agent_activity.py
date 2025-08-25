@@ -828,7 +828,7 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
 
-    def interrupt(self, force: bool = False) -> asyncio.Future[None]:
+    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
         Returns:
