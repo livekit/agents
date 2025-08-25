@@ -133,6 +133,7 @@ class STTv2(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         raise NotImplementedError(
@@ -142,6 +143,7 @@ class STTv2(stt.STT):
     def stream(
         self,
         *,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStreamv2:
         stream = SpeechStreamv2(
@@ -429,8 +431,7 @@ class SpeechStreamv2(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
 
-        request_id = data.get("request_id")
-        if request_id:
+        if request_id := data.get("request_id"):
             self._request_id = request_id
 
         if data["type"] == "TurnInfo":
@@ -484,7 +485,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 alts = _parse_transcription(self._opts.language, data)
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
+                    request_id=self._request_id,
                     alternatives=alts,
                 )
                 self._event_ch.send_nowait(final_event)
