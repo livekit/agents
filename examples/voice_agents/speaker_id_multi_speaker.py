@@ -6,8 +6,7 @@ import datetime
 
 from dotenv import load_dotenv
 
-from livekit import agents
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.agents.stt import MultiSpeakerAdapter
 from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 
@@ -15,6 +14,10 @@ from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 # Required: SPEECHMATICS_API_KEY, OPENAI_API_KEY
 load_dotenv()
 
+
+# This example demonstrates how to use the MultiSpeakerAdapter with STT that supports diarization.
+# It works for a single audio track, and it will detect the primary speaker and suppress the background speaker.
+# It can also be used to format the transcript differently for the primary and background speakers.
 
 MASTER_PROMPT = """
 You are a friendly AI assistant called Lively.
@@ -45,7 +48,7 @@ class Assistant(Agent):
         )
 
 
-async def entrypoint(ctx: agents.JobContext) -> None:
+async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         vad=silero.VAD.load(),
         llm=openai.LLM(),
@@ -70,4 +73,4 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

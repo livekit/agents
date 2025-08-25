@@ -553,8 +553,9 @@ class SpeechStream(stt.SpeechStream):
             "profanity_filter": self._opts.profanity_filter,
             "numerals": self._opts.numerals,
             "mip_opt_out": self._opts.mip_opt_out,
-            "diarize": self._opts.enable_diarization,
         }
+        if self._opts.enable_diarization:
+            live_config["diarize"] = True
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterms:
@@ -614,7 +615,9 @@ class SpeechStream(stt.SpeechStream):
             is_endpoint = data["speech_final"]
             self._request_id = request_id
 
-            alts = live_transcription_to_speech_data(self._opts.language, data)
+            alts = live_transcription_to_speech_data(
+                self._opts.language, data, is_final=is_final_transcript
+            )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
             # been observed.
@@ -652,13 +655,20 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
-def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.SpeechData]:
+def live_transcription_to_speech_data(
+    language: str, data: dict, *, is_final: bool
+) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
     speech_data = []
     for alt in dg_alts:
-        speakers = [word["speaker"] for word in alt["words"] if "speaker" in word]
-        speaker = Counter(speakers).most_common(1)[0][0] if speakers else None
+        if is_final:
+            speakers = [word["speaker"] for word in alt["words"] if "speaker" in word]
+            speaker = Counter(speakers).most_common(1)[0][0] if speakers else None
+        else:
+            # interim result doesn't have correct speaker information?
+            speaker = None
+
         sd = stt.SpeechData(
             language=language,
             start_time=alt["words"][0]["start"] if alt["words"] else 0,

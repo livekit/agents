@@ -26,6 +26,23 @@ class MultiSpeakerAdapter(STT):
         primary_format: str = "{text}",
         background_format: str = "{text}",
     ):
+        """MultiSpeakerAdapter is an adapter that allows to detect and suppress background speakers.
+        It needs STT with diarization capability and works for a single audio track.
+
+        Args:
+            stt (STT): STT instance to wrap
+            detect_primary_speaker (bool, optional): Whether to detect primary speaker. Defaults to True.
+            suppress_background_speaker (bool, optional): Whether to suppress background speaker. Defaults to False.
+            primary_detection_options (NotGivenOr[PrimarySpeakerDetectionOptions], optional): Primary speaker detection options.
+                If not provided, the default options will be used.
+            primary_format (str, optional): Format for primary speaker.
+                Supports {text} and {speaker_id} placeholders. Defaults to "{text}".
+            background_format (str, optional): Format for background speaker.
+                Supports {text} and {speaker_id} placeholders. Defaults to "{text}".
+
+        Raises:
+            ValueError: If the STT does not support diarization.
+        """
         if not stt.capabilities.diarization:
             raise ValueError("MultiSpeakerAdapter needs STT with diarization capability")
 
@@ -96,6 +113,14 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
                 updated_ev = self._detector.on_stt_event(ev)
                 if updated_ev is not None:
                     self._event_ch.send_nowait(updated_ev)
+                elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+                    # send an empty final transcript to clear the interim results
+                    self._event_ch.send_nowait(
+                        SpeechEvent(
+                            type=SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=[SpeechData(language="", text="")],
+                        )
+                    )
 
         stream = self._wrapped_stt.stream(language=self._language, conn_options=self._conn_options)
         tasks = [
@@ -215,21 +240,18 @@ class _PrimarySpeakerDetector:
         if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
             self._update_primary_speaker(sd)
 
-        if sd.speaker_id is None:
+        if sd.speaker_id is None or self._primary_speaker is None:
             return ev
 
-        if (
-            self._suppress_background
-            and self._primary_speaker is not None
-            and sd.speaker_id != self._primary_speaker
-        ):
-            # suppress the background speaker
-            return None
+        sd.is_primary_speaker = sd.speaker_id == self._primary_speaker
 
         # format the transcript
-        if self._primary_speaker is not None and self._primary_speaker == sd.speaker_id:
+        if sd.is_primary_speaker:
             sd.text = self._primary_format.format(text=sd.text, speaker_id=sd.speaker_id)
         else:
+            if self._suppress_background:
+                return None
+
             sd.text = self._background_format.format(text=sd.text, speaker_id=sd.speaker_id)
         return ev
 
@@ -319,6 +341,6 @@ class _PrimarySpeakerDetector:
         }
         if rms > rms_threshold:
             self._primary_speaker = speaker_id
-            logger.debug("update primary speaker", extra=extra)
+            logger.debug("primary speaker switched", extra=extra)
         else:
-            logger.debug("no switch primary speaker", extra=extra)
+            logger.debug("primary speaker unchanged", extra=extra)
