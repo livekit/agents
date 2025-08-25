@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable
-from dataclasses import dataclass, field
+from typing import Annotated, Any, Callable
 
 import pytest
 
 from livekit.agents import APIConnectionError, llm
-from livekit.agents.llm import ChatContext, FunctionTool, function_tool, ImageContent
-from livekit.plugins import anthropic, aws, google, mistralai, openai
+from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, function_tool
+from livekit.plugins import anthropic, google, openai
 from livekit.rtc import VideoBufferType, VideoFrame
 
 
@@ -26,7 +26,7 @@ class TypeInfo:
     choices: list[Any] = field(default_factory=list, hash=False)
 
 
-class FncTls():
+class FncTls:
     @function_tool(name="get_weather", description="Get the current weather in a given location")
     def get_weather(
         location: Annotated[
