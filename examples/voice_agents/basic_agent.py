@@ -11,7 +11,6 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     ModelSettings,
-    ConversationItemAddedEvent,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
@@ -106,16 +105,10 @@ async def entrypoint(ctx: JobContext):
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
 
-    # @session.on("metrics_collected")
-    # def _on_metrics_collected(ev: MetricsCollectedEvent):
-    #     # metrics.log_metrics(ev.metrics)
-    #     usage_collector.collect(ev.metrics)
-
-    @session.on("conversation_item_added")
-    def _on_conversation_item_added(ev: ConversationItemAddedEvent):
-        print("===")
-        import pprint
-        pprint.pprint(session.current_agent.chat_ctx.items)
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
 
     async def log_usage():
         summary = usage_collector.get_summary()
