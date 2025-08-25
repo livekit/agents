@@ -375,7 +375,7 @@ async def _request_fnc_call(
     parallel_tool_calls: bool | None = None,
     tool_choice: llm.NamedToolChoice | None = None,
 ) -> llm.LLMStream:
-    chat_ctx=ChatContext()
+    chat_ctx = ChatContext()
     chat_ctx.add_message(
         content="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",  # noqa: E501
         role="system",
@@ -418,7 +418,10 @@ async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
         role="system",
     )
     chat_ctx.add_message(
-        content=["Describe this image", ImageContent(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")],
+        content=[
+            "Describe this image",
+            ImageContent(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low"),
+        ],
         role="user",
     )
 
@@ -445,7 +448,10 @@ async def test_chat_with_image_frame(llm_factory: Callable[[], llm.LLM]):
         role="system",
     )
     chat_ctx.add_message(
-        content=["Describe this image", ImageContent(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")],
+        content=[
+            "Describe this image",
+            ImageContent(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low"),
+        ],
         role="user",
     )
 
