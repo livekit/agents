@@ -1717,7 +1717,6 @@ class AgentActivity(RecognitionHooks):
 
             new_calls: list[llm.FunctionCall] = []
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
-            generate_tool_reply: bool = False
             new_agent_task: Agent | None = None
             ignore_task_switch = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
@@ -1728,7 +1727,7 @@ class AgentActivity(RecognitionHooks):
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
                     if sanitized_out.reply_required:
-                        generate_tool_reply = True
+                        fnc_executed_ev._reply_required = True
 
                 # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
@@ -1740,15 +1739,19 @@ class AgentActivity(RecognitionHooks):
                     # TODO(long): should we mark the function call as failed to notify the LLM?
 
                 new_agent_task = sanitized_out.agent_task
+
+            if new_agent_task and not ignore_task_switch:
+                fnc_executed_ev._handoff_required = True
+
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
-            if not ignore_task_switch and new_agent_task is not None:
+            if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            if generate_tool_reply:
+            if fnc_executed_ev._reply_required:
                 chat_ctx.items.extend(tool_messages)
 
                 tool_response_task = self._create_speech_task(
@@ -2097,8 +2100,7 @@ class AgentActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
-                function_calls=[],
-                function_call_outputs=[],
+                function_calls=[], function_call_outputs=[]
             )
             new_agent_task: Agent | None = None
             ignore_task_switch = False
@@ -2112,6 +2114,7 @@ class AgentActivity(RecognitionHooks):
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
                     if sanitized_out.reply_required:
                         generate_tool_reply = True
+                        fnc_executed_ev._reply_required = True
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
@@ -2121,10 +2124,13 @@ class AgentActivity(RecognitionHooks):
 
                 new_agent_task = sanitized_out.agent_task
 
+            if new_agent_task and not ignore_task_switch:
+                fnc_executed_ev._handoff_required = True
+
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
-            if not ignore_task_switch and new_agent_task is not None:
+            if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
 
@@ -2139,7 +2145,10 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and not self.llm.capabilities.auto_tool_reply_generation:
+            if (
+                fnc_executed_ev._reply_required
+                and not self.llm.capabilities.auto_tool_reply_generation
+            ):
                 self._rt_session.interrupt()
 
                 self._create_speech_task(
@@ -2158,6 +2167,14 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
+                )
+            elif (
+                self.llm.capabilities.auto_tool_reply_generation
+                and not fnc_executed_ev._reply_required
+                and generate_tool_reply
+            ):
+                logger.warning(
+                    f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
 
     # move them to the end to avoid shadowing the same named modules for mypy
