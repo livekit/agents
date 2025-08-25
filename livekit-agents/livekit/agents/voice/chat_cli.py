@@ -96,6 +96,12 @@ class _AudioOutput(io.AudioOutput):
         self._output_buf = bytearray()
         self._output_lock = threading.Lock()
 
+        self._playback_enabled = asyncio.Event()
+        self._playback_enabled.set()
+        self._paused_at: float | None = None
+        self._paused_duration: float = 0.0
+        self._paused_buf = bytearray()
+
     @property
     def lock(self) -> threading.Lock:
         return self._output_lock
@@ -107,6 +113,8 @@ class _AudioOutput(io.AudioOutput):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
         await self._flush_complete.wait()
+        if not self._playback_enabled.is_set():
+            await self._playback_enabled.wait()
 
         if not self._capturing:
             self._capturing = True
@@ -122,7 +130,8 @@ class _AudioOutput(io.AudioOutput):
         if self._capturing:
             self._flush_complete.clear()
             self._capturing = False
-            to_wait = max(0.0, self._pushed_duration - (time.monotonic() - self._capture_start))
+            played_duration = max(0, time.monotonic() - self._capture_start - self._paused_duration)
+            to_wait = max(0.0, self._pushed_duration - played_duration)
             self._dispatch_handle = self._cli._loop.call_later(
                 to_wait, self._dispatch_playback_finished
             )
@@ -144,6 +153,29 @@ class _AudioOutput(io.AudioOutput):
                 interrupted=played_duration + 1.0 < self._pushed_duration,
             )
             self._pushed_duration = 0.0
+
+    def pause(self) -> None:
+        super().pause()
+
+        with self._output_lock:
+            self._paused_buf.extend(self._output_buf)
+            self._output_buf.clear()
+
+        self._playback_enabled.clear()
+        if self._paused_at is None:
+            self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        super().resume()
+
+        with self._output_lock:
+            self._output_buf.extend(self._paused_buf)
+            self._paused_buf.clear()
+
+        self._playback_enabled.set()
+        if self._paused_at is not None:
+            self._paused_duration += time.monotonic() - self._paused_at
+            self._paused_at = None
 
     def _dispatch_playback_finished(self) -> None:
         self.on_playback_finished(playback_position=self._pushed_duration, interrupted=False)

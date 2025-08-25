@@ -112,6 +112,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def pause(self) -> None:
         super().pause()
         self._playback_enabled.clear()
+        # self._audio_source.clear_queue()
 
     def resume(self) -> None:
         super().resume()
