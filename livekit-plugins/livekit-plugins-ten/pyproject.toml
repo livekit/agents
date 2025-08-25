@@ -43,4 +43,4 @@ packages = ["livekit"]
 include = ["/livekit"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"livekit/plugins/silero/resources/ten_vad.onnx" = "livekit/plugins/silero/resources/ten_vad.onnx"
+"livekit/plugins/ten/ten_vad/src/onnx_model/ten_vad.onnx" = "livekit/plugins/ten/ten_vad/src/onnx_model/ten_vad.onnx"
