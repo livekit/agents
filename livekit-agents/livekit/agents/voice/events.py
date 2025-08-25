@@ -152,8 +152,8 @@ class FunctionToolsExecutedEvent(BaseModel):
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
     created_at: float = Field(default_factory=time.time)
-    _reply_required: bool = Field(exclude=True)
-    _handoff_required: bool = Field(exclude=True)
+    _reply_required: bool
+    _handoff_required: bool
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         return list(zip(self.function_calls, self.function_call_outputs))
