@@ -20,6 +20,7 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Callable, Union, cast
 
 from google.api_core.client_options import ClientOptions
@@ -28,6 +29,7 @@ from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
+from google.protobuf.duration_pb2 import Duration
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -552,6 +554,14 @@ class SpeechStream(stt.SpeechStream):
                 raise APIConnectionError() from e
 
 
+def _duration_to_seconds(duration: Duration | timedelta) -> float:
+    # Proto Plus may auto-convert Duration to timedelta; handle both.
+    # https://proto-plus-python.readthedocs.io/en/latest/marshal.html
+    if isinstance(duration, timedelta):
+        return duration.total_seconds()
+    return duration.seconds + duration.nanos / 1e9
+
+
 def _recognize_response_to_speech_event(
     resp: cloud_speech.RecognizeResponse,
 ) -> stt.SpeechEvent:
@@ -561,18 +571,21 @@ def _recognize_response_to_speech_event(
         text += result.alternatives[0].transcript
         confidence += result.alternatives[0].confidence
 
-    # not sure why start_offset and end_offset returns a timedelta
-    try:
-        start_time = resp.results[0].alternatives[0].words[0].start_offset.total_seconds()  # type: ignore
-        end_time = resp.results[-1].alternatives[0].words[-1].end_offset.total_seconds()  # type: ignore
-    except IndexError:
-        start_time = end_time = 0
+    alternatives = []
 
-    confidence /= len(resp.results)
-    lg = resp.results[0].language_code
-    return stt.SpeechEvent(
-        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[
+    # Google STT may return empty results when spoken_lang != stt_lang
+    if resp.results:
+        try:
+            start_time = _duration_to_seconds(resp.results[0].alternatives[0].words[0].start_offset)
+            end_time = _duration_to_seconds(resp.results[-1].alternatives[0].words[-1].end_offset)
+        except IndexError:
+            # When enable_word_time_offsets=False, there are no "words" to access
+            start_time = end_time = 0
+
+        confidence /= len(resp.results)
+        lg = resp.results[0].language_code
+
+        alternatives = [
             stt.SpeechData(
                 language=lg,
                 start_time=start_time,
@@ -580,8 +593,9 @@ def _recognize_response_to_speech_event(
                 confidence=confidence,
                 text=text,
             )
-        ],
-    )
+        ]
+
+    return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alternatives)
 
 
 def _streaming_recognize_response_to_speech_data(
