@@ -37,11 +37,12 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import TTSEncoding, TTSModels, Voice, VoiceSettings
+from .models import SamplingParams, TTSEncoding, TTSModels, Voice, VoiceSettings
+from .version import __version__
 
+API_VERSION = __version__
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "LiveKit-Plugin-Respeecher-Version"
-API_VERSION = "2025-08-20"
 API_BASE_URL = "https://api.respeecher.com"
 
 
@@ -132,7 +133,11 @@ class TTS(tts.TTS):
                         gender=voice_data.get("gender"),
                         accent=voice_data.get("accent"),
                         age=voice_data.get("age"),
-                        sampling_param=voice_data.get("sampling_param"),
+                        sampling_params=(
+                            SamplingParams(**voice_data["sampling_params"])
+                            if isinstance(voice_data.get("sampling_params"), dict)
+                            else None
+                        ),
                     )
                 )
 
@@ -204,10 +209,10 @@ class ChunkedStream(tts.ChunkedStream):
 
             if (
                 is_given(self._tts._opts.voice_settings)
-                and self._tts._opts.voice_settings.sampling_param
+                and self._tts._opts.voice_settings.sampling_params
             ):
-                json_data["voice"]["sampling_param"] = dataclasses.asdict(
-                    self._tts._opts.voice_settings.sampling_param
+                json_data["voice"]["sampling_params"] = dataclasses.asdict(
+                    self._tts._opts.voice_settings.sampling_params
                 )
 
             http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
@@ -286,10 +291,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                             }
                             if (
                                 is_given(self._tts._opts.voice_settings)
-                                and self._tts._opts.voice_settings.sampling_param
+                                and self._tts._opts.voice_settings.sampling_params
                             ):
-                                generate_request["voice"]["sampling_param"] = dataclasses.asdict(
-                                    self._tts._opts.voice_settings.sampling_param
+                                generate_request["voice"]["sampling_params"] = dataclasses.asdict(
+                                    self._tts._opts.voice_settings.sampling_params
                                 )
 
                             self._mark_started()
@@ -310,10 +315,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     }
                     if (
                         is_given(self._tts._opts.voice_settings)
-                        and self._tts._opts.voice_settings.sampling_param
+                        and self._tts._opts.voice_settings.sampling_params
                     ):
-                        end_request["voice"]["sampling_param"] = dataclasses.asdict(
-                            self._tts._opts.voice_settings.sampling_param
+                        end_request["voice"]["sampling_params"] = dataclasses.asdict(
+                            self._tts._opts.voice_settings.sampling_params
                         )
 
                     await ws.send_str(json.dumps(end_request))
@@ -329,7 +334,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                             aiohttp.WSMsgType.CLOSING,
                         ):
                             raise APIStatusError(
-                                "Respeecher connection closed unexpectedly",
+                                message="Respeecher websocket closed unexpectedly",
+                                status_code=500,
+                                request_id=request_id,
+                                body=None,
                             )
 
                         if msg.type != aiohttp.WSMsgType.TEXT:

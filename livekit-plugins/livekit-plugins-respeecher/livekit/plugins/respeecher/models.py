@@ -3,7 +3,7 @@ from typing import Literal, Optional
 
 TTSModels = Literal[
     # Respeecher's English model, multilanguage models will be added later
-    "v1/public/tts/en-rt",
+    "/v1/public/tts/en-rt",
 ]
 
 TTSEncoding = Literal[
@@ -13,7 +13,7 @@ TTSEncoding = Literal[
 
 TTSLanguages = Literal["en"]
 
-TTSSampleRates = [
+TTSSampleRates = Literal[
     8000,
     11025,
     16000,
@@ -24,11 +24,11 @@ TTSSampleRates = [
 
 
 @dataclass
-class SamplingParam:
+class SamplingParams:
     """Check https://space.respeecher.com/docs/api/tts/sampling-params-guide for details"""
 
     seed: Optional[int] = None
-    temparature: Optional[float] = None
+    temperature: Optional[float] = None
     top_k: Optional[int] = None
     top_p: Optional[float] = None
     min_p: Optional[float] = None
@@ -41,7 +41,7 @@ class SamplingParam:
 class VoiceSettings:
     """Voice settings for Respeecher TTS"""
 
-    sampling_param: Optional[SamplingParam] = None
+    sampling_params: Optional[SamplingParams] = None
 
 
 @dataclass
@@ -52,4 +52,4 @@ class Voice:
     gender: Optional[str] = None
     accent: Optional[str] = None
     age: Optional[str] = None
-    sampling_param: Optional[SamplingParam] = None
+    sampling_params: Optional[SamplingParams] = None
