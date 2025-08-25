@@ -12,9 +12,9 @@ pip install livekit-plugins-respeecher
 
 ## Pre-requisites
 
-You'll need an API key from ElevenLabs. It can be set as an environment variable: `RESPEECHER_API_KEY`
+You'll need an API key from Respeecher. It can be set as an environment variable: `RESPEECHER_API_KEY`
 
 
 ## API Reference
 
-https://space.respeecher.com/docs/quickstart
+[Respeecher Quickstart](https://space.respeecher.com/docs/quickstart)
