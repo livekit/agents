@@ -564,7 +564,7 @@ def _duration_to_seconds(duration: Duration | timedelta) -> float:
 
 def _recognize_response_to_speech_event(
     resp: cloud_speech.RecognizeResponse,
-):
+) -> stt.SpeechEvent:
     text = ""
     confidence = 0.0
     for result in resp.results:
