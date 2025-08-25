@@ -269,7 +269,7 @@ async def test_proc_pool():
 
 
 # async def test_slow_initialization():
-#     mp_ctx = mp.get_context("spawn")
+#     mp_ctx = mp.get_context("fork")
 #     loop = asyncio.get_running_loop()
 #     num_idle_processes = 2
 #     pool = ipc.proc_pool.ProcPool(
@@ -320,7 +320,7 @@ async def test_proc_pool():
 #
 #     for exitcode in exitcodes:
 #         assert exitcode != 0, "process should have been killed"
-#
+
 
 def _create_proc(
     *,

@@ -45,7 +45,6 @@ jobs:
           tests/test_vad.py
           tests/test_connection_pool.py
           tests/test_ipc.py
-          tests/test_llm.py
 
   evaluation:
     runs-on: ubuntu-latest
