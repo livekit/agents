@@ -19,7 +19,6 @@ import time
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 
@@ -100,7 +99,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-            sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+            sample_rate (16000): Sample rate for the inference (only 16KHz are supported).
             force_cpu (bool): Force the use of CPU for inference (kept for compatibility).
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -111,7 +110,7 @@ class VAD(agents.vad.VAD):
             ValueError: If an unsupported sample rate is provided.
         """  # noqa: E501
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
-            raise ValueError("TEN VAD only supports 8KHz and 16KHz sample rates")
+            raise ValueError("TEN VAD only support 16KHz sample rates")
 
         if is_given(padding_duration):
             logger.warning(
