@@ -6,14 +6,18 @@ import datetime
 
 from dotenv import load_dotenv
 
-from livekit import agents
-from livekit.agents import Agent, AgentSession, RoomInputOptions
-from livekit.plugins import openai, silero, speechmatics
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents.stt import MultiSpeakerAdapter
+from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
 
 # Load environment variables from .env file
 # Required: SPEECHMATICS_API_KEY, OPENAI_API_KEY
 load_dotenv()
 
+
+# This example demonstrates how to use the MultiSpeakerAdapter with STT that supports diarization.
+# It works for a single audio track, and it will detect the primary speaker and suppress the background speaker.
+# It can also be used to format the transcript differently for the primary and background speakers.
 
 MASTER_PROMPT = """
 You are a friendly AI assistant called Lively.
@@ -44,31 +48,23 @@ class Assistant(Agent):
         )
 
 
-async def entrypoint(ctx: agents.JobContext) -> None:
+async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
-        stt=speechmatics.STT(
-            end_of_utterance_silence_trigger=0.7,
-            enable_diarization=True,
-            speaker_active_format="<{speaker_id}>{text}</{speaker_id}>",
-            additional_vocab=[
-                speechmatics.AdditionalVocabEntry(
-                    content="LiveKit",
-                    sounds_like=["live kit"],
-                ),
-            ],
-        ),
+        vad=silero.VAD.load(),
         llm=openai.LLM(),
         tts=openai.TTS(),
-        vad=silero.VAD.load(),
+        stt=MultiSpeakerAdapter(
+            stt=speechmatics.STT(enable_diarization=True, end_of_utterance_silence_trigger=0.3),
+            # stt=deepgram.STT(model="nova-3", enable_diarization=True),
+            detect_primary_speaker=True,
+            suppress_background_speaker=True,  # set to True to suppress background speaker
+            primary_format="<{speaker_id}>{text}</{speaker_id}>",
+            background_format="<{speaker_id}>{text}</{speaker_id}>",
+        ),
+        min_interruption_words=3,  # require transcripts to interrupt the agent
     )
 
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(),
-        room_input_options=RoomInputOptions(),
-    )
-
-    await ctx.connect()
+    await session.start(room=ctx.room, agent=Assistant())
 
     # Generate an initial greeting to start the conversation
     await session.generate_reply(
@@ -77,4 +73,4 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
