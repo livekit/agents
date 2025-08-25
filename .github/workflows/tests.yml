@@ -42,6 +42,9 @@ jobs:
           tests/test_schema_gemini.py
           tests/test_tokenizer.py
           tests/test_transcription_filter.py
+          tests/test_vad.py
+          tests/test_connection_pool.py
+          tests/test_ipc.py
 
   evaluation:
     runs-on: ubuntu-latest

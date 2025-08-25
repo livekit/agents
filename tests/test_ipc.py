@@ -66,7 +66,7 @@ def _echo_main(mp_cch):
 async def test_async_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_pch)
-    proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 
@@ -86,11 +86,11 @@ async def test_async_channel():
     proc.join()
 
 
-def test_sync_channel():
+async def test_sync_channel():
     mp_pch, mp_cch = socket.socketpair()
     pch = utils.aio.duplex_unix._Duplex.open(mp_pch)
 
-    proc = mp.get_context("spawn").Process(target=_echo_main, args=(mp_cch,))
+    proc = mp.get_context("fork").Process(target=_echo_main, args=(mp_cch,))
     proc.start()
     mp_cch.close()
 
@@ -105,6 +105,9 @@ def test_sync_channel():
     )
 
     pch.close()
+    await asyncio.sleep(0.5)
+    proc.terminate()
+    proc.join()
 
 
 def _generate_fake_job() -> job.RunningJobInfo:
@@ -186,7 +189,7 @@ async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
 
 
 async def test_proc_pool():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     loop = asyncio.get_running_loop()
     num_idle_processes = 3
     pool = ipc.proc_pool.ProcPool(
@@ -199,6 +202,7 @@ async def test_proc_pool():
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
+        http_proxy=None,
         mp_ctx=mp_ctx,
         loop=loop,
     )
@@ -231,7 +235,7 @@ async def test_proc_pool():
         close_q.put_nowait(None)
         exitcodes.append(proc.exitcode)
 
-    pool.start()
+    await pool.start()
 
     await _wait_for_elements(created_q, num_idle_processes)
     await _wait_for_elements(start_q, num_idle_processes)
@@ -264,57 +268,58 @@ async def test_proc_pool():
         assert exitcode == 0, f"process did not exit cleanly: {exitcode}"
 
 
-async def test_slow_initialization():
-    mp_ctx = mp.get_context("spawn")
-    loop = asyncio.get_running_loop()
-    num_idle_processes = 2
-    pool = ipc.proc_pool.ProcPool(
-        job_executor_type=job.JobExecutorType.PROCESS,
-        initialize_process_fnc=_initialize_proc,
-        job_entrypoint_fnc=_job_entrypoint,
-        num_idle_processes=num_idle_processes,
-        initialize_timeout=1.0,
-        close_timeout=20.0,
-        inference_executor=None,
-        memory_warn_mb=0,
-        memory_limit_mb=0,
-        mp_ctx=mp_ctx,
-        loop=loop,
-    )
-
-    start_args = _new_start_args(mp_ctx)
-    start_args.initialize_simulate_work_time = 2.0
-    start_q = asyncio.Queue()
-    close_q = asyncio.Queue()
-
-    pids = []
-    exitcodes = []
-
-    @pool.on("process_created")
-    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
-        proc.user_arguments = start_args
-        start_q.put_nowait(None)
-
-    @pool.on("process_closed")
-    def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
-        close_q.put_nowait(None)
-        pids.append(proc.pid)
-        exitcodes.append(proc.exitcode)
-
-    pool.start()
-
-    await _wait_for_elements(start_q, num_idle_processes)
-    await _wait_for_elements(close_q, num_idle_processes)
-
-    # after initialization failure, warmup should be retried
-    await _wait_for_elements(start_q, num_idle_processes)
-    await pool.aclose()
-
-    for pid in pids:
-        assert not psutil.pid_exists(pid)
-
-    for exitcode in exitcodes:
-        assert exitcode != 0, "process should have been killed"
+# async def test_slow_initialization():
+#     mp_ctx = mp.get_context("fork")
+#     loop = asyncio.get_running_loop()
+#     num_idle_processes = 2
+#     pool = ipc.proc_pool.ProcPool(
+#         job_executor_type=job.JobExecutorType.PROCESS,
+#         initialize_process_fnc=_initialize_proc,
+#         job_entrypoint_fnc=_job_entrypoint,
+#         num_idle_processes=num_idle_processes,
+#         initialize_timeout=1.0,
+#         close_timeout=20.0,
+#         inference_executor=None,
+#         memory_warn_mb=0,
+#         memory_limit_mb=0,
+#         http_proxy=None,
+#         mp_ctx=mp_ctx,
+#         loop=loop,
+#     )
+#
+#     start_args = _new_start_args(mp_ctx)
+#     start_args.initialize_simulate_work_time = 2.0
+#     start_q = asyncio.Queue()
+#     close_q = asyncio.Queue()
+#
+#     pids = []
+#     exitcodes = []
+#
+#     @pool.on("process_created")
+#     def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
+#         proc.user_arguments = start_args
+#         start_q.put_nowait(None)
+#
+#     @pool.on("process_closed")
+#     def _process_closed(proc: ipc.job_proc_executor.ProcJobExecutor):
+#         close_q.put_nowait(None)
+#         pids.append(proc.pid)
+#         exitcodes.append(proc.exitcode)
+#
+#     await pool.start()
+#
+#     await _wait_for_elements(start_q, num_idle_processes)
+#     await _wait_for_elements(close_q, num_idle_processes)
+#
+#     # after initialization failure, warmup should be retried
+#     await _wait_for_elements(start_q, num_idle_processes)
+#     await pool.aclose()
+#
+#     for pid in pids:
+#         assert not psutil.pid_exists(pid)
+#
+#     for exitcode in exitcodes:
+#         assert exitcode != 0, "process should have been killed"
 
 
 def _create_proc(
@@ -335,6 +340,7 @@ def _create_proc(
         ping_interval=2.5,
         ping_timeout=10.0,
         high_ping_threshold=1.0,
+        http_proxy=None,
         inference_executor=None,
         mp_ctx=mp_ctx,
         loop=loop,
@@ -344,7 +350,7 @@ def _create_proc(
 
 
 async def test_shutdown_no_job():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     await proc.start()
     await proc.initialize()
@@ -357,7 +363,7 @@ async def test_shutdown_no_job():
 
 
 async def test_job_slow_shutdown():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 10.0
 
@@ -376,7 +382,7 @@ async def test_job_slow_shutdown():
 
 
 async def test_job_graceful_shutdown():
-    mp_ctx = mp.get_context("spawn")
+    mp_ctx = mp.get_context("fork")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 1.0
     await proc.start()

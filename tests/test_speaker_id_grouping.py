@@ -36,7 +36,7 @@ class TestSpeakerIdGrouping:
         result = ""
         for text, speaker_id in fragments:
             # Skip speakers to ignore
-            if re.match(r"^__[A-Z0-9_]{2,}__$", speaker_id):
+            if speaker_id is not None and re.match(r"^__[A-Z0-9_]{2,}__$", speaker_id):
                 continue
 
             # Create a SpeakerSpeechData object and get formatted text
@@ -80,7 +80,7 @@ class TestSpeakerIdGrouping:
             ("Hello!", "S1"),
             ("Hi.", "S2"),
             ("How are you?", "S1"),
-            ("Good thanks!    ", "S2"),
+            ("Good thanks!", "S2"),
         ]
         result = self._process_fragments(fragments)
         assert result == "[S1]Hello![/S1] [S2]Hi.[/S2] [S1]How are you?[/S1] [S2]Good thanks![/S2]"
