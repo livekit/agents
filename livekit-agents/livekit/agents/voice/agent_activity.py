@@ -1009,16 +1009,16 @@ class AgentActivity(RecognitionHooks):
 
         if ev.user_transcription_enabled:
             self._session._user_input_transcribed(
-                UserInputTranscribedEvent(transcript="", is_final=False)
+                UserInputTranscribedEvent(transcript="", is_final=False, started_at=self._session._user_speech_started_at)
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         self._session._user_input_transcribed(
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final, started_at=self._session._user_speech_started_at)
         )
 
         if ev.is_final:
-            msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
+            msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id, started_at=self._session._user_speech_started_at)
             self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
 
@@ -1110,6 +1110,7 @@ class AgentActivity(RecognitionHooks):
                 transcript=ev.alternatives[0].text,
                 is_final=False,
                 speaker_id=ev.alternatives[0].speaker_id,
+                started_at=self._session._user_speech_started_at,
             ),
         )
 
@@ -1124,6 +1125,7 @@ class AgentActivity(RecognitionHooks):
                 transcript=ev.alternatives[0].text,
                 is_final=True,
                 speaker_id=ev.alternatives[0].speaker_id,
+                started_at=self._session._user_speech_started_at,
             ),
         )
 
@@ -1373,6 +1375,7 @@ class AgentActivity(RecognitionHooks):
         tasks: list[asyncio.Task[Any]] = []
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            self._session._assistant_speech_started_at = time.time()
             self._session._update_agent_state("speaking")
 
         audio_out: _AudioOutput | None = None
@@ -1452,7 +1455,7 @@ class AgentActivity(RecognitionHooks):
             msg: llm.ChatMessage | None = None
             if forwarded_text:
                 msg = self._agent._chat_ctx.add_message(
-                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
+                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted, started_at=self._session._assistant_speech_started_at
                 )
 
                 speech_handle._chat_items.append(msg)
@@ -1578,6 +1581,7 @@ class AgentActivity(RecognitionHooks):
             tasks.append(text_forward_task)
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            self._session._assistant_speech_started_at = time.time()
             self._session._update_agent_state("speaking")
 
         audio_out: _AudioOutput | None = None
@@ -1796,7 +1800,7 @@ class AgentActivity(RecognitionHooks):
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
+            msg = chat_ctx.add_message(role="user", content=user_input, started_at=self._session._user_speech_started_at)
             await self._rt_session.update_chat_ctx(chat_ctx)
             self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
@@ -1861,6 +1865,7 @@ class AgentActivity(RecognitionHooks):
             return  # TODO(theomonnom): remove the message from the serverside history
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            self._session._assistant_speech_started_at = time.time()
             self._session._update_agent_state("speaking")
 
         tasks: list[asyncio.Task[Any]] = []

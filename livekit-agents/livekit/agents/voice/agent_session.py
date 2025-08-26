@@ -269,6 +269,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
+        self._session_started_at: float | None = None
         self._turn_detection = turn_detection or None
         self._stt = stt or None
         self._vad = vad or None
@@ -304,6 +305,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        self._user_speech_started_at: float | None = None
+        self._assistant_speech_started_at: float | None = None
 
         # used to emit the agent false interruption event
         self._false_interruption_timer: asyncio.TimerHandle | None = None
@@ -359,6 +362,65 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def history(self) -> llm.ChatContext:
         return self._chat_ctx
+
+    @property
+    def session_started_at(self) -> float | None:
+        """Timestamp when the session was started. None if not started yet."""
+        return self._session_started_at
+
+    def get_relative_timestamp(self, absolute_time: float) -> float:
+        """
+        Convert an absolute timestamp to a relative timestamp since session start.
+        
+        Args:
+            absolute_time: The absolute timestamp to convert
+            
+        Returns:
+            Relative timestamp in seconds since session start
+            
+        Raises:
+            ValueError: If session hasn't started yet
+        """
+        if self._session_started_at is None:
+            raise ValueError("Session hasn't started yet")
+        return absolute_time - self._session_started_at
+
+    def get_history_dict(
+        self, 
+        *,
+        exclude_image: bool = True,
+        exclude_audio: bool = True,
+        exclude_timestamp: bool = False,
+        exclude_function_call: bool = False,
+        exclude_started_at: bool = False,
+        include_relative_timestamps: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Get the chat history as a dictionary with optional relative timestamps.
+        
+        Args:
+            exclude_image: Whether to exclude image content
+            exclude_audio: Whether to exclude audio content  
+            exclude_timestamp: Whether to exclude created_at timestamps
+            exclude_function_call: Whether to exclude function calls
+            exclude_started_at: Whether to exclude started_at timestamps
+            include_relative_timestamps: Whether to include relative timestamps (requires session to be started)
+            
+        Returns:
+            Dictionary containing chat history with optional relative timestamps
+            
+        Raises:
+            ValueError: If include_relative_timestamps=True but session hasn't started
+        """
+        return self._chat_ctx.to_dict(
+            exclude_image=exclude_image,
+            exclude_audio=exclude_audio,
+            exclude_timestamp=exclude_timestamp,
+            exclude_function_call=exclude_function_call,
+            exclude_started_at=exclude_started_at,
+            include_relative_timestamps=include_relative_timestamps,
+            session_started_at=self._session_started_at,
+        )
 
     @property
     def current_speech(self) -> SpeechHandle | None:
@@ -518,6 +580,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             self._started = True
+            self._session_started_at = time.time()
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 
@@ -978,6 +1041,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
+            self._assistant_speech_started_at = None
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()
@@ -1001,13 +1065,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         if state == "speaking" and self._user_speaking_span is None:
+            self._user_speech_started_at = time.time()
             self._user_speaking_span = tracer.start_span("user_speaking")
-            self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
+            self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, self._user_speech_started_at)
         elif self._user_speaking_span is not None:
             end_time = last_speaking_time or time.time()
             self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
             self._user_speaking_span.end(end_time=int(end_time * 1_000_000_000))  # nanoseconds
             self._user_speaking_span = None
+            self._user_speech_started_at = None
 
         if state == "listening" and self._agent_state == "listening":
             self._set_user_away_timer()

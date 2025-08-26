@@ -114,6 +114,13 @@ class ChatMessage(BaseModel):
     transcript_confidence: float | None = None
     hash: bytes | None = None
     created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    """
+    Timestamp when speech actually started (for voice agents).
+    - For user messages: when user started speaking (from VAD/STT start detection)  
+    - For assistant messages: when TTS started outputting audio
+    - None for non-speech messages or when timing info is unavailable
+    """
 
     @property
     def text_content(self) -> str | None:
@@ -138,6 +145,11 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    """
+    Timestamp when function call execution started.
+    None when timing info is unavailable.
+    """
 
 
 class FunctionCallOutput(BaseModel):
@@ -148,6 +160,11 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    """
+    Timestamp when function call output was generated.
+    None when timing info is unavailable.
+    """
 
 
 """"
@@ -190,6 +207,7 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        started_at: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -198,6 +216,8 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if is_given(started_at):
+            kwargs["started_at"] = started_at
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
@@ -344,6 +364,9 @@ class ChatContext:
         exclude_audio: bool = True,
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
+        exclude_started_at: bool = True,
+        include_relative_timestamps: bool = False,
+        session_started_at: float | None = None,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -365,17 +388,29 @@ class ChatContext:
         exclude_fields = set()
         if exclude_timestamp:
             exclude_fields.add("created_at")
+        if exclude_started_at:
+            exclude_fields.add("started_at")
+
+        result_items = []
+        for item in items:
+            item_dict = item.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude_defaults=False,
+                exclude=exclude_fields,
+            )
+            
+            # Add relative timestamps if requested
+            if include_relative_timestamps and session_started_at is not None:
+                if hasattr(item, 'started_at') and item.started_at is not None:
+                    item_dict["started_at_relative"] = item.started_at - session_started_at
+                if hasattr(item, 'created_at'):
+                    item_dict["created_at_relative"] = item.created_at - session_started_at
+                    
+            result_items.append(item_dict)
 
         return {
-            "items": [
-                item.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude_defaults=False,
-                    exclude=exclude_fields,
-                )
-                for item in items
-            ],
+            "items": result_items,
         }
 
     @overload

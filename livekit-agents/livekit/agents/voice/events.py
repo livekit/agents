@@ -118,6 +118,11 @@ class UserInputTranscribedEvent(BaseModel):
     speaker_id: str | None = None
     language: str | None = None
     created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    """
+    Timestamp when user started speaking (from VAD/STT start detection).
+    None when timing info is unavailable.
+    """
 
 
 class AgentFalseInterruptionEvent(BaseModel):
@@ -152,6 +157,11 @@ class FunctionToolsExecutedEvent(BaseModel):
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
     created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    """
+    Timestamp when function tool execution started.
+    None when timing info is unavailable.
+    """
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         return list(zip(self.function_calls, self.function_call_outputs))
@@ -175,6 +185,11 @@ class SpeechCreatedEvent(BaseModel):
     speech_handle: SpeechHandle = Field(..., exclude=True)
     """The speech handle that was created"""
     created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    """
+    Timestamp when TTS started outputting audio for this speech.
+    None when timing info is unavailable or speech hasn't started yet.
+    """
 
 
 class ErrorEvent(BaseModel):
