@@ -1,4 +1,4 @@
-# Silero VAD plugin for LiveKit Agents
+# TEN VAD plugin for LiveKit Agents
 
 Support for VAD-based turn detection.
 
