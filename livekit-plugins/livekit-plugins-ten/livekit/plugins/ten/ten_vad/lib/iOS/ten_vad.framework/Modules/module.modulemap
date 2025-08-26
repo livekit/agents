@@ -1,5 +1,0 @@
-framework module ten_vad {
-        umbrella header "ten_vad.h"
-        export *
-        module * { export * }
-    }

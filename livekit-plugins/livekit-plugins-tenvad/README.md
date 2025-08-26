@@ -7,7 +7,7 @@ See [https://docs.livekit.io/agents/build/turns/vad/](https://docs.livekit.io/ag
 ## Installation
 
 ```bash
-pip install livekit-plugins-ten
+pip install livekit-plugins-tenvad
 ```
 
 This plugin contains model files that would need to be downloaded prior to use.

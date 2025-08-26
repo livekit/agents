@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-ten"
+name = "livekit-plugins-tenvad"
 dynamic = ["version"]
-description = "Agent Framework Plugin for TEN"
+description = "Agent Framework Plugin for TEN VAD"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
@@ -41,6 +41,3 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
-
-[tool.hatch.build.targets.wheel.shared-data]
-"livekit/plugins/ten/ten_vad/src/onnx_model/ten_vad.onnx" = "livekit/plugins/ten/ten_vad/src/onnx_model/ten_vad.onnx"
