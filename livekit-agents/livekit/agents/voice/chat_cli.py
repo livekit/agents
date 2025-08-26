@@ -154,17 +154,21 @@ class _AudioOutput(io.AudioOutput):
                 interrupted=played_duration + 1.0 < self._pushed_duration,
             )
             self._pushed_duration = 0.0
+            self._paused_at = None
+            self._paused_duration = 0.0
 
     def pause(self) -> None:
         super().pause()
 
-        with self._output_lock:
-            self._paused_buf.extend(self._output_buf)
-            self._output_buf.clear()
-
-        self._playback_enabled.clear()
         if self._paused_at is None:
             self._paused_at = time.monotonic()
+
+        if self._playback_enabled.is_set():
+            with self._output_lock:
+                self._paused_buf.extend(self._output_buf)
+                self._output_buf.clear()
+
+            self._playback_enabled.clear()
 
     def resume(self) -> None:
         super().resume()
@@ -182,6 +186,9 @@ class _AudioOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=self._pushed_duration, interrupted=False)
         self._flush_complete.set()
         self._pushed_duration = 0.0
+        self._paused_at = None
+        self._paused_duration = 0.0
+        self._paused_buf.clear()
 
 
 class ChatCLI:
