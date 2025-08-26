@@ -232,6 +232,22 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
+    def min_endpointing_delay(self) -> float:
+        return (
+            self._agent.min_endpointing_delay
+            if is_given(self._agent.min_endpointing_delay)
+            else self._session.options.min_endpointing_delay
+        )
+
+    @property
+    def max_endpointing_delay(self) -> float:
+        return (
+            self._agent.max_endpointing_delay
+            if is_given(self._agent.max_endpointing_delay)
+            else self._session.options.max_endpointing_delay
+        )
+
+    @property
     def realtime_llm_session(self) -> llm.RealtimeSession | None:
         return self._rt_session
 
@@ -253,11 +269,17 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def use_tts_aligned_transcript(self) -> bool:
-        return (
+        use_aligned_transcript = (
             self._agent.use_tts_aligned_transcript
             if is_given(self._agent.use_tts_aligned_transcript)
             else self._session.options.use_tts_aligned_transcript
         )
+
+        if is_given(use_aligned_transcript):
+            return use_aligned_transcript
+
+        # enable for non-streaming stt automatically if not specified
+        return self.tts is not None and not self.tts.capabilities.streaming
 
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
@@ -293,12 +315,24 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
             )
 
-    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
         if utils.is_given(tool_choice):
             self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
+
+        if self._audio_recognition:
+            self._audio_recognition.update_options(
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            )
 
     def _create_speech_task(
         self,
@@ -487,8 +521,8 @@ class AgentActivity(RecognitionHooks):
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
-            min_endpointing_delay=self._session.options.min_endpointing_delay,
-            max_endpointing_delay=self._session.options.max_endpointing_delay,
+            min_endpointing_delay=self.min_endpointing_delay,
+            max_endpointing_delay=self.max_endpointing_delay,
             turn_detection_mode=self._turn_detection_mode,
         )
         self._audio_recognition.start()
@@ -794,7 +828,7 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
 
-    def interrupt(self) -> asyncio.Future[None]:
+    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
         Returns:
@@ -807,10 +841,10 @@ class AgentActivity(RecognitionHooks):
         current_speech = self._current_speech
 
         if current_speech is not None:
-            current_speech = current_speech.interrupt()
+            current_speech = current_speech.interrupt(force=force)
 
         for _, _, speech in self._speech_q:
-            speech.interrupt()
+            speech.interrupt(force=force)
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
@@ -1412,6 +1446,8 @@ class AgentActivity(RecognitionHooks):
                 if audio_out is not None and audio_out.first_frame_fut.done():
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
+                else:
+                    forwarded_text = ""
 
             msg: llm.ChatMessage | None = None
             if forwarded_text:

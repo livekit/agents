@@ -562,8 +562,11 @@ def _recognize_response_to_speech_event(
         confidence += result.alternatives[0].confidence
 
     # not sure why start_offset and end_offset returns a timedelta
-    start_offset = resp.results[0].alternatives[0].words[0].start_offset
-    end_offset = resp.results[-1].alternatives[0].words[-1].end_offset
+    try:
+        start_time = resp.results[0].alternatives[0].words[0].start_offset.total_seconds()  # type: ignore
+        end_time = resp.results[-1].alternatives[0].words[-1].end_offset.total_seconds()  # type: ignore
+    except IndexError:
+        start_time = end_time = 0
 
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
@@ -572,8 +575,8 @@ def _recognize_response_to_speech_event(
         alternatives=[
             stt.SpeechData(
                 language=lg,
-                start_time=start_offset.total_seconds(),  # type: ignore
-                end_time=end_offset.total_seconds(),  # type: ignore
+                start_time=start_time,
+                end_time=end_time,
                 confidence=confidence,
                 text=text,
             )
