@@ -57,14 +57,14 @@ class VAD(agents.vad.VAD):
     def load(
         cls,
         *,
-        min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.4,
-        prefix_padding_duration: float = 0.5,
+        min_speech_duration: float = 0.1,
+        min_silence_duration: float = 0.2,
+        prefix_padding_duration: float = 0.2,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         sample_rate: int = 16000,
         # deprecated
-        padding_duration: NotGivenOr[float] = NOT_GIVEN,
+        padding_duration: NotGivenOr[float] = 0.2,
     ) -> VAD:
         """
         Load and initialize the TEN VAD model.
