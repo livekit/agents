@@ -62,7 +62,9 @@ members = [
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
     "livekit-plugins-tavus",
+    "livekit-plugins-ten",
     "livekit-plugins-turn-detector",
+    "livekit-plugins-upliftai",
 ]
 constraints = [{ name = "onnxruntime", marker = "python_full_version == '3.9.*'", specifier = "<1.20.0" }]
 
@@ -1856,6 +1858,9 @@ spitch = [
 tavus = [
     { name = "livekit-plugins-tavus" },
 ]
+ten = [
+    { name = "livekit-plugins-ten" },
+]
 turn-detector = [
     { name = "livekit-plugins-turn-detector" },
 ]
@@ -1908,6 +1913,7 @@ requires-dist = [
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-spitch", marker = "extra == 'spitch'", editable = "livekit-plugins/livekit-plugins-spitch" },
     { name = "livekit-plugins-tavus", marker = "extra == 'tavus'", editable = "livekit-plugins/livekit-plugins-tavus" },
+    { name = "livekit-plugins-ten", marker = "extra == 'ten'", editable = "livekit-plugins/livekit-plugins-ten" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-protocol", specifier = "~=1.0" },
     { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.10.0,<2" },
@@ -1928,7 +1934,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "mistralai", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "speechify", "speechmatics", "spitch", "tavus", "turn-detector"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "mistralai", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "speechify", "speechmatics", "spitch", "tavus", "ten", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -2487,6 +2493,24 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
+name = "livekit-plugins-ten"
+source = { editable = "livekit-plugins/livekit-plugins-ten" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onnxruntime", version = "1.19.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "onnxruntime", version = "1.21.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "onnxruntime", specifier = ">=1.18" },
+]
+
+[[package]]
 name = "livekit-plugins-turn-detector"
 source = { editable = "livekit-plugins/livekit-plugins-turn-detector" }
 dependencies = [
@@ -2506,6 +2530,21 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
     { name = "transformers", specifier = ">=4.47.1" },
+]
+
+[[package]]
+name = "livekit-plugins-upliftai"
+source = { editable = "livekit-plugins/livekit-plugins-upliftai" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
