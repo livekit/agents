@@ -42,6 +42,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
 )
 from .events import (
+    AgentFalseInterruptionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -98,8 +99,9 @@ class AgentActivity(RecognitionHooks):
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
 
+        # for false interruption handling
         self._paused_speech: SpeechHandle | None = None
-        self._playback_resume_timer: asyncio.TimerHandle | None = None
+        self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
@@ -1030,10 +1032,10 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state("speaking")
 
-        if self._playback_resume_timer:
+        if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
-            self._playback_resume_timer.cancel()
-            self._playback_resume_timer = None
+            self._false_interruption_timer.cancel()
+            self._false_interruption_timer = None
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state(
@@ -1045,8 +1047,8 @@ class AgentActivity(RecognitionHooks):
             self._paused_speech
             and (timeout := self._session.options.agent_false_interruption_timeout) is not None
         ):
-            # schedule a resume timer when user stops speaking if the speech was paused
-            self._schedule_speech_resume(timeout)
+            # schedule a resume timer when user stops speaking
+            self._start_false_interruption_timer(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode in ("manual", "realtime_llm"):
@@ -1067,7 +1069,7 @@ class AgentActivity(RecognitionHooks):
             and self.llm.capabilities.turn_detection
             and not use_pause
         ):
-            # ignore if turn_detection is enabled on the realtime model
+            # ignore if realtime model has turn detection enabled
             return
 
         if (
@@ -1089,8 +1091,15 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
-            if use_pause:
-                self._pause_speech(self._current_speech)
+            self._paused_speech = self._current_speech
+
+            # reset the false interruption timer
+            if self._false_interruption_timer:
+                self._false_interruption_timer.cancel()
+                self._false_interruption_timer = None
+
+            if use_pause and self._session.output.audio:
+                self._session.output.audio.pause()
             else:
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
@@ -1223,7 +1232,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": info.new_transcript},
                 )
                 return
-            await self._interrupt_paused_speech()
+            await self._interrupt_paused_speech(self._interrupt_paused_speech_task)
 
             if self._current_speech:
                 self._current_speech.interrupt()
@@ -2147,46 +2156,51 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-    def _pause_speech(self, speech_handle: SpeechHandle) -> None:
-        self._paused_speech = speech_handle
+    def _start_false_interruption_timer(self, timeout: float) -> None:
+        if self._false_interruption_timer is not None:
+            self._false_interruption_timer.cancel()
 
-        if self._session.output.audio:
-            self._session.output.audio.pause()
+        def _on_false_interruption() -> None:
+            if self._paused_speech is None or (
+                self._current_speech and self._current_speech is not self._paused_speech
+            ):
+                # already new speech is scheduled, do nothing
+                self._paused_speech = None
+                return
 
-        if self._playback_resume_timer:
-            self._playback_resume_timer.cancel()
-            self._playback_resume_timer = None
-
-    def _schedule_speech_resume(self, timeout: float) -> None:
-        if self._playback_resume_timer is not None:
-            self._playback_resume_timer.cancel()
-
-        def _resume_playback() -> None:
-            if self._session.output.audio:
+            resumed = False
+            if self._session.options.resume_false_interruption and self._session.output.audio:
                 self._session.output.audio.resume()
-            self._paused_speech = None
-            self._playback_resume_timer = None
-            logger.debug("resumed false interrupted speech")
+                resumed = True
+                logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
 
-        self._playback_resume_timer = asyncio.get_event_loop().call_later(timeout, _resume_playback)
+            self._session.emit(
+                "agent_false_interruption", AgentFalseInterruptionEvent(resumed=resumed)
+            )
+
+            self._paused_speech = None
+            self._false_interruption_timer = None
+
+        self._false_interruption_timer = self._session._loop.call_later(
+            timeout, _on_false_interruption
+        )
 
     async def _interrupt_paused_speech(self, old_task: asyncio.Task[None] | None = None) -> None:
         if old_task is not None:
             await old_task
 
-        if self._playback_resume_timer is not None:
-            self._playback_resume_timer.cancel()
-            self._playback_resume_timer = None
+        if self._false_interruption_timer is not None:
+            self._false_interruption_timer.cancel()
+            self._false_interruption_timer = None
 
         if not self._paused_speech:
             return
 
         if not self._paused_speech.interrupted and self._paused_speech.allow_interruptions:
-            # make sure the speech is done
-            await self._paused_speech.interrupt()
+            await self._paused_speech.interrupt()  # ensure the speech is done
         self._paused_speech = None
 
-        if self._session.output.audio:
+        if self._session.options.resume_false_interruption and self._session.output.audio:
             self._session.output.audio.resume()
 
     # move them to the end to avoid shadowing the same named modules for mypy

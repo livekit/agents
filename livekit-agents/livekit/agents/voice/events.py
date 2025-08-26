@@ -16,6 +16,7 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
 )
+from ..log import logger
 from ..metrics import AgentMetrics
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
@@ -120,16 +121,22 @@ class UserInputTranscribedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-# TODO(long): deprecated, remove it in next versions
 class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
-    message: ChatMessage | None
-    """The `assistant` message that got interrupted"""
-    extra_instructions: str | None = None
-    """Optional instructions originally passed to `AgentSession.generate_reply` via the `instructions` argument.
-    Populated only if the user interrupted a speech response generated using `session.generate_reply`.
-    Useful for understanding what the agent was attempting to convey before the interruption."""
+    resumed: bool
+    """Whether the false interruption was resumed automatically."""
     created_at: float = Field(default_factory=time.time)
+
+    # deprecated
+    message: ChatMessage | None = None
+    extra_instructions: str | None = None
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in ["message", "extra_instructions"]:
+            logger.warning(
+                f"AgentFalseInterruptionEvent.{name} is deprecated, automatic resume is now supported"
+            )
+        return super().__getattribute__(name)
 
 
 class MetricsCollectedEvent(BaseModel):
