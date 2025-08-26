@@ -63,7 +63,6 @@ class VAD(agents.vad.VAD):
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         sample_rate: int = 16000,
-        force_cpu: bool = True,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
@@ -100,7 +99,6 @@ class VAD(agents.vad.VAD):
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
             sample_rate (16000): Sample rate for the inference (only 16KHz are supported).
-            force_cpu (bool): Force the use of CPU for inference (kept for compatibility).
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
         Returns:
@@ -118,7 +116,6 @@ class VAD(agents.vad.VAD):
             )
             prefix_padding_duration = padding_duration
 
-        session = onnx_model.new_inference_session(force_cpu)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
@@ -127,17 +124,21 @@ class VAD(agents.vad.VAD):
             activation_threshold=activation_threshold,
             sample_rate=sample_rate,
         )
-        return cls(session=session, opts=opts)
+        model = onnx_model.OnnxModel(
+            sample_rate=sample_rate,
+            activation_threshold=activation_threshold,
+        )
+        return cls(opts=opts, model=model)
 
     def __init__(
         self,
         *,
-        session: onnx_model.TenVadWrapper,
         opts: _VADOptions,
+        model: onnx_model.OnnxModel,
     ) -> None:
         super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
-        self._onnx_session = session
         self._opts = opts
+        self._model = model
         self._streams = weakref.WeakSet[VADStream]()
 
     def stream(self) -> VADStream:
@@ -147,15 +148,10 @@ class VAD(agents.vad.VAD):
         Returns:
             VADStream: A stream object for processing audio input and detecting speech.
         """
-        model = onnx_model.OnnxModel(
-            onnx_session=self._onnx_session,
-            sample_rate=self._opts.sample_rate,
-            activation_threshold=self._opts.activation_threshold,
-        )
         stream = VADStream(
             self,
             self._opts,
-            model,
+            self._model,
         )
         self._streams.add(stream)
         return stream
@@ -191,6 +187,7 @@ class VAD(agents.vad.VAD):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            self._model.update_threshold(activation_threshold)
 
         for stream in self._streams:
             stream.update_options(

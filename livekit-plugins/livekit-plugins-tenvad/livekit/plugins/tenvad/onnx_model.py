@@ -1,7 +1,6 @@
 import os
 import platform
 from ctypes import CDLL, POINTER, c_float, c_int, c_int32, c_size_t, c_void_p
-from typing import Optional
 
 import numpy as np
 
@@ -15,41 +14,25 @@ class TenVad:
         self.hop_size = hop_size
         self.threshold = threshold
 
-        base_dir = os.path.join(os.path.dirname(__file__), "ten_vad")
+        base_dir = os.path.join(os.path.dirname(__file__))
 
         if platform.system() == "Linux" and platform.machine() == "x86_64":
-            git_path = os.path.join(base_dir, "lib/Linux/x64/libten_vad.so")
-            if os.path.exists(git_path):
-                self.vad_library = CDLL(git_path)
-            else:
-                pip_path = os.path.join(base_dir, "include/ten_vad_library/libten_vad.so")
-                self.vad_library = CDLL(pip_path)
+            git_path = os.path.join(base_dir, "prebuilt/Linux/x64/libten_vad")
 
         elif platform.system() == "Darwin":
-            git_path = os.path.join(base_dir, "lib/macOS/ten_vad.framework/Versions/A/ten_vad")
-            if os.path.exists(git_path):
-                self.vad_library = CDLL(git_path)
-            else:
-                pip_path = os.path.join(base_dir, "include/ten_vad_library/libten_vad")
-                self.vad_library = CDLL(pip_path)
+            git_path = os.path.join(base_dir, "prebuilt/macOS/ten_vad.framework/Versions/A/ten_vad")
 
         elif platform.system().upper() == "WINDOWS":
             if platform.machine().upper() in ["X64", "X86_64", "AMD64"]:
-                git_path = os.path.join(base_dir, "lib/Windows/x64/ten_vad.dll")
-                if os.path.exists(git_path):
-                    self.vad_library = CDLL(git_path)
-                else:
-                    pip_path = os.path.join(base_dir, "include/ten_vad_library/ten_vad.dll")
-                    self.vad_library = CDLL(pip_path)
+                git_path = os.path.join(base_dir, "prebuilt/Windows/x64/ten_vad.dll")
             else:
-                git_path = os.path.join(base_dir, "lib/Windows/x86/ten_vad.dll")
-                if os.path.exists(git_path):
-                    self.vad_library = CDLL(git_path)
-                else:
-                    pip_path = os.path.join(base_dir, "include/ten_vad_library/ten_vad.dll")
-                    self.vad_library = CDLL(pip_path)
+                git_path = os.path.join(base_dir, "prebuilt/Windows/x86/ten_vad.dll")
         else:
-            raise NotImplementedError(f"Unsupported platform: {platform.system()} {platform.machine()}")
+            raise NotImplementedError(
+                f"Unsupported platform: {platform.system()} {platform.machine()}"
+            )
+
+        self.vad_library = CDLL(git_path)
 
         self.vad_handler = c_void_p(0)
         self.out_probability = c_float()
@@ -111,21 +94,12 @@ class TenVad:
         return self.out_probability.value, self.out_flags.value
 
 
-def new_inference_session(force_cpu: bool) -> "TenVadWrapper":
-    return TenVadWrapper()
-
-
-class TenVadWrapper:
-    pass
-
-
 class OnnxModel:
     """Wrapper around TenVad to maintain compatibility with existing VAD interface"""
 
     def __init__(
         self,
         *,
-        onnx_session: Optional[TenVadWrapper] = None,
         sample_rate: int = 16000,
         activation_threshold: float = 0.5,
     ) -> None:
