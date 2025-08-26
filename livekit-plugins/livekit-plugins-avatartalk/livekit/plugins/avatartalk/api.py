@@ -28,8 +28,9 @@ class AvatarTalkAPI:
                 if response.ok:
                     return await response.json()
                 else:
+                    r = await response.json()
                     raise AvatarTalkException(
-                        f"API request failed: {response.status} {response.reason}"
+                        f"API request failed: {response.status} {r['detail']}"
                     )
 
     async def start_session(
