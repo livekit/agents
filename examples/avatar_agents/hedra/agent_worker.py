@@ -16,6 +16,7 @@ load_dotenv()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
+        resume_false_interruption=False,
     )
 
     # upload an avatar image or use an avatar id from hedra

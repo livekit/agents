@@ -142,6 +142,16 @@ class DataStreamAudioOutput(AudioOutput):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def resume(self) -> None:
+        super().resume()
+
+    def pause(self) -> None:
+        super().pause()
+        logger.warning(
+            "pause is not supported by DataStreamAudioOutput, "
+            "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
+        )
+
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
             logger.warning(

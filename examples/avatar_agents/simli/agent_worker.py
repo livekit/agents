@@ -17,6 +17,7 @@ load_dotenv()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
+        resume_false_interruption=False,
     )
 
     simliAPIKey = os.getenv("SIMLI_API_KEY")
