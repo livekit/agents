@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator
 from typing import Union
 
 import aiofiles
@@ -153,6 +153,9 @@ class AudioByteStream:
         self._buf.clear()
         return frames
 
+    def clear(self) -> None:
+        self._buf.clear()
+
 
 async def audio_frames_from_file(
     file_path: str, sample_rate: int = 48000, num_channels: int = 1
@@ -189,26 +192,3 @@ async def audio_frames_from_file(
 
     finally:
         await cancel_and_wait(reader_task)
-
-
-async def resample_audio_frames(
-    frames: AsyncIterable[rtc.AudioFrame], sample_rate: int
-) -> AsyncGenerator[rtc.AudioFrame, None]:
-    resampler: rtc.AudioResampler | None = None
-    async for frame in frames:
-        if not resampler and frame.sample_rate != sample_rate:
-            resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=sample_rate,
-                num_channels=frame.num_channels,
-            )
-
-        if resampler:
-            for f in resampler.push(frame):
-                yield f
-        else:
-            yield frame
-
-    if resampler:
-        for f in resampler.flush():
-            yield f

@@ -32,10 +32,14 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._track_name = track_name
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200)
-        self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
         self._subscribed_fut = asyncio.Future[None]()
+
+        self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
+        self._audio_bstream = utils.audio.AudioByteStream(
+            sample_rate, num_channels, samples_per_channel=sample_rate // 20
+        )  # chunk the frame into a small, fixed size
 
         # used to republish track on reconnection
         self._republish_task: asyncio.Task[None] | None = None
@@ -44,7 +48,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._forwarding_task: asyncio.Task[None] | None = None
 
         self._pushed_duration: float = 0.0
-        self._interrupted: bool = False
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
@@ -88,11 +91,16 @@ class _ParticipantAudioOutput(io.AudioOutput):
             logger.error("capture_frame called while flush is in progress")
             await self._flush_task
 
-        self._pushed_duration += frame.duration
-        await self._audio_buf.send(frame)
+        for f in self._audio_bstream.push(frame.data):
+            await self._audio_buf.send(f)
+            self._pushed_duration += f.duration
 
     def flush(self) -> None:
         super().flush()
+
+        for f in self._audio_bstream.flush():
+            self._audio_buf.send_nowait(f)
+            self._pushed_duration += f.duration
 
         if not self._pushed_duration:
             return
@@ -105,6 +113,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
+        self._audio_bstream.clear()
+
         if not self._pushed_duration:
             return
         self._interrupted_event.set()
