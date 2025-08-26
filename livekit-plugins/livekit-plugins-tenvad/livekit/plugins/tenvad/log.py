@@ -1,3 +1,3 @@
 import logging
 
-logger = logging.getLogger("livekit.plugins.ten")
+logger = logging.getLogger("livekit.plugins.tenvad")
