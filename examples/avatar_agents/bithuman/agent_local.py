@@ -13,7 +13,7 @@ from livekit.agents import (
     WorkerType,
     cli,
 )
-from livekit.plugins import bithuman, openai
+from livekit.plugins import bithuman, deepgram, openai, silero
 
 logger = logging.getLogger("bithuman-avatar-example")
 logger.setLevel(logging.INFO)
@@ -26,7 +26,12 @@ bithuman_api_secret = os.getenv("BITHUMAN_API_SECRET")
 
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(voice="ash"),
+        vad=silero.VAD.load(),
+        stt=deepgram.STT(),
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=openai.TTS(voice="ash"),
+        resume_false_interruption=True,
+        min_interruption_duration=0.2,
     )
 
     logger.info("starting bithuman runtime")
@@ -50,7 +55,10 @@ def prewarm(proc: JobProcess):
     # if we know the model path before job received, prewarm the runtime
     logger.info("loading bithuman runtime")
     runtime = AsyncBithuman(
-        model_path=bithuman_model_path, api_secret=bithuman_api_secret, load_model=True
+        model_path=bithuman_model_path,
+        api_secret=bithuman_api_secret,
+        load_model=True,
+        input_buffer_size=1,  # queue will be cleared when pause is called
     )
     logger.info("bithuman runtime loaded")
     proc.userdata["bithuman_runtime"] = runtime
