@@ -61,6 +61,7 @@ from openai.types.beta.realtime import (
     ResponseOutputItemDoneEvent,
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
+    SessionCreatedEvent,
     SessionUpdateEvent,
     session_update_event,
 )
@@ -542,6 +543,9 @@ class RealtimeSession(
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
 
+        self._session_created_future: asyncio.Future[SessionCreatedEvent] = asyncio.Future()
+        self._session_updates_pending: ZeroNotifyCounter = ZeroNotifyCounter()
+
         # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
@@ -677,6 +681,15 @@ class RealtimeSession(
         async def _send_task() -> None:
             nonlocal closing
             async for msg in self._msg_ch:
+                # do not send any events until the session has been created ("session.created" event)
+                # or pending session updates have been acknowledged ("session.updated" event)
+                # except for further "session.update" events
+                if isinstance(msg, SessionUpdateEvent):
+                    await self._session_updates_pending.inc()
+                else:
+                    await self._session_created_future
+                    await self._session_updates_pending.wait_until_zero()
+
                 try:
                     if isinstance(msg, BaseModel):
                         msg = msg.model_dump(
@@ -730,7 +743,13 @@ class RealtimeSession(
 
                         logger.debug(f"<<< {event_copy}")
 
-                    if event["type"] == "input_audio_buffer.speech_started":
+                    if event["type"] == "session.created":
+                        self._session_created_future.set_result(SessionCreatedEvent.construct(**event))
+
+                    elif event["type"] == "session.updated":
+                        await self._session_updates_pending.dec()
+
+                    elif event["type"] == "input_audio_buffer.speech_started":
                         self._handle_input_audio_buffer_speech_started(
                             InputAudioBufferSpeechStartedEvent.construct(**event)
                         )
@@ -1656,3 +1675,31 @@ def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
         return tool_choice["function"]["name"]
 
     return "auto"
+
+
+class ZeroNotifyCounter:
+    def __init__(self):
+        self._count = 0
+        self._zero_event = asyncio.Event()
+        self._zero_event.set()
+        self._lock = asyncio.Lock()
+
+    async def inc(self):
+        async with self._lock:
+            self._count += 1
+            if self._count == 1:
+                self._zero_event.clear()
+
+    async def dec(self):
+        async with self._lock:
+            if self._count > 0:
+                self._count -= 1
+                if self._count == 0:
+                    self._zero_event.set()
+
+    @property
+    def count(self):
+        return self._count
+
+    async def wait_until_zero(self):
+        await self._zero_event.wait()
