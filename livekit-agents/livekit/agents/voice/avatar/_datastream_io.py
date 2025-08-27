@@ -335,11 +335,31 @@ class DataStreamAudioReceiver(AudioReceiver):
             self._stream_readers.append(reader)
             self._stream_reader_changed.set()
 
+        def _handle_pause(data: rtc.RpcInvocationData) -> str:
+            if (
+                not self._remote_participant
+                or data.caller_identity != self._remote_participant.identity
+            ):
+                return "reject"
+            self.emit("pause")
+            return "ok"
+
+        def _handle_resume(data: rtc.RpcInvocationData) -> str:
+            if (
+                not self._remote_participant
+                or data.caller_identity != self._remote_participant.identity
+            ):
+                return "reject"
+            self.emit("resume")
+            return "ok"
+
         self._register_clear_buffer_rpc(
             self._room,
             caller_identity=self._remote_participant.identity,
             handler=_handle_clear_buffer,
         )
+        self._room.local_participant.register_rpc_method(RPC_PAUSE_AUDIO_OUTPUT, _handle_pause)
+        self._room.local_participant.register_rpc_method(RPC_RESUME_AUDIO_OUTPUT, _handle_resume)
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
