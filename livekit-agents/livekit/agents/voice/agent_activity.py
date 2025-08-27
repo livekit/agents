@@ -1124,7 +1124,11 @@ class AgentActivity(RecognitionHooks):
                 self._false_interruption_timer.cancel()
                 self._false_interruption_timer = None
 
-            if use_pause and self._session.output.audio:
+            if (
+                use_pause
+                and self._session.output.audio
+                and self._session.output.audio.supports_pause
+            ):
                 self._session.output.audio.pause()
             else:
                 if self._rt_session is not None:

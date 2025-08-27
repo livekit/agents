@@ -12,7 +12,7 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
-from ..io import AudioOutput, PlaybackFinishedEvent
+from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
@@ -36,7 +36,12 @@ class DataStreamAudioOutput(AudioOutput):
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
     ):
-        super().__init__(label="DataStreamIO", next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(
+            label="DataStreamIO",
+            next_in_chain=None,
+            sample_rate=sample_rate,
+            capabilities=AudioOutputCapabilities(pause=False),
+        )
         self._room = room
         self._destination_identity = destination_identity
         self._wait_remote_track = wait_remote_track

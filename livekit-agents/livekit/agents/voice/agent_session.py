@@ -1069,7 +1069,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         pass
 
     def _on_audio_output_changed(self) -> None:
-        pass
+        if (
+            self._opts.resume_false_interruption
+            and self._output.audio
+            and not self._output.audio.supports_pause
+        ):
+            logger.warning(
+                "resume_false_interruption is enabled, but the audio output does not support pause, ignored",
+                extra={"audio_output": self._output.audio.label},
+            )
 
     def _on_text_output_changed(self) -> None:
         pass

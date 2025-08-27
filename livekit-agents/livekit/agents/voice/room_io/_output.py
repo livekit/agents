@@ -27,7 +27,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
         track_publish_options: rtc.TrackPublishOptions,
         track_name: str = "roomio_audio",
     ) -> None:
-        super().__init__(label="RoomIO", next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(
+            label="RoomIO",
+            next_in_chain=None,
+            sample_rate=sample_rate,
+            capabilities=io.AudioOutputCapabilities(pause=True),
+        )
         self._room = room
         self._track_name = track_name
         self._lock = asyncio.Lock()
