@@ -508,6 +508,34 @@ def process_base_url(
     return new_url
 
 
+class _ZeroNotifyCounter:
+    def __init__(self) -> None:
+        self._count = 0
+        self._zero_event = asyncio.Event()
+        self._zero_event.set()
+        self._lock = asyncio.Lock()
+
+    async def inc(self) -> None:
+        async with self._lock:
+            self._count += 1
+            if self._count == 1:
+                self._zero_event.clear()
+
+    async def dec(self) -> None:
+        async with self._lock:
+            if self._count > 0:
+                self._count -= 1
+                if self._count == 0:
+                    self._zero_event.set()
+
+    @property
+    def count(self) -> int:
+        return self._count
+
+    async def wait_until_zero(self) -> None:
+        await self._zero_event.wait()
+
+
 class RealtimeSession(
     llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
 ):
@@ -544,7 +572,7 @@ class RealtimeSession(
         self._update_fnc_ctx_lock = asyncio.Lock()
 
         self._session_created_future: asyncio.Future[SessionCreatedEvent] = asyncio.Future()
-        self._session_updates_pending: "ZeroNotifyCounter" = ZeroNotifyCounter()
+        self._session_updates_pending: _ZeroNotifyCounter = _ZeroNotifyCounter()
 
         # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
@@ -1677,31 +1705,3 @@ def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
         return tool_choice["function"]["name"]
 
     return "auto"
-
-
-class ZeroNotifyCounter:
-    def __init__(self) -> None:
-        self._count = 0
-        self._zero_event = asyncio.Event()
-        self._zero_event.set()
-        self._lock = asyncio.Lock()
-
-    async def inc(self) -> None:
-        async with self._lock:
-            self._count += 1
-            if self._count == 1:
-                self._zero_event.clear()
-
-    async def dec(self) -> None:
-        async with self._lock:
-            if self._count > 0:
-                self._count -= 1
-                if self._count == 0:
-                    self._zero_event.set()
-
-    @property
-    def count(self) -> int:
-        return self._count
-
-    async def wait_until_zero(self) -> None:
-        await self._zero_event.wait()
