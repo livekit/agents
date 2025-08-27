@@ -2216,8 +2216,12 @@ class AgentActivity(RecognitionHooks):
                 return
 
             resumed = False
-            if self._session.options.resume_false_interruption and self._session.output.audio:
-                self._session.output.audio.resume()
+            if (
+                self._session.options.resume_false_interruption
+                and (audio_output := self._session.output.audio)
+                and audio_output.supports_pause
+            ):
+                audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
 
