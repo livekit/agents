@@ -4,12 +4,9 @@ import asyncio
 import io
 import os
 import sys
-from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Literal
 
 import aiohttp
-import cv2
-import numpy as np
 from loguru import logger as _logger
 from PIL import Image
 
@@ -27,15 +24,14 @@ from livekit.agents import (
 )
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import (
-    AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
     DataStreamAudioOutput,
     QueueAudioOutput,
-    VideoGenerator,
 )
 
 from .log import logger
+from .video_generator import BithumanGenerator
 
 if TYPE_CHECKING:
     from bithuman import AsyncBithuman  # type: ignore
@@ -232,7 +228,10 @@ class AvatarSession:
             audio_channels=1,
         )
 
-        audio_buffer = QueueAudioOutput(sample_rate=runtime.settings.INPUT_SAMPLE_RATE)
+        audio_buffer = QueueAudioOutput(
+            sample_rate=runtime.settings.INPUT_SAMPLE_RATE,
+            support_pause=True,
+        )
         # create avatar runner
         self._avatar_runner = AvatarRunner(
             room=room,
@@ -375,69 +374,3 @@ class AvatarSession:
         if self._runtime is None:
             raise BitHumanException("Runtime not initialized")
         return self._runtime
-
-
-class BithumanGenerator(VideoGenerator):
-    def __init__(self, runtime: AsyncBithuman):
-        self._runtime = runtime
-
-    @property
-    def video_resolution(self) -> tuple[int, int]:
-        frame = self._runtime.get_first_frame()
-        if frame is None:
-            raise ValueError("Failed to read frame")
-        return frame.shape[1], frame.shape[0]
-
-    @property
-    def video_fps(self) -> int:
-        return self._runtime.settings.FPS  # type: ignore
-
-    @property
-    def audio_sample_rate(self) -> int:
-        return self._runtime.settings.INPUT_SAMPLE_RATE  # type: ignore
-
-    @utils.log_exceptions(logger=logger)
-    async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
-        if isinstance(frame, AudioSegmentEnd):
-            await self._runtime.flush()
-            return
-        await self._runtime.push_audio(bytes(frame.data), frame.sample_rate, last_chunk=False)
-
-    def clear_buffer(self) -> None:
-        self._runtime.interrupt()
-
-    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
-        return self._stream_impl()
-
-    async def _stream_impl(
-        self,
-    ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
-        def create_video_frame(image: np.ndarray) -> rtc.VideoFrame:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            return rtc.VideoFrame(
-                width=image.shape[1],
-                height=image.shape[0],
-                type=rtc.VideoBufferType.RGB24,
-                data=image.tobytes(),
-            )
-
-        async for frame in self._runtime.run():
-            if frame.bgr_image is not None:
-                video_frame = create_video_frame(frame.bgr_image)
-                yield video_frame
-
-            audio_chunk = frame.audio_chunk
-            if audio_chunk is not None:
-                audio_frame = rtc.AudioFrame(
-                    data=audio_chunk.bytes,
-                    sample_rate=audio_chunk.sample_rate,
-                    num_channels=1,
-                    samples_per_channel=len(audio_chunk.array),
-                )
-                yield audio_frame
-
-            if frame.end_of_speech:
-                yield AudioSegmentEnd()
-
-    async def stop(self) -> None:
-        await self._runtime.stop()
