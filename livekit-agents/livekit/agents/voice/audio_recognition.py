@@ -254,7 +254,6 @@ class AudioRecognition:
             return
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
@@ -267,6 +266,7 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            self._hooks.on_final_transcript(ev)
             logger.debug(
                 "received user transcript",
                 extra={"user_transcript": transcript, "language": self._last_language},

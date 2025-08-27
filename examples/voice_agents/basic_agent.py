@@ -5,9 +5,7 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import (
-    NOT_GIVEN,
     Agent,
-    AgentFalseInterruptionEvent,
     AgentSession,
     JobContext,
     JobProcess,
@@ -95,19 +93,17 @@ async def entrypoint(ctx: JobContext):
         tts=openai.TTS(voice="ash"),
         # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,
+        # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
+        # when it's detected, you may resume the agent's speech
+        resume_false_interruption=True,
+        false_interruption_timeout=1.0,
+        min_interruption_duration=0.2,  # with false interruption resume, interruption can be more sensitive
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )
 
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
-
-    # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-    # when it's detected, you may resume the agent's speech
-    @session.on("agent_false_interruption")
-    def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
-        logger.info("false positive interruption, resuming")
-        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
