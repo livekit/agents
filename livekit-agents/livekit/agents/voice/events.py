@@ -158,10 +158,10 @@ class FunctionToolsExecutedEvent(BaseModel):
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         return list(zip(self.function_calls, self.function_call_outputs))
 
-    def prevent_tool_reply(self) -> None:
+    def cancel_tool_reply(self) -> None:
         self._reply_required = False
 
-    def prevent_agent_handoff(self) -> None:
+    def cancel_agent_handoff(self) -> None:
         self._handoff_required = False
 
     @property
