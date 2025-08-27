@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
-from typing import Literal
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -11,7 +11,14 @@ class AudioSegmentEnd:
     pass
 
 
-class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):
+TEvent = TypeVar("TEvent")
+
+
+class AudioReceiver(
+    ABC,
+    rtc.EventEmitter[Union[Literal["clear_buffer", "pause", "resume"], TEvent]],
+    Generic[TEvent],
+):
     async def start(self) -> None:
         pass
 
@@ -43,3 +50,9 @@ class VideoGenerator(ABC):
         self,
     ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""  # noqa: E501
+
+    def pause(self) -> None:  # noqa: B027
+        """Pause the audio output temporarily"""
+
+    def resume(self) -> None:  # noqa: B027
+        """Resume the audio output"""

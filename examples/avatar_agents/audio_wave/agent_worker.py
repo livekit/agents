@@ -13,7 +13,7 @@ from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomOutputOptions
-from livekit.plugins import openai
+from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
@@ -64,11 +64,12 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
 
     agent = Agent(instructions="Talk to me!")
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(),
-        # stt=deepgram.STT(),
-        # llm=openai.LLM(model="gpt-4o-mini"),
-        # tts=cartesia.TTS(),
-        resume_false_interruption=False,
+        # llm=openai.realtime.RealtimeModel(),
+        vad=silero.VAD.load(),
+        stt=deepgram.STT(),
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=openai.TTS(),
+        resume_false_interruption=True,
     )
 
     await launch_avatar(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
@@ -77,6 +78,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         destination_identity=AVATAR_IDENTITY,
         # (optional) wait for the avatar to publish video track before generating a reply
         wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        support_pause=True,
     )
 
     # start agent with room input and room text output

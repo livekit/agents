@@ -11,6 +11,7 @@ import numpy as np
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.types import TOPIC_TRANSCRIPTION
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -43,6 +44,8 @@ class AudioWaveGenerator(VideoGenerator):
         )
         self._frame_ts: deque[float] = deque(maxlen=options.video_fps)
 
+        self._audio_paused = False
+
     # -- VideoGenerator abstract methods --
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
@@ -57,6 +60,12 @@ class AudioWaveGenerator(VideoGenerator):
             except asyncio.QueueEmpty:
                 break
         self._audio_bstream.flush()
+
+    def pause(self) -> None:
+        self._audio_paused = True
+
+    def resume(self) -> None:
+        self._audio_paused = False
 
     def __aiter__(
         self,
@@ -78,13 +87,18 @@ class AudioWaveGenerator(VideoGenerator):
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         while True:
-            try:
-                # timeout has to be shorter than the frame interval to avoid starvation
-                frame = await asyncio.wait_for(
-                    self._audio_queue.get(), timeout=0.5 / self._options.video_fps
-                )
-                self._audio_queue.task_done()
-            except asyncio.TimeoutError:
+            frame: rtc.AudioFrame | AudioSegmentEnd | None = None
+            if not self._audio_paused:
+                try:
+                    # timeout has to be shorter than the frame interval to avoid starvation
+                    frame = await asyncio.wait_for(
+                        self._audio_queue.get(), timeout=0.5 / self._options.video_fps
+                    )
+                    self._audio_queue.task_done()
+                except asyncio.TimeoutError:
+                    pass
+
+            if frame is None:
                 # generate frame without audio (e.g. silence state)
                 yield self._generate_frame(None)
                 self._frame_ts.append(time.time())
@@ -156,6 +170,12 @@ class AudioWaveGenerator(VideoGenerator):
 async def main(api_url: str, api_token: str):
     # connect to the room
     room = rtc.Room()
+
+    def _on_transcript(reader: rtc.TextStreamReader, _: str) -> None:
+        # agent and user transcript are sent via this topic
+        pass
+
+    room.register_text_stream_handler(TOPIC_TRANSCRIPTION, _on_transcript)
     await room.connect(api_url, api_token)
     should_stop = asyncio.Event()
 
@@ -181,7 +201,12 @@ async def main(api_url: str, api_token: str):
     )
     video_gen = AudioWaveGenerator(avatar_options)
     runner = AvatarRunner(
-        room, audio_recv=DataStreamAudioReceiver(room), video_gen=video_gen, options=avatar_options
+        room,
+        audio_recv=DataStreamAudioReceiver(
+            room, frame_size_ms=int(np.ceil(1000 / avatar_options.video_fps))
+        ),
+        video_gen=video_gen,
+        options=avatar_options,
     )
     try:
         await runner.start()
