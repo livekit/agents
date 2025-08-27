@@ -1,25 +1,13 @@
 from __future__ import annotations
 
 from multiprocessing import current_process
-from types import TracebackType
 
 if current_process().name == "job_proc":
     import signal
-    import sys
 
     # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-
-    def _no_traceback_excepthook(
-        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
-    ) -> None:
-        if isinstance(exc_val, KeyboardInterrupt):
-            return
-        sys.__excepthook__(exc_type, exc_val, traceback)
-
-    sys.excepthook = _no_traceback_excepthook
-
 
 import asyncio
 import contextlib
@@ -31,7 +19,6 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from ..cli import cli
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..telemetry import trace_types, tracer
@@ -68,18 +55,13 @@ def proc_main(args: ProcStartArgs) -> None:
         args.user_arguments,
     )
 
-    client = _ProcClient(
-        args.mp_cch,
-        args.log_cch,
-        job_proc.initialize,
-        job_proc.entrypoint,
-    )
-
+    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
     client.initialize_logger()
     try:
         client.initialize()
     except Exception:
         return  # initialization failed, exit (initialize will send an error to the worker)
+
     client.run()
 
 
@@ -182,10 +164,11 @@ class _JobProc:
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
         await self._exit_proc_flag.wait()
+
         await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
-        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+        if msg.running_job.fake_job:
             from .mock_room import create_mock_room
 
             self._room = cast(rtc.Room, create_mock_room())
@@ -244,7 +227,7 @@ class _JobProc:
         )
 
         async def _warn_not_connected_task() -> None:
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            if self._job_ctx.is_fake_job():
                 return
 
             await asyncio.sleep(10)
@@ -264,7 +247,7 @@ class _JobProc:
                     exc_info=t.exception(),
                 )
             elif not self._ctx_connect_called and not self._ctx_shutdown_called:
-                if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+                if self._job_ctx.is_fake_job():
                     return
 
                 logger.warning(

@@ -15,11 +15,11 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
     ToolError,
-    WorkerOptions,
     beta,
     cli,
     function_tool,
@@ -152,7 +152,11 @@ class FrontDeskAgent(Agent):
         return "\n".join(lines) or "No slots available at the moment."
 
 
-async def entrypoint(ctx: JobContext):
+server = AgentServer()
+
+
+@server.realtime_session()
+async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
     timezone = "utc"
@@ -182,4 +186,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

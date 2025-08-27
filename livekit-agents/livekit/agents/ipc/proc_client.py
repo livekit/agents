@@ -87,6 +87,7 @@ class _ProcClient:
                     # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process  # noqa: E501
                     # (See proto.ShutdownRequest)
                     pass
+
         except KeyboardInterrupt:
             pass
         finally:
@@ -102,7 +103,7 @@ class _ProcClient:
         self._acch = await aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
         try:
             exit_flag = asyncio.Event()
-            ping_timeout = aio.sleep(self._init_req.ping_timeout)
+            ping_timeout = aio.sleep(self._init_req.ping_timeout + 10)
 
             ipc_ch = aio.Chan[Message]()
 
@@ -157,5 +158,6 @@ class _ProcClient:
             await aio.cancel_and_wait(read_task, main_task)
             if health_check_task is not None:
                 await aio.cancel_and_wait(health_check_task)
+
         finally:
             await self._acch.aclose()

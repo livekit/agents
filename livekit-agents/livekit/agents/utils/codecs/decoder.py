@@ -150,7 +150,9 @@ class AudioStreamDecoder:
 
         if self.__class__._executor is None:
             # each decoder instance will submit jobs to the shared pool
-            self.__class__._executor = ThreadPoolExecutor(max_workers=self.__class__._max_workers)
+            self.__class__._executor = ThreadPoolExecutor(
+                max_workers=self.__class__._max_workers, thread_name_prefix="AudioDecoder"
+            )
 
     def push(self, chunk: bytes) -> None:
         self._input_buf.write(chunk)
