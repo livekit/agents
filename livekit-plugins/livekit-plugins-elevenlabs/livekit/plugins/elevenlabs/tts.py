@@ -374,6 +374,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _sentence_stream_task() -> None:
             flush_on_chunk = (
                 isinstance(self._opts.word_tokenizer, tokenize.SentenceTokenizer)
+                and is_given(self._opts.auto_mode)
                 and self._opts.auto_mode
             )
             xml_content: list[str] = []
