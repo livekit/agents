@@ -4,7 +4,7 @@ import time
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from ..llm import (
@@ -152,9 +152,25 @@ class FunctionToolsExecutedEvent(BaseModel):
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
     created_at: float = Field(default_factory=time.time)
+    _reply_required: bool = PrivateAttr(default=False)
+    _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         return list(zip(self.function_calls, self.function_call_outputs))
+
+    def cancel_tool_reply(self) -> None:
+        self._reply_required = False
+
+    def cancel_agent_handoff(self) -> None:
+        self._handoff_required = False
+
+    @property
+    def has_tool_reply(self) -> bool:
+        return self._reply_required
+
+    @property
+    def has_agent_handoff(self) -> bool:
+        return self._handoff_required
 
     @model_validator(mode="after")
     def verify_lists_length(self) -> Self:
