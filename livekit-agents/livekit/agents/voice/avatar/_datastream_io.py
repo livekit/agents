@@ -16,6 +16,8 @@ from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
+RPC_PAUSE_AUDIO_OUTPUT = "lk.pause_audio_output"
+RPC_RESUME_AUDIO_OUTPUT = "lk.resume_audio_output"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 AUDIO_STREAM_TOPIC = "lk.audio_stream"
 
@@ -35,12 +37,13 @@ class DataStreamAudioOutput(AudioOutput):
         destination_identity: str,
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
+        support_pause: bool = False,
     ):
         super().__init__(
             label="DataStreamIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=False),
+            capabilities=AudioOutputCapabilities(pause=support_pause),
         )
         self._room = room
         self._destination_identity = destination_identity
@@ -69,6 +72,8 @@ class DataStreamAudioOutput(AudioOutput):
         self._room.on("connection_state_changed", self._handle_connection_state_changed)
         if self._room.isconnected():
             self._room_connected_fut.set_result(None)
+
+        self.__paused = False
 
     @utils.log_exceptions(logger=logger)
     async def _start_task(self) -> None:
@@ -160,14 +165,43 @@ class DataStreamAudioOutput(AudioOutput):
         task.add_done_callback(self._tasks.discard)
 
     def resume(self) -> None:
+        if not self.__paused:
+            return
+
         super().resume()
+        task = asyncio.create_task(
+            self._room.local_participant.perform_rpc(
+                destination_identity=self._destination_identity,
+                method=RPC_RESUME_AUDIO_OUTPUT,
+                payload="",
+            )
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        self.__paused = False
 
     def pause(self) -> None:
+        if not self.supports_pause:
+            logger.warning(
+                "pause is not supported by DataStreamAudioOutput, "
+                "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
+            )
+            return
+
+        if self.__paused:
+            return
+
         super().pause()
-        logger.warning(
-            "pause is not supported by DataStreamAudioOutput, "
-            "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
+        task = asyncio.create_task(
+            self._room.local_participant.perform_rpc(
+                destination_identity=self._destination_identity,
+                method=RPC_PAUSE_AUDIO_OUTPUT,
+                payload="",
+            )
         )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        self.__paused = True
 
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
