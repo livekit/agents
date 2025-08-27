@@ -386,8 +386,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         continue
 
                 formatted_text = f"{text} "  # must always end with a space
+                # when using auto_mode, we are flushing for each sentence
                 connection.send_content(
-                    _SynthesizeContent(self._context_id, formatted_text, flush=False)
+                    _SynthesizeContent(self._context_id, formatted_text, flush=self._opts.auto_mode)
                 )
                 self._mark_started()
                 if not started_event.is_set():
