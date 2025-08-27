@@ -80,6 +80,8 @@ class AvatarRunner:
         # start audio receiver
         await self._audio_recv.start()
         self._audio_recv.on("clear_buffer", self._on_clear_buffer)
+        self._audio_recv.on("pause", self._on_pause)
+        self._audio_recv.on("resume", self._on_resume)
 
         self._room.on("reconnected", self._on_reconnected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
@@ -176,6 +178,12 @@ class AvatarRunner:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         self._audio_playing = False
+
+    def _on_pause(self) -> None:
+        self._video_gen.pause()
+
+    def _on_resume(self) -> None:
+        self._video_gen.resume()
 
     def _on_reconnected(self) -> None:
         if self._lazy_publish and not self._video_publication:
