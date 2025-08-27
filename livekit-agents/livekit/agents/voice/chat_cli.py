@@ -395,8 +395,7 @@ class ChatCLI:
                     )
                     outdata[available_bytes // 2 :, 0] = 0
                     del self._audio_sink.audio_buffer[:available_bytes]
-                    if available_bytes > 0:
-                        self._audio_sink.mark_output_empty()
+                    self._audio_sink.mark_output_empty()
                 else:
                     chunk = self._audio_sink.audio_buffer[:bytes_needed]
                     outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
