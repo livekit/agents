@@ -96,7 +96,7 @@ async def entrypoint(ctx: JobContext):
         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
         # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
-        agent_false_interruption_timeout=1.0,
+        false_interruption_timeout=1.0,
         min_interruption_duration=0.2,  # with false interruption resume, interruption can be more sensitive
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),

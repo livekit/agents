@@ -67,7 +67,7 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
-    agent_false_interruption_timeout: float | None
+    false_interruption_timeout: float | None
     resume_false_interruption: bool
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
@@ -148,13 +148,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
-        agent_false_interruption_timeout: float | None = 2.0,
+        false_interruption_timeout: float | None = 2.0,
         resume_false_interruption: bool = True,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
+        # deprecated
+        agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
         media streams, speech/LLM components, and tool orchestration into a
@@ -211,12 +213,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
-            agent_false_interruption_timeout (float, optional): If set, emit an
+            false_interruption_timeout (float, optional): If set, emit an
                 `agent_false_interruption` event after this amount of time if
                 the user is silent and no user transcript is detected after
                 the interruption. Set to ``None`` to disable. Default ``2.0`` s.
             resume_false_interruption (bool): Whether to resume the false interruption
-                after the agent_false_interruption_timeout. Default ``True``.
+                after the false_interruption_timeout. Default ``True``.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
@@ -241,6 +243,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
 
+        if is_given(agent_false_interruption_timeout):
+            logger.warning(
+                "`agent_false_interruption_timeout` is deprecated, use `false_interruption_timeout` instead"  # noqa: E501
+            )
+            false_interruption_timeout = agent_false_interruption_timeout
+
         if not is_given(video_sampler):
             video_sampler = VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
 
@@ -257,7 +265,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
-            agent_false_interruption_timeout=agent_false_interruption_timeout,
+            false_interruption_timeout=false_interruption_timeout,
             resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             preemptive_generation=preemptive_generation,

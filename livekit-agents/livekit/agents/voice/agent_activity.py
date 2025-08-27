@@ -1045,7 +1045,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             self._paused_speech
-            and (timeout := self._session.options.agent_false_interruption_timeout) is not None
+            and (timeout := self._session.options.false_interruption_timeout) is not None
         ):
             # schedule a resume timer when user stops speaking
             self._start_false_interruption_timer(timeout)
@@ -1060,9 +1060,7 @@ class AgentActivity(RecognitionHooks):
         if ev.speech_duration < opt.min_interruption_duration:
             return
 
-        use_pause = (
-            opt.resume_false_interruption and opt.agent_false_interruption_timeout is not None
-        )
+        use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
