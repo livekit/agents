@@ -233,7 +233,7 @@ async def test_tool_call() -> None:
     "resume_false_interruption, expected_interruption_time",
     [
         (False, 5.5),  # when vad event, 5 + 0.5
-        (True, 6.2),  # when final transcript sent, 6 + 0.2
+        (True, 5.5),  # pause/resume is disabled for fake audio output
     ],
 )
 async def test_interruption(
@@ -389,7 +389,7 @@ async def test_interruption_by_text_input() -> None:
     "resume_false_interruption, expected_interruption_time",
     [
         (False, 3.5),  # 3 + 0.5
-        (True, 4.2),  # 4 + 0.2
+        (True, 3.5),  # pause/resume is disabled for fake audio output
     ],
 )
 async def test_interruption_before_speaking(
