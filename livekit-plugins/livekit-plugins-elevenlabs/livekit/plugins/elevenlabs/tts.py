@@ -72,7 +72,7 @@ class Voice:
 DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
-WS_INACTIVITY_TIMEOUT = 300
+WS_INACTIVITY_TIMEOUT = 180
 
 
 class TTS(tts.TTS):
@@ -106,7 +106,7 @@ class TTS(tts.TTS):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
-            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Recommended for full sentences/phrases. Defaults to False.
+            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Sentence tokenizer will be used to synthesize one sentence at a time. Defaults to True.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
@@ -132,6 +132,9 @@ class TTS(tts.TTS):
             raise ValueError(
                 "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"  # noqa: E501
             )
+
+        if not is_given(auto_mode):
+            auto_mode = True
 
         if not is_given(word_tokenizer):
             word_tokenizer = (
@@ -220,7 +223,11 @@ class TTS(tts.TTS):
     async def current_connection(self) -> _Connection:
         """Get the current connection, creating one if needed"""
         async with self._connection_lock:
-            if self._current_connection and self._current_connection.is_current:
+            if (
+                self._current_connection
+                and self._current_connection.is_current
+                and not self._current_connection._closed
+            ):
                 return self._current_connection
 
             session = self._ensure_session()
@@ -328,6 +335,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._durations_ms: list[int] = []
         self._connection: _Connection | None = None
 
+    async def aclose(self) -> None:
+        await self._sent_tokenizer_stream.aclose()
+        await super().aclose()
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         output_emitter.initialize(
             request_id=self._context_id,
@@ -361,6 +372,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task() -> None:
+            flush_on_chunk = (
+                isinstance(self._opts.word_tokenizer, tokenize.SentenceTokenizer)
+                and self._opts.auto_mode
+            )
             xml_content: list[str] = []
             async for data in self._sent_tokenizer_stream:
                 text = data.token
@@ -388,7 +403,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 formatted_text = f"{text} "  # must always end with a space
                 # when using auto_mode, we are flushing for each sentence
                 connection.send_content(
-                    _SynthesizeContent(self._context_id, formatted_text, flush=self._opts.auto_mode)
+                    _SynthesizeContent(self._context_id, formatted_text, flush=flush_on_chunk)
                 )
                 self._mark_started()
                 if not started_event.is_set():
@@ -410,11 +425,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
-            raise APIStatusError("Could not synthesize.") from e
+            if isinstance(e, APIStatusError):
+                raise e
+            raise APIStatusError("Could not synthesize") from e
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
-            await self._sent_tokenizer_stream.aclose()
 
 
 @dataclass
@@ -578,6 +594,8 @@ class _Connection:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    if not self._closed:
+                        logger.warning("websocket closed unexpectedly")
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -632,7 +650,6 @@ class _Connection:
                     if not self._is_current and not self._active_contexts:
                         logger.debug("no active contexts, shutting down connection")
                         break
-
         except Exception as e:
             logger.warning("recv loop error", exc_info=e)
             for fut in self._context_waiters.values():
@@ -659,17 +676,20 @@ class _Connection:
 
         for fut in self._context_waiters.values():
             if not fut.done():
-                fut.cancel()
+                # do not cancel the future as it becomes difficult to catch
+                # all pending tasks will be aborted with an exception
+                fut.set_exception(APIStatusError("connection closed"))
         self._context_waiters.clear()
+
+        if self._ws:
+            await self._ws.close()
 
         if self._send_task:
             await utils.aio.gracefully_cancel(self._send_task)
         if self._recv_task:
             await utils.aio.gracefully_cancel(self._recv_task)
 
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
+        self._ws = None
 
 
 def _dict_to_voices_list(data: dict[str, Any]) -> list[Voice]:
