@@ -106,6 +106,14 @@ class STT(stt.STT):
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Sarvam"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

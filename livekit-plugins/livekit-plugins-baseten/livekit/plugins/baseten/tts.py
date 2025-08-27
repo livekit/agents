@@ -92,6 +92,14 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(voice=voice, language=language, temperature=temperature)
         self._session = http_session
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Baseten"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

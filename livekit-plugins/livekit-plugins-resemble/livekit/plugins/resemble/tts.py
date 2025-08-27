@@ -106,6 +106,14 @@ class TTS(tts.TTS):
             close_cb=self._close_ws,
         )
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Resemble"
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(

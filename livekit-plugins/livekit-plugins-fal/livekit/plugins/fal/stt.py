@@ -37,6 +37,14 @@ class WizperSTT(stt.STT):
         self._opts = _STTOptions(language=language if is_given(language) else "en")
         self._fal_client = fal_client.AsyncClient(key=self._api_key)
 
+    @property
+    def model(self) -> str:
+        return "Wizper"
+
+    @property
+    def provider(self) -> str:
+        return "Fal"
+
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
             self._opts.language = language

@@ -43,6 +43,14 @@ class LLMAdapter(llm.LLM):
         self._graph = graph
         self._config = config
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "LangChain"
+
     def chat(
         self,
         *,

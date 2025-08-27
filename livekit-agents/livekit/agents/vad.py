@@ -9,6 +9,7 @@ from enum import Enum, unique
 from typing import Literal, Union
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .metrics import VADMetrics
 from .utils import aio
@@ -79,6 +80,14 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "unknown"
+
+    @property
     def capabilities(self) -> VADCapabilities:
         return self._capabilities
 
@@ -125,6 +134,9 @@ class VADStream(ABC):
                         inference_duration_total=inference_duration_total,
                         inference_count=inference_count,
                         label=self._vad._label,
+                        metadata=Metadata(
+                            model_name=self._vad.model, model_provider=self._vad.provider
+                        ),
                     )
                     self._vad.emit("metrics_collected", vad_metrics)
 
