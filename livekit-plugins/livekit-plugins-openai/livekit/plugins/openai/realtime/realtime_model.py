@@ -544,7 +544,7 @@ class RealtimeSession(
         self._update_fnc_ctx_lock = asyncio.Lock()
 
         self._session_created_future: asyncio.Future[SessionCreatedEvent] = asyncio.Future()
-        self._session_updates_pending: ZeroNotifyCounter = ZeroNotifyCounter()
+        self._session_updates_pending: "ZeroNotifyCounter" = ZeroNotifyCounter()
 
         # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
@@ -744,7 +744,9 @@ class RealtimeSession(
                         logger.debug(f"<<< {event_copy}")
 
                     if event["type"] == "session.created":
-                        self._session_created_future.set_result(SessionCreatedEvent.construct(**event))
+                        self._session_created_future.set_result(
+                            SessionCreatedEvent.construct(**event)
+                        )
 
                     elif event["type"] == "session.updated":
                         await self._session_updates_pending.dec()
@@ -1678,19 +1680,19 @@ def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
 
 
 class ZeroNotifyCounter:
-    def __init__(self):
+    def __init__(self) -> None:
         self._count = 0
         self._zero_event = asyncio.Event()
         self._zero_event.set()
         self._lock = asyncio.Lock()
 
-    async def inc(self):
+    async def inc(self) -> None:
         async with self._lock:
             self._count += 1
             if self._count == 1:
                 self._zero_event.clear()
 
-    async def dec(self):
+    async def dec(self) -> None:
         async with self._lock:
             if self._count > 0:
                 self._count -= 1
@@ -1698,8 +1700,8 @@ class ZeroNotifyCounter:
                     self._zero_event.set()
 
     @property
-    def count(self):
+    def count(self) -> int:
         return self._count
 
-    async def wait_until_zero(self):
+    async def wait_until_zero(self) -> None:
         await self._zero_event.wait()
