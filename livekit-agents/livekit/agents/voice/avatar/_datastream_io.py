@@ -320,6 +320,13 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             if self._current_reader:
                 self._current_reader_cleared = True
+
+            while not self._data_ch.empty():
+                try:
+                    self._data_ch.recv_nowait()
+                except utils.aio.channel.ChanEmpty:
+                    break
+
             self.emit("clear_buffer")
             return "ok"
 
