@@ -38,7 +38,7 @@ from .utils import DEFAULT_REGION
 @dataclass
 class STTOptions:
     sample_rate: int
-    language: str
+    language: str | None
     encoding: str
     vocabulary_name: NotGivenOr[str]
     session_id: NotGivenOr[str]
@@ -51,6 +51,10 @@ class STTOptions:
     partial_results_stability: NotGivenOr[str]
     language_model_name: NotGivenOr[str]
     region: str
+    identify_language: NotGivenOr[bool]
+    preferred_language: NotGivenOr[str]
+    identify_multiple_languages: NotGivenOr[bool]
+    language_options: NotGivenOr[list[str]]
 
 
 class STT(stt.STT):
@@ -59,7 +63,7 @@ class STT(stt.STT):
         *,
         region: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
-        language: str = "en-US",
+        language: str | None = "en-US",
         encoding: str = "pcm",
         vocabulary_name: NotGivenOr[str] = NOT_GIVEN,
         session_id: NotGivenOr[str] = NOT_GIVEN,
@@ -71,6 +75,10 @@ class STT(stt.STT):
         enable_partial_results_stabilization: NotGivenOr[bool] = NOT_GIVEN,
         partial_results_stability: NotGivenOr[str] = NOT_GIVEN,
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
+        identify_language: NotGivenOr[bool] = NOT_GIVEN,
+        preferred_language: NotGivenOr[str] = NOT_GIVEN,
+        identify_multiple_languages: NotGivenOr[bool] = NOT_GIVEN,
+        language_options: NotGivenOr[list[str]] = NOT_GIVEN,
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
@@ -92,6 +100,10 @@ class STT(stt.STT):
             partial_results_stability=partial_results_stability,
             language_model_name=language_model_name,
             region=region,
+            identify_language=identify_language,
+            preferred_language=preferred_language,
+            identify_multiple_languages=identify_multiple_languages,
+            language_options=language_options,
         )
 
     async def aclose(self) -> None:
@@ -146,8 +158,15 @@ class SpeechStream(stt.SpeechStream):
                 "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,  # noqa: E501
                 "partial_results_stability": self._opts.partial_results_stability,
                 "language_model_name": self._opts.language_model_name,
+                "identify_language": self._opts.identify_language,
+                "preferred_language": self._opts.preferred_language,
+                "identify_multiple_languages": self._opts.identify_multiple_languages,
+                "language_options": self._opts.language_options,
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
+            filtered_config["language_code"] = live_config[
+                "language_code"
+            ]  # as `language_code` is required param in start_stream_transcription
             stream = await client.start_stream_transcription(**filtered_config)  # type: ignore
 
             async def input_generator(stream: StartStreamTranscriptionEventStream) -> None:
