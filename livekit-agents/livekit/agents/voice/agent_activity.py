@@ -1060,6 +1060,8 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent) -> None:
         self._session._update_user_state("speaking")
 
+
+        print(ev)
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
             self._false_interruption_timer.cancel()
@@ -1070,6 +1072,9 @@ class AgentActivity(RecognitionHooks):
             "listening",
             last_speaking_time=time.time() - ev.silence_duration,
         )
+
+
+        print(ev)
 
         if (
             self._paused_speech
@@ -1082,6 +1087,8 @@ class AgentActivity(RecognitionHooks):
         if self._turn_detection_mode in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
+
+        #print(ev)
 
         opt = self._session.options
 
