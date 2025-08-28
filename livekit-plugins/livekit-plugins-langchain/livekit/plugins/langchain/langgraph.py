@@ -38,10 +38,12 @@ class LLMAdapter(llm.LLM):
         graph: PregelProtocol,
         *,
         config: RunnableConfig | None = None,
+        streaming_nodes: set[str] | None = None,
     ) -> None:
         super().__init__()
         self._graph = graph
         self._config = config
+        self._streaming_nodes = streaming_nodes
 
     def chat(
         self,
@@ -61,6 +63,7 @@ class LLMAdapter(llm.LLM):
             graph=self._graph,
             conn_options=conn_options,
             config=self._config,
+            streaming_nodes=self._streaming_nodes,
         )
 
 
@@ -74,6 +77,7 @@ class LangGraphStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         graph: PregelProtocol,
         config: RunnableConfig | None = None,
+        streaming_nodes: set[str] | None = None,
     ):
         super().__init__(
             llm,
@@ -83,15 +87,23 @@ class LangGraphStream(llm.LLMStream):
         )
         self._graph = graph
         self._config = config
+        self._streaming_nodes = streaming_nodes
 
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
 
-        async for message_chunk, _ in self._graph.astream(
+        async for message_chunk, metadata in self._graph.astream(
             state,
             self._config,
             stream_mode="messages",
         ):
+            # Filter by node name using metadata if streaming_nodes is specified
+            if self._streaming_nodes is not None:
+                # Ensure metadata is a dict-like object before accessing it
+                node_name = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+                if node_name not in self._streaming_nodes:
+                    continue
+
             chat_chunk = _to_chat_chunk(message_chunk)
             if chat_chunk:
                 self._event_ch.send_nowait(chat_chunk)
