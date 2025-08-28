@@ -18,12 +18,12 @@ class QueueAudioOutput(AudioReceiver[Literal["playback_finished"]], AudioOutput)
     AudioOutput implementation that sends audio frames through a queue.
     """
 
-    def __init__(self, *, sample_rate: int | None = None, support_pause: bool = False):
+    def __init__(self, *, sample_rate: int | None = None, can_pause: bool = False):
         super().__init__(
             label="DebugQueueIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=support_pause),
+            capabilities=AudioOutputCapabilities(pause=can_pause),
         )
         self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
         self._capturing = False
@@ -53,7 +53,7 @@ class QueueAudioOutput(AudioReceiver[Literal["playback_finished"]], AudioOutput)
         self.__paused = False
 
     def pause(self) -> None:
-        if not self.supports_pause:
+        if not self.can_pause:
             logger.warning("pause is not supported by QueueAudioOutput")
             return
 

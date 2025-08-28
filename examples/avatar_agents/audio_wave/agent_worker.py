@@ -78,7 +78,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         destination_identity=AVATAR_IDENTITY,
         # (optional) wait for the avatar to publish video track before generating a reply
         wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-        support_pause=True,
+        can_pause=True,
     )
 
     # start agent with room input and room text output
