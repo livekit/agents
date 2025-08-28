@@ -14,7 +14,7 @@ from livekit.agents import (
 from livekit.agents.llm import function_tool
 from livekit.plugins import deepgram, openai, silero
 
-logger = logging.getLogger("silent-function-call")
+logger = logging.getLogger("long-running-function")
 logger.setLevel(logging.INFO)
 
 load_dotenv()

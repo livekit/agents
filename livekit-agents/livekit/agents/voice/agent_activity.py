@@ -842,14 +842,9 @@ class AgentActivity(RecognitionHooks):
 
     def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
-
-        for speech in list(self._background_speeches):
+        for speech in self._background_speeches:
             if force or speech.allow_interruptions:
-                speech.interrupt(force=force)
-
-            if speech.done() or speech.interrupted:
-                self._background_speeches.discard(speech)
-                interrupted_speeches.append(speech)
+                interrupted_speeches.append(speech.interrupt(force=force))
 
         return interrupted_speeches
 
