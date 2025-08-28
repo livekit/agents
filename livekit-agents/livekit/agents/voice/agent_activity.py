@@ -1082,7 +1082,6 @@ class AgentActivity(RecognitionHooks):
         if self._turn_detection_mode in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
- 
 
         opt = self._session.options
 
