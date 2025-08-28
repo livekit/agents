@@ -293,9 +293,6 @@ class AvatarSession:
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
 
-        logger.debug("waiting for avatar agent to join the room")
-        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
-
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
