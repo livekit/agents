@@ -230,7 +230,7 @@ class AvatarSession:
 
         audio_buffer = QueueAudioOutput(
             sample_rate=runtime.settings.INPUT_SAMPLE_RATE,
-            support_pause=True,
+            can_pause=True,
         )
         # create avatar runner
         self._avatar_runner = AvatarRunner(

@@ -37,13 +37,13 @@ class DataStreamAudioOutput(AudioOutput):
         destination_identity: str,
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
-        support_pause: bool = False,
+        can_pause: bool = False,
     ):
         super().__init__(
             label="DataStreamIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=support_pause),
+            capabilities=AudioOutputCapabilities(pause=can_pause),
         )
         self._room = room
         self._destination_identity = destination_identity
@@ -181,7 +181,7 @@ class DataStreamAudioOutput(AudioOutput):
         self.__paused = False
 
     def pause(self) -> None:
-        if not self.supports_pause:
+        if not self.can_pause:
             logger.warning(
                 "pause is not supported by DataStreamAudioOutput, "
                 "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
