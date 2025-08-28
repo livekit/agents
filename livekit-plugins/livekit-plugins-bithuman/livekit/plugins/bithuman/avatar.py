@@ -229,8 +229,7 @@ class AvatarSession:
         )
 
         audio_buffer = QueueAudioOutput(
-            sample_rate=runtime.settings.INPUT_SAMPLE_RATE,
-            can_pause=True,
+            sample_rate=runtime.settings.INPUT_SAMPLE_RATE, can_pause=True
         )
         # create avatar runner
         self._avatar_runner = AvatarRunner(
@@ -295,6 +294,7 @@ class AvatarSession:
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
+            can_pause=True,
         )
 
     async def _start_cloud_agent(
