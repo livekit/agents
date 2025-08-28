@@ -550,6 +550,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 " -> ".join([f"`{out.label}`" for out in audio_input]) or "(none)",
                 " -> ".join([f"`{out.label}`" for out in audio_output]) or "(none)",
             )
+            if (
+                self._opts.resume_false_interruption
+                and self.output.audio
+                and not self.output.audio.can_pause
+            ):
+                logger.warning(
+                    "resume_false_interruption is enabled but audio output does not support pause, it will be ignored",
+                    extra={"audio_output": self.output.audio.label},
+                )
 
             logger.debug(
                 "using transcript io: `AgentSession` -> %s",
@@ -1069,7 +1078,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         pass
 
     def _on_audio_output_changed(self) -> None:
-        pass
+        if (
+            self._started
+            and self._opts.resume_false_interruption
+            and (audio_output := self.output.audio)
+            and not audio_output.can_pause
+        ):
+            logger.warning(
+                "resume_false_interruption is enabled, but the audio output does not support pause, ignored",
+                extra={"audio_output": audio_output.label},
+            )
 
     def _on_text_output_changed(self) -> None:
         pass

@@ -5,7 +5,7 @@ import time
 
 from livekit import rtc
 from livekit.agents import utils
-from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput
+from livekit.agents.voice.io import AudioInput, AudioOutput, AudioOutputCapabilities, TextOutput
 
 
 class FakeAudioInput(AudioInput):
@@ -36,7 +36,12 @@ class FakeAudioOutput(AudioOutput):
     def __init__(
         self, *, next_in_chain: AudioOutput | None = None, sample_rate: int | None = None
     ) -> None:
-        super().__init__(label="FakeIO", next_in_chain=next_in_chain, sample_rate=sample_rate)
+        super().__init__(
+            label="FakeIO",
+            next_in_chain=next_in_chain,
+            sample_rate=sample_rate,
+            capabilities=AudioOutputCapabilities(pause=False),
+        )
         self._start_time = 0.0
         self._pushed_duration = 0.0
         self._flush_handle: asyncio.TimerHandle | None = None

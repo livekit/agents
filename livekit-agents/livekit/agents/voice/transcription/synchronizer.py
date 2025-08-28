@@ -510,6 +510,7 @@ class _SyncedAudioOutput(io.AudioOutput):
             label="TranscriptSynchronizer",
             next_in_chain=next_in_chain,
             sample_rate=next_in_chain.sample_rate,
+            capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
