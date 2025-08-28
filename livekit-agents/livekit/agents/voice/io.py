@@ -233,10 +233,8 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         return self._sample_rate
 
     @property
-    def supports_pause(self) -> bool:
-        return self._capabilities.pause and (
-            not self.next_in_chain or self.next_in_chain.supports_pause
-        )
+    def can_pause(self) -> bool:
+        return self._capabilities.pause and (not self.next_in_chain or self.next_in_chain.can_pause)
 
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:

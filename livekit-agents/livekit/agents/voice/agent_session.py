@@ -553,7 +553,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if (
                 self._opts.resume_false_interruption
                 and self.output.audio
-                and not self.output.audio.supports_pause
+                and not self.output.audio.can_pause
             ):
                 logger.warning(
                     "resume_false_interruption is enabled but audio output does not support pause, it will be ignored",
@@ -1082,7 +1082,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started
             and self._opts.resume_false_interruption
             and (audio_output := self.output.audio)
-            and not audio_output.supports_pause
+            and not audio_output.can_pause
         ):
             logger.warning(
                 "resume_false_interruption is enabled, but the audio output does not support pause, ignored",
