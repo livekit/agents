@@ -479,7 +479,7 @@ class _Connection:
         self._active_contexts: set[str] = set()
         self._input_queue = utils.aio.Chan[Union[_SynthesizeContent, _CloseContext]]()
 
-        self._context_stream_data: dict[str, _StreamData] = {}
+        self._context_data: dict[str, _StreamData] = {}
 
         self._send_task: asyncio.Task | None = None
         self._recv_task: asyncio.Task | None = None
@@ -510,12 +510,12 @@ class _Connection:
         self._recv_task = asyncio.create_task(self._recv_loop())
 
     def register_stream(
-        self, stream: SynthesizeStream, emitter: tts.AudioEmitter, waiter: asyncio.Future[None]
+        self, stream: SynthesizeStream, emitter: tts.AudioEmitter, done_fut: asyncio.Future[None]
     ) -> None:
         """Register a new synthesis stream with this connection"""
         context_id = stream._context_id
-        self._context_stream_data[context_id] = _StreamData(
-            emitter=emitter, stream=stream, waiter=waiter
+        self._context_data[context_id] = _StreamData(
+            emitter=emitter, stream=stream, waiter=done_fut
         )
 
     def send_content(self, content: _SynthesizeContent) -> None:
@@ -610,23 +610,23 @@ class _Connection:
                 data = json.loads(msg.data)
                 context_id = data.get("contextId")
 
-                if not context_id or context_id not in self._context_stream_data:
+                if not context_id or context_id not in self._context_data:
                     continue
 
-                stream_data = self._context_stream_data[context_id]
+                ctx = self._context_data[context_id]
 
                 if error := data.get("error"):
                     logger.error(
                         "elevenlabs tts returned error",
                         extra={"context_id": context_id, "error": error},
                     )
-                    if not stream_data.waiter.done():
-                        stream_data.waiter.set_exception(APIError(message=error))
+                    if not ctx.waiter.done():
+                        ctx.waiter.set_exception(APIError(message=error))
                     self._cleanup_context(context_id)
                     continue
 
-                emitter = stream_data.emitter
-                stream = stream_data.stream
+                emitter = ctx.emitter
+                stream = ctx.stream
 
                 # ensure alignment
                 alignment = data.get("normalizedAlignment") or data.get("alignment")
@@ -647,8 +647,8 @@ class _Connection:
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     emitter.push(b64data)
-                    if stream_data.timeout_timer:
-                        stream_data.timeout_timer.cancel()
+                    if ctx.timeout_timer:
+                        ctx.timeout_timer.cancel()
 
                 if data.get("isFinal"):
                     if stream is not None:
@@ -660,8 +660,8 @@ class _Connection:
                         )
                         emitter.push_timed_transcript(timed_words)
 
-                    if not stream_data.waiter.done():
-                        stream_data.waiter.set_result(None)
+                    if not ctx.waiter.done():
+                        ctx.waiter.set_result(None)
                     self._cleanup_context(context_id)
 
                     if not self._is_current and not self._active_contexts:
@@ -669,40 +669,39 @@ class _Connection:
                         break
         except Exception as e:
             logger.warning("recv loop error", exc_info=e)
-            for stream_data in self._context_stream_data.values():
-                if not stream_data.waiter.done():
-                    stream_data.waiter.set_exception(e)
-            self._context_stream_data.clear()
+            for ctx in self._context_data.values():
+                if not ctx.waiter.done():
+                    ctx.waiter.set_exception(e)
+                if ctx.timeout_timer:
+                    ctx.timeout_timer.cancel()
+            self._context_data.clear()
         finally:
             if not self._closed:
                 await self.aclose()
 
     def _cleanup_context(self, context_id: str) -> None:
         """Clean up context state"""
-        stream_data = self._context_stream_data.pop(context_id, None)
-        if stream_data and stream_data.timeout_timer:
-            stream_data.timeout_timer.cancel()
+        ctx = self._context_data.pop(context_id, None)
+        if ctx and ctx.timeout_timer:
+            ctx.timeout_timer.cancel()
 
         self._active_contexts.discard(context_id)
 
     def _start_timeout_timer(self, context_id: str) -> None:
         """Start a timeout timer for a context"""
-        if (
-            not (stream_data := self._context_stream_data.get(context_id))
-            or stream_data.timeout_timer
-        ):
+        if not (ctx := self._context_data.get(context_id)) or ctx.timeout_timer:
             return
 
-        timeout = stream_data.stream._conn_options.timeout
+        timeout = ctx.stream._conn_options.timeout
 
         def _on_timeout() -> None:
-            if not stream_data.waiter.done():
-                stream_data.waiter.set_exception(
-                    APITimeoutError(f"elevenlabs tts timed out after {timeout} seconds")
+            if not ctx.waiter.done():
+                ctx.waiter.set_exception(
+                    APITimeoutError(f"11labs tts timed out after {timeout} seconds")
                 )
             self._cleanup_context(context_id)
 
-        stream_data.timeout_timer = asyncio.get_event_loop().call_later(timeout, _on_timeout)
+        ctx.timeout_timer = asyncio.get_event_loop().call_later(timeout, _on_timeout)
 
     async def aclose(self) -> None:
         """Close the connection and clean up"""
@@ -712,12 +711,14 @@ class _Connection:
         self._closed = True
         self._input_queue.close()
 
-        for stream_data in self._context_stream_data.values():
-            if not stream_data.waiter.done():
+        for ctx in self._context_data.values():
+            if not ctx.waiter.done():
                 # do not cancel the future as it becomes difficult to catch
                 # all pending tasks will be aborted with an exception
-                stream_data.waiter.set_exception(APIStatusError("connection closed"))
-        self._context_stream_data.clear()
+                ctx.waiter.set_exception(APIStatusError("connection closed"))
+            if ctx.timeout_timer:
+                ctx.timeout_timer.cancel()
+        self._context_data.clear()
 
         if self._ws:
             await self._ws.close()
