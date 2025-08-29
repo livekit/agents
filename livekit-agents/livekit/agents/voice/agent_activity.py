@@ -185,13 +185,13 @@ class AgentActivity(RecognitionHooks):
         if (
             not self.vad
             and self.stt
+            and not self.stt.capabilities.streaming
             and isinstance(self.llm, llm.LLM)
             and self.allow_interruptions
             and self._turn_detection_mode is None
-            and not self._session.options.interrupt_by_interim_transcript
         ):
             logger.warning(
-                "VAD is not set. Enabling VAD is recommended when using LLM and STT "
+                "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
                 "for more responsive interruption handling."
             )
 
@@ -1147,7 +1147,7 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-        if self._session.options.interrupt_by_interim_transcript:
+        if ev.alternatives[0].text:
             self._interrupt_by_audio_activity()
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
