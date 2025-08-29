@@ -569,10 +569,11 @@ class _Connection:
                     }
                     if msg.flush:
                         pkt["flush"] = True
-                    await self._ws.send_json(pkt)
 
                     # start timeout timer for this context
                     self._start_timeout_timer(msg.context_id)
+
+                    await self._ws.send_json(pkt)
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
