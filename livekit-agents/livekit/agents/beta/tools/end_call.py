@@ -7,18 +7,18 @@ class EndCallTool(Tool):
     @function_tool(name="end_call")
     def _end_call(self) -> None:
         """
-                Ends the current call and disconnects immediately.
+        Ends the current call and disconnects immediately.
 
-                Call when:
-                - The user clearly indicates they are done (e.g., “that’s all, bye”).
-                - The agent determines the conversation is complete and should end.
+        Call when:
+        - The user clearly indicates they are done (e.g., “that’s all, bye”).
+        - The agent determines the conversation is complete and should end.
 
-                Do not call when:
-                - The user asks to pause, hold, or transfer.
-                - Intent is unclear.
-        ,
-                This is the final action the agent can take.
-                Once called, no further interaction is possible with the user.
+        Do not call when:
+        - The user asks to pause, hold, or transfer.
+        - Intent is unclear.
+,
+        This is the final action the agent can take.
+        Once called, no further interaction is possible with the user.
         """
         from ...voice.agent_activity import _AgentActivityContextVar
 
