@@ -101,7 +101,7 @@ class STT(stt.STT):
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", "scribe_v1")
         form.add_field("language_code", self._opts.language_code)
-        form.add_field("tag_audio_events", self._opts.tag_audio_events)
+        form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
 
         try:
             async with self._ensure_session().post(
