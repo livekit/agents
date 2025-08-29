@@ -562,6 +562,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
+    def close_soon(self) -> None:
+        self._close_soon(reason=CloseReason.USER_INITIATED, drain=True)
+
     def _close_soon(
         self,
         *,
