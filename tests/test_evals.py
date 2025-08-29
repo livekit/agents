@@ -58,6 +58,22 @@ async def test_function_call():
         result.expect.no_more_events()
 
 
+@pytest.mark.asyncio
+async def test_start_with_capture_run():
+    async with openai.LLM(model="gpt-4o-mini") as llm, AgentSession(llm=llm) as sess:
+        result = await sess.start(EchoAgent(), capture_run=True)
+        assert result is not None
+
+        print(result.events)
+        result.expect.next_event().is_agent_handoff(new_agent_type=EchoAgent)
+        result.expect.next_event().is_message(role="assistant")
+
+        result = await sess.run(user_input="Hello how are you?")
+        print(result.events)
+        result.expect.next_event().is_message(role="assistant")
+        result.expect.no_more_events()
+
+
 @dataclass
 class RandomResult:
     random_number: int

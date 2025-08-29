@@ -393,23 +393,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         agent: Agent,
         *,
+        capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-    ) -> None:
+    ) -> RunResult | None:
         """Start the voice agent.
 
         Create a default RoomIO if the input or output audio is not already set.
         If the console flag is provided, start a ChatCLI.
 
         Args:
+            capture_run: Whether to return a RunResult and capture the run result during session start.
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
         """
         async with self._lock:
             if self._started:
-                return
+                return None
 
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
@@ -495,6 +497,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             except RuntimeError:
                 pass  # ignore
 
+            run_state: RunResult | None = None
+            if capture_run:
+                if self._global_run_state is not None and not self._global_run_state.done():
+                    raise RuntimeError("nested runs are not supported")
+
+                run_state = RunResult(output_type=None)
+                self._global_run_state = run_state
+
             # it is ok to await it directly, there is no previous task to drain
             tasks.append(
                 asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
@@ -571,6 +581,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     " -> ".join([f"`{out.label}`" for out in video_input]) or "(none)",
                     " -> ".join([f"`{out.label}`" for out in video_output]) or "(none)",
                 )
+
+            if run_state:
+                await run_state
+
+            return run_state
 
     async def drain(self) -> None:
         if self._activity is None:
