@@ -31,6 +31,8 @@ from typing import (
 
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
+from pydantic import ValidationError
+
 
 # Used by ToolChoice
 class Function(TypedDict, total=False):
@@ -79,6 +81,7 @@ class StopResponse(Exception):
 class _FunctionToolInfo:
     name: str
     description: str | None
+    handle_validation_error: Callable[[ValidationError], str] | None = None
 
 
 @runtime_checkable
@@ -108,6 +111,7 @@ class RawFunctionDescription(TypedDict):
 class _RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
+    handle_validation_error: Callable[[ValidationError], str] | None = None
 
 
 @runtime_checkable
@@ -123,25 +127,39 @@ Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
 
 @overload
 def function_tool(
-    f: Raw_F, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: Raw_F,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    handle_validation_error: Callable[[ValidationError], str] | None = None,
 ) -> RawFunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: None = None,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    handle_validation_error: Callable[[ValidationError], str] | None = None,
 ) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
 @overload
 def function_tool(
-    f: F, *, name: str | None = None, description: str | None = None
+    f: F,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    handle_validation_error: Callable[[ValidationError], str] | None = None,
 ) -> FunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, name: str | None = None, description: str | None = None
+    f: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    handle_validation_error: Callable[[ValidationError], str] | None = None,
 ) -> Callable[[F], FunctionTool]: ...
 
 
@@ -151,6 +169,7 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+    handle_validation_error: Callable[[ValidationError], str] | None = None,
 ) -> (
     FunctionTool
     | RawFunctionTool
@@ -167,7 +186,11 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
+        info = _RawFunctionToolInfo(
+            raw_schema={**raw_schema},
+            name=raw_schema["name"],
+            handle_validation_error=handle_validation_error,
+        )
         setattr(func, "__livekit_raw_tool_info", info)
         return cast(RawFunctionTool, func)
 
@@ -178,6 +201,7 @@ def function_tool(
         info = _FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
+            handle_validation_error=handle_validation_error,
         )
         setattr(func, "__livekit_tool_info", info)
         return cast(FunctionTool, func)
@@ -210,6 +234,27 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
         if is_function_tool(member) or is_raw_function_tool(member):
             methods.append(member)
     return methods
+
+
+def handle_validation_error(
+    e: ValidationError,
+    *,
+    handler: Callable[[ValidationError], str] | None = None,
+) -> str:
+    """Handle validation errors based on the configured handler.
+
+    Args:
+        e: The validation error that occurred.
+        handler: How to handle the error (callable or None).
+
+    Returns:
+        The error message to return to the LLM.
+    """
+    if handler is None:
+        # Default error message that's helpful but not technical
+        return "Tool input validation error"
+
+    return handler(e)
 
 
 class ToolContext:
