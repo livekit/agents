@@ -7,7 +7,16 @@ import time
 from collections.abc import AsyncIterable
 from dataclasses import asdict, dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    Union,
+    overload,
+    runtime_checkable,
+)
 
 from opentelemetry import context as otel_context, trace
 
@@ -387,6 +396,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input)
         return run_state
+
+    @overload
+    async def start(
+        self,
+        agent: Agent,
+        *,
+        capture_run: Literal[True],
+        room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
+        room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+    ) -> RunResult: ...
+
+    @overload
+    async def start(
+        self,
+        agent: Agent,
+        *,
+        capture_run: Literal[False] = False,
+        room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
+        room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+    ) -> None: ...
 
     @tracer.start_as_current_span("agent_session", end_on_exit=False)
     async def start(

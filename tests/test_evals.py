@@ -62,7 +62,6 @@ async def test_function_call():
 async def test_start_with_capture_run():
     async with openai.LLM(model="gpt-4o-mini") as llm, AgentSession(llm=llm) as sess:
         result = await sess.start(EchoAgent(), capture_run=True)
-        assert result is not None
 
         print(result.events)
         result.expect.next_event().is_agent_handoff(new_agent_type=EchoAgent)
