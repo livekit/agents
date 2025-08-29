@@ -1491,8 +1491,7 @@ class AgentActivity(RecognitionHooks):
                 msg = self._agent._chat_ctx.add_message(
                     role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
                 )
-
-                speech_handle._chat_items.append(msg)
+                speech_handle._item_added([msg])
                 self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":

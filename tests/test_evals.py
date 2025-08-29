@@ -24,6 +24,7 @@ class KellyAgent(Agent):
     @function_tool
     async def talk_to_echo(self, ctx: RunContext):
         """Called when the user wants to speak with Echo"""
+        await self.session.say("Hello world")
         return EchoAgent()
 
 
@@ -52,7 +53,9 @@ async def test_function_call():
         result.expect.no_more_events()
 
         result = await sess.run(user_input="Can I speak to Echo?")
-        result.expect.skip_next(2)  # fnc_call & fnc_call_output
+        result.expect.next_event().is_function_call()
+        result.expect.next_event().is_message(role="assistant")  # say `Hello world`!
+        result.expect.next_event().is_function_call_output()
         result.expect.next_event().is_agent_handoff(new_agent_type=EchoAgent)
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
