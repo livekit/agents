@@ -188,10 +188,10 @@ class ConsoleAudioOutput(io.AudioOutput):
 
 
 class AgentsConsole:
-    _instance: "AgentsConsole | None" = None
+    _instance: AgentsConsole | None = None
 
     @classmethod
-    def get_instance(cls) -> "AgentsConsole":
+    def get_instance(cls) -> AgentsConsole:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -1272,15 +1272,16 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
             loop.close()
 
 
-def _build_cli(server: AgentServer) -> typer.Typer:
-    class LogLevel(str, enum.Enum):
-        trace = "TRACE"
-        debug = "DEBUG"
-        info = "INFO"
-        warn = "WARN"
-        error = "ERROR"
-        critical = "CRITICAL"
+class LogLevel(str, enum.Enum):
+    trace = "TRACE"
+    debug = "DEBUG"
+    info = "INFO"
+    warn = "WARN"
+    error = "ERROR"
+    critical = "CRITICAL"
 
+
+def _build_cli(server: AgentServer) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
     @app.command()
@@ -1335,7 +1336,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         log_level: Annotated[
             LogLevel,
             typer.Option(help="Set the log level", case_sensitive=False),
-        ] = "info",
+        ] = LogLevel.info,
         url: Annotated[
             str | None,
             typer.Option(
@@ -1371,7 +1372,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         log_level: Annotated[
             LogLevel,
             typer.Option(help="Set the log level", case_sensitive=False),
-        ] = "info",
+        ] = LogLevel.debug,
         reload: Annotated[
             bool,
             typer.Option(help="Enable auto-reload of the server when (code) files change."),
