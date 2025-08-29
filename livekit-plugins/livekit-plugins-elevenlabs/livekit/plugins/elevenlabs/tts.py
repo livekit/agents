@@ -417,7 +417,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         stream_t = asyncio.create_task(_sentence_stream_task())
 
         try:
-            await asyncio.wait_for(waiter, self._conn_options.timeout)
+            await waiter
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
