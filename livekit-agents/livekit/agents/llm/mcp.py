@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
-    from mcp import ClientSession, stdio_client, McpError
+    from mcp import ClientSession, McpError, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client

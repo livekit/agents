@@ -29,7 +29,6 @@ from ..llm.tool_context import (
     get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
-    handle_validation_error,
 )
 from ..log import logger
 from ..telemetry import trace_types, tracer
@@ -381,11 +380,9 @@ async def _execute_tools_task(
     ) -> Callable[[ValidationError], str] | None:
         """Extract handle_validation_error from a tool."""
         if is_function_tool(tool):
-            tool_info = get_function_info(tool)
-            return tool_info.handle_validation_error
+            return get_function_info(tool).handle_validation_error
         elif is_raw_function_tool(tool):
-            tool_info = get_raw_function_info(tool)
-            return tool_info.handle_validation_error
+            return get_raw_function_info(tool).handle_validation_error
         return None
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
@@ -693,7 +690,7 @@ def make_tool_output(
         )
 
     if isinstance(exception, ValidationError):
-        from ..llm.tool_context import _handle_validation_error
+        from ..llm.tool_context import handle_validation_error as _handle_validation_error
 
         error_message = _handle_validation_error(exception, handler=handle_validation_error)
         return ToolExecutionOutput(

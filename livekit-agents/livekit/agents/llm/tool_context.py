@@ -29,9 +29,8 @@ from typing import (
     runtime_checkable,
 )
 
-from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
-
 from pydantic import ValidationError
+from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
 
 # Used by ToolChoice
