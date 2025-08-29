@@ -71,6 +71,7 @@ class FallbackAdapter(
             capabilities=STTCapabilities(
                 streaming=True,
                 interim_results=all(t.capabilities.interim_results for t in stt),
+                diarization=all(t.capabilities.diarization for t in stt),
             )
         )
 
