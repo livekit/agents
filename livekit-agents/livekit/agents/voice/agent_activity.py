@@ -654,7 +654,6 @@ class AgentActivity(RecognitionHooks):
             await self._audio_recognition.aclose()
 
         await self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
-        await asyncio.gather(*self._interrupt_background_speeches(force=False))
         self._interrupt_paused_speech_task = None
 
     async def aclose(self) -> None:
@@ -668,6 +667,7 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
 
             await self._close_session()
+            await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
