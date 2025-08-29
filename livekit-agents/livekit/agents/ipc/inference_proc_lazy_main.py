@@ -9,6 +9,7 @@ if current_process().name == "inference_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
+import asyncio
 import math
 import socket
 import time

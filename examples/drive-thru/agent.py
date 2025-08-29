@@ -398,7 +398,7 @@ async def new_userdata() -> Userdata:
 server = AgentServer()
 
 
-@server.rtc_session()
+@server.realtime_session()
 async def drive_thru_agent(ctx: JobContext):
     userdata = await new_userdata()
     session = AgentSession[Userdata](
