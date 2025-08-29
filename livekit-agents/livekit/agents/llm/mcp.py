@@ -31,7 +31,12 @@ MCPTool = RawFunctionTool
 
 
 class MCPServer(ABC):
-    def __init__(self, *, client_session_timeout_seconds: float, handle_mcp_error: Callable[[McpError], ToolError] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        client_session_timeout_seconds: float,
+        handle_mcp_error: Callable[[McpError], ToolError] | None = None,
+    ) -> None:
         self._client: ClientSession | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
@@ -39,6 +44,7 @@ class MCPServer(ABC):
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
         self._handle_mcp_error = handle_mcp_error
+
     @property
     def initialized(self) -> bool:
         return self._client is not None
@@ -174,7 +180,10 @@ class MCPServerHTTP(MCPServer):
         client_session_timeout_seconds: float = 5,
         handle_mcp_error: Callable[[McpError], ToolError] | None = None,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds, handle_mcp_error=handle_mcp_error)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds,
+            handle_mcp_error=handle_mcp_error,
+        )
         self.url = url
         self.headers = headers
         self._timeout = timeout
@@ -235,7 +244,10 @@ class MCPServerStdio(MCPServer):
         client_session_timeout_seconds: float = 5,
         handle_mcp_error: Callable[[McpError], ToolError] | None = None,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds, handle_mcp_error=handle_mcp_error)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds,
+            handle_mcp_error=handle_mcp_error,
+        )
         self.command = command
         self.args = args
         self.env = env
