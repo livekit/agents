@@ -185,12 +185,13 @@ class AgentActivity(RecognitionHooks):
         if (
             not self.vad
             and self.stt
+            and not self.stt.capabilities.streaming
             and isinstance(self.llm, llm.LLM)
             and self.allow_interruptions
             and self._turn_detection_mode is None
         ):
             logger.warning(
-                "VAD is not set. Enabling VAD is recommended when using LLM and STT "
+                "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
                 "for more responsive interruption handling."
             )
 
@@ -1055,39 +1056,8 @@ class AgentActivity(RecognitionHooks):
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    # region recognition hooks
-
-    def on_start_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session._update_user_state("speaking")
-
-        if self._false_interruption_timer:
-            # cancel the timer when user starts speaking but leave the paused state unchanged
-            self._false_interruption_timer.cancel()
-            self._false_interruption_timer = None
-
-    def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session._update_user_state(
-            "listening",
-            last_speaking_time=time.time() - ev.silence_duration,
-        )
-
-        if (
-            self._paused_speech
-            and (timeout := self._session.options.false_interruption_timeout) is not None
-        ):
-            # schedule a resume timer when user stops speaking
-            self._start_false_interruption_timer(timeout)
-
-    def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode in ("manual", "realtime_llm"):
-            # ignore vad inference done event if turn_detection is manual or realtime_llm
-            return
-
+    def _interrupt_by_audio_activity(self) -> None:
         opt = self._session.options
-
-        if ev.speech_duration < opt.min_interruption_duration:
-            return
-
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
         if (
@@ -1132,6 +1102,37 @@ class AgentActivity(RecognitionHooks):
 
                 self._current_speech.interrupt()
 
+    # region recognition hooks
+
+    def on_start_of_speech(self, ev: vad.VADEvent) -> None:
+        self._session._update_user_state("speaking")
+
+        if self._false_interruption_timer:
+            # cancel the timer when user starts speaking but leave the paused state unchanged
+            self._false_interruption_timer.cancel()
+            self._false_interruption_timer = None
+
+    def on_end_of_speech(self, ev: vad.VADEvent) -> None:
+        self._session._update_user_state(
+            "listening",
+            last_speaking_time=time.time() - ev.silence_duration,
+        )
+
+        if (
+            self._paused_speech
+            and (timeout := self._session.options.false_interruption_timeout) is not None
+        ):
+            # schedule a resume timer when user stops speaking
+            self._start_false_interruption_timer(timeout)
+
+    def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+        if self._turn_detection_mode in ("manual", "realtime_llm"):
+            # ignore vad inference done event if turn_detection is manual or realtime_llm
+            return
+
+        if ev.speech_duration >= self._session.options.min_interruption_duration:
+            self._interrupt_by_audio_activity()
+
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
@@ -1145,6 +1146,9 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+
+        if ev.alternatives[0].text:
+            self._interrupt_by_audio_activity()
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
