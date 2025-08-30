@@ -1072,11 +1072,7 @@ class AgentActivity(RecognitionHooks):
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
-        if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and not use_pause
-        ):
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
 
@@ -2243,6 +2239,7 @@ class AgentActivity(RecognitionHooks):
                 self._session.options.resume_false_interruption
                 and (audio_output := self._session.output.audio)
                 and audio_output.can_pause
+                and not self._paused_speech.done()
             ):
                 audio_output.resume()
                 resumed = True
