@@ -7,7 +7,7 @@ from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
-from livekit.plugins import openai
+from livekit.plugins import openai, silero
 
 logger = logging.getLogger("weather-example")
 logger.setLevel(logging.INFO)
@@ -20,6 +20,7 @@ class WeatherAgent(Agent):
         super().__init__(
             instructions="You are a weather agent.",
             llm=openai.realtime.RealtimeModel(),
+            vad=silero.VAD.load(),
         )
 
     @function_tool
