@@ -5,7 +5,7 @@ This module sets up logging for the LiveKit Agents framework.
 
 Environment Variables:
     LIVEKIT_LOGGER_NAME: Custom logger name to use instead of the default one.
-                         This allows applications to customize the logger name for 
+                         This allows applications to customize the logger name for
                          better integration with their logging infrastructure.
 """
 import logging
