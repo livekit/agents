@@ -1072,10 +1072,7 @@ class AgentActivity(RecognitionHooks):
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
-        if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-        ):
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
 
