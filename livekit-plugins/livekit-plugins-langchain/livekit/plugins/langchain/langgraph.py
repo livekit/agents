@@ -158,7 +158,7 @@ def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
     # (token, meta)
     if len(item) == 2 and not isinstance(item[1], tuple):
         token, _meta = item
-        return token  # types
+        return token  # type: ignore
 
     # (namespace, (token, meta))  OR  (mode, (token, meta))
     if len(item) == 2 and isinstance(item[1], tuple):
