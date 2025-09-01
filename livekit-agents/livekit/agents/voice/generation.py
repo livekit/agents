@@ -32,6 +32,7 @@ from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
+from .transcription import filters as transcription_filters
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -201,6 +202,12 @@ async def _tts_inference_task(
     data: _TTSGenerationData,
 ) -> bool:
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
+
+    if model_settings.tts_filter_markdown:
+        input = transcription_filters.filter_markdown(input)
+    if model_settings.tts_filter_emoji:
+        input = transcription_filters.filter_emoji(input)
+
     tts_node = node(input, model_settings)
     if asyncio.iscoroutine(tts_node):
         tts_node = await tts_node

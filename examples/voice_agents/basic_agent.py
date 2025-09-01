@@ -19,7 +19,6 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
-from livekit.agents.voice.transcription.filters import filter_markdown
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -49,10 +48,12 @@ class MyAgent(Agent):
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        # TTS node allows us to process the text before it's sent to the model
-        # here we'll strip out markdown
-        filtered_text = filter_markdown(text)
-        return super().tts_node(filtered_text, model_settings)
+        # Markdown and emoji are filtered before sending it to the TTS model by default,
+        # you can disable this via model_settings in tts_node
+
+        # model_settings.tts_filter_markdown = False
+        # model_settings.tts_filter_emoji = False
+        return super().tts_node(text, model_settings)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
