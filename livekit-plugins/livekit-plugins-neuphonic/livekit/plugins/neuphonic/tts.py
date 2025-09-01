@@ -215,7 +215,7 @@ class ChunkedStream(tts.ChunkedStream):
                 f"{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
                 headers={API_AUTH_HEADER: self._opts.api_key},
                 json={
-                    "msg": self._input_text,
+                    "text": self._input_text,
                     "voice_id": self._opts.voice_id,
                     "lang_code": self._opts.lang_code,
                     "encoding": "pcm_linear",
