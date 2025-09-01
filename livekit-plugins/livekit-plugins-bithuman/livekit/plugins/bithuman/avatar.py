@@ -6,6 +6,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Literal
+import uuid
 
 import aiohttp
 import cv2
@@ -194,6 +195,7 @@ class AvatarSession:
         from bithuman import AsyncBithuman
 
         if self._runtime:
+            self._runtime.transaction_id = str(uuid.uuid4())
             runtime = self._runtime
             await runtime._initialize_token()  # refresh the token
         else:
