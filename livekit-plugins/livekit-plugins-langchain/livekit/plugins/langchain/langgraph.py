@@ -154,24 +154,25 @@ def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
     if not isinstance(item, tuple):
         return None
 
+    # token is usually BaseMessageChunk, but could be a str
     # (token, meta)
     if len(item) == 2 and not isinstance(item[1], tuple):
         token, _meta = item
-        return token
+        return token  # type: ignore
 
     # (namespace, (token, meta))  OR  (mode, (token, meta))
     if len(item) == 2 and isinstance(item[1], tuple):
         inner = item[1]
         if len(inner) == 2:
             token, _meta = inner
-            return token
+            return token  # type: ignore
 
     # (namespace, mode, (token, meta))
     if len(item) == 3 and isinstance(item[2], tuple):
         inner = item[2]
         if len(inner) == 2:
             token, _meta = inner
-            return token
+            return token  # type: ignore
 
     return None
 
@@ -185,7 +186,7 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     elif isinstance(msg, BaseMessageChunk):
         content = msg.text()
         if getattr(msg, "id", None):
-            message_id = msg.id  # type: ignore[assignment]
+            message_id = msg.id  # type: ignore
 
     if not content:
         return None
