@@ -48,6 +48,7 @@ from .models import (
     CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
+    NebiusChatModels,
     OctoChatModels,
     PerplexityChatModels,
     TelnyxChatModels,
@@ -586,6 +587,50 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
+    @staticmethod
+    def with_nebius(
+        *,
+        model: str | NebiusChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        api_key: str | None = None,
+        base_url: str = "https://api.studio.nebius.com/v1/",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of Nebius LLM.
+
+        ``api_key`` must be set to your Nebius API key, either using the argument or by setting
+        the ``NEBIUS_API_KEY`` environmental variable.
+        """
+
+        api_key = api_key or os.environ.get("NEBIUS_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
