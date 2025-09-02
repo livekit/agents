@@ -1,4 +1,3 @@
-
 import traceback
 from collections import OrderedDict
 
@@ -18,7 +17,6 @@ def record_exception(span: trace.Span, exception: Exception) -> None:
             trace_types.ATTR_EXCEPTION_TRACE: traceback.format_exc(),
         }
     )
-
 
 
 class BoundedSpanDict:
@@ -62,3 +60,36 @@ class BoundedSpanDict:
     def keys(self) -> list[str]:
         """Return list of all keys."""
         return list(self.cache.keys())
+
+
+def flatten_dict_for_langfuse(
+    data: dict, prefix: str = "", separator: str = "."
+) -> dict[str, int | float | str | bool]:
+    """Flatten a nested dictionary into dot-notation keys for Langfuse compatibility.
+
+    Args:
+        data: The nested dictionary to flatten
+        prefix: The prefix to prepend to all keys
+        separator: The separator to use between nested keys (default: ".")
+
+    Returns:
+        A flattened dictionary with dot-notation keys
+
+    Example:
+        >>> flatten_dict_for_langfuse(
+        ...     {"usage": {"input": {"tokens": 100}}},
+        ...     "langfuse.observation"
+        ... )
+        {"langfuse.observation.usage.input.tokens": 100}
+    """
+    flattened = {}
+
+    for key, value in data.items():
+        new_key = f"{prefix}{separator}{key}" if prefix else key
+
+        if isinstance(value, dict):
+            flattened.update(flatten_dict_for_langfuse(value, new_key, separator))
+        else:
+            flattened[new_key] = value
+
+    return flattened

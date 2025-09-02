@@ -73,7 +73,6 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
-
 @dataclass
 class _PreemptiveGeneration:
     speech_handle: SpeechHandle
@@ -1032,7 +1031,11 @@ class AgentActivity(RecognitionHooks):
                 logger.critical(
                     "Adding RealtimeModelMetrics to relevant span: %s",
                     target_span.name,
-                    extra={"request_id": ev.request_id, "target_span": target_span.name, "target_span_is_active": target_span.is_recording()},
+                    extra={
+                        "request_id": ev.request_id,
+                        "target_span": target_span.name,
+                        "target_span_is_active": target_span.is_recording(),
+                    },
                 )
 
                 # Use the target span as the current context to ensure proper trace attribution
@@ -1050,7 +1053,7 @@ class AgentActivity(RecognitionHooks):
                         }
                     )
 
-                    # Add Langfuse-specific detailed usage breakdown
+                    # Add Langfuse-specific detailed usage breakdown as flattened attributes
                     usage_details = {
                         "input_tokens": ev.input_tokens,
                         "output_tokens": ev.output_tokens,
@@ -1065,17 +1068,19 @@ class AgentActivity(RecognitionHooks):
                             "audio_tokens": ev.output_token_details.audio_tokens,
                         },
                     }
-                    target_span.set_attribute(
-                        trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
-                        json.dumps(usage_details),
+                    flattened_usage = telemetry_utils.flatten_dict_for_langfuse(
+                        usage_details, trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS
                     )
+                    target_span.set_attributes(flattened_usage)
             else:
                 logger.warning(
                     "The relevant span reference has been removed already: indicative of a bug",
                     extra={
                         "request_id": ev.request_id,
                         "target_span_name": target_span.name if target_span else None,
-                        "target_span_is_active": target_span.is_recording() if target_span else False,
+                        "target_span_is_active": target_span.is_recording()
+                        if target_span
+                        else False,
                         "available_spans": list(self._realtime_spans.keys()),
                     },
                 )
