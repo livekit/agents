@@ -93,7 +93,7 @@ NebiusChatModels = Literal[
     "Qwen/Qwen2.5-Coder-32B-Instruct",
     "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
     "mistralai/Mistral-Nemo-Instruct-2407",
-    "google/gemma-2-2b-it"
+    "google/gemma-2-2b-it",
 ]
 
 CerebrasChatModels = Literal[
