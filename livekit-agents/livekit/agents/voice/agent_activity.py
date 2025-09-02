@@ -1042,6 +1042,89 @@ class AgentActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
+    def _attach_realtime_metrics_to_span(self, ev: RealtimeModelMetrics) -> None:
+        """Attach realtime model metrics to the appropriate OpenTelemetry span.
+
+        The metrics should be attributed to the specific realtime_assistant_turn span,
+        not the session-level span to avoid overwriting data across generations.
+
+        TODO: expand this code to non OpenAI realtime providers,
+        One issue for AWS realtime model would be, at time of writing,
+        the ev.request_id is not the same key as the relevant trace
+
+        Args:
+            ev: The RealtimeModelMetrics event to process
+        """
+        if not (isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev)):
+            return
+
+        # Check if we have a stored span for this request_id
+        target_span = self._realtime_spans.get(ev.request_id)
+        logger.debug(
+            "Realtime Model Metrics telemetry starting",
+            extra={
+                "self._realtime_spans": len(self._realtime_spans),
+                "ev": ev.model_dump(mode="json"),
+            },
+        )
+        span_found = target_span is not None
+
+        try:
+            if target_span:
+                logger.critical(
+                    "Adding RealtimeModelMetrics to relevant span: %s",
+                    target_span.name,
+                    extra={"request_id": ev.request_id, "target_span": target_span.name, "target_span_is_active": target_span.is_recording()},
+                )
+
+                # Add the full metrics as JSON (following LLM pattern)
+                target_span.set_attribute(
+                    trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
+                )
+
+                # Add standard OpenTelemetry GenAI attributes
+                target_span.set_attributes(
+                    {
+                        trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+                    }
+                )
+
+                # Add Langfuse-specific detailed usage breakdown
+                usage_details = {
+                    "input_tokens": ev.input_tokens,
+                    "output_tokens": ev.output_tokens,
+                    "total_tokens": ev.total_tokens,
+                    "input_tokens_details": {
+                        "text_tokens": ev.input_token_details.text_tokens,
+                        "audio_tokens": ev.input_token_details.audio_tokens,
+                        "cached_tokens": ev.input_token_details.cached_tokens,
+                    },
+                    "output_tokens_details": {
+                        "text_tokens": ev.output_token_details.text_tokens,
+                        "audio_tokens": ev.output_token_details.audio_tokens,
+                    },
+                }
+                target_span.set_attribute(
+                    trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
+                    json.dumps(usage_details),
+                )
+            else:
+                logger.warning(
+                    "The relevant span reference has been removed already: indicative of a bug",
+                    extra={
+                        "request_id": ev.request_id,
+                        "target_span_name": target_span.name if target_span else None,
+                        "target_span_is_active": target_span.is_recording() if target_span else False,
+                        "available_spans": list(self._realtime_spans.keys()),
+                    },
+                )
+        finally:
+            # Always clean up the span reference after processing metrics to prevent memory leaks
+            # This ensures cleanup happens even if there's an exception during metric processing
+            if span_found:
+                self._realtime_spans.pop(ev.request_id, None)
+
     def _on_metrics_collected(
         self,
         ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
@@ -1050,80 +1133,8 @@ class AgentActivity(RecognitionHooks):
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
         ):
             ev.speech_id = speech_handle.id
-
-        # Add RealtimeModelMetrics to the appropriate OpenTelemetry span
-        # The metrics should be attributed to the specific realtime_assistant_turn span,
-        # not the session-level span to avoid overwriting data across generations
-        # TODO: expand this code to non OpenAI realtime providers,
-        # One issue for AWS realtime model would bem at time of writingm
-        # the ev.request_id is not the same key as the relevant trace
-        if isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev):
-            # Check if we have a stored span for this request_id
-            target_span = self._realtime_spans.get(ev.request_id)
-            logger.debug(
-                "Realtime Model Metrics telemetry starting",
-                extra={
-                    "self._realtime_spans": len(self._realtime_spans),
-                    "ev": ev.model_dump(mode="json"),
-                },
-            )
-            span_found = target_span is not None
-
-            try:
-                if target_span:
-                    logger.critical(
-                        "Adding RealtimeModelMetrics to relevant span: %s",
-                        target_span.name,
-                        extra={"request_id": ev.request_id, "target_span": target_span.name, "target_span_is_active": target_span.is_recording()},
-                    )
-
-                    # Add the full metrics as JSON (following LLM pattern)
-                    target_span.set_attribute(
-                        trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
-                    )
-
-                    # Add standard OpenTelemetry GenAI attributes
-                    target_span.set_attributes(
-                        {
-                            trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
-                        }
-                    )
-
-                    # Add Langfuse-specific detailed usage breakdown
-                    usage_details = {
-                        "input_tokens": ev.input_tokens,
-                        "output_tokens": ev.output_tokens,
-                        "total_tokens": ev.total_tokens,
-                        "input_tokens_details": {
-                            "text_tokens": ev.input_token_details.text_tokens,
-                            "audio_tokens": ev.input_token_details.audio_tokens,
-                            "cached_tokens": ev.input_token_details.cached_tokens,
-                        },
-                        "output_tokens_details": {
-                            "text_tokens": ev.output_token_details.text_tokens,
-                            "audio_tokens": ev.output_token_details.audio_tokens,
-                        },
-                    }
-                    target_span.set_attribute(
-                        trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
-                        json.dumps(usage_details),
-                    )
-                else:
-                    logger.error(
-                        "The relevant span reference has been removed already",
-                        extra={
-                            "request_id": ev.request_id,
-                            "target_span_name": target_span.name,
-                            "target_span_is_active": target_span.is_recording(),
-                            "available_spans": list(self._realtime_spans.keys()),
-                        },
-                    )
-            finally:
-                # Always clean up the span reference after processing metrics to prevent memory leaks
-                # This ensures cleanup happens even if there's an exception during metric processing
-                if span_found:
-                    self._realtime_spans.pop(ev.request_id, None)
+        if isinstance(ev, RealtimeModelMetrics):
+            self._attach_realtime_metrics_to_span(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_error(
