@@ -1060,7 +1060,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev):
             # Check if we have a stored span for this request_id
             target_span = self._realtime_spans.get(ev.request_id)
-            logger.debug(
+            logger.critical(
                 "Realtime Model Metrics telemetry starting",
                 extra={
                     "self._realtime_spans": len(self._realtime_spans),
@@ -1071,9 +1071,10 @@ class AgentActivity(RecognitionHooks):
 
             try:
                 if target_span and target_span.is_recording():
-                    logger.debug(
-                        "Adding RealtimeModelMetrics to relevant span",
-                        extra={"request_id": ev.request_id},
+                    logger.critical(
+                        "Adding RealtimeModelMetrics to relevant span: %s",
+                        target_span.name,
+                        extra={"request_id": ev.request_id, "target_span": target_span.name},
                     )
 
                     # Add the full metrics as JSON (following LLM pattern)
@@ -1109,11 +1110,11 @@ class AgentActivity(RecognitionHooks):
                         json.dumps(usage_details),
                     )
                 else:
-                    logger.debug(
+                    logger.critical(
                         "The relevant span is not currently active or it's reference has been removed already",
                         extra={
                             "request_id": ev.request_id,
-                            "target_span": target_span,
+                            "target_span_name": target_span.name,
                             "target_span_is_active": target_span.is_recording(),
                             "available_spans": list(self._realtime_spans.keys()),
                         },
