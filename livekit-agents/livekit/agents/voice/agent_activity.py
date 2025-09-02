@@ -1523,7 +1523,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
-        _tools_messages: Sequence[llm.ChatItem] | None = None,
+        _tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
         from .agent import ModelSettings
 
@@ -1690,6 +1690,7 @@ class AgentActivity(RecognitionHooks):
                 # reset the created_at to the reply start time
                 msg.created_at = reply_started_at
             self._agent._chat_ctx.insert(_tools_messages)
+            self._session._tool_items_added(_tools_messages)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1825,6 +1826,7 @@ class AgentActivity(RecognitionHooks):
                 for msg in tool_messages:
                     msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
+                self._session._tool_items_added(tool_messages)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -2142,6 +2144,7 @@ class AgentActivity(RecognitionHooks):
         if len(tool_output.output) > 0:
             speech_handle._num_steps += 1
 
+            new_calls: list[llm.FunctionCall] = []
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
@@ -2156,6 +2159,7 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
                 if sanitized_out.fnc_call_out is not None:
+                    new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
                     if sanitized_out.reply_required:
                         generate_tool_reply = True
@@ -2184,6 +2188,8 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx.items.extend(new_fnc_outputs)
                 try:
                     await self._rt_session.update_chat_ctx(chat_ctx)
+                    self._session._tool_items_added(new_calls)
+                    self._session._tool_items_added(new_fnc_outputs)
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
