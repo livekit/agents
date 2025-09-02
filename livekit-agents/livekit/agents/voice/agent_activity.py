@@ -25,7 +25,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import BoundedSpanDict, trace_types, tracer
+from ..telemetry import trace_types, tracer, utils as telemetry_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -115,7 +115,7 @@ class AgentActivity(RecognitionHooks):
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
         # OpenTelemetry span tracking for realtime generations (bounded to prevent memory leaks)
-        self._realtime_spans = BoundedSpanDict(maxsize=100)
+        self._realtime_spans = telemetry_utils.BoundedSpanDict(maxsize=100)
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
