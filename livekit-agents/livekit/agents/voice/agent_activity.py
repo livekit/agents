@@ -5,7 +5,6 @@ import contextvars
 import heapq
 import json
 import time
-from collections import OrderedDict
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
@@ -26,7 +25,7 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer
+from ..telemetry import BoundedSpanDict, trace_types, tracer
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -73,48 +72,6 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
-
-class BoundedSpanDict:
-    """A bounded dictionary for span references that auto-evicts oldest entries
-    to provide extra protection against memory leaks if we did not correctly clean up
-    old references to spans.
-
-    Based on the OrderedDict LRU pattern from Python's collections documentation.
-    """
-
-    def __init__(self, maxsize: int = 100):
-        """Initialize bounded span dictionary.
-
-        :param maxsize: Maximum number of span references to keep.
-        """
-        self.cache: OrderedDict[str, trace.Span] = OrderedDict()
-        self.maxsize = maxsize
-
-    def __setitem__(self, key: str, span: trace.Span) -> None:
-        """Store span reference, evicting oldest if needed."""
-        self.cache[key] = span
-        if len(self.cache) > self.maxsize:
-            oldest_key, _ = self.cache.popitem(last=False)
-
-    def get(self, key: str, default: trace.Span | None = None) -> trace.Span | None:
-        """Get span reference by key."""
-        return self.cache.get(key, default)
-
-    def pop(self, key: str, default: trace.Span | None = None) -> trace.Span | None:
-        """Remove and return span reference."""
-        return self.cache.pop(key, default)
-
-    def __len__(self) -> int:
-        """Return number of span references."""
-        return len(self.cache)
-
-    def clear(self) -> None:
-        """Remove all span references."""
-        self.cache.clear()
-
-    def keys(self) -> list[str]:
-        """Return list of all keys."""
-        return list(self.cache.keys())
 
 
 @dataclass
@@ -1048,6 +1005,7 @@ class AgentActivity(RecognitionHooks):
         The metrics should be attributed to the specific realtime_assistant_turn span,
         not the session-level span to avoid overwriting data across generations.
 
+
         TODO: expand this code to non OpenAI realtime providers,
         One issue for AWS realtime model would be, at time of writing,
         the ev.request_id is not the same key as the relevant trace
@@ -1077,38 +1035,40 @@ class AgentActivity(RecognitionHooks):
                     extra={"request_id": ev.request_id, "target_span": target_span.name, "target_span_is_active": target_span.is_recording()},
                 )
 
-                # Add the full metrics as JSON (following LLM pattern)
-                target_span.set_attribute(
-                    trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
-                )
+                # Use the target span as the current context to ensure proper trace attribution
+                with trace.use_span(target_span):
+                    # Add the full metrics as JSON (following LLM pattern)
+                    target_span.set_attribute(
+                        trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
+                    )
 
-                # Add standard OpenTelemetry GenAI attributes
-                target_span.set_attributes(
-                    {
-                        trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
-                        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+                    # Add standard OpenTelemetry GenAI attributes
+                    target_span.set_attributes(
+                        {
+                            trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
+                            trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+                        }
+                    )
+
+                    # Add Langfuse-specific detailed usage breakdown
+                    usage_details = {
+                        "input_tokens": ev.input_tokens,
+                        "output_tokens": ev.output_tokens,
+                        "total_tokens": ev.total_tokens,
+                        "input_tokens_details": {
+                            "text_tokens": ev.input_token_details.text_tokens,
+                            "audio_tokens": ev.input_token_details.audio_tokens,
+                            "cached_tokens": ev.input_token_details.cached_tokens,
+                        },
+                        "output_tokens_details": {
+                            "text_tokens": ev.output_token_details.text_tokens,
+                            "audio_tokens": ev.output_token_details.audio_tokens,
+                        },
                     }
-                )
-
-                # Add Langfuse-specific detailed usage breakdown
-                usage_details = {
-                    "input_tokens": ev.input_tokens,
-                    "output_tokens": ev.output_tokens,
-                    "total_tokens": ev.total_tokens,
-                    "input_tokens_details": {
-                        "text_tokens": ev.input_token_details.text_tokens,
-                        "audio_tokens": ev.input_token_details.audio_tokens,
-                        "cached_tokens": ev.input_token_details.cached_tokens,
-                    },
-                    "output_tokens_details": {
-                        "text_tokens": ev.output_token_details.text_tokens,
-                        "audio_tokens": ev.output_token_details.audio_tokens,
-                    },
-                }
-                target_span.set_attribute(
-                    trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
-                    json.dumps(usage_details),
-                )
+                    target_span.set_attribute(
+                        trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
+                        json.dumps(usage_details),
+                    )
             else:
                 logger.warning(
                     "The relevant span reference has been removed already: indicative of a bug",
