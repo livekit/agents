@@ -45,6 +45,7 @@ ATTR_END_OF_UTTERANCE_DELAY = "lk.end_of_utterance_delay"
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
+ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
 
 # OpenTelemetry GenAI attributes
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
@@ -66,3 +67,4 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS = "langfuse.observation.usage_details"

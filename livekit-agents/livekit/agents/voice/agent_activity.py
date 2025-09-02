@@ -991,6 +991,36 @@ class AgentActivity(RecognitionHooks):
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
         ):
             ev.speech_id = speech_handle.id
+
+        # Add RealtimeModelMetrics to current OpenTelemetry span (similar to LLM pattern)
+        if isinstance(ev, RealtimeModelMetrics):
+            current_span = trace.get_current_span()
+            if current_span.is_recording():
+                # Add the full metrics as JSON (following LLM pattern)
+                current_span.set_attribute(
+                    trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json(mode="json")
+                )
+
+                # Add standard OpenTelemetry GenAI attributes
+                current_span.set_attributes(
+                    {
+                        trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_TOTAL_TOKENS: ev.total_tokens,
+                    }
+                )
+
+                # Add detailed token breakdown for realtime models
+                current_span.set_attributes(
+                    {
+                        trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
+                        trace_types.ATTR_GEN_AI_USAGE_CACHED_TOKENS: ev.input_token_details.cached_tokens,
+                    }
+                )
+
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_error(
