@@ -1007,7 +1007,8 @@ class AgentActivity(RecognitionHooks):
         # code that the "current span" is also the relevant one to add the metrics to
         # which is safe for OpenAI models (realtime_assistant_turn) but may be problematic for
         # models like AWS bedrock due streaming of metrics during the response.
-        if isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev):
+        logger.warning("Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev})
+        if isinstance(ev, RealtimeModelMetrics):
             current_span = trace.get_current_span()
             if current_span.is_recording():
                 # Add the full metrics as JSON (following LLM pattern)
