@@ -2020,6 +2020,7 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self.llm.model)
 
         # Store the span reference for OpenTelemetry metrics attribution
         # Use the response_id from the generation event when available
