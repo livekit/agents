@@ -30,6 +30,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -67,6 +68,7 @@ class TTS(tts.TTS):
         voice_id: str = "samantha",
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         sample_rate: int = 22050,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = API_BASE_URL,
     ) -> None:
@@ -108,6 +110,9 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -184,7 +189,6 @@ class TTS(tts.TTS):
             self._session = None
 
 
-# TODO: ask if it's better to use SSE instead of bytes here
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text using Respeecher HTTPS endpoint"""
 
@@ -270,35 +274,48 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws_url = self._tts._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         full_ws_url = f"{ws_url}{self._tts._opts.model}/tts/websocket?api_key={self._tts._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
 
+        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+
         async def _ws_operation():
             async with self._tts._ensure_session().ws_connect(full_ws_url) as ws:
+                logger.debug(f"WebSocket connected {full_ws_url}")
+
+                @utils.log_exceptions(logger=logger)
+                async def input_task() -> None:
+                    async for data in self._input_ch:
+                        if isinstance(data, self._FlushSentinel):
+                            sent_tokenizer_stream.flush()
+                            continue
+
+                        sent_tokenizer_stream.push_text(data)
+
+                    sent_tokenizer_stream.end_input()
 
                 @utils.log_exceptions(logger=logger)
                 async def send_task() -> None:
-                    async for input in self._input_ch:
-                        if isinstance(input, str):
-                            generate_request = {
-                                "context_id": request_id,
-                                "transcript": input,
-                                "voice": {
-                                    "id": self._tts._opts.voice_id,
-                                },
-                                "continue": True,
-                                "output_format": {
-                                    "encoding": self._tts._opts.encoding,
-                                    "sample_rate": self._tts._opts.sample_rate,
-                                },
-                            }
-                            if (
-                                is_given(self._tts._opts.voice_settings)
-                                and self._tts._opts.voice_settings.sampling_params
-                            ):
-                                generate_request["voice"]["sampling_params"] = dataclasses.asdict(
-                                    self._tts._opts.voice_settings.sampling_params
-                                )
+                    async for sent in sent_tokenizer_stream:
+                        generate_request = {
+                            "context_id": request_id,
+                            "transcript": sent.token,
+                            "voice": {
+                                "id": self._tts._opts.voice_id,
+                            },
+                            "continue": True,  # Always True for streamed sentences
+                            "output_format": {
+                                "encoding": self._tts._opts.encoding,
+                                "sample_rate": self._tts._opts.sample_rate,
+                            },
+                        }
+                        if (
+                            is_given(self._tts._opts.voice_settings)
+                            and self._tts._opts.voice_settings.sampling_params
+                        ):
+                            generate_request["voice"]["sampling_params"] = dataclasses.asdict(
+                                self._tts._opts.voice_settings.sampling_params
+                            )
 
-                            self._mark_started()
-                            await ws.send_str(json.dumps(generate_request))
+                        self._mark_started()
+                        await ws.send_str(json.dumps(generate_request))
 
                     # Send final message with continue=False to signal end of stream
                     end_request = {
@@ -341,7 +358,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
 
                         if msg.type != aiohttp.WSMsgType.TEXT:
-                            logger.warning("unexpected Respeecher message type %s", msg.type)
+                            logger.warning("Unexpected Respeecher message type %s", msg.type)
                             continue
 
                         data = json.loads(msg.data)
@@ -362,12 +379,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 output_emitter.end_segment()
                                 current_segment_id = None
 
-                            output_emitter.end_input()
-                            return
+                            # Only end input when the sentence tokenizer stream is closed
+                            # and we've received the final done message
+                            if sent_tokenizer_stream.closed:
+                                output_emitter.end_input()
+                                return
                         else:
                             raise APIError("Unexpected websocket message type")
 
                 tasks = [
+                    asyncio.create_task(input_task()),
                     asyncio.create_task(send_task()),
                     asyncio.create_task(recv_task()),
                 ]
@@ -375,6 +396,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
 
         try:
