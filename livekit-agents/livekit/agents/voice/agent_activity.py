@@ -1008,11 +1008,11 @@ class AgentActivity(RecognitionHooks):
         # which is safe for OpenAI models (realtime_assistant_turn) but may be problematic for
         # models like AWS bedrock due streaming of metrics during the response.
         # label=livekit.plugins.openai.realtime.realtime_model.RealtimeModel
-        logger.warning("OPENTELEMETRY: Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev})
+        logger.warning("OPENTELEMETRY: Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev, "current_span": trace.get_current_span().name})
         if isinstance(ev, RealtimeModelMetrics):
             current_span = trace.get_current_span()
             if current_span.is_recording():
-                logger.warning("OPENTELEMETRY: Adding the full metrics as JSON (following LLM pattern)", extra={"current_span": current_span})
+                logger.warning("OPENTELEMETRY: Adding the full metrics as JSON (following LLM pattern)", extra={"current_span": current_span.name})
                 # Add the full metrics as JSON (following LLM pattern)
                 current_span.set_attribute(
                     trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
@@ -1046,7 +1046,7 @@ class AgentActivity(RecognitionHooks):
                     json.dumps(usage_details)
                 )
             else:
-                logger.warning("OPENTELEMETRY: Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev, "current_span": current_span})
+                logger.warning("OPENTELEMETRY: Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev, "current_span": current_span.name})
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_error(
