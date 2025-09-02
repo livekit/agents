@@ -14,7 +14,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, cast
 
 import aiohttp
 
@@ -52,7 +52,7 @@ from .events import (
     SetOutputMediumEvent,
     StateEvent,
     TranscriptEvent,
-    UltravoxEventType,
+    UltravoxEvent,
     parse_ultravox_event,
     serialize_ultravox_event,
 )
@@ -287,9 +287,10 @@ class RealtimeSession(
             The RealtimeModel instance providing configuration.
         """
         super().__init__(realtime_model)
+        self._realtime_model: RealtimeModel = realtime_model
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[UltravoxEventType, dict[str, Any], bytes]]()
+        self._msg_ch = utils.aio.Chan[Union[UltravoxEvent, dict[str, Any], bytes]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
@@ -316,7 +317,6 @@ class RealtimeSession(
         self._last_user_final_ts: float | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
-        self._ws_session_lock = asyncio.Lock()
 
     # Helper function to fix TTFT issue : TTFT was showing -1.0 seconds during function calls
     def _pick_created_timestamp(self) -> float:
@@ -332,23 +332,13 @@ class RealtimeSession(
                 return self._last_user_final_ts
         return now
 
-    async def _close_active_ws_session(self) -> None:
-        async with self._ws_session_lock:
-            if self._ws:
-                try:
-                    await self._ws.close()
-                except Exception as e:
-                    logger.warning(f"error closing Ultravox WebSocket session: {e}")
-                finally:
-                    self._ws = None
-
-    def _mark_restart_needed(self):
+    def _mark_restart_needed(self) -> None:
         if not self._session_should_close.is_set():
             self._session_should_close.set()
             # Close old channel before creating new one
             old_ch = self._msg_ch
             old_ch.close()
-            self._msg_ch = utils.aio.Chan[Union[UltravoxEventType, dict[str, Any], bytes]]()
+            self._msg_ch = utils.aio.Chan[Union[UltravoxEvent, dict[str, Any], bytes]]()
 
             # Clear pending generation state on restart
             if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -367,7 +357,9 @@ class RealtimeSession(
     ) -> None:
         """Update session options."""
         if is_given(output_medium):
-            self._send_client_event(SetOutputMediumEvent(medium=output_medium))
+            self._send_client_event(
+                SetOutputMediumEvent(medium=cast(Literal["text", "voice"], output_medium))
+            )
 
         if is_given(tool_choice):
             logger.warning("Ultravox does not support dynamic tool choice updates")
@@ -492,7 +484,7 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Push audio frames to the session for transcription by Ultravox."""
-        if self._closed or not self._ws:
+        if self._closed:
             return
 
         for resampled_frame in self._resample_audio(frame):
@@ -504,7 +496,7 @@ class RealtimeSession(
         """Push video frames (not supported by Ultravox)."""
         pass
 
-    def _send_client_event(self, event: UltravoxEventType) -> None:
+    def _send_client_event(self, event: UltravoxEvent | dict[str, Any]) -> None:
         """Send an event to the Ultravox WebSocket."""
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
@@ -529,7 +521,7 @@ class RealtimeSession(
         # Record epoch for server-event gating
         self._pending_generation_epoch = time.perf_counter()
 
-        fut = asyncio.Future()
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
 
         if is_given(instructions):
@@ -558,16 +550,16 @@ class RealtimeSession(
         # Only send barge-in if there's an active generation to interrupt
         if self._current_generation and not self._current_generation._done:
             # Send programmatic interruption to server via text barge-in
-            if self._ws and not self._ws.closed:
-                # Use text barge-in with immediate urgency to interrupt
-                # deferResponse=true prevents Ultravox from generating a response
-                interrupt_msg = {
-                    "type": "user_text_message",
-                    "text": "(barge-in)",
-                    "urgency": "immediate",
-                    "deferResponse": True,
-                }
-                self._send_client_event(interrupt_msg)  # Direct call, already non-blocking
+
+            # Use text barge-in with immediate urgency to interrupt
+            # deferResponse=true prevents Ultravox from generating a response
+            interrupt_msg = {
+                "type": "user_text_message",
+                "text": "(barge-in)",
+                "urgency": "immediate",
+                "deferResponse": True,
+            }
+            self._send_client_event(interrupt_msg)  # Direct call, already non-blocking
 
             # Finalize the active generation
             self._mark_current_generation_done()
@@ -591,10 +583,7 @@ class RealtimeSession(
         self._msg_ch.close()
         self._session_should_close.set()
 
-        if self._main_atask:
-            await utils.aio.cancel_and_wait(self._main_atask)
-
-        await self._close_active_ws_session()
+        await utils.aio.cancel_and_wait(self._main_atask)
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             self._pending_generation_fut.cancel("Session closed")
@@ -602,13 +591,6 @@ class RealtimeSession(
         if self._current_generation:
             self._mark_current_generation_done()
 
-        await self._cleanup()
-
-    async def _cleanup(self) -> None:
-        """Clean up resources."""
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-        self._ws = None
         self._closed = True
 
     @utils.log_exceptions(logger=logger)
@@ -622,9 +604,6 @@ class RealtimeSession(
             self._last_seen_agent_ord = -1
 
             try:
-                # Close any existing WebSocket connection before creating new one
-                await self._close_active_ws_session()
-
                 # Create new Ultravox session
                 headers = {
                     "User-Agent": "LiveKit Agents",
@@ -646,7 +625,7 @@ class RealtimeSession(
                 # Build payload with core parameters
                 recommended_buffer_size = max(self._realtime_model._opts.client_buffer_size_ms, 200)
 
-                payload = {
+                payload: dict[str, Any] = {
                     "systemPrompt": self._realtime_model._opts.system_prompt,
                     "model": self._realtime_model._opts.model_id,
                     "voice": self._realtime_model._opts.voice,
@@ -657,7 +636,7 @@ class RealtimeSession(
                             "clientBufferSizeMs": recommended_buffer_size,
                         }
                     },
-                    "selectedTools": self._prepare_tools(self._tools.function_tools.values()),
+                    "selectedTools": self._prepare_tools(list(self._tools.function_tools.values())),
                 }
 
                 # Add optional parameters only if specified
@@ -686,12 +665,11 @@ class RealtimeSession(
                         raise APIConnectionError("Ultravox call created, but no joinUrl received.")
 
                 ws_conn = await http_session.ws_connect(join_url)
-                self._ws = ws_conn
                 self._closing = False
 
                 # Create tasks for send/recv and restart monitoring
-                send_task = asyncio.create_task(self._send_task(), name="_send_task")
-                recv_task = asyncio.create_task(self._recv_task(), name="_recv_task")
+                send_task = asyncio.create_task(self._send_task(ws_conn), name="_send_task")
+                recv_task = asyncio.create_task(self._recv_task(ws_conn), name="_recv_task")
                 restart_wait_task = asyncio.create_task(
                     self._session_should_close.wait(), name="_restart_wait"
                 )
@@ -709,9 +687,7 @@ class RealtimeSession(
                             task.result()
                 finally:
                     # Close current WebSocket
-                    if self._ws:
-                        await self._ws.close()
-                        self._ws = None
+                    await ws_conn.close()
                     await utils.aio.cancel_and_wait(send_task, recv_task, restart_wait_task)
 
                 # If restart triggered, loop continues
@@ -752,11 +728,8 @@ class RealtimeSession(
                 # Wait before retrying on recoverable errors
                 await asyncio.sleep(1.0)
 
-        # Final cleanup when exiting the loop
-        await self._cleanup()
-
     @utils.log_exceptions(logger=logger)
-    async def _send_task(self) -> None:
+    async def _send_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         """Task for sending messages to Ultravox WebSocket."""
         async for msg in self._msg_ch:
             # Check if restart is needed
@@ -769,20 +742,20 @@ class RealtimeSession(
                     self.emit(
                         "ultravox_client_event_queued", {"type": "audio_bytes", "len": len(msg)}
                     )
-                    await self._ws.send_bytes(msg)
+                    await ws_conn.send_bytes(msg)
                     # You will want to comment these logs when in debugging mode as they are noisy
                     # if lk_ultravox_debug:
                     #     logger.info(f">>> [audio bytes: {len(msg)} bytes]")
                 elif isinstance(msg, dict):
                     msg_dict = msg
                     self.emit("ultravox_client_event_queued", msg_dict)
-                    await self._ws.send_str(json.dumps(msg_dict))
+                    await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
                         logger.debug(f">>> {msg_dict}")
                 else:
                     msg_dict = serialize_ultravox_event(msg)
                     self.emit("ultravox_client_event_queued", msg_dict)
-                    await self._ws.send_str(json.dumps(msg_dict))
+                    await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
                         logger.debug(f">>> {msg_dict}")
             except Exception as e:
@@ -792,14 +765,14 @@ class RealtimeSession(
         self._closing = True
 
     @utils.log_exceptions(logger=logger)
-    async def _recv_task(self) -> None:
+    async def _recv_task(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         """Task for receiving messages from Ultravox WebSocket."""
         while True:
             # Check if restart is needed
             if self._session_should_close.is_set():
                 break
 
-            msg = await self._ws.receive()
+            msg = await ws_conn.receive()
             # Generation will be started when we receive state change to "speaking" or first transcript
 
             if msg.type == aiohttp.WSMsgType.TEXT:
@@ -827,7 +800,7 @@ class RealtimeSession(
                 # Unexpected close
                 raise APIConnectionError(message="Ultravox S2S connection closed unexpectedly")
             elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error(f"Ultravox WebSocket error: {self._ws.exception()}")
+                logger.error(f"Ultravox WebSocket error: {ws_conn.exception()}")
                 break
 
     @utils.log_exceptions(logger=logger)
@@ -889,7 +862,7 @@ class RealtimeSession(
         # Emit metrics for interrupted/completed generation
         self._emit_generation_metrics(interrupted=True)
 
-    def _handle_ultravox_event(self, event: UltravoxEventType) -> None:
+    def _handle_ultravox_event(self, event: UltravoxEvent) -> None:
         """Handle incoming Ultravox events and map them to LiveKit events."""
         if isinstance(event, TranscriptEvent):
             self._handle_transcript_event(event)
@@ -967,6 +940,7 @@ class RealtimeSession(
                 self._start_new_generation(created_ts=self._pick_created_timestamp())
 
             msg_gen = self._current_generation
+            assert msg_gen is not None
 
             # Handle incremental transcript updates (delta or non-final text)
             incremental_text = event.delta or (event.text if not event.final else None)
@@ -986,8 +960,8 @@ class RealtimeSession(
                             "Resolving pending generate_reply via first agent TranscriptEvent"
                         )
                         generation_created = llm.GenerationCreatedEvent(
-                            message_stream=self._current_generation.message_ch,
-                            function_stream=self._current_generation.function_ch,
+                            message_stream=msg_gen.message_ch,
+                            function_stream=msg_gen.function_ch,
                             user_initiated=True,
                         )
                         self._pending_generation_fut.set_result(generation_created)
@@ -1099,6 +1073,8 @@ class RealtimeSession(
             if not self._current_generation or self._current_generation._done:
                 # Ensure a generation exists; anchor creation to recent user-final or now
                 self._start_new_generation(created_ts=self._pick_created_timestamp())
+
+            assert self._current_generation is not None
             # Resolve pending generation with server confirmation via "speaking" event
             if (
                 self._pending_generation_fut
@@ -1138,6 +1114,8 @@ class RealtimeSession(
         if self._current_generation is None:
             # Tool invocations do not represent model output yet; anchor to recent user-final or now
             self._start_new_generation(created_ts=self._pick_created_timestamp())
+
+        assert self._current_generation is not None
         self._current_generation.function_ch.send_nowait(function_call)
 
         if lk_ultravox_debug:
@@ -1286,20 +1264,21 @@ class RealtimeSession(
         results: list[dict[str, Any]] = []
         for tool in tools:
             if is_raw_function_tool(tool):
-                info = get_raw_function_info(tool)
-                name = info.name
-                description = info.raw_schema.get("description", None)
-                parameters = info.raw_schema.get("parameters", {})
+                raw_fnc_info = get_raw_function_info(tool)
+                name = raw_fnc_info.name
+                description = raw_fnc_info.raw_schema.get("description", None)
+                parameters = raw_fnc_info.raw_schema.get("parameters", {})
             elif is_function_tool(tool):
-                info = get_function_info(tool)
+                fnc_info = get_function_info(tool)
                 model = function_arguments_to_pydantic_model(tool)
-                name = info.name
-                description = info.description
+                name = fnc_info.name
+                description = fnc_info.description
                 parameters = model.model_json_schema()
 
             def _extract_type(prop: dict[str, Any]) -> str:
                 """Best-effort guess of a parameter's primitive type."""
                 if "type" in prop:
+                    assert isinstance(prop["type"], str)
                     return prop["type"]
                 if "enum" in prop:
                     return "string"
@@ -1309,6 +1288,7 @@ class RealtimeSession(
                     if key in prop:
                         for variant in prop[key]:
                             if isinstance(variant, dict) and "type" in variant:
+                                assert isinstance(variant["type"], str)
                                 return variant["type"]
                 # Fallback to string
                 return "string"

@@ -97,6 +97,7 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 [tool.mypy]
 strict = true
 disallow_any_generics = false
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = "mcp.*"
