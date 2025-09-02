@@ -131,7 +131,9 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool], *, filter_chat_ctx: bool = True
+    ) -> None:
         """
         Updates the agent's available function tools.
 
@@ -141,18 +143,23 @@ class Agent:
         Args:
             tools (list[llm.FunctionTool]):
                 The new list of function tools available to the agent.
+            filter_chat_ctx (bool): Whether to remove function calls and outputs from the chat context
+                if they are not from the new agent's tools.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
         if self._activity is None:
             self._tools = list(set(tools))
-            self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
+            if filter_chat_ctx:
+                self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
-        await self._activity.update_tools(tools)
+        await self._activity.update_tools(tools, filter_chat_ctx=filter_chat_ctx)
 
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+    async def update_chat_ctx(
+        self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
+    ) -> None:
         """
         Updates the agent's chat context.
 
@@ -162,15 +169,21 @@ class Agent:
         Args:
             chat_ctx (llm.ChatContext):
                 The new or updated chat context for the agent.
+            exclude_invalid_function_calls (bool): Whether to exclude function calls
+                and outputs not from the agent's tools.
 
         Raises:
             llm.RealtimeError: If updating the realtime session chat context fails.
         """
         if self._activity is None:
-            self._chat_ctx = chat_ctx.copy(tools=self._tools)
+            self._chat_ctx = chat_ctx.copy(
+                tools=self._tools if exclude_invalid_function_calls else NOT_GIVEN
+            )
             return
 
-        await self._activity.update_chat_ctx(chat_ctx)
+        await self._activity.update_chat_ctx(
+            chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
+        )
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
