@@ -83,6 +83,15 @@ class _PreemptiveGeneration:
     created_at: float
 
 
+def _is_openai_realtime_model(metrics: RealtimeModelMetrics) -> bool:
+    """Check if RealtimeModelMetrics comes from OpenAI realtime model.
+
+    :param metrics: The RealtimeModelMetrics event.
+    :return: True if metrics are from OpenAI realtime model, False otherwise.
+    """
+    return "openai" in metrics.label.lower()
+
+
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
@@ -993,7 +1002,12 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
 
         # Add RealtimeModelMetrics to current OpenTelemetry span
-        if isinstance(ev, RealtimeModelMetrics):
+        # Note: this code might work for other realtime providers, but
+        # cautiously limit to OpenAI for now. Note that we assume in this
+        # code that the "current span" is also the relevant one to add the metrics to
+        # which is safe for OpenAI models (realtime_assistant_turn) but may be problematic for
+        # models like AWS bedrock due streaming of metrics during the response.
+        if isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev):
             current_span = trace.get_current_span()
             if current_span.is_recording():
                 # Add the full metrics as JSON (following LLM pattern)
@@ -1025,7 +1039,7 @@ class AgentActivity(RecognitionHooks):
                     }
                 }
                 current_span.set_attribute(
-                    trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS, 
+                    trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
                     json.dumps(usage_details)
                 )
 
