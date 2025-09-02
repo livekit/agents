@@ -272,7 +272,7 @@ async def entrypoint(ctx: JobContext) -> None:
         allow_interruptions=True,
         vad=ctx.proc.userdata["vad"],
         llm=RealtimeModel(
-            model_id="fixie-ai/ultravox",
+            model="fixie-ai/ultravox",
             voice="Jessica",
             temperature=0.7,
             language_hint="en",
@@ -287,10 +287,10 @@ async def entrypoint(ctx: JobContext) -> None:
     def on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
         logger.info(f"conversation_item_added: {ev}")
 
-    @session.on("metrics_collected")
-    def on_metrics_collected(ev: MetricsCollectedEvent) -> None:
-        # Use framework helper for consistent formatting
-        logger.info(f"metrics_collected: {ev}")
+    # @session.on("metrics_collected")
+    # def on_metrics_collected(ev: MetricsCollectedEvent) -> None:
+    #     # Use framework helper for consistent formatting
+    #     logger.info(f"metrics_collected: {ev}")
 
     @session.on("user_input_transcribed")
     def on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:

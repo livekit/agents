@@ -193,19 +193,3 @@ def parse_ultravox_event(data: dict[str, Any]) -> UltravoxEventType:
         return UltravoxEventAdapter.validate_python(data)
     except ValidationError as e:
         raise ValueError(f"Invalid event data: {data}\n{e}") from e
-
-
-def serialize_ultravox_event(event: UltravoxEvent) -> dict[str, Any]:
-    """Serialize an Ultravox event object to JSON-compatible dict.
-
-    Parameters
-    ----------
-    event : UltravoxEvent
-        Event object to serialize
-
-    Returns
-    -------
-    Dict[str, Any]
-        JSON-compatible dictionary
-    """
-    return event.model_dump(by_alias=True, exclude_none=True, mode="json")
