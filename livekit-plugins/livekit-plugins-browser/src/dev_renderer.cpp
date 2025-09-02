@@ -589,5 +589,5 @@ void DevRenderer::Run() {
 }
 
 void DevRenderer::Close() {
-  // glfwSetWindowShouldClose(window_, GLFW_TRUE);
+  glfwSetWindowShouldClose(window_, GLFW_TRUE);
 }

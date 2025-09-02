@@ -6,7 +6,9 @@ from typing import Any, Callable, TypeVar, cast
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def log_exceptions(msg: str = "", logger: logging.Logger = logging.getLogger()) -> Callable[[F], F]:  # noqa: B008
+def log_exceptions(msg: str = "", logger: logging.Logger | None = None) -> Callable[[F], F]:
+    if logger is None:
+        logger = logging.getLogger()
     def deco(fn: F) -> F:
         if asyncio.iscoroutinefunction(fn):
 
