@@ -1010,7 +1010,7 @@ class AgentActivity(RecognitionHooks):
         # label=livekit.plugins.openai.realtime.realtime_model.RealtimeModel
 
         if isinstance(ev, RealtimeModelMetrics):
-            logger.warning("OPENTELEMETRY: Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev, "current_span": trace.get_current_span()})
+            logger.warning("OPENTELEMETRY: Adding RealtimeModelMetrics to current OpenTelemetry span", extra={"ev": ev})
             current_span = trace.get_current_span()
             if current_span.is_recording():
                 logger.warning("OPENTELEMETRY: Adding the full metrics as JSON (following LLM pattern)", extra={"current_span": current_span.name})
