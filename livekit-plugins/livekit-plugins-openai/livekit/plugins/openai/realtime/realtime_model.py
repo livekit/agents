@@ -1583,7 +1583,35 @@ def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
                 )
 
             elif isinstance(c, llm.ImageContent):
-                continue  # not supported for now
+                # Serialize the image using LiveKit's utility
+                cache_key = "serialized_image"
+                if cache_key not in c._cache:
+                    from livekit.agents.llm import utils as llm_utils
+                    c._cache[cache_key] = llm_utils.serialize_image(c)
+                
+                img = c._cache[cache_key]
+                
+                # Build the image URL in the format OpenAI expects
+                if img.external_url:
+                    # Use external URL directly
+                    image_url = img.external_url
+                elif img.data_bytes:
+                    # Convert bytes to base64 data URL
+                    b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
+                    mime_type = img.mime_type or "image/jpeg"
+                    image_url = f"data:{mime_type};base64,{b64_data}"
+                else:
+                    continue  # Skip if no valid image data
+                
+                # Add image content using the new OpenAI Realtime API format
+                content_list.append(
+                    # TODO: support image_url from on ConversationItemContent class (OpenAI Python SDK)
+                    ConversationItemContent(
+                        type="input_image",
+                        image_url=image_url,
+                    )
+                )
+                
             elif isinstance(c, llm.AudioContent):
                 if conversation_item.role == "user":
                     encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
