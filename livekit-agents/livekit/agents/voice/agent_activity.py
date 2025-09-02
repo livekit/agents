@@ -5,6 +5,7 @@ import contextvars
 import heapq
 import json
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
@@ -73,6 +74,49 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
+class BoundedSpanDict:
+    """A bounded dictionary for span references that auto-evicts oldest entries
+    to provide extra protection against memory leaks if we did not correctly clean up
+    old references to spans.
+
+    Based on the OrderedDict LRU pattern from Python's collections documentation.
+    """
+
+    def __init__(self, maxsize: int = 100):
+        """Initialize bounded span dictionary.
+
+        :param maxsize: Maximum number of span references to keep.
+        """
+        self.cache: OrderedDict[str, trace.Span] = OrderedDict()
+        self.maxsize = maxsize
+
+    def __setitem__(self, key: str, span: trace.Span) -> None:
+        """Store span reference, evicting oldest if needed."""
+        self.cache[key] = span
+        if len(self.cache) > self.maxsize:
+            oldest_key, _ = self.cache.popitem(last=False)
+
+    def get(self, key: str, default: trace.Span | None = None) -> trace.Span | None:
+        """Get span reference by key."""
+        return self.cache.get(key, default)
+
+    def pop(self, key: str, default: trace.Span | None = None) -> trace.Span | None:
+        """Remove and return span reference."""
+        return self.cache.pop(key, default)
+
+    def __len__(self) -> int:
+        """Return number of span references."""
+        return len(self.cache)
+
+    def clear(self) -> None:
+        """Remove all span references."""
+        self.cache.clear()
+
+    def keys(self) -> list[str]:
+        """Return list of all keys."""
+        return list(self.cache.keys())
+
+
 @dataclass
 class _PreemptiveGeneration:
     speech_handle: SpeechHandle
@@ -113,8 +157,8 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
-        # OpenTelemetry span tracking for realtime generations
-        self._realtime_spans: dict[str, trace.Span] = {}
+        # OpenTelemetry span tracking for realtime generations (bounded to prevent memory leaks)
+        self._realtime_spans = BoundedSpanDict(maxsize=100)
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -685,6 +729,9 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
+            # Clear all span references to prevent memory leaks
+            self._realtime_spans.clear()
+
             self._agent._activity = None
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -1010,48 +1057,57 @@ class AgentActivity(RecognitionHooks):
         if isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev):
             # Check if we have a stored span for this request_id
             target_span = self._realtime_spans.get(ev.request_id)
+            LOGGER.critical("OPENTELEMETRY: number of spans", extra={"self._realtime_spans": len(self._realtime_spans)})
+            span_found = target_span is not None
 
-            if target_span and target_span.is_recording():
-                logger.debug("OPENTELEMETRY: Adding RealtimeModelMetrics to realtime_assistant_turn span",
-                           extra={"request_id": ev.request_id})
+            try:
+                if target_span and target_span.is_recording():
+                    logger.critical("OPENTELEMETRY: Adding RealtimeModelMetrics to realtime_assistant_turn span",
+                               extra={"request_id": ev.request_id})
 
-                # Add the full metrics as JSON (following LLM pattern)
-                target_span.set_attribute(
-                    trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
-                )
+                    # Add the full metrics as JSON (following LLM pattern)
+                    target_span.set_attribute(
+                        trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
+                    )
 
-                # Add standard OpenTelemetry GenAI attributes
-                target_span.set_attributes(
-                    {
-                        trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
-                        trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+                    # Add standard OpenTelemetry GenAI attributes
+                    target_span.set_attributes(
+                        {
+                            trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
+                            trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+                        }
+                    )
+
+                    # Add Langfuse-specific detailed usage breakdown
+                    usage_details = {
+                        "input_tokens": ev.input_tokens,
+                        "output_tokens": ev.output_tokens,
+                        "total_tokens": ev.total_tokens,
+                        "input_tokens_details": {
+                            "text_tokens": ev.input_token_details.text_tokens,
+                            "audio_tokens": ev.input_token_details.audio_tokens,
+                            "cached_tokens": ev.input_token_details.cached_tokens,
+                        },
+                        "output_tokens_details": {
+                            "text_tokens": ev.output_token_details.text_tokens,
+                            "audio_tokens": ev.output_token_details.audio_tokens,
+                        }
                     }
-                )
-
-                # Add Langfuse-specific detailed usage breakdown
-                usage_details = {
-                    "input_tokens": ev.input_tokens,
-                    "output_tokens": ev.output_tokens,
-                    "total_tokens": ev.total_tokens,
-                    "input_tokens_details": {
-                        "text_tokens": ev.input_token_details.text_tokens,
-                        "audio_tokens": ev.input_token_details.audio_tokens,
-                        "cached_tokens": ev.input_token_details.cached_tokens,
-                    },
-                    "output_tokens_details": {
-                        "text_tokens": ev.output_token_details.text_tokens,
-                        "audio_tokens": ev.output_token_details.audio_tokens,
-                    }
-                }
-                target_span.set_attribute(
-                    trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
-                    json.dumps(usage_details)
-                )
-                # Clean up the span reference after use
-                self._realtime_spans.pop(ev.request_id, None)
-            else:
-                logger.warning("OPENTELEMETRY: Could not find appropriate realtime_assistant_turn span for metrics",
-                             extra={"request_id": ev.request_id, "available_spans": list(self._realtime_spans.keys())})
+                    target_span.set_attribute(
+                        trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
+                        json.dumps(usage_details)
+                    )
+                else:
+                    logger.critical("OPENTELEMETRY: The relevant span is not currently active or popped already",
+                                 extra={"request_id": ev.request_id,
+                                  "target_span": target_span,
+                                   "target_span_is_active": target_span.is_recording(),
+                                   "available_spans": list(self._realtime_spans.keys())})
+            finally:
+                # Always clean up the span reference after processing metrics to prevent memory leaks
+                # This ensures cleanup happens even if there's an exception during metric processing
+                if span_found:
+                    self._realtime_spans.pop(ev.request_id, None)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_error(
@@ -2287,9 +2343,9 @@ class AgentActivity(RecognitionHooks):
                     f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
 
-        # Clean up span reference to prevent memory leaks
-        # The metrics should have been processed by now, but clean up anyway
-        self._realtime_spans.pop(generation_ev.response_id, None)
+        # Note: We don't clean up span references here because metrics may arrive
+        # after this method completes. Cleanup happens in _on_metrics_collected()
+        # when metrics are actually processed, ensuring proper attribution.
 
     def _start_false_interruption_timer(self, timeout: float) -> None:
         if self._false_interruption_timer is not None:
