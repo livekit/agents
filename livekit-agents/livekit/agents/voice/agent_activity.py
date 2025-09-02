@@ -1054,16 +1054,27 @@ class AgentActivity(RecognitionHooks):
         # Add RealtimeModelMetrics to the appropriate OpenTelemetry span
         # The metrics should be attributed to the specific realtime_assistant_turn span,
         # not the session-level span to avoid overwriting data across generations
+        # TODO: expand this code to non OpenAI realtime providers,
+        # One issue for AWS realtime model would bem at time of writingm
+        # the ev.request_id is not the same key as the relevant trace
         if isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev):
             # Check if we have a stored span for this request_id
             target_span = self._realtime_spans.get(ev.request_id)
-            LOGGER.critical("OPENTELEMETRY: number of spans", extra={"self._realtime_spans": len(self._realtime_spans)})
+            logger.debug(
+                "Realtime Model Metrics telemetry starting",
+                extra={
+                    "self._realtime_spans": len(self._realtime_spans),
+                    "ev": ev.model_dump(mode="json"),
+                },
+            )
             span_found = target_span is not None
 
             try:
                 if target_span and target_span.is_recording():
-                    logger.critical("OPENTELEMETRY: Adding RealtimeModelMetrics to realtime_assistant_turn span",
-                               extra={"request_id": ev.request_id})
+                    logger.debug(
+                        "Adding RealtimeModelMetrics to relevant span",
+                        extra={"request_id": ev.request_id},
+                    )
 
                     # Add the full metrics as JSON (following LLM pattern)
                     target_span.set_attribute(
@@ -1091,18 +1102,22 @@ class AgentActivity(RecognitionHooks):
                         "output_tokens_details": {
                             "text_tokens": ev.output_token_details.text_tokens,
                             "audio_tokens": ev.output_token_details.audio_tokens,
-                        }
+                        },
                     }
                     target_span.set_attribute(
                         trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
-                        json.dumps(usage_details)
+                        json.dumps(usage_details),
                     )
                 else:
-                    logger.critical("OPENTELEMETRY: The relevant span is not currently active or popped already",
-                                 extra={"request_id": ev.request_id,
-                                  "target_span": target_span,
-                                   "target_span_is_active": target_span.is_recording(),
-                                   "available_spans": list(self._realtime_spans.keys())})
+                    logger.debug(
+                        "The relevant span is not currently active or it's reference has been removed already",
+                        extra={
+                            "request_id": ev.request_id,
+                            "target_span": target_span,
+                            "target_span_is_active": target_span.is_recording(),
+                            "available_spans": list(self._realtime_spans.keys()),
+                        },
+                    )
             finally:
                 # Always clean up the span reference after processing metrics to prevent memory leaks
                 # This ensures cleanup happens even if there's an exception during metric processing
@@ -2006,8 +2021,9 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
         # Store the span reference for OpenTelemetry metrics attribution
-        # We'll use the generation event's response_id when available
-        self._realtime_spans[generation_ev.response_id] = current_span
+        # Use the response_id from the generation event when available
+        if generation_ev.response_id:
+            self._realtime_spans[generation_ev.response_id] = current_span
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
@@ -2342,10 +2358,6 @@ class AgentActivity(RecognitionHooks):
                 logger.warning(
                     f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
-
-        # Note: We don't clean up span references here because metrics may arrive
-        # after this method completes. Cleanup happens in _on_metrics_collected()
-        # when metrics are actually processed, ensuring proper attribution.
 
     def _start_false_interruption_timer(self, timeout: float) -> None:
         if self._false_interruption_timer is not None:

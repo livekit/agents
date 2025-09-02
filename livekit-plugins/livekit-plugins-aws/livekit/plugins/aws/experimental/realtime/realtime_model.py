@@ -556,6 +556,7 @@ class RealtimeSession(  # noqa: F811
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=self._current_generation.response_id,
         )
         self.emit("generation_created", generation_ev)
 
