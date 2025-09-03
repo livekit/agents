@@ -1911,7 +1911,7 @@ class AgentActivity(RecognitionHooks):
             # TODO: implement a generic way across all realtime models to obtain the model name
             # from livekit.plugins.openai.realtime.realtime_model import RealtimeModel
             # would be the correct type, but this class should be plugin agnostic presumably.
-            model_name = self.llm._opts.model
+            model_name = self.llm._opts.model  # type: ignore[attr-defined]
         except AttributeError:
             model_name = "unknown-realtime-model"
 

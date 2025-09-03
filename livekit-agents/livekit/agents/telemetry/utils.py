@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Generic, TypeVar, Union
 
 from opentelemetry import trace
 
-from . import trace_types, tracer
+from . import trace_types
+from .traces import tracer
 
 if TYPE_CHECKING:
     from ..metrics import RealtimeModelMetrics
@@ -204,10 +205,10 @@ class RealtimeSpanManager:
                 if target_span:
                     logger.critical(
                         "Adding RealtimeModelMetrics to active span: %s",
-                        target_span.name, # type: ignore[attr-defined]
+                        target_span.name,  # type: ignore[attr-defined]
                         extra={
                             "request_id": ev.request_id,
-                            "target_span": target_span.name, # type: ignore[attr-defined]
+                            "target_span": target_span.name,  # type: ignore[attr-defined]
                             "target_span_is_active": target_span.is_recording(),
                         },
                     )
