@@ -1044,7 +1044,6 @@ class AgentActivity(RecognitionHooks):
                         trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
                     )
 
-
                     target_span.set_attributes(
                         {
                             trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
