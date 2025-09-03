@@ -1082,7 +1082,7 @@ class AgentActivity(RecognitionHooks):
                     # flattened_usage = telemetry_utils.flatten_dict_for_langfuse(
                     #     usage_details, trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS
                     # )
-                    target_span.set_attributes(
+                    target_span.set_attribute(
                         trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
                         json.dumps(usage_details_flat),
                     )
