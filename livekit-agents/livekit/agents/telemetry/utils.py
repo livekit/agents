@@ -48,7 +48,7 @@ class RealtimeSpanManager:
         self._realtime_spans: BoundedSpanDict[str, RealtimeSpanContext] = BoundedSpanDict(
             maxsize=maxsize
         )
-        self._model_name: str | None = None
+        self._model_name: str = "unknown-realtime-model"
 
     @property
     def model_name(self) -> str | None:
