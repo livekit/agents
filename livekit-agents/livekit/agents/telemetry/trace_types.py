@@ -48,10 +48,20 @@ ATTR_TTS_METRICS = "lk.tts_metrics"
 ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
 
 # OpenTelemetry GenAI attributes
+# OpenTelemetry specification: https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+
+# Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse 
+# https://langfuse.com/integrations/native/opentelemetry#usage
+# but not yet in the official OpenTelemetry specification.
+ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"
+ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS = "gen_ai.usage.input_audio_tokens"
+ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS = "gen_ai.usage.input_cached_tokens"
+ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS = "gen_ai.usage.output_text_tokens"
+ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS = "gen_ai.usage.output_audio_tokens"
 
 # OpenTelemetry GenAI event names (for structured logging)
 EVENT_GEN_AI_SYSTEM_MESSAGE = "gen_ai.system.message"
@@ -67,4 +77,3 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
-ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS = "langfuse.observation.usage_details"
