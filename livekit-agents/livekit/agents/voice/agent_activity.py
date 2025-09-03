@@ -1917,6 +1917,9 @@ class AgentActivity(RecognitionHooks):
 
         current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model_name)
 
+        # Store the model name in the span manager for metrics attribution
+        self._realtime_span_manager.model_name = model_name
+
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
             self._session.output.transcription

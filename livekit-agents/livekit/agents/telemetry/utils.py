@@ -48,6 +48,17 @@ class RealtimeSpanManager:
         self._realtime_spans: BoundedSpanDict[str, RealtimeSpanContext] = BoundedSpanDict(
             maxsize=maxsize
         )
+        self._model_name: str | None = None
+
+    @property
+    def model_name(self) -> str | None:
+        """Get the stored model name."""
+        return self._model_name
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        """Set the model name for use in metrics attribution."""
+        self._model_name = value
 
     def register_realtime_turn(self, response_id: str, span: trace.Span) -> None:
         """Register a realtime_assistant_turn span.
@@ -139,6 +150,11 @@ class RealtimeSpanManager:
             target_span: The span to attach metrics to
             ev: The metrics event
         """
+        # Set the model name to ensure Langfuse treats this as a generation (not just a span)
+        # LangFuse requires generation observations to be able to assign cost/token counts
+        if self._model_name:
+            target_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._model_name)
+
         # Add the full metrics as JSON (following LLM pattern)
         target_span.set_attribute(trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json())
 
@@ -216,6 +232,7 @@ class RealtimeSpanManager:
                     # Use the target span as the current context to ensure proper trace attribution
                     with trace.use_span(target_span):
                         self._set_metrics_on_span(target_span, ev)
+
                 else:
                     # All spans have ended, create a dedicated metrics span
                     logger.warning(
