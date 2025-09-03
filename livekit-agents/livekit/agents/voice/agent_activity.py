@@ -9,7 +9,7 @@ from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
@@ -364,7 +364,19 @@ class AgentActivity(RecognitionHooks):
         if speech_handle is not None:
             tk1 = _SpeechHandleContextVar.set(speech_handle)
 
-        task = asyncio.create_task(coro, name=name)
+        # Capture the current OpenTelemetry context to ensure proper span nesting
+        current_context = otel_context.get_current()
+
+        # Create a wrapper coroutine that runs in the captured context
+        async def _context_aware_coro():
+            # Attach the captured context before running the original coroutine
+            token = otel_context.attach(current_context)
+            try:
+                return await coro
+            finally:
+                otel_context.detach(token)
+
+        task = asyncio.create_task(_context_aware_coro(), name=name)
         self._speech_tasks.append(task)
         task.add_done_callback(lambda _: self._speech_tasks.remove(task))
 
