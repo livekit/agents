@@ -44,7 +44,7 @@ from .version import __version__
 API_VERSION = __version__
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "LiveKit-Plugin-Respeecher-Version"
-API_BASE_URL = "https://api.respeecher.com"
+API_BASE_URL = "https://api.respeecher.com/v1"
 
 
 @dataclass
@@ -63,7 +63,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        model: TTSModels | str = "/v1/public/tts/en-rt",
+        model: TTSModels | str = "/public/tts/en-rt",
         encoding: TTSEncoding = "pcm_s16le",
         voice_id: str = "samantha",
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
