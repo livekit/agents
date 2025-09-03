@@ -13,15 +13,6 @@ TTSEncoding = Literal[
 
 TTSLanguages = Literal["en"]
 
-TTSSampleRates = Literal[
-    8000,
-    11025,
-    16000,
-    22050,
-    44100,
-    48000,
-]
-
 
 @dataclass
 class SamplingParams:
