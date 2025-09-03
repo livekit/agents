@@ -89,6 +89,9 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
+        # OpenTelemetry span manager for realtime generations
+        self._realtime_span_manager = RealtimeSpanManager(maxsize=100)
+
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
@@ -105,8 +108,6 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
-        # OpenTelemetry span manager for realtime generations
-        self._realtime_span_manager = RealtimeSpanManager(maxsize=100)
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
