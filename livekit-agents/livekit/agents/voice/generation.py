@@ -4,6 +4,7 @@ import asyncio
 import functools
 import inspect
 import json
+import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
@@ -507,10 +508,14 @@ async def _execute_tools_task(
                     function_callable: Callable, fnc_call: llm.FunctionCall
                 ) -> None:
                     current_span = trace.get_current_span()
+                    start_time = time.time()
+
                     current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, fnc_call.name)
                     current_span.set_attribute(
                         trace_types.ATTR_FUNCTION_TOOL_ARGS, fnc_call.arguments
                     )
+                    # Set start time for Langfuse latency calculation
+                    current_span.set_attribute(trace_types.ATTR_START_TIME, start_time)
 
                     # Register the function tool span with active realtime contexts
                     # Get the current activity from the context variable
@@ -535,6 +540,10 @@ async def _execute_tools_task(
                         )
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
+                    finally:
+                        # Set end time for Langfuse latency calculation
+                        end_time = time.time()
+                        current_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
 
                     if fnc_call_out := output.fnc_call_out:
                         current_span.set_attribute(
