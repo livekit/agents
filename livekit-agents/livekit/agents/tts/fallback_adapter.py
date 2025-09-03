@@ -81,11 +81,9 @@ class FallbackAdapter(
 
         num_channels = tts[0].num_channels
 
-        # Use streaming capability of the first available streaming TTS, prioritizing the primary
-        streaming_capable = tts[0].capabilities.streaming or any(t.capabilities.streaming for t in tts)
         super().__init__(
             capabilities=TTSCapabilities(
-                streaming=streaming_capable,
+                streaming=any(t.capabilities.streaming for t in tts),
                 aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
             ),
             sample_rate=sample_rate,
