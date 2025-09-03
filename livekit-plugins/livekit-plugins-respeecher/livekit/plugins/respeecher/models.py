@@ -3,7 +3,7 @@ from typing import Literal, Optional
 
 TTSModels = Literal[
     # Respeecher's English model, multilanguage models will be added later
-    "/v1/public/tts/en-rt",
+    "/public/tts/en-rt",
 ]
 
 TTSEncoding = Literal[
