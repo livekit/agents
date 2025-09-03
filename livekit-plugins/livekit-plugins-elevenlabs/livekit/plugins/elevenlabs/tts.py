@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Union
+from typing import Any, Union, cast
 
 import aiohttp
 
@@ -225,7 +225,7 @@ class TTS(tts.TTS):
             is_given(preferred_transcript_alignment)
             and preferred_transcript_alignment != self._opts.preferred_transcript_alignment
         ):
-            self._opts.preferred_transcript_alignment = preferred_transcript_alignment
+            self._opts.preferred_transcript_alignment = cast(TranscriptAlignment, preferred_transcript_alignment)
             changed = True
 
         if changed and self._current_connection:
