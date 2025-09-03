@@ -738,9 +738,13 @@ class RealtimeSession(
                     await self._session_updates_pending.inc()
                 else:
                     await self._session_created_future
-                    timeout_occurred = not await self._session_updates_pending.wait_until_zero(timeout=self._realtime_model._opts.session_updates_waiting_timeout)
+                    timeout_occurred = not await self._session_updates_pending.wait_until_zero(
+                        timeout=self._realtime_model._opts.session_updates_waiting_timeout
+                    )
                     if timeout_occurred:
-                        logger.warning(f"Waiting for session update acknowledgements (session.updated events) timed out after {self._realtime_model._opts.session_updates_waiting_timeout}s")
+                        logger.warning(
+                            f"Waiting for session update acknowledgements (session.updated events) timed out after {self._realtime_model._opts.session_updates_waiting_timeout}s"
+                        )
 
                 try:
                     if isinstance(msg, BaseModel):
