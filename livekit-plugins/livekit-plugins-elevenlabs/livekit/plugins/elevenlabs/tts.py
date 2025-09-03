@@ -225,7 +225,9 @@ class TTS(tts.TTS):
             is_given(preferred_transcript_alignment)
             and preferred_transcript_alignment != self._opts.preferred_transcript_alignment
         ):
-            self._opts.preferred_transcript_alignment = cast(TranscriptAlignment, preferred_transcript_alignment)
+            self._opts.preferred_transcript_alignment = cast(
+                TranscriptAlignment, preferred_transcript_alignment
+            )
             changed = True
 
         if changed and self._current_connection:
