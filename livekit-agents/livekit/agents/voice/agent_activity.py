@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -368,7 +368,7 @@ class AgentActivity(RecognitionHooks):
         current_context = otel_context.get_current()
 
         # Create a wrapper coroutine that runs in the captured context
-        async def _context_aware_coro() -> Coroutine[Any, Any, Any]:
+        async def _context_aware_coro() -> Any:
             # Attach the captured context before running the original coroutine
             token = otel_context.attach(current_context)
             try:
