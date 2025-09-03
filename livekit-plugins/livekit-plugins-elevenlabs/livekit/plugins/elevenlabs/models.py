@@ -20,3 +20,8 @@ TTSEncoding = Literal[
     "mp3_44100_128",
     "mp3_44100_192",
 ]
+
+TranscriptAlignment = Literal[
+    "normalized",
+    "original",
+]

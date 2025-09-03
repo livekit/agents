@@ -41,7 +41,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
-from .models import TTSEncoding, TTSModels
+from .models import TranscriptAlignment, TTSEncoding, TTSModels
 
 # by default, use 22.05kHz sample rate at 32kbps
 # in our testing,  reduce TTFB by about ~110ms
@@ -94,6 +94,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
+        preferred_transcript_alignment: TranscriptAlignment = "normalized",
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -113,6 +114,7 @@ class TTS(tts.TTS):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
+            preferred_transcript_alignment (TranscriptAlignment): Preferred alignment type for transcript timing. Can be "normalized" or "original". Defaults to "normalized". Falls back to the other type if preferred is not available.
         """  # noqa: E501
 
         if not is_given(encoding):
@@ -164,6 +166,7 @@ class TTS(tts.TTS):
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
+            preferred_transcript_alignment=preferred_transcript_alignment,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -190,6 +193,7 @@ class TTS(tts.TTS):
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        preferred_transcript_alignment: NotGivenOr[TranscriptAlignment] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -197,6 +201,7 @@ class TTS(tts.TTS):
             voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (NotGivenOr[TTSModels | str]): TTS model to use.
             language (NotGivenOr[str]): Language code for the TTS model.
+            preferred_transcript_alignment (NotGivenOr[TranscriptAlignment]): Preferred alignment type for transcript timing.
         """
         changed = False
 
@@ -214,6 +219,13 @@ class TTS(tts.TTS):
 
         if is_given(language) and language != self._opts.language:
             self._opts.language = language
+            changed = True
+
+        if (
+            is_given(preferred_transcript_alignment)
+            and preferred_transcript_alignment != self._opts.preferred_transcript_alignment
+        ):
+            self._opts.preferred_transcript_alignment = preferred_transcript_alignment
             changed = True
 
         if changed and self._current_connection:
@@ -446,6 +458,7 @@ class _TTSOptions:
     inactivity_timeout: int
     sync_alignment: bool
     auto_mode: NotGivenOr[bool]
+    preferred_transcript_alignment: TranscriptAlignment
 
 
 @dataclass
@@ -629,8 +642,11 @@ class _Connection:
                 emitter = ctx.emitter
                 stream = ctx.stream
 
-                # ensure alignment
-                alignment = data.get("normalizedAlignment") or data.get("alignment")
+                # ensure alignment based on preferred type with fallback
+                if self._opts.preferred_transcript_alignment == "normalized":
+                    alignment = data.get("normalizedAlignment") or data.get("alignment")
+                else:  # "original"
+                    alignment = data.get("alignment") or data.get("normalizedAlignment")
                 if alignment and stream is not None:
                     stream._text_buffer += "".join(alignment["chars"])
                     starts = alignment.get("charStartTimesMs") or alignment.get("charsStartTimesMs")
