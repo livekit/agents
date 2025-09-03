@@ -1004,9 +1004,9 @@ class AgentActivity(RecognitionHooks):
         The metrics should be attributed to the specific realtime_assistant_turn span,
         not the session-level span to avoid overwriting data across generations.
 
-        For accurate latency calculation in Langfuse, this method sets the
-        completion_start_time to ev.timestamp (the actual generation start time from OpenAI).
-        This ensures Langfuse shows meaningful latency values rather than full span duration.
+        Note: The completion_start_time for Langfuse is set early when the span is created
+        (in _realtime_generation_task) to maintain proper span nesting. Setting it here
+        during late metrics processing would cause Langfuse to create separate traces.
 
         TODO: expand this code to non OpenAI realtime providers,
         One issue for AWS realtime model would be, at time of writing,
@@ -1056,13 +1056,7 @@ class AgentActivity(RecognitionHooks):
                         }
                     )
 
-                    # Set Langfuse completion start time for accurate latency calculation
-                    # ev.timestamp is already the start time of response generation from OpenAI
-                    # This ensures Langfuse calculates latency from actual generation start, not span start
-                    completion_start_time = ev.timestamp
-                    target_span.set_attribute(
-                        trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'
-                    )
+                    # Note: completion_start_time is set early during span creation to maintain nesting
 
                     # Add Langfuse-specific detailed usage breakdown as flattened attributes
                     usage_details = {
@@ -2007,6 +2001,14 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+
+        # Set Langfuse completion start time early to maintain proper span nesting
+        # We'll use the current time as an estimate since the actual OpenAI start time
+        # isn't available until metrics arrive (which would break span nesting)
+        completion_start_time = time.time()
+        current_span.set_attribute(
+            trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'
+        )
 
         # Store the span reference for OpenTelemetry metrics attribution
         # Use the response_id from the generation event when available
