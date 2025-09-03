@@ -19,7 +19,7 @@ Support for Ultravox Realtime API
 
 """
 
-from . import realtime
+from . import realtime, utils
 from .models import UltravoxModel, UltravoxVoice
 from .realtime.realtime_model import RealtimeModel, RealtimeSession
 from .version import __version__
@@ -30,6 +30,7 @@ __all__ = [
     "realtime",
     "RealtimeModel",
     "RealtimeSession",
+    "utils",
     "__version__",
 ]
 

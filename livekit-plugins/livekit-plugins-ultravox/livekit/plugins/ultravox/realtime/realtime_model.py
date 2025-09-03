@@ -21,19 +21,14 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
-from livekit.agents.llm.utils import compute_chat_ctx_diff, function_arguments_to_pydantic_model
+from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics.base import RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ..log import logger
 from ..models import UltravoxModel, UltravoxVoice
+from ..utils import parse_tools
 from .events import (
     CallStartedEvent,
     ClientToolInvocationEvent,
@@ -72,7 +67,6 @@ class _UltravoxOptions:
     system_prompt: str
     input_sample_rate: int
     output_sample_rate: int
-    client_buffer_size_ms: int
     temperature: NotGivenOr[float]
     language_hint: NotGivenOr[str]
     max_duration: NotGivenOr[str]
@@ -129,13 +123,12 @@ class RealtimeModel(llm.RealtimeModel):
         output_medium: NotGivenOr[Literal["text", "voice"]] = NOT_GIVEN,
         input_sample_rate: int = INPUT_SAMPLE_RATE,
         output_sample_rate: int = OUTPUT_SAMPLE_RATE,
-        client_buffer_size_ms: int = 200,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         language_hint: NotGivenOr[str] = NOT_GIVEN,
         max_duration: NotGivenOr[str] = NOT_GIVEN,
         time_exceeded_message: NotGivenOr[str] = NOT_GIVEN,
         enable_greeting_prompt: NotGivenOr[bool] = NOT_GIVEN,
-        first_speaker: NotGivenOr[str] = NOT_GIVEN,
+        first_speaker: NotGivenOr[str] = "FIRST_SPEAKER_USER",
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Initialize the Ultravox RealtimeModel.
@@ -158,10 +151,6 @@ class RealtimeModel(llm.RealtimeModel):
             Input audio sample rate.
         output_sample_rate : int
             Output audio sample rate.
-        client_buffer_size_ms : int
-            Size of the client-side audio buffer in milliseconds. For WebSocket integration,
-            larger buffer sizes (>200ms) are recommended to prevent audio underflow.
-            The implementation will automatically use a minimum of 200ms.
         temperature : float, optional
             Controls response randomness (0.0-1.0). Lower values are more deterministic.
         language_hint : str, optional
@@ -177,13 +166,17 @@ class RealtimeModel(llm.RealtimeModel):
         http_session : aiohttp.ClientSession, optional
             HTTP session to use for requests.
         """
+        output_medium = (
+            cast(Literal["text", "voice"], output_medium) if is_given(output_medium) else "voice"
+        )
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=True,
                 user_transcription=True,
                 auto_tool_reply_generation=True,
-                audio_output=True,
+                audio_output=output_medium == "voice",
             )
         )
 
@@ -194,9 +187,6 @@ class RealtimeModel(llm.RealtimeModel):
                 "Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
             )
 
-        output_medium = (
-            cast(Literal["text", "voice"], output_medium) if is_given(output_medium) else "voice"
-        )
         self._opts = _UltravoxOptions(
             model_id=model,
             voice=voice,
@@ -205,7 +195,6 @@ class RealtimeModel(llm.RealtimeModel):
             system_prompt=system_prompt,
             input_sample_rate=input_sample_rate,
             output_sample_rate=output_sample_rate,
-            client_buffer_size_ms=client_buffer_size_ms,
             temperature=temperature,
             language_hint=language_hint,
             max_duration=max_duration,
@@ -249,6 +238,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.output_medium = output_medium
             for sess in self._sessions:
                 sess.update_options(output_medium=output_medium)
+            self._capabilities.audio_output = output_medium == "voice"
 
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
@@ -499,6 +489,8 @@ class RealtimeSession(
 
         if is_given(instructions):
             self._send_client_event(InputTextMessageEvent(text=instructions, defer_response=False))
+        else:
+            self._send_client_event(InputTextMessageEvent(text="", defer_response=False))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -535,6 +527,7 @@ class RealtimeSession(
         self,
         *,
         message_id: str,
+        modalities: list[Literal["text", "audio"]],
         audio_end_ms: int,
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -590,9 +583,6 @@ class RealtimeSession(
                     create_call_url += f"?{query_string}"
 
                 # Build payload with core parameters
-                # recommended_buffer_size = max(self._realtime_model._opts.client_buffer_size_ms, 200)
-                recommended_buffer_size = 30000  # 30 seconds
-
                 payload: dict[str, Any] = {
                     "systemPrompt": self._realtime_model._opts.system_prompt,
                     "model": self._realtime_model._opts.model_id,
@@ -601,10 +591,10 @@ class RealtimeSession(
                         "serverWebSocket": {
                             "inputSampleRate": self._realtime_model._opts.input_sample_rate,
                             "outputSampleRate": self._realtime_model._opts.output_sample_rate,
-                            "clientBufferSizeMs": recommended_buffer_size,
+                            "clientBufferSizeMs": 30000,  # 30 seconds
                         }
                     },
-                    "selectedTools": self._prepare_tools(list(self._tools.function_tools.values())),
+                    "selectedTools": parse_tools(list(self._tools.function_tools.values())),
                 }
 
                 # Add optional parameters only if specified
@@ -791,11 +781,16 @@ class RealtimeSession(
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             _created_timestamp=created_ts or time.time(),
         )
+        msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
+        msg_modalities.set_result(
+            ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
+        )
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
                 text_stream=self._current_generation.text_ch,
                 audio_stream=self._current_generation.audio_ch,
+                modalities=msg_modalities,
             )
         )
         generation_ev = llm.GenerationCreatedEvent(
@@ -805,7 +800,7 @@ class RealtimeSession(
         )
         self.emit("generation_created", generation_ev)
 
-        if lk_ultravox_debug or True:
+        if lk_ultravox_debug:
             logger.debug(f"[ultravox] start_generation id={response_id}")
 
     def _interrupt_current_generation(self) -> None:
@@ -1085,10 +1080,6 @@ class RealtimeSession(
         This event is WebSocket-specific and indicates that the client should
         clear any buffered audio output to prevent audio lag or overlapping.
         """
-        logger.debug("[ultravox] Received PlaybackClearBuffer - clearing audio buffer")
-
-        # Best-effort: clear local input buffer (output playout buffer is managed
-        # downstream in the agent audio pipeline).
         self.emit("input_speech_started", InputSpeechStartedEvent())
 
     def _handle_debug_event(self, event: DebugEvent) -> None:
@@ -1163,71 +1154,3 @@ class RealtimeSession(
             agent_reaction="speaks",
         )
         self._send_client_event(event)
-
-    def _prepare_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
-    ) -> list[dict[str, Any]]:
-        """Prepare tools for sending to Ultravox. https://docs.ultravox.ai/essentials/tools#creating-your-first-custom-tool"""
-
-        results: list[dict[str, Any]] = []
-        for tool in tools:
-            if is_raw_function_tool(tool):
-                raw_fnc_info = get_raw_function_info(tool)
-                name = raw_fnc_info.name
-                description = raw_fnc_info.raw_schema.get("description", None)
-                parameters = raw_fnc_info.raw_schema.get("parameters", {})
-            elif is_function_tool(tool):
-                fnc_info = get_function_info(tool)
-                model = function_arguments_to_pydantic_model(tool)
-                name = fnc_info.name
-                description = fnc_info.description
-                parameters = model.model_json_schema()
-
-            def _extract_type(prop: dict[str, Any]) -> str:
-                """Best-effort guess of a parameter's primitive type."""
-                if "type" in prop:
-                    assert isinstance(prop["type"], str)
-                    return prop["type"]
-                if "enum" in prop:
-                    return "string"
-                if "items" in prop:
-                    return "array"
-                for key in ("anyOf", "oneOf"):
-                    if key in prop:
-                        for variant in prop[key]:
-                            if isinstance(variant, dict) and "type" in variant:
-                                assert isinstance(variant["type"], str)
-                                return variant["type"]
-                # Fallback to string
-                return "string"
-
-            results.append(
-                {
-                    "temporaryTool": {
-                        "modelToolName": name,
-                        "description": description,
-                        "dynamicParameters": [
-                            {
-                                "name": pn,
-                                "location": "PARAMETER_LOCATION_BODY",
-                                "schema": (
-                                    p
-                                    if "type" in p
-                                    else {  # fallback minimal schema for enum/anyOf etc.
-                                        "type": _extract_type(p),
-                                        **(
-                                            {"description": p.get("description")}
-                                            if p.get("description")
-                                            else {}
-                                        ),
-                                    }
-                                ),
-                                "required": pn in parameters.get("required", []),
-                            }
-                            for pn, p in parameters["properties"].items()
-                        ],
-                        "client": {},
-                    }
-                }
-            )
-        return results

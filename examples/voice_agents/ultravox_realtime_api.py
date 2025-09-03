@@ -11,6 +11,7 @@ from livekit.agents import (
     ChatContext,
     JobContext,
     JobProcess,
+    RoomOutputOptions,
     ToolError,
     WorkerOptions,
     cli,
@@ -27,7 +28,7 @@ from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
 logger = logging.getLogger("ultravox-agent")
-logger.setLevel(logging.INFO)
+
 
 load_dotenv()
 
@@ -232,44 +233,10 @@ async def search_knowledge(
         raise ToolError(f"Error searching knowledge base: {e}") from e
 
 
-class TestAgent(Agent):
-    """Test agent that demonstrates both tools and dynamic context management."""
-
-    async def on_user_turn_completed(
-        self, turn_ctx: ChatContext, new_message: llm.ChatMessage
-    ) -> None:
-        """Inject relevant context based on user input - demonstrates RAG integration."""
-        try:
-            user_text = new_message.content.lower() if new_message.content else ""
-            logger.info(f"[RAG] Processing user turn: {user_text[:50]}...")
-
-            # Auto-inject customer context if name mentioned
-            for name in CUSTOMER_DATABASE:
-                if name in user_text:
-                    customer_data = CUSTOMER_DATABASE[name]
-                    logger.info(f"[RAG] Auto-injecting context for: {customer_data['name']}")
-                    turn_ctx.add_message(
-                        role="system",
-                        content=f"Context: Customer {customer_data['name']} is calling. Account: {customer_data['account_id']}, Status: {customer_data['status']}, Balance: {customer_data['balance']}",
-                    )
-                    break
-
-            # Auto-inject knowledge if relevant topic mentioned
-            for topic in KNOWLEDGE_BASE:
-                if topic in user_text:
-                    logger.info(f"[RAG] Auto-injecting knowledge for: {topic}")
-                    turn_ctx.add_message(role="system", content=f"Context: {KNOWLEDGE_BASE[topic]}")
-                    break
-
-        except Exception as e:
-            logger.error(f"[RAG] Error in context injection: {e}", exc_info=True)
-
-
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
 
-    session: AgentSession[None] = AgentSession(
-        allow_interruptions=True,
+    session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         llm=RealtimeModel(
             model="fixie-ai/ultravox",
@@ -297,7 +264,7 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info(f"user_input_transcribed: {ev}")
 
     await session.start(
-        agent=TestAgent(
+        agent=Agent(
             instructions="""You are a helpful customer service assistant.
 
 You have access to:
@@ -318,7 +285,10 @@ Be conversational and helpful. Use tools when needed to look up specific informa
             ],
         ),
         room=ctx.room,
+        room_output_options=RoomOutputOptions(sync_transcription=True),
     )
+
+    session.generate_reply()
 
 
 def prewarm(proc: JobProcess) -> None:
