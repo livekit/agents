@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar, Union
 
 from opentelemetry import trace
 
+from ..log import logger
 from . import trace_types
 from .traces import tracer
 
@@ -197,20 +198,18 @@ class RealtimeSpanManager:
         Args:
             ev: The RealtimeModelMetrics event to process
         """
-        from ..log import logger
-
         if not (ev.type == "realtime_model_metrics" and _is_openai_realtime_model(ev)):
             return
 
         # Check if we have a stored span context for this request_id
         span_context = self._realtime_spans.get(ev.request_id)
-        logger.debug(
-            "Realtime Model Metrics telemetry starting",
-            extra={
-                "span_contexts_count": len(self._realtime_spans),
-                "ev": ev.model_dump(mode="json"),
-            },
-        )
+        # logger.debug(
+        #     "Realtime Model Metrics telemetry starting",
+        #     extra={
+        #         "span_contexts_count": len(self._realtime_spans),
+        #         "ev": ev.model_dump(mode="json"),
+        #     },
+        # )
         context_found = span_context is not None
 
         try:
@@ -219,15 +218,15 @@ class RealtimeSpanManager:
                 target_span = self._find_best_active_span(span_context)
 
                 if target_span:
-                    logger.critical(
-                        "Adding RealtimeModelMetrics to active span: %s",
-                        target_span.name,  # type: ignore[attr-defined]
-                        extra={
-                            "request_id": ev.request_id,
-                            "target_span": target_span.name,  # type: ignore[attr-defined]
-                            "target_span_is_active": target_span.is_recording(),
-                        },
-                    )
+                    # logger.debug(
+                    #     "Adding RealtimeModelMetrics to active span: %s",
+                    #     target_span.name,  # type: ignore[attr-defined]
+                    #     extra={
+                    #         "request_id": ev.request_id,
+                    #         "target_span": target_span.name,  # type: ignore[attr-defined]
+                    #         "target_span_is_active": target_span.is_recording(),
+                    #     },
+                    # )
 
                     # Use the target span as the current context to ensure proper trace attribution
                     with trace.use_span(target_span):
@@ -235,21 +234,24 @@ class RealtimeSpanManager:
 
                 else:
                     # All spans have ended, create a dedicated metrics span
-                    logger.warning(
-                        "All spans have ended, creating fallback metrics span",
-                        extra={
-                            "request_id": ev.request_id,
-                            "realtime_turn_active": span_context.realtime_turn.is_recording(),
-                            "agent_speaking_active": span_context.agent_speaking.is_recording()
-                            if span_context.agent_speaking
-                            else False,
-                            "function_tools_count": len(span_context.function_tools),
-                        },
-                    )
+                    # It is possible for e.g. a Realtime tool call span to end before we collect its metrics
+                    # and as spans are immutable in OpenTelemetry, we make an new span to dump the metrics.
+
+                    # logger.debug(
+                    #     "All spans have ended, creating fallback metrics span",
+                    #     extra={
+                    #         "request_id": ev.request_id,
+                    #         "realtime_turn_active": span_context.realtime_turn.is_recording(),
+                    #         "agent_speaking_active": span_context.agent_speaking.is_recording()
+                    #         if span_context.agent_speaking
+                    #         else False,
+                    #         "function_tools_count": len(span_context.function_tools),
+                    #     },
+                    # )
                     self._create_metrics_span(span_context, ev)
             else:
                 logger.warning(
-                    "No span context found for request_id: indicative of a bug",
+                    "OpenTelemetry Issue: No span context found for request_id: indicative of a bug",
                     extra={
                         "request_id": ev.request_id,
                         "available_spans": list(self._realtime_spans.keys()),
