@@ -1004,6 +1004,9 @@ class AgentActivity(RecognitionHooks):
         The metrics should be attributed to the specific realtime_assistant_turn span,
         not the session-level span to avoid overwriting data across generations.
 
+        For accurate latency calculation in Langfuse, this method sets the
+        completion_start_time to ev.timestamp (the actual generation start time from OpenAI).
+        This ensures Langfuse shows meaningful latency values rather than full span duration.
 
         TODO: expand this code to non OpenAI realtime providers,
         One issue for AWS realtime model would be, at time of writing,
@@ -1051,6 +1054,14 @@ class AgentActivity(RecognitionHooks):
                             trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
                             trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
                         }
+                    )
+
+                    # Set Langfuse completion start time for accurate latency calculation
+                    # ev.timestamp is already the start time of response generation from OpenAI
+                    # This ensures Langfuse calculates latency from actual generation start, not span start
+                    completion_start_time = ev.timestamp
+                    target_span.set_attribute(
+                        trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'
                     )
 
                     # Add Langfuse-specific detailed usage breakdown as flattened attributes
