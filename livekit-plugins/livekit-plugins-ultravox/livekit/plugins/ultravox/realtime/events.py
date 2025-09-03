@@ -26,7 +26,7 @@ As of 2025-05-28, the following events are supported:
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
@@ -155,19 +155,19 @@ class PlaybackClearBufferEvent(UltravoxEvent):
 
 
 # Union type for all possible events
-UltravoxEventType = (
-    PingEvent
-    | UserTextMessageEvent
-    | SetOutputMediumEvent
-    | ClientToolResultEvent
-    | CallStartedEvent
-    | PongEvent
-    | StateEvent
-    | TranscriptEvent
-    | ClientToolInvocationEvent
-    | DebugEvent
-    | PlaybackClearBufferEvent
-)
+UltravoxEventType = Union[
+    PingEvent,
+    UserTextMessageEvent,
+    SetOutputMediumEvent,
+    ClientToolResultEvent,
+    CallStartedEvent,
+    PongEvent,
+    StateEvent,
+    TranscriptEvent,
+    ClientToolInvocationEvent,
+    DebugEvent,
+    PlaybackClearBufferEvent,
+]
 UltravoxEventAdapter: TypeAdapter[UltravoxEventType] = TypeAdapter(UltravoxEventType)
 
 
