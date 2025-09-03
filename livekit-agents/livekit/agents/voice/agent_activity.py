@@ -1086,6 +1086,17 @@ class AgentActivity(RecognitionHooks):
                         trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
                         json.dumps(usage_details_flat),
                     )
+                    target_span.set_attributes(
+                        {
+                            "gen_ai.usage.input_tokens": ev.input_tokens,
+                            "gen_ai.usage.output_tokens": ev.output_tokens,
+                            "gen_ai.usage.input_text_tokens": ev.input_token_details.text_tokens,
+                            "gen_ai.usage.input_audio_tokens": ev.input_token_details.audio_tokens,
+                            "gen_ai.usage.input_cached_tokens": ev.input_token_details.cached_tokens,
+                            "gen_ai.usage.output_text_tokens": ev.output_token_details.text_tokens,
+                            "gen_ai.usage.output_audio_tokens": ev.output_token_details.audio_tokens,
+                        }
+                    )
             else:
                 logger.warning(
                     "The relevant span reference has been removed already: indicative of a bug",
