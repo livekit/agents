@@ -1055,24 +1055,37 @@ class AgentActivity(RecognitionHooks):
                     # Note: completion_start_time is set early during span creation to maintain nesting
 
                     # Add Langfuse-specific detailed usage breakdown as flattened attributes
-                    usage_details = {
+                    # usage_details = {
+                    #     "input_tokens": ev.input_tokens,
+                    #     "output_tokens": ev.output_tokens,
+                    #     "total_tokens": ev.total_tokens,
+                    #     "prompt_tokens_details": {
+                    #         "text_tokens": ev.input_token_details.text_tokens,
+                    #         "audio_tokens": ev.input_token_details.audio_tokens,
+                    #         "cached_tokens": ev.input_token_details.cached_tokens,
+                    #     },
+                    #     "completion_tokens_details": {
+                    #         "text_tokens": ev.output_token_details.text_tokens,
+                    #         "audio_tokens": ev.output_token_details.audio_tokens,
+                    #     },
+                    # }
+                    usage_details_flat = {
                         "input_tokens": ev.input_tokens,
                         "output_tokens": ev.output_tokens,
                         "total_tokens": ev.total_tokens,
-                        "input_tokens_details": {
-                            "text_tokens": ev.input_token_details.text_tokens,
-                            "audio_tokens": ev.input_token_details.audio_tokens,
-                            "cached_tokens": ev.input_token_details.cached_tokens,
-                        },
-                        "output_tokens_details": {
-                            "text_tokens": ev.output_token_details.text_tokens,
-                            "audio_tokens": ev.output_token_details.audio_tokens,
-                        },
+                        "input_text_tokens": ev.input_token_details.text_tokens,
+                        "input_audio_tokens": ev.input_token_details.audio_tokens,
+                        "input_cached_tokens": ev.input_token_details.cached_tokens,
+                        "output_text_tokens": ev.output_token_details.text_tokens,
+                        "output_audio_tokens": ev.output_token_details.audio_tokens,
                     }
-                    flattened_usage = telemetry_utils.flatten_dict_for_langfuse(
-                        usage_details, trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS
+                    # flattened_usage = telemetry_utils.flatten_dict_for_langfuse(
+                    #     usage_details, trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS
+                    # )
+                    target_span.set_attributes(
+                        trace_types.ATTR_LANGFUSE_OBSERVATION_USAGE_DETAILS,
+                        json.dumps(usage_details_flat),
                     )
-                    target_span.set_attributes(flattened_usage)
             else:
                 logger.warning(
                     "The relevant span reference has been removed already: indicative of a bug",
