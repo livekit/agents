@@ -233,7 +233,7 @@ async def test_tool_call() -> None:
     "resume_false_interruption, expected_interruption_time",
     [
         (False, 5.5),  # when vad event, 5 + 0.5
-        (True, 6.2),  # when final transcript sent, 6 + 0.2
+        (True, 5.5),  # pause/resume is disabled for fake audio output
     ],
 )
 async def test_interruption(
@@ -389,7 +389,7 @@ async def test_interruption_by_text_input() -> None:
     "resume_false_interruption, expected_interruption_time",
     [
         (False, 3.5),  # 3 + 0.5
-        (True, 4.2),  # 4 + 0.2
+        (True, 3.5),  # pause/resume is disabled for fake audio output
     ],
 )
 async def test_interruption_before_speaking(
@@ -591,7 +591,7 @@ async def test_interrupt_during_on_user_turn_completed(
     actions.add_user_speech(0.5, 2.0, "Tell me a story", stt_delay=0.2)
     actions.add_llm("Here is a story for you...", ttft=0.1, duration=0.3)
     actions.add_tts(10.0, ttfb=1.0)  # latency after end of turn: 1.3s
-    actions.add_user_speech(2.6, 3.0, "about a firefighter.")  # interrupt before speaking
+    actions.add_user_speech(2.6, 3.2, "about a firefighter.")  # interrupt before speaking
     actions.add_llm("Here is a story about a firefighter...", ttft=0.1, duration=0.3)
     actions.add_tts(10.0, ttfb=0.3)
 
@@ -609,12 +609,21 @@ async def test_interrupt_during_on_user_turn_completed(
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
-    assert len(agent_state_events) == 4
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
-    assert agent_state_events[1].new_state == "thinking"
-    assert agent_state_events[2].new_state == "speaking"
-    assert agent_state_events[3].new_state == "listening"
+    if on_user_turn_completed_delay == 0.0:
+        # on_user_turn_completed already committed before interrupting
+        assert len(agent_state_events) == 6
+        assert agent_state_events[1].new_state == "thinking"
+        assert agent_state_events[2].new_state == "listening"
+        assert agent_state_events[3].new_state == "thinking"
+        assert agent_state_events[4].new_state == "speaking"
+        assert agent_state_events[5].new_state == "listening"
+    else:
+        assert len(agent_state_events) == 4
+        assert agent_state_events[1].new_state == "thinking"
+        assert agent_state_events[2].new_state == "speaking"
+        assert agent_state_events[3].new_state == "listening"
 
     assert len(conversation_events) == 3
     assert conversation_events[0].item.type == "message"

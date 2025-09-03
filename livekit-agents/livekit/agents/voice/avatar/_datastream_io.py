@@ -12,7 +12,7 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
-from ..io import AudioOutput, PlaybackFinishedEvent
+from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
@@ -36,7 +36,12 @@ class DataStreamAudioOutput(AudioOutput):
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
     ):
-        super().__init__(label="DataStreamIO", next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(
+            label="DataStreamIO",
+            next_in_chain=None,
+            sample_rate=sample_rate,
+            capabilities=AudioOutputCapabilities(pause=False),
+        )
         self._room = room
         self._destination_identity = destination_identity
         self._wait_remote_track = wait_remote_track
@@ -44,14 +49,26 @@ class DataStreamAudioOutput(AudioOutput):
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task[Any]] = set()
 
+        self._started = False
+        self._lock = asyncio.Lock()
+        self._start_atask: asyncio.Task | None = None
+
+        def _on_room_connected(fut: asyncio.Future[None]) -> None:
+            if not self._start_atask and not fut.cancelled() and not fut.exception():
+                # register the rpc method right after the room is connected
+                self._register_playback_finished_rpc(
+                    self._room,
+                    caller_identity=self._destination_identity,
+                    handler=self._handle_playback_finished,
+                )
+                self._start_atask = asyncio.create_task(self._start_task())
+
         self._room_connected_fut = asyncio.Future[None]()
+        self._room_connected_fut.add_done_callback(_on_room_connected)
+
         self._room.on("connection_state_changed", self._handle_connection_state_changed)
         if self._room.isconnected():
             self._room_connected_fut.set_result(None)
-        self._started = False
-        self._lock = asyncio.Lock()
-
-        self._start_atask: asyncio.Task | None = None
 
     @utils.log_exceptions(logger=logger)
     async def _start_task(self) -> None:

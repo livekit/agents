@@ -45,6 +45,7 @@ class SpeechData:
     end_time: float = 0.0
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
+    is_primary_speaker: bool | None = None
 
 
 @dataclass
@@ -64,6 +65,7 @@ class SpeechEvent:
 class STTCapabilities:
     streaming: bool
     interim_results: bool
+    diarization: bool = False
 
 
 class STTError(BaseModel):

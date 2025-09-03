@@ -44,6 +44,8 @@ jobs:
           tests/test_transcription_filter.py
 
   evaluation:
+    # don't run tests for PRs on forks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

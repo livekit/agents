@@ -14,6 +14,7 @@ This directory contains a comprehensive collection of voice-based agent examples
 - [`dynamic_tool_creation.py`](./dynamic_tool_creation.py) - Creating and registering tools dynamically at runtime
 - [`raw_function_description.py`](./raw_function_description.py) - Using raw JSON schema definitions for tool descriptions
 - [`silent_function_call.py`](./silent_function_call.py) - Executing function calls without verbal responses to user
+- [`long_running_function.py`](./long_running_function.py) - Handling long running function calls with interruption support
 
 ### ⚡ Real-time Models
 

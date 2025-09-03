@@ -75,6 +75,7 @@ from openai.types.beta.realtime.session import (
 )
 
 from ..log import logger
+from ..models import RealtimeModels
 
 # When a response is created with the OpenAI Realtime API, those events are sent in this order:
 # 1. response.created (contains resp_id)
@@ -182,7 +183,7 @@ class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        model: str = "gpt-4o-realtime-preview",
+        model: RealtimeModels | str = "gpt-realtime",
         voice: str = "alloy",
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
