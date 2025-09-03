@@ -47,7 +47,7 @@ class PingEvent(UltravoxEvent):
     timestamp: float = Field(..., description="Client timestamp for latency measurement")
 
 
-class InputTextMessageEvent(UltravoxEvent):
+class UserTextMessageEvent(UltravoxEvent):
     """User message sent via text (UserTextMessage in Ultravox docs)."""
 
     type: Literal["user_text_message"] = "user_text_message"
@@ -157,7 +157,7 @@ class PlaybackClearBufferEvent(UltravoxEvent):
 # Union type for all possible events
 UltravoxEventType = (
     PingEvent
-    | InputTextMessageEvent
+    | UserTextMessageEvent
     | SetOutputMediumEvent
     | ClientToolResultEvent
     | CallStartedEvent

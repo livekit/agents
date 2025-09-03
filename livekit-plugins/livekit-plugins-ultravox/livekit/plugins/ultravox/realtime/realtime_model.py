@@ -34,7 +34,6 @@ from .events import (
     ClientToolInvocationEvent,
     ClientToolResultEvent,
     DebugEvent,
-    InputTextMessageEvent,
     PingEvent,
     PlaybackClearBufferEvent,
     PongEvent,
@@ -42,6 +41,7 @@ from .events import (
     StateEvent,
     TranscriptEvent,
     UltravoxEvent,
+    UserTextMessageEvent,
     parse_ultravox_event,
 )
 
@@ -372,7 +372,7 @@ class RealtimeSession(
             if item.type == "message" and item.role in ("system", "developer"):
                 if item.text_content:
                     self._send_client_event(
-                        InputTextMessageEvent(
+                        UserTextMessageEvent(
                             text=f"<instruction>{item.text_content}</instruction>",
                             defer_response=True,
                         )
@@ -382,7 +382,7 @@ class RealtimeSession(
                 # Inject user message as context; do not trigger an immediate response
                 if item.text_content:
                     self._send_client_event(
-                        InputTextMessageEvent(text=item.text_content, defer_response=True)
+                        UserTextMessageEvent(text=item.text_content, defer_response=True)
                     )
             elif item.type == "function_call_output":
                 # Bridge tool result back to Ultravox using the original invocationId
@@ -488,9 +488,16 @@ class RealtimeSession(
         self._pending_generation_fut = fut
 
         if is_given(instructions):
-            self._send_client_event(InputTextMessageEvent(text=instructions, defer_response=False))
+            # TODO(long): a better solution to send instructions?
+            self._send_client_event(
+                UserTextMessageEvent(
+                    text=f"<instruction>{instructions}</instruction>", defer_response=False
+                )
+            )
         else:
-            self._send_client_event(InputTextMessageEvent(text="", defer_response=False))
+            self._send_client_event(UserTextMessageEvent(text="", defer_response=False))
+
+        # NOTE: ultravox API will send the text back as user transcript
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -517,7 +524,7 @@ class RealtimeSession(
             # Use text barge-in with immediate urgency to interrupt
             # deferResponse=true prevents Ultravox from generating a response
             self._send_client_event(
-                InputTextMessageEvent(text="", urgency="immediate", defer_response=True)
+                UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
             )
 
             # Finalize the active generation

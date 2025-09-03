@@ -49,7 +49,7 @@ async def entrypoint(ctx: JobContext):
         agent=MyAgent(),
         room=ctx.room,
         room_output_options=RoomOutputOptions(
-            sync_transcription=False,  # ultravox syncs transcription with the audio internally
+            transcription_speed_factor=1.5,
         ),
     )
 
