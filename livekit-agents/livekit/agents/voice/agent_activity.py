@@ -25,7 +25,8 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import trace_types, tracer, utils as telemetry_utils
+from ..telemetry import trace_types, tracer
+from ..telemetry.utils import RealtimeSpanManager
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -83,15 +84,6 @@ class _PreemptiveGeneration:
     created_at: float
 
 
-def _is_openai_realtime_model(metrics: RealtimeModelMetrics) -> bool:
-    """Check if RealtimeModelMetrics comes from OpenAI realtime model.
-
-    :param metrics: The RealtimeModelMetrics event.
-    :return: True if metrics are from OpenAI realtime model, False otherwise.
-    """
-    return "openai" in metrics.label.lower()
-
-
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
@@ -113,8 +105,8 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
-        # OpenTelemetry span tracking for realtime generations (bounded to prevent memory leaks)
-        self._realtime_spans = telemetry_utils.BoundedSpanDict(maxsize=100)
+        # OpenTelemetry span manager for realtime generations
+        self._realtime_span_manager = RealtimeSpanManager(maxsize=100)
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -686,7 +678,7 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             # Clear all span references to prevent memory leaks
-            self._realtime_spans.clear()
+            self._realtime_span_manager.clear()
 
             self._agent._activity = None
 
@@ -998,82 +990,6 @@ class AgentActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
-    def _attach_realtime_metrics_to_span(self, ev: RealtimeModelMetrics) -> None:
-        """Attach realtime model metrics to the appropriate OpenTelemetry span.
-
-        The metrics should be attributed to the specific realtime_assistant_turn span,
-        not the session-level span to avoid overwriting data across generations.
-
-        TODO: expand this code to non OpenAI realtime providers,
-        One issue for AWS realtime model would be, at time of writing,
-        the ev.request_id is not the same key as the relevant trace
-
-        Args:
-            ev: The RealtimeModelMetrics event to process
-        """
-        if not (isinstance(ev, RealtimeModelMetrics) and _is_openai_realtime_model(ev)):
-            return
-
-        # Check if we have a stored span for this request_id
-        target_span = self._realtime_spans.get(ev.request_id)
-        logger.debug(
-            "Realtime Model Metrics telemetry starting",
-            extra={
-                "self._realtime_spans": len(self._realtime_spans),
-                "ev": ev.model_dump(mode="json"),
-            },
-        )
-        span_found = target_span is not None
-
-        try:
-            if target_span:
-                logger.critical(
-                    "Adding RealtimeModelMetrics to relevant span: %s",
-                    target_span.name,
-                    extra={
-                        "request_id": ev.request_id,
-                        "target_span": target_span.name,
-                        "target_span_is_active": target_span.is_recording(),
-                    },
-                )
-
-                # Use the target span as the current context to ensure proper trace attribution
-                with trace.use_span(target_span):
-                    # Add the full metrics as JSON (following LLM pattern)
-                    target_span.set_attribute(
-                        trace_types.ATTR_REALTIME_MODEL_METRICS, ev.model_dump_json()
-                    )
-
-                    target_span.set_attributes(
-                        {
-                            trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: ev.input_token_details.cached_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
-                            trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
-                        }
-                    )
-
-            else:
-                logger.warning(
-                    "The relevant span reference has been removed already: indicative of a bug",
-                    extra={
-                        "request_id": ev.request_id,
-                        "target_span_name": target_span.name if target_span else None,
-                        "target_span_is_active": target_span.is_recording()
-                        if target_span
-                        else False,
-                        "available_spans": list(self._realtime_spans.keys()),
-                    },
-                )
-        finally:
-            # Always clean up the span reference after processing metrics to prevent memory leaks
-            # This ensures cleanup happens even if there's an exception during metric processing
-            if span_found:
-                self._realtime_spans.pop(ev.request_id, None)
-
     def _on_metrics_collected(
         self,
         ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
@@ -1083,7 +999,7 @@ class AgentActivity(RecognitionHooks):
         ):
             ev.speech_id = speech_handle.id
         if isinstance(ev, RealtimeModelMetrics):
-            self._attach_realtime_metrics_to_span(ev)
+            self._realtime_span_manager.attach_realtime_metrics_to_span(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_error(
@@ -1981,14 +1897,24 @@ class AgentActivity(RecognitionHooks):
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
-        # Store the span reference for OpenTelemetry metrics attribution
+        # Store the span context for OpenTelemetry metrics attribution
         # Use the response_id from the generation event when available
         if generation_ev.response_id:
-            self._realtime_spans[generation_ev.response_id] = current_span
+            self._realtime_span_manager.register_realtime_turn(
+                generation_ev.response_id, current_span
+            )
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
-        model_name = self.llm._opts.model
+        try:
+            # This attribute is specific to OpenAI realtime model.
+            # TODO: implement a generic way across all realtime models to obtain the model name
+            # from livekit.plugins.openai.realtime.realtime_model import RealtimeModel
+            # would be the correct type, but this class should be plugin agnostic presumably.
+            model_name = self.llm._opts.model
+        except AttributeError:
+            model_name = "unknown-realtime-model"
+
         current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model_name)
 
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None

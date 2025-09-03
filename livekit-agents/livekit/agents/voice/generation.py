@@ -512,6 +512,19 @@ async def _execute_tools_task(
                         trace_types.ATTR_FUNCTION_TOOL_ARGS, fnc_call.arguments
                     )
 
+                    # Register the function tool span with active realtime contexts
+                    # Get the current activity from the context variable
+                    from .agent_activity import _AgentActivityContextVar
+
+                    try:
+                        if activity := _AgentActivityContextVar.get(None):
+                            activity._realtime_span_manager.register_function_tool_span(
+                                current_span
+                            )
+                    except LookupError:
+                        # Context variable not set, this is normal for non-realtime flows
+                        pass
+
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
