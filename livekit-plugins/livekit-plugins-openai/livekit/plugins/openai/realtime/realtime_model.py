@@ -118,6 +118,8 @@ class _RealtimeOptions:
     modalities: list[Literal["text", "audio"]]
     max_session_duration: float | None
     """reset the connection after this many seconds if provided"""
+    session_updates_waiting_timeout: float
+    """timeout in seconds for waiting for session updates to be acknowledged"""
     conn_options: APIConnectOptions
 
 
@@ -194,6 +196,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        session_updates_waiting_timeout: float = 2.0,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
@@ -217,6 +220,7 @@ class RealtimeModel(llm.RealtimeModel):
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        session_updates_waiting_timeout: float = 2.0,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
@@ -240,6 +244,7 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         api_version: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        session_updates_waiting_timeout: float = 2.0,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         modalities = modalities if is_given(modalities) else ["text", "audio"]
@@ -301,6 +306,7 @@ class RealtimeModel(llm.RealtimeModel):
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
+            session_updates_waiting_timeout=session_updates_waiting_timeout,
             conn_options=conn_options,
         )
         self._http_session = http_session
@@ -326,6 +332,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        session_updates_waiting_timeout: float = 2.0,
     ) -> RealtimeModel:
         """
         Create a RealtimeClient instance configured for Azure OpenAI Service.
@@ -399,6 +406,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             entra_token=entra_token,
             base_url=base_url,
+            session_updates_waiting_timeout=session_updates_waiting_timeout,
         )
 
     def update_options(
@@ -528,12 +536,26 @@ class _ZeroNotifyCounter:
                 if self._count == 0:
                     self._zero_event.set()
 
+    async def zero(self) -> None:
+        async with self._lock:
+            self._count = 0
+            self._zero_event.set()
+
     @property
     def count(self) -> int:
         return self._count
 
-    async def wait_until_zero(self) -> None:
-        await self._zero_event.wait()
+    async def wait_until_zero(self, timeout: float | None = None) -> bool:
+        if timeout is None:
+            await self._zero_event.wait()
+            return True
+        else:
+            try:
+                await asyncio.wait_for(self._zero_event.wait(), timeout=timeout)
+                return True
+            except asyncio.TimeoutError:
+                await self.zero()  # Zero the counter if timeout occurs
+                return False
 
 
 class RealtimeSession(
@@ -716,7 +738,9 @@ class RealtimeSession(
                     await self._session_updates_pending.inc()
                 else:
                     await self._session_created_future
-                    await self._session_updates_pending.wait_until_zero()
+                    timeout_occurred = not await self._session_updates_pending.wait_until_zero(timeout=self._realtime_model._opts.session_updates_waiting_timeout)
+                    if timeout_occurred:
+                        logger.warning(f"Waiting for session update acknowledgements (session.updated events) timed out after {self._realtime_model._opts.session_updates_waiting_timeout}s")
 
                 try:
                     if isinstance(msg, BaseModel):
