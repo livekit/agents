@@ -31,6 +31,7 @@ from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
+from .agent_activity import _AgentActivityContextVar
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -514,8 +515,6 @@ async def _execute_tools_task(
 
                     # Register the function tool span with active realtime contexts
                     # Get the current activity from the context variable
-                    from .agent_activity import _AgentActivityContextVar
-
                     try:
                         if activity := _AgentActivityContextVar.get(None):
                             activity._realtime_span_manager.register_function_tool_span(
