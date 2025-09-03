@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -107,7 +107,6 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
-
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -369,7 +368,7 @@ class AgentActivity(RecognitionHooks):
         current_context = otel_context.get_current()
 
         # Create a wrapper coroutine that runs in the captured context
-        async def _context_aware_coro():
+        async def _context_aware_coro() -> Coroutine[Any, Any, Any]:
             # Attach the captured context before running the original coroutine
             token = otel_context.attach(current_context)
             try:
