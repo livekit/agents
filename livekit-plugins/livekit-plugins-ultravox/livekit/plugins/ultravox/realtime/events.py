@@ -12,10 +12,10 @@ As of 2025-05-28, the following events are supported:
 |----------------------|--------|--------------------------------------------------------|
 | Ping                 | Client | Measures round-trip data latency.                      |
 | Pong                 | Server | Server reply to a ping message.                        |
-| State                | Server | Indicates the server’s current state.                  |
+| State                | Server | Indicates the server's current state.                  |
 | Transcript           | Server | Contains text for an utterance made during the call.   |
 | InputTextMessage     | Client | Used to send a user message to the agent via text.     |
-| SetOutputMedium      | Client | Sets server’s output medium to text or voice.          |
+| SetOutputMedium      | Client | Sets server's output medium to text or voice.          |
 | ClientToolInvocation | Server | Asks the client to invoke a client tool.               |
 | ClientToolResult     | Client | Contains the result of a client tool invocation.       |
 | Debug                | Server | Useful for application debugging. Excluded by default. |
@@ -26,7 +26,7 @@ As of 2025-05-28, the following events are supported:
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
@@ -47,7 +47,7 @@ class PingEvent(UltravoxEvent):
     timestamp: float = Field(..., description="Client timestamp for latency measurement")
 
 
-class InputTextMessageEvent(UltravoxEvent):
+class UserTextMessageEvent(UltravoxEvent):
     """User message sent via text (UserTextMessage in Ultravox docs)."""
 
     type: Literal["user_text_message"] = "user_text_message"
@@ -155,20 +155,20 @@ class PlaybackClearBufferEvent(UltravoxEvent):
 
 
 # Union type for all possible events
-UltravoxEventType = (
-    PingEvent
-    | InputTextMessageEvent
-    | SetOutputMediumEvent
-    | ClientToolResultEvent
-    | CallStartedEvent
-    | PongEvent
-    | StateEvent
-    | TranscriptEvent
-    | ClientToolInvocationEvent
-    | DebugEvent
-    | PlaybackClearBufferEvent
-)
-UltravoxEvent = TypeAdapter(UltravoxEventType)
+UltravoxEventType = Union[
+    PingEvent,
+    UserTextMessageEvent,
+    SetOutputMediumEvent,
+    ClientToolResultEvent,
+    CallStartedEvent,
+    PongEvent,
+    StateEvent,
+    TranscriptEvent,
+    ClientToolInvocationEvent,
+    DebugEvent,
+    PlaybackClearBufferEvent,
+]
+UltravoxEventAdapter: TypeAdapter[UltravoxEventType] = TypeAdapter(UltravoxEventType)
 
 
 def parse_ultravox_event(data: dict[str, Any]) -> UltravoxEventType:
@@ -190,22 +190,6 @@ def parse_ultravox_event(data: dict[str, Any]) -> UltravoxEventType:
         If the event type is unknown or data is invalid
     """
     try:
-        return UltravoxEvent.validate_python(data)
+        return UltravoxEventAdapter.validate_python(data)
     except ValidationError as e:
         raise ValueError(f"Invalid event data: {data}\n{e}") from e
-
-
-def serialize_ultravox_event(event: UltravoxEventType) -> dict[str, Any]:
-    """Serialize an Ultravox event object to JSON-compatible dict.
-
-    Parameters
-    ----------
-    event : UltravoxEventType
-        Event object to serialize
-
-    Returns
-    -------
-    Dict[str, Any]
-        JSON-compatible dictionary
-    """
-    return event.model_dump(by_alias=True, exclude_none=True, mode="json")  # type: ignore[no-any-return]
