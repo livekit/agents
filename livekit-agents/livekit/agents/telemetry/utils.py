@@ -266,7 +266,12 @@ class RealtimeSpanManager:
                 self._realtime_spans.pop(ev.request_id, None)
 
     def clear(self) -> None:
-        """Clear all span contexts."""
+        """Clear all span contexts and clean up references to prevent memory leaks."""
+        # Clean up all span references in each context
+        for context in self._realtime_spans.cache.values():
+            self._cleanup_span_context(context)
+
+        # Now clear the cache
         self._realtime_spans.clear()
 
 
