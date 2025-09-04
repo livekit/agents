@@ -57,7 +57,7 @@ class STTOptions:
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
-    punctuation: NotGivenOr[str] = NOT_GIVEN
+    punctuation: NotGivenOr[bool] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -78,7 +78,7 @@ class STT(stt.STT):
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
-        punctuation: NotGivenOr[str] = NOT_GIVEN,
+        punctuation: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
         Create a new instance of Azure STT.
@@ -94,8 +94,8 @@ class STT(stt.STT):
         Args:
             phrase_list: List of words or phrases to boost recognition accuracy.
                         Azure will give higher priority to these phrases during recognition.
-            punctuation: Controls punctuation behavior. Valid values are 'explicit', 'implicit', or None.
-                        'explicit' adds punctuation marks explicitly, 'implicit' uses natural speech patterns.
+            punctuation: Controls punctuation behavior. If False, sets explicit punctuation mode.
+                        If True or NOT_GIVEN, uses Azure's default punctuation behavior.
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
@@ -373,9 +373,9 @@ def _create_speech_recognizer(
         speech_config.set_profanity(config.profanity)
 
     # Set punctuation behavior if specified
-    if is_given(config.punctuation):
+    if is_given(config.punctuation) and config.punctuation is False:
         speech_config.set_service_property(
-            "punctuation", config.punctuation, speechsdk.ServicePropertyChannel.UriQueryParameter
+            "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
         )
 
     kwargs: dict[str, Any] = {}
