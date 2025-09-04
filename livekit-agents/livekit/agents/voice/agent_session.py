@@ -1035,7 +1035,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and self._activity._realtime_span_manager is not None
                     and isinstance(self._llm, llm.RealtimeModel)
                 ):
-                    self._activity._realtime_span_manager.register_agent_speaking_span(
+                    self._activity._realtime_span_manager.track_agent_speaking_span(
                         self._agent_speaking_span
                     )
         elif self._agent_speaking_span is not None:

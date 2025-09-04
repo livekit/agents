@@ -520,9 +520,7 @@ async def _execute_tools_task(
                         if (
                             activity := _AgentActivityContextVar.get(None)
                         ) and activity._realtime_span_manager is not None:
-                            activity._realtime_span_manager.register_function_tool_span(
-                                current_span
-                            )
+                            activity._realtime_span_manager.track_function_tool_span(current_span)
                     except LookupError:
                         # Context variable not set, this is normal for non-realtime flows
                         pass

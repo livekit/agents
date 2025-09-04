@@ -82,8 +82,13 @@ class BoundedSpanDict(Generic[K, V]):
 class RealtimeSpanManager:
     """Manages OpenTelemetry span attribution for realtime model metrics.
 
-    Provides hierarchical span attribution to ensure metrics are attached to the most
-    appropriate active span, preventing timing and scope mismatches.
+    Tracks references to existing spans and provides hierarchical span attribution
+    to ensure metrics are attached to the most appropriate active span, preventing
+    timing and scope mismatches.
+
+    This class stores references to existing spans for metrics attribution purposes.
+    It sets metrics as attributes on existing spans, or creates new spans dedicated
+    to metrics, but is not used to create sub-spans within existing spans.
     """
 
     def __init__(self, maxsize: int = 100):
@@ -107,33 +112,41 @@ class RealtimeSpanManager:
         """Set the model name for use in metrics attribution."""
         self._model_name = value
 
-    def register_realtime_turn(self, response_id: str, span: trace.Span) -> None:
-        """Register a realtime_assistant_turn span.
+    def track_realtime_span(self, response_id: str, span: trace.Span) -> None:
+        """Track a realtime_assistant_turn span for metrics attribution.
+
+        Stores a reference to an existing span to enable later metric attribution.
 
         Args:
             response_id: The response ID from the generation event
-            span: The realtime_assistant_turn span
+            span: The existing realtime_assistant_turn span to track
         """
         self._realtime_spans[response_id] = RealtimeSpanContext(realtime_turn=span)
 
-    def register_agent_speaking_span(self, span: trace.Span) -> None:
-        """Register an agent_speaking span with active realtime contexts.
+    def track_agent_speaking_span(self, span: trace.Span) -> None:
+        """Track an agent_speaking span with active realtime contexts.
+
+        Stores a reference to an existing span with all active realtime contexts
+        to enable hierarchical metrics attribution.
 
         Args:
-            span: The agent_speaking span to register
+            span: The existing agent_speaking span to track
         """
-        # Register the speaking span with all active realtime contexts
+        # Track the speaking span with all active realtime contexts
         for context in self._realtime_spans.cache.values():
             if context.realtime_turn.is_recording():
                 context.agent_speaking = span
 
-    def register_function_tool_span(self, span: trace.Span) -> None:
-        """Register a function_tool span with active realtime contexts.
+    def track_function_tool_span(self, span: trace.Span) -> None:
+        """Track a function_tool span with active realtime contexts.
+
+        Stores a reference to an existing span with all active realtime contexts
+        to enable hierarchical metrics attribution.
 
         Args:
-            span: The function_tool span to register
+            span: The existing function_tool span to track
         """
-        # Register the tool span with all active realtime contexts
+        # Track the tool span with all active realtime contexts
         for context in self._realtime_spans.cache.values():
             if context.realtime_turn.is_recording():
                 context.function_tools.append(span)
