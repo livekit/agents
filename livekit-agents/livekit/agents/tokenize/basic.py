@@ -70,9 +70,16 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
 
 
 class WordTokenizer(tokenizer.WordTokenizer):
-    def __init__(self, *, ignore_punctuation: bool = True, split_character: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        ignore_punctuation: bool = True,
+        split_character: bool = False,
+        retain_format: bool = False,
+    ) -> None:
         self._ignore_punctuation = ignore_punctuation
         self._split_character = split_character
+        self._retain_format = retain_format
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         return [
@@ -81,6 +88,7 @@ class WordTokenizer(tokenizer.WordTokenizer):
                 text,
                 ignore_punctuation=self._ignore_punctuation,
                 split_character=self._split_character,
+                retain_format=self._retain_format,
             )
         ]
 
@@ -90,6 +98,7 @@ class WordTokenizer(tokenizer.WordTokenizer):
                 _basic_word.split_words,
                 ignore_punctuation=self._ignore_punctuation,
                 split_character=self._split_character,
+                retain_format=self._retain_format,
             ),
             min_token_len=1,
             min_ctx_len=1,  # ignore

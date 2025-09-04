@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Union
+from typing import Any, Literal, Union
 
 import aiohttp
 
@@ -94,6 +94,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
+        preferred_alignment: Literal["normalized", "original"] = "normalized",
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -113,6 +114,7 @@ class TTS(tts.TTS):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
+            preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
         """  # noqa: E501
 
         if not is_given(encoding):
@@ -164,6 +166,7 @@ class TTS(tts.TTS):
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
+            preferred_alignment=preferred_alignment,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -445,6 +448,7 @@ class _TTSOptions:
     enable_ssml_parsing: bool
     inactivity_timeout: int
     sync_alignment: bool
+    preferred_alignment: Literal["normalized", "original"]
     auto_mode: NotGivenOr[bool]
 
 
@@ -630,14 +634,25 @@ class _Connection:
                 stream = ctx.stream
 
                 # ensure alignment
-                alignment = data.get("normalizedAlignment") or data.get("alignment")
+                alignment = (
+                    data.get("normalizedAlignment")
+                    if self._opts.preferred_alignment == "normalized"
+                    else data.get("alignment")
+                )
                 if alignment and stream is not None:
-                    stream._text_buffer += "".join(alignment["chars"])
+                    chars = alignment["chars"]
                     starts = alignment.get("charStartTimesMs") or alignment.get("charsStartTimesMs")
                     durs = alignment.get("charDurationsMs") or alignment.get("charsDurationsMs")
-                    if starts and durs:
-                        stream._start_times_ms += starts
-                        stream._durations_ms += durs
+                    if starts and durs and len(chars) == len(durs) and len(starts) == len(durs):
+                        stream._text_buffer += "".join(chars)
+                        # in case item in chars has multiple characters
+                        for char, start, dur in zip(chars, starts, durs):
+                            if len(char) > 1:
+                                stream._start_times_ms += [start] * (len(char) - 1)
+                                stream._durations_ms += [0] * (len(char) - 1)
+                            stream._start_times_ms.append(start)
+                            stream._durations_ms.append(dur)
+
                         timed_words, stream._text_buffer = _to_timed_words(
                             stream._text_buffer, stream._start_times_ms, stream._durations_ms
                         )

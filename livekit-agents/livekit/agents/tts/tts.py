@@ -237,8 +237,8 @@ class ChunkedStream(ABC):
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
-                if output_emitter.pushed_duration() <= 0.0:
-                    raise APIError("no audio frames were pushed")
+                if self._input_text.strip() and output_emitter.pushed_duration() <= 0.0:
+                    raise APIError(f"no audio frames were pushed for text: {self._input_text}")
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
                 return

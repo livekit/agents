@@ -1141,7 +1141,7 @@ class AgentActivity(RecognitionHooks):
         if ev.speech_duration >= self._session.options.min_interruption_duration:
             self._interrupt_by_audio_activity()
 
-    def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
+    def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -1157,6 +1157,14 @@ class AgentActivity(RecognitionHooks):
 
         if ev.alternatives[0].text:
             self._interrupt_by_audio_activity()
+
+            if (
+                speaking is False
+                and self._paused_speech
+                and (timeout := self._session.options.false_interruption_timeout) is not None
+            ):
+                # schedule a resume timer if interrupted after end_of_speech
+                self._start_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1943,17 +1951,6 @@ class AgentActivity(RecognitionHooks):
                     else:
                         tr_text_input = msg.text_stream.__aiter__()
 
-                    # text output
-                    tr_node = self._agent.transcription_node(tr_text_input, model_settings)
-                    tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
-                    text_out: _TextOutput | None = None
-                    if tr_node_result is not None:
-                        forward_task, text_out = perform_text_forwarding(
-                            text_output=text_output,
-                            source=tr_node_result,
-                        )
-                        forward_tasks.append(forward_task)
-
                     # audio output
                     audio_out = None
                     if audio_output is not None:
@@ -1964,6 +1961,18 @@ class AgentActivity(RecognitionHooks):
                                 input=tts_text_input,
                                 model_settings=model_settings,
                             )
+
+                            if (
+                                self.use_tts_aligned_transcript
+                                and (tts := self.tts)
+                                and (
+                                    tts.capabilities.aligned_transcript
+                                    or not tts.capabilities.streaming
+                                )
+                                and (timed_texts := await tts_gen_data.timed_texts_fut)
+                            ):
+                                tr_text_input = timed_texts
+
                             tasks.append(tts_task)
                             realtime_audio_result = tts_gen_data.audio_ch
                         elif "audio" in msg_modalities:
@@ -1993,7 +2002,19 @@ class AgentActivity(RecognitionHooks):
                             )
                             forward_tasks.append(forward_task)
                             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
-                    elif text_out is not None:
+
+                    # text output
+                    tr_node = self._agent.transcription_node(tr_text_input, model_settings)
+                    tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
+                    text_out: _TextOutput | None = None
+                    if tr_node_result is not None:
+                        forward_task, text_out = perform_text_forwarding(
+                            text_output=text_output,
+                            source=tr_node_result,
+                        )
+                        forward_tasks.append(forward_task)
+
+                    if not audio_out and text_out:
                         text_out.first_text_fut.add_done_callback(_on_first_frame)
 
                     outputs.append((msg, text_out, audio_out))

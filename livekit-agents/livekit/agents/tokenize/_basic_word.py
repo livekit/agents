@@ -4,7 +4,11 @@ from . import tokenizer
 
 
 def split_words(
-    text: str, *, ignore_punctuation: bool = True, split_character: bool = False
+    text: str,
+    *,
+    ignore_punctuation: bool = True,
+    split_character: bool = False,
+    retain_format: bool = False,
 ) -> list[tuple[str, int, int]]:
     """
     Split text into words, supporting both space-separated languages (like English)
@@ -45,12 +49,14 @@ def split_words(
 
     for pos, char in enumerate(text):
         if char.isspace():
+            if retain_format and not text[word_start:pos].strip():
+                continue
+
             # reached whitespace, commit current word
             _add_current_word(word_start, pos)
-            word_start = pos + 1
-            continue
+            word_start = pos if retain_format else pos + 1
 
-        if char_based_codes and char_based_codes.match(char):
+        elif char_based_codes and char_based_codes.match(char):
             if word_start < pos:
                 _add_current_word(word_start, pos)
 
