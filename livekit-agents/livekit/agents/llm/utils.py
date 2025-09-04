@@ -407,7 +407,7 @@ def _is_optional_type(hint: Any) -> bool:
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
     result = {}
-    for name, field in model.model_fields.items():
+    for name, field in model.__class__.model_fields.items():
         key = field.alias if by_alias and field.alias else name
         result[key] = getattr(model, name)
     return result
