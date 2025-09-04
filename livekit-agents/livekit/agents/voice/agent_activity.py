@@ -1141,7 +1141,7 @@ class AgentActivity(RecognitionHooks):
         if ev.speech_duration >= self._session.options.min_interruption_duration:
             self._interrupt_by_audio_activity()
 
-    def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
+    def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -1157,6 +1157,14 @@ class AgentActivity(RecognitionHooks):
 
         if ev.alternatives[0].text:
             self._interrupt_by_audio_activity()
+
+            if (
+                speaking is False
+                and self._paused_speech
+                and (timeout := self._session.options.false_interruption_timeout) is not None
+            ):
+                # schedule a resume timer if interrupted after end_of_speech
+                self._start_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
