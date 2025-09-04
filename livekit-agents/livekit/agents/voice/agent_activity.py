@@ -26,7 +26,7 @@ from ..metrics import (
     VADMetrics,
 )
 from ..telemetry import trace_types, tracer
-from ..telemetry.utils import RealtimeSpanManager
+from ..telemetry.realtime_span_manager import RealtimeSpanManager
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
