@@ -117,3 +117,27 @@ async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
 
     if buffer:
         yield process_complete_text(buffer, is_newline=buffer_is_newline)
+
+
+# Unicode block ranges from: https://unicode.org/Public/UNIDATA/Blocks.txt
+EMOJI_PATTERN = re.compile(
+    r"[\U0001F000-\U0001FBFF]"  # Emoji blocks: Mahjong Tiles through Symbols for Legacy Computing
+    r"|[\U00002600-\U000026FF]"  # Miscellaneous Symbols
+    r"|[\U00002700-\U000027BF]"  # Dingbats
+    r"|[\U00002B00-\U00002BFF]"  # Miscellaneous Symbols and Arrows
+    r"|[\U0000FE00-\U0000FE0F]"  # Variation selectors
+    r"|\U0000200D"  # Zero width joiner
+    r"|\U000020E3"  # Combining enclosing keycap
+    r"+",
+    re.UNICODE,
+)
+
+
+async def filter_emoji(text: AsyncIterable[str]) -> AsyncIterable[str]:
+    """
+    Filter out emojis from the text.
+    """
+
+    async for chunk in text:
+        filtered_chunk = EMOJI_PATTERN.sub("", chunk)
+        yield filtered_chunk
