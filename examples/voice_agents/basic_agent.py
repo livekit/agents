@@ -48,11 +48,12 @@ class MyAgent(Agent):
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        # Markdown and emoji are filtered before sending it to the TTS model by default,
-        # you can disable this via model_settings in tts_node
+        # Markdown and emoji filters are enabled in `Agent.tts_node`, markdown symbols
+        # and emojis will be removed from the text sent to the TTS model
 
-        # model_settings.tts_filter_markdown = False
-        # model_settings.tts_filter_emoji = False
+        # To disable these filters, customize the `tts_node` method and
+        # use `return Agent.default.tts_node(self, text, model_settings)` instead
+
         return super().tts_node(text, model_settings)
 
     # all functions annotated with @function_tool will be passed to the LLM when this

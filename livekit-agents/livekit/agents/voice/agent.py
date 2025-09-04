@@ -31,10 +31,6 @@ if TYPE_CHECKING:
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
-    tts_filter_markdown: bool = True
-    "Whether to filter markdown from the text before sending it to the TTS model."
-    tts_filter_emoji: bool = True
-    "Whether to filter emoji from the text before sending it to the TTS model."
 
 
 class Agent:
@@ -308,6 +304,10 @@ class Agent:
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
         """
+        from .transcription.filters import filter_emoji, filter_markdown
+
+        text = filter_markdown(text)
+        text = filter_emoji(text)
         return Agent.default.tts_node(self, text, model_settings)
 
     def realtime_audio_output_node(
