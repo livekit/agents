@@ -174,7 +174,9 @@ class LLM(llm.LLM):
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
-            system_messages = [{"text": content} for content in extra_data.system_messages]
+            system_messages: list[dict[str, str | dict]] = [
+                {"text": content} for content in extra_data.system_messages
+            ]
             if self._opts.cache_system:
                 system_messages.append({"cachePoint": {"type": "default"}})
             opts["system"] = system_messages
