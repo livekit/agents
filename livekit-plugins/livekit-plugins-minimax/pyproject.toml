@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
+
+[project]
+name = "livekit-plugins-minimax"
+version = "0.1.0"
+description = "Minimax Text-to-Speech plugin for LiveKit Agents."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = [
+    "livekit-agents",
+    "aiohttp >= 3.9.0"  # <--- **将 httpx 改为 aiohttp**
+]
+
+[project.entry-points."livekit.agents.plugins"]
+minimax = "livekit.plugins.minimax:TTS"
