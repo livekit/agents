@@ -89,8 +89,8 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
-        # OpenTelemetry span manager for realtime generations
-        self._realtime_span_manager = RealtimeSpanManager(maxsize=100)
+        # OpenTelemetry span manager for realtime generations (initialized when needed)
+        self._realtime_span_manager: RealtimeSpanManager | None = None
 
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
@@ -519,6 +519,18 @@ class AgentActivity(RecognitionHooks):
             except llm.RealtimeError:
                 logger.exception("failed to update the tools")
 
+            # Initialize realtime span manager for metrics attribution
+            self._realtime_span_manager = RealtimeSpanManager(maxsize=100)
+
+            # Set model name for span manager metrics attribution
+            try:
+                # This attribute is specific to OpenAI realtime model.
+                # TODO: implement a generic way across all realtime models to obtain the model name
+                model_name = self.llm._opts.model  # type: ignore[attr-defined]
+            except AttributeError:
+                model_name = "unknown-realtime-model"
+            self._realtime_span_manager.model_name = model_name
+
             if (
                 not self.llm.capabilities.audio_output
                 and not self.tts
@@ -690,7 +702,8 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             # Clear all span references to prevent memory leaks
-            self._realtime_span_manager.clear()
+            if self._realtime_span_manager is not None:
+                self._realtime_span_manager.clear()
 
             self._agent._activity = None
 
@@ -1010,7 +1023,7 @@ class AgentActivity(RecognitionHooks):
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
         ):
             ev.speech_id = speech_handle.id
-        if isinstance(ev, RealtimeModelMetrics):
+        if isinstance(ev, RealtimeModelMetrics) and self._realtime_span_manager is not None:
             self._realtime_span_manager.attach_realtime_metrics_to_span(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
@@ -1911,26 +1924,19 @@ class AgentActivity(RecognitionHooks):
 
         # Store the span context for OpenTelemetry metrics attribution
         # Use the response_id from the generation event when available
-        if generation_ev.response_id:
+        if generation_ev.response_id and self._realtime_span_manager is not None:
             self._realtime_span_manager.register_realtime_turn(
                 generation_ev.response_id, current_span
             )
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
-        try:
-            # This attribute is specific to OpenAI realtime model.
-            # TODO: implement a generic way across all realtime models to obtain the model name
-            # from livekit.plugins.openai.realtime.realtime_model import RealtimeModel
-            # would be the correct type, but this class should be plugin agnostic presumably.
-            model_name = self.llm._opts.model  # type: ignore[attr-defined]
-        except AttributeError:
-            model_name = "unknown-realtime-model"
+        assert self._realtime_span_manager is not None, "realtime span manager is not available"
 
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model_name)
-
-        # Store the model name in the span manager for metrics attribution
-        self._realtime_span_manager.model_name = model_name
+        # Set the model name on the current span for this specific generation
+        current_span.set_attribute(
+            trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._realtime_span_manager.model_name
+        )
 
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
