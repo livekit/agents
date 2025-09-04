@@ -98,7 +98,7 @@ class RealtimeSpanManager:
         self._model_name: str = "unknown-realtime-model"
 
     @property
-    def model_name(self) -> Union[None, str]:
+    def model_name(self) -> str:
         """Get the stored model name."""
         return self._model_name
 

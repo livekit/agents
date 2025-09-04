@@ -517,7 +517,9 @@ async def _execute_tools_task(
                     from .agent_activity import _AgentActivityContextVar
 
                     try:
-                        if activity := _AgentActivityContextVar.get(None):
+                        if (
+                            activity := _AgentActivityContextVar.get(None)
+                        ) and activity._realtime_span_manager is not None:
                             activity._realtime_span_manager.register_function_tool_span(
                                 current_span
                             )
