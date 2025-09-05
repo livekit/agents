@@ -32,6 +32,7 @@ class LLM(OpenAILLM):
         base_url: NotGivenOr[str] = "https://api.groq.com/openai/v1",
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
+        service_tier: NotGivenOr[str] = NOT_GIVEN,
     ):
         """
         Create a new instance of Groq LLM.
@@ -59,6 +60,7 @@ class LLM(OpenAILLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
         )
 
 
