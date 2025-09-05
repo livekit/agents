@@ -617,6 +617,8 @@ class AgentActivity(RecognitionHooks):
         # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
             await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+            # backup chat_ctx of the session for resume
+            self._agent._chat_ctx = self._rt_session.chat_ctx.copy()
             await self._close_session()
 
     async def _close_session(self) -> None:
