@@ -100,6 +100,7 @@ class LLM(llm.LLM):
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
@@ -138,7 +139,7 @@ class LLM(llm.LLM):
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
-            max_retries=0,
+            max_retries=max_retries if is_given(max_retries) else 0,
             http_client=httpx.AsyncClient(
                 timeout=timeout
                 if timeout
