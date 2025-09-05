@@ -106,6 +106,11 @@ class StreamAdapterWrapper(RecognizeStream):
                     )
 
                     merged_frames = utils.merge_frames(event.frames)
+
+                    import time
+                    with open(f"stt_input_{time.time()}.wav", "wb") as f:
+                        f.write(merged_frames.to_wav_bytes())
+
                     t_event = await self._wrapped_stt.recognize(
                         buffer=merged_frames,
                         language=self._language,
