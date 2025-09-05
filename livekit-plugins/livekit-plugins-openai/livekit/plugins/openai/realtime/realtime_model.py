@@ -1231,6 +1231,7 @@ class RealtimeSession(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=event.response.id,
         )
 
         if (
