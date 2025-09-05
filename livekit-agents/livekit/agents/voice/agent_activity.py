@@ -300,16 +300,14 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool], *, filter_chat_ctx: bool = True
-    ) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(tools)
 
-        if isinstance(self.llm, llm.LLM) and filter_chat_ctx:
+        if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
 

@@ -131,9 +131,7 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool], *, filter_chat_ctx: bool = True
-    ) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         """
         Updates the agent's available function tools.
 
@@ -143,19 +141,16 @@ class Agent:
         Args:
             tools (list[llm.FunctionTool]):
                 The new list of function tools available to the agent.
-            filter_chat_ctx (bool): Whether to remove function calls and outputs from the chat context
-                if they are not from the new agent's tools.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
         if self._activity is None:
             self._tools = list(set(tools))
-            if filter_chat_ctx:
-                self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
+            self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
-        await self._activity.update_tools(tools, filter_chat_ctx=filter_chat_ctx)
+        await self._activity.update_tools(tools)
 
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
