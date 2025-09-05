@@ -22,6 +22,7 @@ from .tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
+from .stream_adapter import StreamAdapter
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -82,7 +83,7 @@ class FallbackAdapter(
 
         super().__init__(
             capabilities=TTSCapabilities(
-                streaming=all(t.capabilities.streaming for t in tts),
+                streaming=any(t.capabilities.streaming for t in tts),
                 aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
             ),
             sample_rate=sample_rate,
@@ -266,7 +267,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
         conn_options: APIConnectOptions,
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
-        stream = tts.stream(conn_options=conn_options)
+        # If TTS doesn't support streaming, wrap it with StreamAdapter
+        if not tts.capabilities.streaming:
+            from .. import tokenize
+            wrapped_tts = StreamAdapter(
+                tts=tts,
+                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+            )
+            stream = wrapped_tts.stream(conn_options=conn_options)
+        else:
+            stream = tts.stream(conn_options=conn_options)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input_task() -> None:
