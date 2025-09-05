@@ -500,9 +500,15 @@ class Worker(utils.EventEmitter[EventTypes]):
                     await proc.join()
 
         if timeout:
-            await asyncio.wait_for(_join_jobs(), timeout)  # raises asyncio.TimeoutError on timeout
+            try:
+                await asyncio.wait_for(_join_jobs(), timeout)  # raises asyncio.TimeoutError on timeout
+                logger.info("joined jobs", extra={"id": self.id})
+            except asyncio.TimeoutError:
+                logger.warning("timed out joining jobs", extra={"id": self.id, "timeout": timeout})
         else:
+            logger.info("joining jobs (no timeout)", extra={"id": self.id})
             await _join_jobs()
+            logger.info("joined jobs (no timeout)", extra={"id": self.id})
 
     async def simulate_job(
         self,
@@ -567,13 +573,13 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await self._proc_pool.launch_job(running_info)
 
-    async def aclose(self) -> None:
+    async def aclose(self, reason: str) -> None:
         if self._closed:
             if self._close_future is not None:
                 await self._close_future
             return
 
-        logger.info("shutting down worker", extra={"id": self.id})
+        logger.info("shutting down worker", extra={"id": self.id, "reason": reason})
 
         assert self._close_future is not None
         assert self._http_session is not None

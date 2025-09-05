@@ -64,6 +64,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
     try:
 
         def _signal_handler() -> None:
+            logger.info("Signal received, shutting down worker.", extra={"signal": sig, "id": worker.id})
             raise KeyboardInterrupt
 
         if threading.current_thread() is threading.main_thread():
@@ -92,6 +93,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
         try:
             loop.run_until_complete(main_task)
         except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received, shutting down worker.", extra={"id": worker.id})
             pass
 
         try:

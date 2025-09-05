@@ -206,7 +206,7 @@ class SupervisedProc(ABC):
 
         self._closing = True
         with contextlib.suppress(duplex_unix.DuplexClosed):
-            await channel.asend_message(self._pch, proto.ShutdownRequest())
+            await channel.asend_message(self._pch, proto.ShutdownRequest("SupervisedProc.aclose()"))
 
         try:
             if self._supervise_atask:
