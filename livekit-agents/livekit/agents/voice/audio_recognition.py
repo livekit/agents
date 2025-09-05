@@ -106,6 +106,9 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
 
+        self._audio_frames: list[rtc.AudioFrame] = []
+
+
     def update_options(
         self,
         *,
@@ -128,12 +131,22 @@ class AudioRecognition:
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._sample_rate = frame.sample_rate
         if self._stt_ch is not None:
+            self._audio_frames.append(frame)
             self._stt_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
     async def aclose(self) -> None:
+
+        if self._audio_frames:
+            merged_frames = utils.merge_frames(self._audio_frames)
+            with open(f"raw_audio_{time.time()}.wav", "wb") as f:
+                f.write(merged_frames.to_wav_bytes())
+
+            self._audio_frames.clear()
+
+
         await aio.cancel_and_wait(*self._tasks)
         if self._commit_user_turn_atask is not None:
             await aio.cancel_and_wait(self._commit_user_turn_atask)
