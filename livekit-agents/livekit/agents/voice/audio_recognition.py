@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
@@ -186,7 +187,13 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_stt(stt)
 
-    def commit_user_turn(self, *, audio_detached: bool, transcript_timeout: float) -> None:
+    def commit_user_turn(
+        self,
+        *,
+        audio_detached: bool,
+        transcript_timeout: float,
+        stt_flush_duration: float,
+    ) -> None:
         async def _commit_user_turn() -> None:
             if time.time() - self._last_final_transcript_time > 0.5:
                 # if the last final transcript is received more than 0.5s ago
@@ -203,7 +210,8 @@ class AudioRecognition:
                         num_channels=1,
                         samples_per_channel=num_samples,
                     )
-                    for _ in range(5):  # 5 * 0.2s = 1s
+                    num_frames = max(0, int(math.ceil(stt_flush_duration / silence_frame.duration)))
+                    for _ in range(num_frames):
                         self.push_audio(silence_frame)
 
                 # wait for the final transcript to be available
@@ -213,13 +221,31 @@ class AudioRecognition:
                         timeout=transcript_timeout,
                     )
                 except asyncio.TimeoutError:
-                    pass
+                    logger.warning(
+                        "final transcript not received after timeout",
+                        extra={
+                            "transcript_timeout": transcript_timeout,
+                            "interim_transcript": self._audio_interim_transcript,
+                        },
+                    )
 
             if self._audio_interim_transcript:
+                # emit interim transcript as final for frontend display
+                if self._audio_interim_transcript:
+                    self._hooks.on_final_transcript(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=[
+                                stt.SpeechData(language="", text=self._audio_interim_transcript)
+                            ],
+                        )
+                    )
+
                 # append interim transcript in case the final transcript is not ready
                 self._audio_transcript = (
                     f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
                 )
+
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)

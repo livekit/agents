@@ -63,6 +63,8 @@ async def entrypoint(ctx: JobContext):
             # the timeout for the final transcript to be received after committing the user turn
             # increase this value if the STT is slow to respond
             transcript_timeout=10.0,
+            # the duration of the silence to be appended to the STT to make it generate the final transcript
+            stt_flush_duration=2.0,
         )
 
     @ctx.room.local_participant.register_rpc_method("cancel_turn")
