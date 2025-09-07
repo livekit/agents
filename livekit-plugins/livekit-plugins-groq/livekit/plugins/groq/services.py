@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+import httpx
 import openai
 from openai.types import ReasoningEffort
 
@@ -33,6 +34,8 @@ class LLM(OpenAILLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Create a new instance of Groq LLM.
@@ -61,6 +64,8 @@ class LLM(OpenAILLM):
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
             service_tier=service_tier,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
 
