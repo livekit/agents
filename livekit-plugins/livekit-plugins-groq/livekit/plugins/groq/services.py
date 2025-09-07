@@ -31,11 +31,13 @@ class LLM(OpenAILLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         base_url: NotGivenOr[str] = "https://api.groq.com/openai/v1",
+        metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
+        client: openai.AsyncClient | None = None,
     ):
         """
         Create a new instance of Groq LLM.
@@ -66,6 +68,8 @@ class LLM(OpenAILLM):
             service_tier=service_tier,
             timeout=timeout,
             max_retries=max_retries,
+            metadata=metadata,
+            max_completion_tokens=max_completion_tokens,
         )
 
 
