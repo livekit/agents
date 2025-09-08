@@ -58,6 +58,7 @@ class RealtimeCapabilities:
     user_transcription: bool
     auto_tool_reply_generation: bool
     audio_output: bool
+    resumable_function_calls: bool
 
 
 class RealtimeError(Exception):
@@ -73,6 +74,10 @@ class RealtimeModel:
     @property
     def capabilities(self) -> RealtimeCapabilities:
         return self._capabilities
+
+    @property
+    def label(self) -> str:
+        return self._label
 
     @abstractmethod
     def session(self) -> RealtimeSession: ...

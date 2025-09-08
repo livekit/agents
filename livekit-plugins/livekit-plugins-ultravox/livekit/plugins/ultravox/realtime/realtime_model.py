@@ -177,6 +177,7 @@ class RealtimeModel(llm.RealtimeModel):
                 user_transcription=True,
                 auto_tool_reply_generation=True,
                 audio_output=output_medium == "voice",
+                resumable_function_calls=False,
             )
         )
 

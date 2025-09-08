@@ -240,6 +240,7 @@ class RealtimeModel(llm.RealtimeModel):
                 user_transcription=True,
                 auto_tool_reply_generation=True,
                 audio_output=True,
+                resumable_function_calls=False,
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
