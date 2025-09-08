@@ -210,7 +210,9 @@ class ChunkedStream(tts.ChunkedStream):
                 is_given(self._tts._opts.voice_settings)
                 and self._tts._opts.voice_settings.sampling_params
             ):
-                json_data["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
+                json_data["voice"]["sampling_params"] = (
+                    self._tts._opts.voice_settings.sampling_params
+                )
 
             http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
             async with self._tts._ensure_session().post(
@@ -303,7 +305,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                             is_given(self._tts._opts.voice_settings)
                             and self._tts._opts.voice_settings.sampling_params
                         ):
-                            generate_request["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
+                            generate_request["voice"]["sampling_params"] = (
+                                self._tts._opts.voice_settings.sampling_params
+                            )
 
                         self._mark_started()
                         await ws.send_str(json.dumps(generate_request))
@@ -325,7 +329,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         is_given(self._tts._opts.voice_settings)
                         and self._tts._opts.voice_settings.sampling_params
                     ):
-                        end_request["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
+                        end_request["voice"]["sampling_params"] = (
+                            self._tts._opts.voice_settings.sampling_params
+                        )
 
                     await ws.send_str(json.dumps(end_request))
 

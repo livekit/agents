@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 TTSModels = Literal[
     # Respeecher's English model, multilanguage models will be added later
@@ -13,7 +13,7 @@ TTSEncoding = Literal[
 
 
 """Check https://space.respeecher.com/docs/api/tts/sampling-params-guide for details"""
-SamplingParams = Dict[str, Any]
+SamplingParams = dict[str, Any]
 
 
 @dataclass
