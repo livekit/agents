@@ -23,12 +23,18 @@ class VoiceSettings:
     sampling_params: Optional[SamplingParams] = None
 
 
-@dataclass
-class Voice:
-    """Voice model for Respeecher"""
+class Voice(dict):
+    """Voice model for Respeecher - behaves like a dict with guaranteed `id` and optional `sampling_params`"""
 
-    id: str
-    gender: Optional[str] = None
-    accent: Optional[str] = None
-    age: Optional[str] = None
-    sampling_params: Optional[SamplingParams] = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "id" not in self:
+            raise ValueError("Voice must have an 'id' field")
+
+    @property
+    def id(self) -> str:
+        return self["id"]
+
+    @property
+    def sampling_params(self) -> Optional[SamplingParams]:
+        return self.get("sampling_params")
