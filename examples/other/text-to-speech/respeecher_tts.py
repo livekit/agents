@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import wave
-import os
 
 from dotenv import load_dotenv
 
@@ -30,6 +28,7 @@ async def entrypoint(job: JobContext):
     await publication.wait_for_subscription()
 
     async with tts.stream() as stream:
+
         async def _playback_task():
             count = 0
             async for audio in stream:
@@ -52,6 +51,7 @@ async def entrypoint(job: JobContext):
         stream.flush()
         stream.end_input()
         await asyncio.gather(task)
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
