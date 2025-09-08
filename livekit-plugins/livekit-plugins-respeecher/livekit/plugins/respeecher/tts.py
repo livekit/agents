@@ -131,15 +131,7 @@ class TTS(tts.TTS):
             data = await resp.json()
             voices = []
             for voice_data in data:
-                voices.append(
-                    Voice(
-                        id=voice_data["id"],
-                        gender=voice_data.get("gender"),
-                        accent=voice_data.get("accent"),
-                        age=voice_data.get("age"),
-                        sampling_params=voice_data.get("sampling_params"),
-                    )
-                )
+                voices.append(Voice(voice_data))
 
             if len(voices) == 0:
                 raise APIError("No voices are available")
@@ -193,28 +185,26 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the TTS synthesis"""
+        json_data = {
+            "transcript": self._input_text,
+            "voice": {
+                "id": self._tts._opts.voice_id,
+            },
+            "output_format": {
+                "sample_rate": self._tts._opts.sample_rate,
+                "encoding": self._tts._opts.encoding,
+            },
+        }
 
-        async def _http_operation():
-            json_data = {
-                "transcript": self._input_text,
-                "voice": {
-                    "id": self._tts._opts.voice_id,
-                },
-                "output_format": {
-                    "sample_rate": self._tts._opts.sample_rate,
-                    "encoding": self._tts._opts.encoding,
-                },
-            }
+        if (
+            is_given(self._tts._opts.voice_settings)
+            and self._tts._opts.voice_settings.sampling_params
+        ):
+            json_data["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
 
-            if (
-                is_given(self._tts._opts.voice_settings)
-                and self._tts._opts.voice_settings.sampling_params
-            ):
-                json_data["voice"]["sampling_params"] = (
-                    self._tts._opts.voice_settings.sampling_params
-                )
+        http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
 
-            http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
+        try:
             async with self._tts._ensure_session().post(
                 http_url,
                 headers={
@@ -223,6 +213,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json=json_data,
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
 
@@ -237,9 +228,6 @@ class ChunkedStream(tts.ChunkedStream):
                     output_emitter.push(data)
 
                 output_emitter.flush()
-
-        try:
-            await asyncio.wait_for(_http_operation(), timeout=self._conn_options.timeout)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -272,8 +260,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
 
         async def _ws_operation():
-            async with self._tts._ensure_session().ws_connect(full_ws_url) as ws:
-                logger.debug(f"WebSocket connected {full_ws_url}")
+            try:
+                ws = await asyncio.wait_for(
+                    self._tts._ensure_session().ws_connect(full_ws_url),
+                    timeout=self._conn_options.timeout,
+                )
+            except asyncio.TimeoutError:
+                raise APITimeoutError() from None
+
+            async with ws:
 
                 @utils.log_exceptions(logger=logger)
                 async def input_task() -> None:
@@ -359,6 +354,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         data = json.loads(msg.data)
 
                         if data.get("type") == "error":
+                            logger.error(f"Respeecher API error: {data.get('error')}")
                             raise APIError(message=data.get("error"))
 
                         if data.get("type") == "chunk":
@@ -369,6 +365,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             audio_data = base64.b64decode(data["data"])
                             output_emitter.push(audio_data)
                         elif data.get("type") == "done":
+                            logger.debug(f"Received done message: {data}")
                             # End the current segment if one was started
                             if current_segment_id is not None:
                                 output_emitter.end_segment()
@@ -395,9 +392,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.gracefully_cancel(*tasks)
 
         try:
-            await asyncio.wait_for(_ws_operation(), timeout=self._conn_options.timeout)
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
+            await _ws_operation()
+        except APITimeoutError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
