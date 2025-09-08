@@ -676,6 +676,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.output.audio = None
                 self.output.transcription = None
 
+                if (
+                    reason != CloseReason.ERROR
+                    and (audio_recognition := self._activity._audio_recognition) is not None
+                ):
+                    # wait for the user transcript to be committed
+                    audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
+
                 await self._activity.aclose()
                 self._activity = None
 

@@ -1222,6 +1222,16 @@ class AgentActivity(RecognitionHooks):
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+
+            # add user input to chat context
+            user_message = llm.ChatMessage(
+                role="user",
+                content=[info.new_transcript],
+                transcript_confidence=info.transcript_confidence,
+            )
+            self._agent._chat_ctx.items.append(user_message)
+            self._session._conversation_item_added(user_message)
+
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
@@ -1289,19 +1299,20 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
+        user_message = llm.ChatMessage(
+            role="user",
+            content=[info.new_transcript],
+            transcript_confidence=info.transcript_confidence,
+        )
+
         if self._scheduling_paused:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+            self._agent._chat_ctx.items.append(user_message)
+            self._session._conversation_item_added(user_message)
             return
-
-        # id is generated
-        user_message: llm.ChatMessage = llm.ChatMessage(
-            role="user",
-            content=[info.new_transcript],
-            transcript_confidence=info.transcript_confidence,
-        )
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the
@@ -1331,6 +1342,9 @@ class AgentActivity(RecognitionHooks):
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+            if user_message:
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
             return
 
         speech_handle: SpeechHandle | None = None

@@ -225,11 +225,19 @@ class _SegmentSynchronizerImpl:
         self._reestimate_speed()
 
     def pause(self) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.pause called after close")
+            return
+
         if self._paused_wall_time is None:
             self._paused_wall_time = time.time()
         self._output_enabled_ev.clear()
 
     def resume(self) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.resume called after close")
+            return
+
         if self._paused_wall_time is not None:
             self._paused_duration += time.time() - self._paused_wall_time
             self._paused_wall_time = None
@@ -369,11 +377,11 @@ class _SegmentSynchronizerImpl:
 
         self._close_future.set_result(None)
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
+        self._output_enabled_ev.set()
         await self._text_data.word_stream.aclose()
         await self._audio_data.sr_stream.aclose()
         await self._capture_atask
         await self._speaking_rate_atask
-        self._output_enabled_ev.set()
 
 
 class TranscriptSynchronizer:
