@@ -57,7 +57,7 @@ class STTOptions:
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
-    explicit_punctuation: bool
+    explicit_punctuation: bool = False
 
 
 class STT(stt.STT):
