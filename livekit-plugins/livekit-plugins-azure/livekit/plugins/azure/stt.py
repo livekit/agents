@@ -57,7 +57,7 @@ class STTOptions:
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
-    punctuation: NotGivenOr[bool] = NOT_GIVEN
+    explicit_punctuation: bool
 
 
 class STT(stt.STT):
@@ -78,7 +78,7 @@ class STT(stt.STT):
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
-        punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        explicit_punctuation: bool = False,
     ):
         """
         Create a new instance of Azure STT.
@@ -94,8 +94,9 @@ class STT(stt.STT):
         Args:
             phrase_list: List of words or phrases to boost recognition accuracy.
                         Azure will give higher priority to these phrases during recognition.
-            punctuation: Controls punctuation behavior. If False, sets explicit punctuation mode.
-                        If True or NOT_GIVEN, uses Azure's default punctuation behavior.
+            explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
+                        where punctuation marks are added explicitly. If False (default), uses Azure's
+                        default punctuation behavior.
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
@@ -142,7 +143,7 @@ class STT(stt.STT):
             profanity=profanity,
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
-            punctuation=punctuation,
+            explicit_punctuation=explicit_punctuation,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -373,7 +374,7 @@ def _create_speech_recognizer(
         speech_config.set_profanity(config.profanity)
 
     # Set punctuation behavior if specified
-    if is_given(config.punctuation) and config.punctuation is False:
+    if config.explicit_punctuation:
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
         )
