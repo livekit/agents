@@ -128,6 +128,8 @@ class ChunkedStream(tts.ChunkedStream):
                 retries={"mode": "standard", "total_max_attempts": 1},
             )
             async with self._tts._session.client("polly", config=config) as client:  # type: ignore
+                if self._opts.text_type == "ssml":
+                    self._input_text = f"<speak>{self._input_text}</speak>"
                 response = await client.synthesize_speech(
                     **_strip_nones(
                         {
