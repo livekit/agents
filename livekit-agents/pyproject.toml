@@ -94,6 +94,7 @@ spitch = ["livekit-plugins-spitch>=1.2.8"]
 tavus = ["livekit-plugins-tavus>=1.2.8"]
 turn-detector = ["livekit-plugins-turn-detector>=1.2.8"]
 upliftai = ["livekit-plugins-upliftai>=1.2.8"]
+ultravox = ["livekit-plugins-ultravox>=1.2.8"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
