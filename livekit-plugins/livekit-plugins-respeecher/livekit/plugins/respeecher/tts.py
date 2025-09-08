@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import dataclasses
 import json
 import os
 import weakref
@@ -38,7 +37,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import SamplingParams, TTSEncoding, TTSModels, Voice, VoiceSettings
+from .models import TTSEncoding, TTSModels, Voice, VoiceSettings
 from .version import __version__
 
 API_VERSION = __version__
@@ -138,11 +137,7 @@ class TTS(tts.TTS):
                         gender=voice_data.get("gender"),
                         accent=voice_data.get("accent"),
                         age=voice_data.get("age"),
-                        sampling_params=(
-                            SamplingParams(**voice_data["sampling_params"])
-                            if isinstance(voice_data.get("sampling_params"), dict)
-                            else None
-                        ),
+                        sampling_params=voice_data.get("sampling_params"),
                     )
                 )
 
@@ -215,9 +210,7 @@ class ChunkedStream(tts.ChunkedStream):
                 is_given(self._tts._opts.voice_settings)
                 and self._tts._opts.voice_settings.sampling_params
             ):
-                json_data["voice"]["sampling_params"] = dataclasses.asdict(
-                    self._tts._opts.voice_settings.sampling_params
-                )
+                json_data["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
 
             http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
             async with self._tts._ensure_session().post(
@@ -310,9 +303,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             is_given(self._tts._opts.voice_settings)
                             and self._tts._opts.voice_settings.sampling_params
                         ):
-                            generate_request["voice"]["sampling_params"] = dataclasses.asdict(
-                                self._tts._opts.voice_settings.sampling_params
-                            )
+                            generate_request["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
 
                         self._mark_started()
                         await ws.send_str(json.dumps(generate_request))
@@ -334,9 +325,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         is_given(self._tts._opts.voice_settings)
                         and self._tts._opts.voice_settings.sampling_params
                     ):
-                        end_request["voice"]["sampling_params"] = dataclasses.asdict(
-                            self._tts._opts.voice_settings.sampling_params
-                        )
+                        end_request["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
 
                     await ws.send_str(json.dumps(end_request))
 
