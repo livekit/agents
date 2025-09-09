@@ -3,10 +3,10 @@ import logging
 import os
 import queue
 import threading
+from collections.abc import Generator
 from dataclasses import dataclass
 
 import riva.client
-import riva.client.proto.riva_asr_pb2 as riva_asr
 
 from livekit import rtc
 from livekit.agents import (
@@ -96,9 +96,13 @@ class STT(stt.STT):
 
 class SpeechStream(stt.SpeechStream):
     def __init__(self, *, stt: STT, conn_options: APIConnectOptions, language: str):
-        super().__init__(stt=stt, conn_options=conn_options)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
         self._stt = stt
         self._language = language
+
+        # Threading primitives for sync/async bridge
+        self._audio_queue = queue.Queue()
+        self._shutdown = threading.Event()
 
         # Initialize NVIDIA Riva client
         self._auth = riva.client.Auth(
@@ -114,56 +118,147 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Main streaming loop that processes audio and sends it to NVIDIA ASR."""
         logger.debug("Starting NVIDIA ASR streaming session")
+
         try:
-            # Create streaming configuration
-            config = riva.client.StreamingRecognitionConfig(
-                config=riva.client.RecognitionConfig(
-                    encoding=riva.client.AudioEncoding.LINEAR_PCM,
-                    language_code=self._language,
-                    model=self._stt._opts.model,
-                    max_alternatives=1,
-                    enable_automatic_punctuation=self._stt._opts.punctuate,
-                    sample_rate_hertz=self._stt._opts.sample_rate,
-                    audio_channel_count=1,
-                ),
-                interim_results=True,
+            config = self._create_streaming_config()
+
+            # Run audio collection and recognition concurrently
+            await asyncio.gather(
+                self._collect_audio(),
+                self._process_streaming_recognition(config),
+                return_exceptions=True,
             )
-            # Start the streaming recognition
-            await self._stream_recognize(config)
 
         except Exception as e:
-            raise e
-            # if isinstance(e, APIConnectionError):
-            #     raise e
-            # # Wrap other exceptions in APIConnectionError
-            # raise APIConnectionError(f"NVIDIA ASR streaming failed: {str(e)}") from e
+            logger.exception("Error in NVIDIA streaming")
+            if isinstance(e, APIConnectionError):
+                raise e
+            raise APIConnectionError(f"NVIDIA ASR streaming failed: {str(e)}") from e
+        finally:
+            self._shutdown.set()
 
-    async def _stream_recognize(self, config: riva.client.StreamingRecognitionConfig) -> None:
-        """Handle the bidirectional streaming with NVIDIA ASR."""
-
-        auth = riva.client.Auth(
-            use_ssl=True,
-            uri=self._stt._opts.server,
-            metadata_args=[
-                ["authorization", f"Bearer {self._stt.nvidia_api_key}"],
-                ["function-id", self._stt._opts.function_id],
-            ],
+    def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
+        """Create the streaming configuration for NVIDIA ASR."""
+        return riva.client.StreamingRecognitionConfig(
+            config=riva.client.RecognitionConfig(
+                encoding=riva.client.AudioEncoding.LINEAR_PCM,
+                language_code=self._language,
+                model=self._stt._opts.model,
+                max_alternatives=1,
+                enable_automatic_punctuation=self._stt._opts.punctuate,
+                sample_rate_hertz=self._stt._opts.sample_rate,
+                audio_channel_count=1,
+            ),
+            interim_results=True,
         )
 
-        asr_service = riva.client.ASRService(auth)
-        config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
-            riva.client.proto.riva_asr_pb2.RivaSpeechRecognitionConfigRequest()
-        )
-        asr_models = {}
-        for model_config in config_response.model_config:
-            if model_config.parameters["type"] == "online":
-                language_code = model_config.parameters["language_code"]
-                model = {"model": [model_config.model_name]}
-                if language_code in asr_models:
-                    asr_models[language_code].append(model)
-                else:
-                    asr_models[language_code] = [model]
+    async def _collect_audio(self) -> None:
+        """Collect audio frames from LiveKit and put them in the queue."""
+        try:
+            async for data in self._input_ch:
+                if isinstance(data, rtc.AudioFrame):
+                    audio_bytes = data.data.tobytes()
+                    if audio_bytes:
+                        self._audio_queue.put(audio_bytes)
+                elif isinstance(data, self._FlushSentinel):
+                    logger.debug("Received flush sentinel, ending audio stream")
+                    break
+        except Exception as e:
+            logger.exception(f"Error collecting audio: {e}")
+        finally:
+            self._shutdown.set()
+            logger.debug("Audio collection finished")
 
-        logger.debug("Available ASR models")
-        asr_models = dict(sorted(asr_models.items()))
-        logger.debug(asr_models)
+    async def _process_streaming_recognition(
+        self, config: riva.client.StreamingRecognitionConfig
+    ) -> None:
+        """Process streaming recognition using NVIDIA ASR service."""
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._run_nvidia_streaming, config)
+        except Exception as e:
+            logger.exception(f"Error in streaming recognition: {e}")
+            raise
+
+    def _run_nvidia_streaming(self, config: riva.client.StreamingRecognitionConfig) -> None:
+        """Run NVIDIA streaming recognition in a thread (synchronous)."""
+        try:
+            # Create audio generator for NVIDIA
+            audio_generator = self._audio_chunk_generator()
+
+            # Get responses from NVIDIA
+            response_generator = self._asr_service.streaming_response_generator(
+                audio_generator, config
+            )
+
+            # Process each response
+            for response in response_generator:
+                self._handle_response(response)
+
+        except Exception as e:
+            logger.exception(f"Error in NVIDIA streaming thread: {e}")
+            raise
+
+    def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
+        """Generate audio chunks for NVIDIA (synchronous generator)."""
+        logger.debug("Starting audio chunk generator")
+
+        while not self._shutdown.is_set():
+            try:
+                # Get audio with timeout to allow shutdown check
+                audio_chunk = self._audio_queue.get(timeout=0.1)
+                yield audio_chunk
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error in audio generator: {e}")
+                break
+
+        logger.debug("Audio chunk generator finished")
+
+    def _handle_response(self, response) -> None:
+        """Handle a single response from NVIDIA ASR."""
+        try:
+            if not hasattr(response, "results") or not response.results:
+                return
+
+            for result in response.results:
+                if not hasattr(result, "alternatives") or not result.alternatives:
+                    continue
+
+                for alternative in result.alternatives:
+                    transcript = getattr(alternative, "transcript", "")
+                    confidence = getattr(alternative, "confidence", 0.0)
+                    is_final = getattr(result, "is_final", False)
+
+                    if transcript.strip():  # Only log non-empty transcripts
+                        status = "FINAL" if is_final else "INTERIM"
+                        logger.info(
+                            f"Transcript ({status}): '{transcript}' (confidence: {confidence:.3f})"
+                        )
+
+        except Exception as e:
+            logger.error(f"Error handling response: {e}")
+
+    def log_asr_models(self, asr_service: riva.client.ASRService) -> None:
+        """Log available ASR models (utility method)."""
+        try:
+            config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
+                riva.client.RivaSpeechRecognitionConfigRequest()
+            )
+
+            asr_models = {}
+            for model_config in config_response.model_config:
+                if model_config.parameters.get("type") == "online":
+                    language_code = model_config.parameters["language_code"]
+                    model = {"model": [model_config.model_name]}
+                    if language_code in asr_models:
+                        asr_models[language_code].append(model)
+                    else:
+                        asr_models[language_code] = [model]
+
+            logger.debug("Available ASR models")
+            asr_models = dict(sorted(asr_models.items()))
+            logger.debug(asr_models)
+        except Exception as e:
+            logger.warning(f"Could not retrieve ASR models: {e}")
