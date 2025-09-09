@@ -14,6 +14,7 @@ from .._exceptions import APIConnectionError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
+from .stream_adapter import StreamAdapter
 from .tts import (
     TTS,
     AudioEmitter,
@@ -22,7 +23,6 @@ from .tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
-from .stream_adapter import StreamAdapter
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
