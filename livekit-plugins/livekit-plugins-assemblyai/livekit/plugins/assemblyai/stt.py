@@ -315,7 +315,11 @@ class SpeechStream(stt.SpeechStream):
         }
 
         ws_url = "wss://streaming.assemblyai.com/v3/ws"
-        filtered_config = {k: v for k, v in live_config.items() if v is not None}
+        filtered_config = {
+            k: ("true" if v else "false") if isinstance(v, bool) else v
+            for k, v in live_config.items()
+            if v is not None
+        }
         url = f"{ws_url}?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
