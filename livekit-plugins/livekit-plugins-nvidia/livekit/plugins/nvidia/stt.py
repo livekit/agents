@@ -74,13 +74,14 @@ class STT(stt.STT):
             server=server,
         )
 
-    def _recognize_stream(
+    def _recognize_impl(
         self,
+        buffer: AudioBuffer,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> stt.RecognizeStream:
-        return SpeechStream(stt=self, conn_options=conn_options, language=language)
+    ) -> stt.SpeechEvent:
+        raise NotImplementedError("Not implemented")
 
     def stream(
         self,
@@ -127,149 +128,42 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 interim_results=True,
             )
-
-            # Set up audio buffering - buffer audio in chunks suitable for streaming
-            audio_buffer = AudioBuffer(
-                capacity=self._stt._opts.sample_rate,  # 1 second capacity
-            )
-
             # Start the streaming recognition
-            await self._stream_recognize(config, audio_buffer)
+            await self._stream_recognize(config)
 
         except Exception as e:
-            if isinstance(e, APIConnectionError):
-                raise
-            # Wrap other exceptions in APIConnectionError
-            raise APIConnectionError(f"NVIDIA ASR streaming failed: {str(e)}") from e
+            raise e
+            # if isinstance(e, APIConnectionError):
+            #     raise e
+            # # Wrap other exceptions in APIConnectionError
+            # raise APIConnectionError(f"NVIDIA ASR streaming failed: {str(e)}") from e
 
-    async def _stream_recognize(
-        self, config: riva.client.StreamingRecognitionConfig, audio_buffer: AudioBuffer
-    ) -> None:
+    async def _stream_recognize(self, config: riva.client.StreamingRecognitionConfig) -> None:
         """Handle the bidirectional streaming with NVIDIA ASR."""
 
-        # Create a queue for audio chunks
-        audio_queue = queue.Queue()
+        auth = riva.client.Auth(
+            use_ssl=True,
+            uri=self._stt._opts.server,
+            metadata_args=[
+                ["authorization", f"Bearer {self._stt.nvidia_api_key}"],
+                ["function-id", self._stt._opts.function_id],
+            ],
+        )
 
-        def audio_generator():
-            """Generator that yields audio chunks for NVIDIA client."""
-            while True:
-                try:
-                    chunk = audio_queue.get(timeout=0.1)
-                    if chunk is None:  # Sentinel to stop
-                        break
-                    yield chunk
-                except queue.Empty:
-                    continue
+        asr_service = riva.client.ASRService(auth)
+        config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
+            riva.client.proto.riva_asr_pb2.RivaSpeechRecognitionConfigRequest()
+        )
+        asr_models = {}
+        for model_config in config_response.model_config:
+            if model_config.parameters["type"] == "online":
+                language_code = model_config.parameters["language_code"]
+                model = {"model": [model_config.model_name]}
+                if language_code in asr_models:
+                    asr_models[language_code].append(model)
+                else:
+                    asr_models[language_code] = [model]
 
-        # Create a thread to handle the gRPC streaming (since NVIDIA client is synchronous)
-        streaming_thread = None
-        responses_queue = queue.Queue()
-
-        def streaming_worker():
-            """Worker thread that handles the synchronous NVIDIA streaming."""
-            try:
-                responses = self._asr_service.streaming_response_generator(
-                    audio_chunks=audio_generator(),
-                    streaming_config=config,
-                )
-
-                for response in responses:
-                    responses_queue.put(("response", response))
-
-            except Exception as e:
-                responses_queue.put(("error", e))
-
-        streaming_thread = threading.Thread(target=streaming_worker, daemon=True)
-        streaming_thread.start()
-
-        # Process input audio frames
-        async def process_audio():
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    # Convert frame to the expected sample rate if needed
-                    frame_data = data.data.tobytes()
-                    audio_queue.put(frame_data)
-
-                elif isinstance(data, self._FlushSentinel):
-                    # Signal end of audio
-                    audio_queue.put(None)
-                    break
-
-        # Process responses from NVIDIA
-        async def process_responses():
-            while streaming_thread and streaming_thread.is_alive():
-                try:
-                    # Check for responses from the streaming thread
-                    try:
-                        item_type, item = responses_queue.get(timeout=0.1)
-                    except queue.Empty:
-                        await asyncio.sleep(0.01)
-                        continue
-
-                    if item_type == "error":
-                        if isinstance(item, Exception):
-                            raise APIConnectionError(f"NVIDIA ASR error: {str(item)}") from item
-                        else:
-                            raise APIConnectionError(f"NVIDIA ASR error: {item}")
-
-                    response = item
-                    await self._process_response(response)
-
-                except APIConnectionError:
-                    raise
-                except Exception as e:
-                    # Wrap in APIConnectionError for consistency
-                    raise APIConnectionError(
-                        f"Error processing NVIDIA ASR response: {str(e)}"
-                    ) from e
-
-        # Run both audio processing and response processing concurrently
-        try:
-            await asyncio.gather(process_audio(), process_responses())
-        finally:
-            # Clean up
-            if streaming_thread and streaming_thread.is_alive():
-                audio_queue.put(None)  # Signal thread to stop
-                streaming_thread.join(timeout=1.0)
-
-    async def _process_response(self, response: riva_asr.StreamingRecognizeResponse) -> None:
-        """Process a response from NVIDIA ASR and emit appropriate events."""
-        if not response.results:
-            return
-
-        for result in response.results:
-            if not result.alternatives:
-                continue
-
-            # Get the best alternative
-            alternative = result.alternatives[0]
-            transcript = alternative.transcript
-            confidence = alternative.confidence
-
-            if not transcript.strip():
-                continue
-
-            # Create speech data
-            speech_data = stt.SpeechData(
-                language=self._language,
-                text=transcript,
-                confidence=confidence,
-                start_time=0.0,  # NVIDIA doesn't provide precise timing in streaming mode
-                end_time=0.0,
-            )
-
-            # Determine event type based on whether this is a final result
-            if result.is_final:
-                event_type = stt.SpeechEventType.FINAL_TRANSCRIPT
-                logger.debug(f"Final transcript: {transcript}")
-            else:
-                event_type = stt.SpeechEventType.INTERIM_TRANSCRIPT
-                logger.debug(f"Interim transcript: {transcript}")
-
-            # Emit the speech event
-            speech_event = stt.SpeechEvent(
-                type=event_type,
-                alternatives=[speech_data],
-            )
-
-            self._event_ch.send_nowait(speech_event)
+        logger.debug("Available ASR models")
+        asr_models = dict(sorted(asr_models.items()))
+        logger.debug(asr_models)
