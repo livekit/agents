@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, tts, utils, vad
+from .. import cloud, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
@@ -41,10 +41,10 @@ class Agent:
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -57,6 +57,16 @@ class Agent:
         self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
+
+        if isinstance(stt, str):
+            stt = cloud.STT(model=stt)
+
+        if isinstance(llm, str):
+            llm = cloud.LLM(model=llm)
+
+        if isinstance(tts, str):
+            tts = cloud.TTS(model=tts)
+
         self._stt = stt
         self._llm = llm
         self._tts = tts
