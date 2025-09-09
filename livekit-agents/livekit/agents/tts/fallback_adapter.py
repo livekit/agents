@@ -270,6 +270,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         # If TTS doesn't support streaming, wrap it with StreamAdapter
         if not tts.capabilities.streaming:
             from .. import tokenize
+
             wrapped_tts = StreamAdapter(
                 tts=tts,
                 sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
