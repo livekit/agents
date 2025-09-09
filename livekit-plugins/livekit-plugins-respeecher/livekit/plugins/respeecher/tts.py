@@ -112,6 +112,19 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+        )
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
+        full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
+        return await asyncio.wait_for(session.ws_connect(full_ws_url), timeout)
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -146,8 +159,15 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
     ) -> None:
         """Update TTS options"""
-        if is_given(model):
+        if is_given(model) and model != self._opts.model:
             self._opts.model = model
+            # Clear the connection pool when model changes to force reconnection
+            asyncio.create_task(self._pool.aclose())
+            self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+                connect_cb=self._connect_ws,
+                close_cb=self._close_ws,
+            )
+
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(voice_settings):
@@ -157,6 +177,9 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -170,6 +193,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
+        await self._pool.aclose()
 
         if self._session:
             await self._session.close()
@@ -244,145 +268,121 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
 
+    async def aclose(self) -> None:
+        await super().aclose()
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
+        context_id = utils.shortuuid()
         output_emitter.initialize(
-            request_id=request_id,
+            request_id=context_id,
             sample_rate=self._tts._opts.sample_rate,
             num_channels=1,
             stream=True,
             mime_type="audio/pcm",
         )
-
-        ws_url = self._tts._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        full_ws_url = f"{ws_url}{self._tts._opts.model}/tts/websocket?api_key={self._tts._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
+        output_emitter.start_segment(segment_id=context_id)
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
 
-        async def _ws_operation():
-            try:
-                ws = await asyncio.wait_for(
-                    self._tts._ensure_session().ws_connect(full_ws_url),
-                    timeout=self._conn_options.timeout,
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    sent_tokenizer_stream.flush()
+                    continue
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
+
+        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            async for sent in sent_tokenizer_stream:
+                generate_request = {
+                    "context_id": context_id,
+                    "transcript": sent.token,
+                    "voice": {
+                        "id": self._tts._opts.voice_id,
+                    },
+                    "continue": True,
+                    "output_format": {
+                        "encoding": self._tts._opts.encoding,
+                        "sample_rate": self._tts._opts.sample_rate,
+                    },
+                }
+                if (
+                    is_given(self._tts._opts.voice_settings)
+                    and self._tts._opts.voice_settings.sampling_params
+                ):
+                    generate_request["voice"]["sampling_params"] = (
+                        self._tts._opts.voice_settings.sampling_params
+                    )
+
+                self._mark_started()
+                await ws.send_str(json.dumps(generate_request))
+
+            # Send final message with continue=False
+            end_request = {
+                "context_id": context_id,
+                "transcript": "",
+                "voice": {
+                    "id": self._tts._opts.voice_id,
+                },
+                "continue": False,
+                "output_format": {
+                    "encoding": self._tts._opts.encoding,
+                    "sample_rate": self._tts._opts.sample_rate,
+                },
+            }
+            if (
+                is_given(self._tts._opts.voice_settings)
+                and self._tts._opts.voice_settings.sampling_params
+            ):
+                end_request["voice"]["sampling_params"] = (
+                    self._tts._opts.voice_settings.sampling_params
                 )
-            except asyncio.TimeoutError:
-                raise APITimeoutError() from None
+            await ws.send_str(json.dumps(end_request))
 
-            async with ws:
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError(
+                        "Respeecher connection closed unexpectedly", request_id=context_id
+                    )
 
-                @utils.log_exceptions(logger=logger)
-                async def input_task() -> None:
-                    async for data in self._input_ch:
-                        if isinstance(data, self._FlushSentinel):
-                            sent_tokenizer_stream.flush()
-                            continue
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("Unexpected Respeecher message type %s", msg.type)
+                    continue
 
-                        sent_tokenizer_stream.push_text(data)
+                data = json.loads(msg.data)
 
-                    sent_tokenizer_stream.end_input()
+                if data.get("context_id") != context_id:
+                    logger.warning(
+                        "Received a message with context_id=%s instead of expected %s",
+                        data.get("context_id"),
+                        context_id,
+                    )
+                    continue
 
-                @utils.log_exceptions(logger=logger)
-                async def send_task() -> None:
-                    async for sent in sent_tokenizer_stream:
-                        generate_request = {
-                            "context_id": request_id,
-                            "transcript": sent.token,
-                            "voice": {
-                                "id": self._tts._opts.voice_id,
-                            },
-                            "continue": True,  # Always True for streamed sentences
-                            "output_format": {
-                                "encoding": self._tts._opts.encoding,
-                                "sample_rate": self._tts._opts.sample_rate,
-                            },
-                        }
-                        if (
-                            is_given(self._tts._opts.voice_settings)
-                            and self._tts._opts.voice_settings.sampling_params
-                        ):
-                            generate_request["voice"]["sampling_params"] = (
-                                self._tts._opts.voice_settings.sampling_params
-                            )
+                if data.get("type") == "error":
+                    raise APIError(f"Respeecher returned error: {data.get('error')}")
 
-                        self._mark_started()
-                        await ws.send_str(json.dumps(generate_request))
+                if data.get("type") == "chunk":
+                    audio_data = base64.b64decode(data["data"])
+                    output_emitter.push(audio_data)
 
-                    # Send final message with continue=False to signal end of stream
-                    end_request = {
-                        "context_id": request_id,
-                        "transcript": "",
-                        "voice": {
-                            "id": self._tts._opts.voice_id,
-                        },
-                        "continue": False,
-                        "output_format": {
-                            "encoding": self._tts._opts.encoding,
-                            "sample_rate": self._tts._opts.sample_rate,
-                        },
-                    }
-                    if (
-                        is_given(self._tts._opts.voice_settings)
-                        and self._tts._opts.voice_settings.sampling_params
-                    ):
-                        end_request["voice"]["sampling_params"] = (
-                            self._tts._opts.voice_settings.sampling_params
-                        )
+                elif data.get("type") == "done":
+                    if sent_tokenizer_stream.closed:
+                        output_emitter.end_input()
+                        break
 
-                    await ws.send_str(json.dumps(end_request))
-
-                @utils.log_exceptions(logger=logger)
-                async def recv_task() -> None:
-                    current_segment_id: str | None = None
-                    while True:
-                        msg = await ws.receive()
-                        if msg.type in (
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSING,
-                        ):
-                            raise APIStatusError(
-                                message="Respeecher websocket closed unexpectedly",
-                                status_code=500,
-                                request_id=request_id,
-                                body=None,
-                            )
-
-                        if msg.type != aiohttp.WSMsgType.TEXT:
-                            logger.warning("Unexpected Respeecher message type %s", msg.type)
-                            continue
-
-                        data = json.loads(msg.data)
-
-                        if data.get("type") == "error":
-                            logger.error(f"Respeecher API error: {data.get('error')}")
-                            raise APIError(message=data.get("error"))
-
-                        if data.get("type") == "chunk":
-                            if current_segment_id is None:
-                                current_segment_id = request_id
-                                output_emitter.start_segment(segment_id=current_segment_id)
-
-                            audio_data = base64.b64decode(data["data"])
-                            output_emitter.push(audio_data)
-                        elif data.get("type") == "done":
-                            logger.debug(f"Received done message: {data}")
-                            # End the current segment if one was started
-                            if current_segment_id is not None:
-                                output_emitter.end_segment()
-                                current_segment_id = None
-
-                            # Only end input when the sentence tokenizer stream is closed
-                            # and we've received the final done message
-                            if sent_tokenizer_stream.closed:
-                                output_emitter.end_input()
-                                return
-                        else:
-                            raise APIError("Unexpected websocket message type")
-
+        try:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 tasks = [
-                    asyncio.create_task(input_task()),
-                    asyncio.create_task(send_task()),
-                    asyncio.create_task(recv_task()),
+                    asyncio.create_task(_input_task()),
+                    asyncio.create_task(_sentence_stream_task(ws)),
+                    asyncio.create_task(_recv_task(ws)),
                 ]
 
                 try:
@@ -390,14 +390,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
-
-        try:
-            await _ws_operation()
-        except APITimeoutError:
-            raise
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
+                message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
+        finally:
+            output_emitter.end_segment()
