@@ -85,7 +85,6 @@ class TTS(tts.TTS):
         return self._tts_service
 
     def list_voices(self) -> None:
-        """List available TTS voices from NVIDIA."""
         try:
             service = self._ensure_session()
             config_response = service.stub.GetRivaSynthesisConfig(
@@ -114,7 +113,6 @@ class TTS(tts.TTS):
 
         except Exception as e:
             logger.error(f"Error listing TTS voices: {e}")
-            # Don't raise to allow debugging
             logger.warning("TTS voice listing failed, skipping...")
             return
 
@@ -138,11 +136,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = opts
         self._context_id = utils.shortuuid()
         self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-        self._token_q = queue.Queue()  # Thread-safe queue
-        self._shutdown_event = threading.Event()  # Thread-safe event
+        self._token_q = queue.Queue()
+        self._shutdown_event = threading.Event()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Test NVIDIA TTS authentication - simplified for debugging."""
         output_emitter.initialize(
             request_id=self._context_id,
             sample_rate=self._opts.sample_rate,
@@ -162,16 +159,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _process_segments() -> None:
             async for word_stream in self._sent_tokenizer_stream:
-                self._token_q.put(word_stream)  # Thread-safe put
-            self._token_q.put(SENT_FLUSH_SENTINEL)  # Thread-safe put
+                self._token_q.put(word_stream)
+            self._token_q.put(SENT_FLUSH_SENTINEL)
 
-        def _synthesize_worker() -> None:  # Regular function, not async
-            """Runs in separate thread - handles all blocking operations"""
+        def _synthesize_worker() -> None:
             try:
                 service = self._tts._ensure_session()
                 while not self._shutdown_event.is_set():
                     try:
-                        # Use timeout to allow checking shutdown event
                         token = self._token_q.get(timeout=0.1)
                     except queue.Empty:
                         continue
@@ -179,7 +174,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if token is SENT_FLUSH_SENTINEL:
                         break
 
-                    # This entire block is blocking and runs in thread
                     try:
                         responses = service.synthesize_online(
                             token.token,
@@ -188,7 +182,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                             sample_rate_hz=self._opts.sample_rate,
                             encoding=AudioEncoding.LINEAR_PCM,
                         )
-                        # Iterate over the blocking generator
                         for response in responses:
                             if self._shutdown_event.is_set():
                                 break
@@ -202,7 +195,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             except Exception as e:
                 logger.error(f"Error in synthesis worker: {e}")
 
-        # Start synthesis worker thread
         synthesize_thread = threading.Thread(
             target=_synthesize_worker,
             name="nvidia-tts-synthesize",
@@ -210,7 +202,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         synthesize_thread.start()
 
-        # Run async tasks
         tasks = [
             asyncio.create_task(_input_task()),
             asyncio.create_task(_process_segments()),
@@ -220,6 +211,5 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
             await asyncio.to_thread(synthesize_thread.join, timeout=5.0)
         finally:
-            # Signal thread to stop and wait for it
             self._shutdown_event.set()
             output_emitter.end_segment()
