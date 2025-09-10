@@ -1,26 +1,18 @@
 import logging
-from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
-from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
     JobProcess,
-    MetricsCollectedEvent,
-    ModelSettings,
     RoomInputOptions,
     RoomOutputOptions,
-    RunContext,
     WorkerOptions,
     cli,
-    metrics,
 )
-from livekit.agents.llm import function_tool
-from livekit.agents.voice.transcription.filters import filter_markdown
-from livekit.plugins import deepgram, nvidia, openai, silero
+from livekit.plugins import nvidia, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
