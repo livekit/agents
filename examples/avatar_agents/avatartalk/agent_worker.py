@@ -28,7 +28,7 @@ async def entrypoint(ctx: JobContext):
 
     avatar = avatartalk.AvatarSession(
         api_url=os.getenv("AVATARTALK_API_URL"),
-        avatar_id=os.getenv("AVATARTALK_AVATAR_NAME"),
+        avatar_name=os.getenv("AVATARTALK_AVATAR_NAME"),
         avatar_expression=os.getenv("AVATARTALK_AVATAR_EXPRESSION"),
         api_secret=os.getenv("AVATARTALK_API_KEY"),
     )
