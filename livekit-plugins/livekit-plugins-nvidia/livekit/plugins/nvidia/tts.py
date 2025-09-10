@@ -79,13 +79,11 @@ class TTS(tts.TTS):
                 ],
             )
 
-            # WORKAROUND: Manually patch the auth metadata since get_auth_metadata() is broken
             auth.metadata = [
                 ("authorization", f"Bearer {self.nvidia_api_key}"),
                 ("function-id", self._opts.function_id),
             ]
 
-            logger.debug(f"Manually set auth metadata: {auth.metadata}")
             self._tts_service = riva.client.SpeechSynthesisService(auth)
         return self._tts_service
 
