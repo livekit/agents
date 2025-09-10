@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 from dataclasses import dataclass
+from typing import Union
 
 import riva.client
 import riva.client.proto.riva_tts_pb2 as riva_tts
@@ -17,6 +19,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
+from riva.client.proto.riva_audio_pb2 import AudioEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,7 @@ class TTSOptions:
     function_id: str
     server: str
     sample_rate: int
+    language_code: str
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
 
 
@@ -37,6 +41,7 @@ class TTS(tts.TTS):
         server: str = "grpc.nvcf.nvidia.com:443",
         voice: str = "Magpie-Multilingual.EN-US.Sofia",
         function_id: str = "877104f7-e885-42b9-8de8-f6e4c6303969",
+        language_code: str = "en-US",
         api_key: str | None = None,
     ):
         super().__init__(
@@ -59,6 +64,7 @@ class TTS(tts.TTS):
             function_id=function_id,
             server=server,
             sample_rate=16000,
+            language_code=language_code,
             word_tokenizer=tokenize.blingfire.SentenceTokenizer(),
         )
         self._tts_service = None
@@ -87,59 +93,10 @@ class TTS(tts.TTS):
             self._tts_service = riva.client.SpeechSynthesisService(auth)
         return self._tts_service
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.ChunkedStream:
-        raise NotImplementedError("Chunked synthesis is not supported for NVIDIA TTS")
-
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options, opts=self._opts)
-
-
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._context_id = utils.shortuuid()
-        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Test NVIDIA TTS authentication - simplified for debugging."""
-        output_emitter.initialize(
-            request_id=self._context_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            stream=True,
-            mime_type="audio/mp3",
-        )
-        output_emitter.start_segment(segment_id=self._context_id)
-
-        async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
-                    continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
-
-        async def _process_segments() -> None:
-            async for word_stream in self._sent_tokenizer_stream:
-                logger.info(f"Processing segment: {word_stream.token}")
-
-        # service = self._tts._ensure_session()
-
-        tasks = [
-            asyncio.create_task(_input_task()),
-            asyncio.create_task(_process_segments()),
-        ]
-
-        await asyncio.gather(*tasks)
-
-    def list_voices(self, service: riva.client.SpeechSynthesisService) -> None:
+    def list_voices(self) -> None:
         """List available TTS voices from NVIDIA."""
         try:
+            service = self._ensure_session()
             config_response = service.stub.GetRivaSynthesisConfig(
                 riva.client.proto.riva_tts_pb2.RivaSynthesisConfigRequest()
             )
@@ -169,3 +126,77 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Don't raise to allow debugging
             logger.warning("TTS voice listing failed, skipping...")
             return
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        raise NotImplementedError("Chunked synthesis is not supported for NVIDIA TTS")
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.SynthesizeStream:
+        return SynthesizeStream(tts=self, conn_options=conn_options, opts=self._opts)
+
+
+SENT_FLUSH_SENTINEL = object()
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._opts = opts
+        self._context_id = utils.shortuuid()
+        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
+        self._token_q = asyncio.Queue[Union[tokenize.TokenData, object]]()
+        self._shutdown_event = asyncio.Event()
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        """Test NVIDIA TTS authentication - simplified for debugging."""
+        output_emitter.initialize(
+            request_id=self._context_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            stream=True,
+            mime_type="audio/pcm",
+        )
+        output_emitter.start_segment(segment_id=self._context_id)
+
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    self._sent_tokenizer_stream.flush()
+                    continue
+                self._sent_tokenizer_stream.push_text(data)
+            self._sent_tokenizer_stream.end_input()
+
+        async def _process_segments() -> None:
+            async for word_stream in self._sent_tokenizer_stream:
+                self._token_q.put_nowait(word_stream)
+            self._token_q.put_nowait(SENT_FLUSH_SENTINEL)
+
+        async def _synthesize_worker() -> None:
+            service = self._tts._ensure_session()
+            while not self._shutdown_event.is_set():
+                token = await self._token_q.get()
+                if token is SENT_FLUSH_SENTINEL:
+                    break
+                logger.info(f"Synthesizing token: {token.token}")
+                responses = service.synthesize_online(
+                    token.token,
+                    self._opts.voice,
+                    self._opts.language_code,
+                    sample_rate_hz=self._opts.sample_rate,
+                    encoding=AudioEncoding.LINEAR_PCM,
+                )
+                for response in responses:
+                    output_emitter.push(response.audio)
+
+        tasks = [
+            asyncio.create_task(_input_task()),
+            asyncio.create_task(_process_segments()),
+            asyncio.create_task(_synthesize_worker()),
+        ]
+
+        await asyncio.gather(*tasks)
+
+        output_emitter.end_segment()
