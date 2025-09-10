@@ -30,6 +30,7 @@ from ..llm.tool_context import (
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from ._utils import create_access_token
 from .models import LLMModels
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
@@ -49,6 +50,7 @@ class _LLMOptions:
     api_key: str
     api_secret: str
     verbosity: NotGivenOr[Verbosity]
+    extra_kwargs: dict[str, Any]
 
 
 class LLM(llm.LLM):
@@ -67,13 +69,14 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         super().__init__()
 
-        lk_base_url = base_url if is_given(base_url) else os.environ.get("LIVEKIT_URL")
+        lk_base_url = base_url if is_given(base_url) else os.environ.get("LIVEKIT_GATEWAY_URL")
         if not lk_base_url:
             raise ValueError(
-                "LIVEKIT_URL is required, either as argument or set LIVEKIT_URL environmental variable"
+                "LIVEKIT_GATEWAY_URL is required, either as argument or set LIVEKIT_GATEWAY_URL environmental variable"
             )
 
         lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
@@ -91,6 +94,7 @@ class LLM(llm.LLM):
         self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
+            top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             max_completion_tokens=max_completion_tokens,
@@ -98,10 +102,11 @@ class LLM(llm.LLM):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             verbosity=verbosity,
+            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else {},
         )
         self._client = openai.AsyncClient(
-            api_key=None,  # TODO: what api key and url use here?
-            base_url=None,
+            api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
+            base_url=self._opts.base_url,
             max_retries=max_retries if is_given(max_retries) else 0,
             http_client=httpx.AsyncClient(
                 timeout=timeout
@@ -172,10 +177,14 @@ class LLM(llm.LLM):
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
+        extra.update(self._opts.extra_kwargs)
+
+        # reset the access token to avoid expiration
+        self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         return LLMStream(
             self,
             model=self._opts.model,
-            provider_fmt="openai",  # TODO: use format according to model provider
+            provider_fmt="openai",  # always sent in openai format
             strict_tool_schema=True,
             client=self._client,
             chat_ctx=chat_ctx,
