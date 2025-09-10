@@ -67,9 +67,6 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
-            logger.debug(
-                f"Creating TTS service with auth: {self.nvidia_api_key} and function_id: {self._opts.function_id}"
-            )
             auth = riva.client.Auth(
                 uri=self._opts.server,
                 use_ssl=True,
