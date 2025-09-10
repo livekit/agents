@@ -2,24 +2,20 @@ import asyncio
 import json
 import logging
 import os
-import secrets
+import queue
+import threading
 from dataclasses import dataclass
-from typing import Union
 
 import riva.client
-import riva.client.proto.riva_tts_pb2 as riva_tts
+from riva.client.proto.riva_audio_pb2 import AudioEncoding
 
 from livekit.agents import (
-    NOT_GIVEN,
     APIConnectOptions,
-    NotGivenOr,
     tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils import is_given
-from riva.client.proto.riva_audio_pb2 import AudioEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +143,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = opts
         self._context_id = utils.shortuuid()
         self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-        self._token_q = asyncio.Queue[Union[tokenize.TokenData, object]]()
-        self._shutdown_event = asyncio.Event()
+        self._token_q = queue.Queue()  # Thread-safe queue
+        self._shutdown_event = threading.Event()  # Thread-safe event
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Test NVIDIA TTS authentication - simplified for debugging."""
@@ -171,32 +167,66 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _process_segments() -> None:
             async for word_stream in self._sent_tokenizer_stream:
-                self._token_q.put_nowait(word_stream)
-            self._token_q.put_nowait(SENT_FLUSH_SENTINEL)
+                self._token_q.put(word_stream)  # Thread-safe put
+            self._token_q.put(SENT_FLUSH_SENTINEL)  # Thread-safe put
 
-        async def _synthesize_worker() -> None:
-            service = self._tts._ensure_session()
-            while not self._shutdown_event.is_set():
-                token = await self._token_q.get()
-                if token is SENT_FLUSH_SENTINEL:
-                    break
-                logger.info(f"Synthesizing token: {token.token}")
-                responses = service.synthesize_online(
-                    token.token,
-                    self._opts.voice,
-                    self._opts.language_code,
-                    sample_rate_hz=self._opts.sample_rate,
-                    encoding=AudioEncoding.LINEAR_PCM,
-                )
-                for response in responses:
-                    output_emitter.push(response.audio)
+        def _synthesize_worker() -> None:  # Regular function, not async
+            """Runs in separate thread - handles all blocking operations"""
+            try:
+                service = self._tts._ensure_session()
+                while not self._shutdown_event.is_set():
+                    try:
+                        # Use timeout to allow checking shutdown event
+                        token = self._token_q.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
 
+                    if token is SENT_FLUSH_SENTINEL:
+                        break
+
+                    logger.info(f"Synthesizing token: {token.token}")
+
+                    # This entire block is blocking and runs in thread
+                    try:
+                        responses = service.synthesize_online(
+                            token.token,
+                            self._opts.voice,
+                            self._opts.language_code,
+                            sample_rate_hz=self._opts.sample_rate,
+                            encoding=AudioEncoding.LINEAR_PCM,
+                        )
+                        # Iterate over the blocking generator
+                        for response in responses:
+                            if self._shutdown_event.is_set():
+                                break
+                            output_emitter.push(response.audio)
+                    except Exception as e:
+                        logger.error(f"Error in synthesis: {e}")
+                        continue
+                    finally:
+                        self._token_q.task_done()
+
+            except Exception as e:
+                logger.error(f"Error in synthesis worker: {e}")
+
+        # Start synthesis worker thread
+        synthesize_thread = threading.Thread(
+            target=_synthesize_worker,
+            name="nvidia-tts-synthesize",
+            daemon=True,
+        )
+        synthesize_thread.start()
+
+        # Run async tasks
         tasks = [
             asyncio.create_task(_input_task()),
             asyncio.create_task(_process_segments()),
-            asyncio.create_task(_synthesize_worker()),
         ]
 
-        await asyncio.gather(*tasks)
-
-        output_emitter.end_segment()
+        try:
+            await asyncio.gather(*tasks)
+            await asyncio.to_thread(synthesize_thread.join, timeout=5.0)
+        finally:
+            # Signal thread to stop and wait for it
+            self._shutdown_event.set()
+            output_emitter.end_segment()
