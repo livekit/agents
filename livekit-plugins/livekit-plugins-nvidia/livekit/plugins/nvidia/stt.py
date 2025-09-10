@@ -118,7 +118,6 @@ class SpeechStream(stt.SpeechStream):
         self._asr_service = riva.client.ASRService(self._auth)
 
     async def _run(self) -> None:
-
         try:
             config = self._create_streaming_config()
 
@@ -180,7 +179,6 @@ class SpeechStream(stt.SpeechStream):
 
     def _recognition_thread_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
         try:
-
             audio_generator = self._audio_chunk_generator()
 
             response_generator = self._asr_service.streaming_response_generator(
@@ -195,7 +193,6 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             logger.exception(f"Error in NVIDIA recognition thread: {e}")
             self._thread_exception = e
-        finally:
 
     def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
         while not self._shutdown_event.is_set():
@@ -208,7 +205,6 @@ class SpeechStream(stt.SpeechStream):
                 logger.error(f"Error in audio generator: {e}")
                 break
 
-
     def _handle_response(self, response) -> None:
         try:
             if not hasattr(response, "results") or not response.results:
@@ -217,7 +213,7 @@ class SpeechStream(stt.SpeechStream):
             for result in response.results:
                 if not hasattr(result, "alternatives") or not result.alternatives:
                     continue
-                    
+
                 alternative = result.alternatives[0]
                 transcript = getattr(alternative, "transcript", "")
                 is_final = getattr(result, "is_final", False)
