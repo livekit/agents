@@ -1,10 +1,14 @@
 import logging
+import os
 from typing import Any
 
 import aiohttp
 
+from livekit.agents import NOT_GIVEN, NotGivenOr
+
 logger = logging.getLogger(__name__)
 
+DEFAULT_API_URL = "https://api.avatartalk.ai"
 
 class AvatarTalkException(Exception):
     """Exception for AvatarTalkAPI errors"""
@@ -13,11 +17,15 @@ class AvatarTalkException(Exception):
 class AvatarTalkAPI:
     def __init__(
         self,
-        api_url: str,
-        api_key: str,
+        api_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
     ):
-        self._api_url = api_url
-        self._api_key = api_key
+        self._api_url = api_url or DEFAULT_API_URL
+        avatartalk_api_key = api_key or os.getenv("AVATARTALK_API_KEY")
+        if avatartalk_api_key is None:
+            raise AvatarTalkException("AVATARTALK_API_KEY must be set")
+
+        self._api_key = avatartalk_api_key
         self._headers = {"Authorization": f"Bearer {self._api_key}"}
 
     async def _request(self, method: str, path: str, **kwargs):
