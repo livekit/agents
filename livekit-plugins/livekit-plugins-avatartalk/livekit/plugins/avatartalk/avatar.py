@@ -11,6 +11,7 @@ from .log import logger
 
 _AVATAR_AGENT_IDENTITY = "avatartalk-agent"
 _AVATAR_AGENT_NAME = "avatartalk-agent"
+DEFAULT_AVATAR_NAME = "european_man"
 SAMPLE_RATE = 16000
 
 
@@ -20,17 +21,15 @@ class AvatarSession:
     def __init__(
         self,
         *,
-        api_url: NotGivenOr[str | None] = NOT_GIVEN,
-        api_secret: NotGivenOr[str | None] = NOT_GIVEN,
+        api_url: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         avatar_name: NotGivenOr[str | None] = NOT_GIVEN,
         avatar_expression: NotGivenOr[str | None] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
-        **kwargs,
     ):
-        self._api_url = api_url or (os.getenv("AVATARTALK_API_URL") or NOT_GIVEN)
-        self._api_secret = api_secret or (os.getenv("AVATARTALK_API_SECRET") or NOT_GIVEN)
-        self._avatar_name = avatar_name or (os.getenv("AVATARTALK_AVATAR_NAME") or NOT_GIVEN)
+        self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
+        self._avatar_name = avatar_name or (os.getenv("AVATARTALK_AVATAR_NAME") or DEFAULT_AVATAR_NAME)
         self._avatar_expression = avatar_expression or (
             os.getenv("AVATARTALK_AVATAR_EXPRESSION") or NOT_GIVEN
         )
@@ -38,16 +37,10 @@ class AvatarSession:
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._agent_track = None
 
-        if self._api_url is NOT_GIVEN or self._api_secret is NOT_GIVEN:
-            raise AvatarTalkException("api_url and api_secret must be provided")
-
-        if self._avatar_name is NOT_GIVEN:
-            raise AvatarTalkException("avatar_name must be provided")
-
         if self._avatar_expression is NOT_GIVEN:
             self._avatar_expression = "expressive"
 
-        self._avatartalk_api = AvatarTalkAPI(self._api_url, self._api_secret)
+
 
     def __generate_lk_token(
         self,
@@ -57,8 +50,7 @@ class AvatarSession:
         participant_identity: str,
         participant_name: str,
         as_agent: bool = True,
-        local_participant_identity: Optional[str] = None,
-        **kwargs,
+        local_participant_identity: Optional[str] = None
     ):
         token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
