@@ -24,6 +24,7 @@ STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
+DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
@@ -42,7 +43,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,  # TODO: add a default model
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
@@ -56,11 +57,11 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
         )
 
-        lk_base_url = base_url if is_given(base_url) else os.environ.get("LIVEKIT_GATEWAY_URL")
-        if not lk_base_url:
-            raise ValueError(
-                "LIVEKIT_GATEWAY_URL is required, either as argument or set LIVEKIT_GATEWAY_URL environmental variable"
-            )
+        lk_base_url = (
+            base_url
+            if is_given(base_url)
+            else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
+        )
 
         lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
         if not lk_api_key:
@@ -231,14 +232,16 @@ class SpeechStream(stt.SpeechStream):
 
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
-                if msg_type == "interim_transcript":
+                if msg_type == "session.created":
+                    pass
+                elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
                 elif msg_type == "final_transcript":
                     self._process_transcript(data, is_final=True)
-                # elif msg_type == "session.finalized":
-                #     logger.info("Received session.finalize ACK from LiveKit STT", data)
-                # elif msg_type == "session.closed":
-                #     logger.info("Received session.close ACK from LiveKit STT", data)
+                elif msg_type == "session.finalized":
+                    pass
+                elif msg_type == "session.closed":
+                    pass
                 elif msg_type == "error":
                     raise APIError(f"LiveKit STT returned error: {msg.data}")
                 else:
@@ -280,8 +283,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit STT WebSocket."""
-        params = {
-            "model": self._opts.model,
+        params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
                 "encoding": self._opts.encoding,
@@ -289,8 +291,12 @@ class SpeechStream(stt.SpeechStream):
             },
         }
 
+        if self._opts.model:
+            # TODO: is this required?
+            params["model"] = self._opts.model
+
         if self._opts.language:
-            params["settings"]["language"] = self._opts.language  # type: ignore
+            params["settings"]["language"] = self._opts.language
 
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
@@ -306,6 +312,7 @@ class SpeechStream(stt.SpeechStream):
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            # TODO: handle 429 status code when quota is exceeded
             raise APIConnectionError("failed to connect to LiveKit STT") from e
         return ws
 

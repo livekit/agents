@@ -36,6 +36,8 @@ from .models import LLMModels
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
+DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
+DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
 @dataclass
@@ -57,7 +59,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: LLMModels | str = "openai/gpt4o",
+        model: LLMModels | str = DEFAULT_MODEL,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -73,11 +75,11 @@ class LLM(llm.LLM):
     ) -> None:
         super().__init__()
 
-        lk_base_url = base_url if is_given(base_url) else os.environ.get("LIVEKIT_GATEWAY_URL")
-        if not lk_base_url:
-            raise ValueError(
-                "LIVEKIT_GATEWAY_URL is required, either as argument or set LIVEKIT_GATEWAY_URL environmental variable"
-            )
+        lk_base_url = (
+            base_url
+            if is_given(base_url)
+            else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
+        )
 
         lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
         if not lk_api_key:

@@ -25,6 +25,7 @@ TTSEncoding = Literal[
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
+DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
@@ -44,7 +45,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,  # TODO: add a default model
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
@@ -74,11 +75,11 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        lk_base_url = base_url if is_given(base_url) else os.environ.get("LIVEKIT_GATEWAY_URL")
-        if not lk_base_url:
-            raise ValueError(
-                "LIVEKIT_GATEWAY_URL is required, either as argument or set LIVEKIT_GATEWAY_URL environmental variable"
-            )
+        lk_base_url = (
+            base_url
+            if is_given(base_url)
+            else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
+        )
 
         lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
         if not lk_api_key:
@@ -133,11 +134,16 @@ class TTS(tts.TTS):
             "type": "session.create",
             "sample_rate": str(self._opts.sample_rate),
             "encoding": self._opts.encoding,
-            "voice": self._opts.voice,
-            "model": f"{self._opts.model}",
-            "language": self._opts.language,
             "extra": self._opts.extra_kwargs,
         }
+
+        if self._opts.voice:
+            params["voice"] = self._opts.voice
+        if self._opts.model:
+            params["model"] = self._opts.model  # TODO: what options are required?
+        if self._opts.language:
+            params["language"] = self._opts.language
+
         try:
             await ws.send_str(json.dumps(params))
         except Exception as e:
@@ -266,7 +272,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     current_session_id = session_id
                     output_emitter.start_segment(segment_id=session_id)
 
-                if data.get("type") == "output_audio":
+                if data.get("type") == "session.created":
+                    pass
+                elif data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "done":
