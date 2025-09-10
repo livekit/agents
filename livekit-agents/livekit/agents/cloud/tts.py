@@ -77,7 +77,7 @@ class TTS(tts.TTS):
         lk_base_url = base_url if is_given(base_url) else os.environ.get("LIVEKIT_GATEWAY_URL")
         if not lk_base_url:
             raise ValueError(
-                "LIVEKIT_URL is required, either as argument or set LIVEKIT_URL environmental variable"
+                "LIVEKIT_GATEWAY_URL is required, either as argument or set LIVEKIT_GATEWAY_URL environmental variable"
             )
 
         lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
@@ -266,15 +266,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     current_session_id = session_id
                     output_emitter.start_segment(segment_id=session_id)
 
-                if data.get("type") == "error":
-                    raise APIError(f"LiveKit TTS returned error: {msg.data}")
-
                 if data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "done":
                     output_emitter.end_input()
                     break
+                elif data.get("type") == "error":
+                    raise APIError(f"LiveKit TTS returned error: {msg.data}")
                 else:
                     logger.warning("unexpected message %s", data)
 
