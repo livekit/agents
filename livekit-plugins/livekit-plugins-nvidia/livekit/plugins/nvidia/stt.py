@@ -50,7 +50,6 @@ class STT(stt.STT):
             ),
         )
 
-        # Get API key from parameter or environment
         if is_given(api_key):
             self.nvidia_api_key = api_key
         else:
