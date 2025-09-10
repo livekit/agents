@@ -45,7 +45,7 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(),
+        stt=nvidia.STT(),
         tts=nvidia.TTS(),
         # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,

@@ -7,7 +7,9 @@ import riva.client
 import riva.client.proto.riva_tts_pb2 as riva_tts
 
 from livekit.agents import (
+    NOT_GIVEN,
     APIConnectOptions,
+    NotGivenOr,
     tts,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -38,7 +40,7 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        if is_given(api_key):
+        if api_key:
             self.nvidia_api_key = api_key
         else:
             self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
@@ -52,7 +54,9 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
-            # Use the same Auth pattern as STT (which works!)
+            logger.debug(
+                f"Creating TTS service with auth: {self.nvidia_api_key} and function_id: {self._opts.function_id}"
+            )
             auth = riva.client.Auth(
                 uri=self._opts.server,
                 use_ssl=True,
@@ -104,9 +108,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             logger.exception(f"Error in NVIDIA TTS: {e}")
             logger.warning("NVIDIA TTS authentication failed, but continuing...")
-
-        # Don't call end_input() or end_segment() since we're not producing audio
-        # Let the TTS framework handle the lifecycle
 
     def list_voices(self, service: riva.client.SpeechSynthesisService) -> None:
         """List available TTS voices from NVIDIA."""
