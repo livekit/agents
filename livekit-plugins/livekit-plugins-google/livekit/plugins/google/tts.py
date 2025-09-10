@@ -15,8 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import weakref
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass, replace
 
 from google.api_core.client_options import ClientOptions
@@ -283,6 +284,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        self._char_count = 0  # Track total characters sent to Google TTS API
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         encoding = self._opts.encoding
@@ -346,15 +348,21 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter: tts.AudioEmitter,
         streaming_config: texttospeech.StreamingSynthesizeConfig,
     ) -> None:
+        # Reset character count for this segment
+        segment_char_count = 0
+
         @utils.log_exceptions(logger=logger)
         async def input_generator() -> AsyncGenerator[
             texttospeech.StreamingSynthesizeRequest, None
         ]:
+            nonlocal segment_char_count
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 
                 async for input in input_stream:
                     self._mark_started()
+                    # Track the characters sent to Google TTS API for this segment
+                    segment_char_count += len(input.token)
                     yield texttospeech.StreamingSynthesizeRequest(
                         input=texttospeech.StreamingSynthesisInput(text=input.token)
                     )
@@ -379,7 +387,70 @@ class SynthesizeStream(tts.SynthesizeStream):
         except GoogleAPICallError as e:
             raise APIStatusError(e.message, status_code=e.code or -1) from e
         finally:
+            # Store the character count for this segment
+            self._char_count = segment_char_count
             await input_gen.aclose()
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[tts.SynthesizedAudio]) -> None:
+        """Task used to collect metrics - override to use actual character count sent to API"""
+        audio_duration = 0.0
+        ttfb = -1.0
+        request_id = ""
+        segment_id = ""
+
+        def _emit_metrics() -> None:
+            nonlocal audio_duration, ttfb, request_id, segment_id
+
+            if not self._started_time or self._current_attempt_has_error:
+                return
+
+            duration = time.perf_counter() - self._started_time
+
+            if not self._mtc_pending_texts:
+                return
+
+            # Pop the pending text (maintain compatibility with base behavior)
+            text = self._mtc_pending_texts.pop(0)
+            if not text:
+                return
+
+            # Use the actual character count sent to Google API instead of segment text length
+            actual_char_count = self._char_count
+
+            metrics = tts.TTSMetrics(
+                timestamp=time.time(),
+                request_id=request_id,
+                segment_id=segment_id,
+                ttfb=ttfb,
+                duration=duration,
+                characters_count=actual_char_count,  # Use the tracked character count
+                audio_duration=audio_duration,
+                cancelled=self._task.cancelled(),
+                label=self._tts._label,
+                streamed=True,
+            )
+            if self._tts_request_span:
+                from livekit.agents.telemetry import trace_types
+                self._tts_request_span.set_attribute(
+                    trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
+                )
+            self._tts.emit("metrics_collected", metrics)
+
+            audio_duration = 0.0
+            ttfb = -1.0
+            request_id = ""
+            self._started_time = 0
+
+        async for ev in event_aiter:
+            if ttfb == -1.0:
+                ttfb = time.perf_counter() - self._started_time
+
+            audio_duration += ev.frame.duration
+            request_id = ev.request_id
+            segment_id = ev.segment_id
+
+            if ev.is_final:
+                _emit_metrics()
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
