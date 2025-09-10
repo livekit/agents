@@ -1052,7 +1052,7 @@ class RealtimeSession(
                 tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             elif is_raw_function_tool(tool):
                 tool_info = get_raw_function_info(tool)
-                tool_desc = tool_info.raw_schema
+                tool_desc = dict(tool_info.raw_schema)
                 if "meta" in tool_desc:
                     del tool_desc["meta"]  # unset meta key
                 tool_desc["type"] = "function"  # internally tagged
