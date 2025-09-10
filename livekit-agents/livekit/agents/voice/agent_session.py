@@ -22,7 +22,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import cloud, llm, stt, tts, utils, vad
+from .. import inference, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
@@ -285,13 +285,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
-            stt = cloud.STT(model=stt)
+            stt = inference.STT(model=stt)
 
         if isinstance(llm, str):
-            llm = cloud.LLM(model=llm)
+            llm = inference.LLM(model=llm)
 
         if isinstance(tts, str):
-            tts = cloud.TTS(model=tts)
+            tts = inference.TTS(model=tts)
 
         self._stt = stt or None
         self._vad = vad or None

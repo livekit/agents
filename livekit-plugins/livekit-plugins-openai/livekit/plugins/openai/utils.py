@@ -4,7 +4,7 @@ import os
 from collections.abc import Awaitable
 from typing import Callable, Union
 
-from livekit.agents.cloud.llm import to_fnc_ctx
+from livekit.agents.inference.llm import to_fnc_ctx
 
 AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 

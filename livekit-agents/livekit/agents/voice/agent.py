@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
-from .. import cloud, llm, stt, tokenize, tts, utils, vad
+from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
@@ -59,13 +59,13 @@ class Agent:
         self._turn_detection = turn_detection
 
         if isinstance(stt, str):
-            stt = cloud.STT(model=stt)
+            stt = inference.STT(model=stt)
 
         if isinstance(llm, str):
-            llm = cloud.LLM(model=llm)
+            llm = inference.LLM(model=llm)
 
         if isinstance(tts, str):
-            tts = cloud.TTS(model=tts)
+            tts = inference.TTS(model=tts)
 
         self._stt = stt
         self._llm = llm
