@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -10,7 +11,9 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
+    tokenize,
     tts,
+    utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
@@ -23,6 +26,8 @@ class TTSOptions:
     voice: str
     function_id: str
     server: str
+    sample_rate: int
+    word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
 
 
 class TTS(tts.TTS):
@@ -49,7 +54,13 @@ class TTS(tts.TTS):
                     "NVIDIA_API_KEY is not set. Either pass api_key parameter or set NVIDIA_API_KEY environment variable"
                 )
 
-        self._opts = TTSOptions(voice=voice, function_id=function_id, server=server)
+        self._opts = TTSOptions(
+            voice=voice,
+            function_id=function_id,
+            server=server,
+            sample_rate=16000,
+            word_tokenizer=tokenize.blingfire.SentenceTokenizer(),
+        )
         self._tts_service = None
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
@@ -91,23 +102,40 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
+        self._context_id = utils.shortuuid()
+        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Test NVIDIA TTS authentication - simplified for debugging."""
-        try:
-            logger.debug("Testing NVIDIA TTS authentication...")
-            service = self._tts._ensure_session()
-            logger.info(f"TTS service created successfully: {type(service)}")
+        output_emitter.initialize(
+            request_id=self._context_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            stream=True,
+            mime_type="audio/mp3",
+        )
+        output_emitter.start_segment(segment_id=self._context_id)
 
-            # Check the manually patched auth metadata
-            logger.debug(f"TTS service auth metadata: {service.auth.metadata}")
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    self._sent_tokenizer_stream.flush()
+                    continue
+                self._sent_tokenizer_stream.push_text(data)
+            self._sent_tokenizer_stream.end_input()
 
-            self.list_voices(service)
-            logger.info("NVIDIA TTS service initialization successful!")
+        async def _process_segments() -> None:
+            async for word_stream in self._sent_tokenizer_stream:
+                logger.info(f"Processing segment: {word_stream.token}")
 
-        except Exception as e:
-            logger.exception(f"Error in NVIDIA TTS: {e}")
-            logger.warning("NVIDIA TTS authentication failed, but continuing...")
+        # service = self._tts._ensure_session()
+
+        tasks = [
+            asyncio.create_task(_input_task()),
+            asyncio.create_task(_process_segments()),
+        ]
+
+        await asyncio.gather(*tasks)
 
     def list_voices(self, service: riva.client.SpeechSynthesisService) -> None:
         """List available TTS voices from NVIDIA."""
