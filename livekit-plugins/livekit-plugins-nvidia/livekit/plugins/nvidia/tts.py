@@ -184,8 +184,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if token is SENT_FLUSH_SENTINEL:
                         break
 
-                    logger.info(f"Synthesizing token: {token.token}")
-
                     # This entire block is blocking and runs in thread
                     try:
                         responses = service.synthesize_online(

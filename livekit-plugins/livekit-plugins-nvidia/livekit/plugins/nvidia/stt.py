@@ -241,14 +241,12 @@ class SpeechStream(stt.SpeechStream):
                 return
 
             for result in response.results:
-                logger.debug("Result", extra={"result": result})
                 if not hasattr(result, "alternatives") or not result.alternatives:
                     continue
 
                 # Extract the best alternative (first one)
                 alternative = result.alternatives[0]
                 transcript = getattr(alternative, "transcript", "")
-                confidence = getattr(alternative, "confidence", 0.0)
                 is_final = getattr(result, "is_final", False)
 
                 # Skip empty transcripts
@@ -288,10 +286,6 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=[speech_data],
                     )
                     self._event_ch.send_nowait(interim_event)
-
-                # Log the transcript for debugging
-                status = "FINAL" if is_final else "INTERIM"
-                logger.info(f"Transcript ({status}): '{transcript}' (confidence: {confidence:.3f})")
 
         except Exception as e:
             logger.error(f"Error handling response: {e}")
