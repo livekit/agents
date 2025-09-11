@@ -192,7 +192,11 @@ class AudioRecognition:
         self.update_stt(stt)
 
     def commit_user_turn(
-        self, *, audio_detached: bool, transcript_timeout: float, stt_flush_duration: float
+        self,
+        *,
+        audio_detached: bool,
+        transcript_timeout: float,
+        stt_flush_duration: float = 2.0,
     ) -> None:
         if not self._stt or self._closing.is_set():
             return
