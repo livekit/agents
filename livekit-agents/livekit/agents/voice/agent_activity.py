@@ -893,11 +893,12 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.clear_audio()
 
-    def commit_user_turn(self, *, transcript_timeout: float) -> None:
+    def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
+            stt_flush_duration=stt_flush_duration,
         )
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
@@ -1222,6 +1223,17 @@ class AgentActivity(RecognitionHooks):
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+
+            if self._session._closing:
+                # add user input to chat context
+                user_message = llm.ChatMessage(
+                    role="user",
+                    content=[info.new_transcript],
+                    transcript_confidence=info.transcript_confidence,
+                )
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
+
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
@@ -1289,19 +1301,21 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
+        user_message = llm.ChatMessage(
+            role="user",
+            content=[info.new_transcript],
+            transcript_confidence=info.transcript_confidence,
+        )
+
         if self._scheduling_paused:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+            if self._session._closing:
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
             return
-
-        # id is generated
-        user_message: llm.ChatMessage = llm.ChatMessage(
-            role="user",
-            content=[info.new_transcript],
-            transcript_confidence=info.transcript_confidence,
-        )
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the
@@ -1331,6 +1345,9 @@ class AgentActivity(RecognitionHooks):
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+            if user_message and self._session._closing:
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
             return
 
         speech_handle: SpeechHandle | None = None
@@ -2052,6 +2069,8 @@ class AgentActivity(RecognitionHooks):
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
+            self._agent._chat_ctx.items.append(fnc_call)
+            # TODO(long): add it to session.history
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
@@ -2133,16 +2152,18 @@ class AgentActivity(RecognitionHooks):
         if len(message_outputs) > 0:
             # there should be only one message
             msg_gen, text_out, _ = message_outputs[0]
-            msg = llm.ChatMessage(
-                role="assistant",
-                content=[text_out.text if text_out else ""],
-                id=msg_gen.message_id,
-                interrupted=False,
-            )
-            self._agent._chat_ctx.items.append(msg)
-            speech_handle._item_added([msg])
-            self._session._conversation_item_added(msg)
-            current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, msg.text_content or "")
+            forwarded_text = text_out.text if text_out else ""
+            if forwarded_text:
+                msg = llm.ChatMessage(
+                    role="assistant",
+                    content=[forwarded_text],
+                    id=msg_gen.message_id,
+                    interrupted=False,
+                )
+                self._agent._chat_ctx.items.append(msg)
+                speech_handle._item_added([msg])
+                self._session._conversation_item_added(msg)
+                current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         for tee in tees:
             await tee.aclose()
@@ -2181,6 +2202,10 @@ class AgentActivity(RecognitionHooks):
                     if sanitized_out.reply_required:
                         generate_tool_reply = True
                         fnc_executed_ev._reply_required = True
+
+                    # add tool output to the chat context
+                    self._agent._chat_ctx.items.append(sanitized_out.fnc_call_out)
+                    # TODO: add to session.history
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(

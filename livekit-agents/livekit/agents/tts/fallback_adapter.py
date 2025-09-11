@@ -267,6 +267,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         conn_options: APIConnectOptions,
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
+        # If TTS doesn't support streaming, wrap it with StreamAdapter
         if tts.capabilities.streaming:
             stream = tts.stream(conn_options=conn_options)
         else:

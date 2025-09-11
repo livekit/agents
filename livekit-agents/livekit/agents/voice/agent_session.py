@@ -330,6 +330,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
+        self._closing: bool = False
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
@@ -454,6 +455,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._closing = False
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
@@ -664,6 +666,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
+            self._closing = True
+
             if self._activity is not None:
                 if not drain:
                     try:
@@ -685,6 +689,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.input.video = None
                 self.output.audio = None
                 self.output.transcription = None
+
+                if (
+                    reason != CloseReason.ERROR
+                    and (audio_recognition := self._activity._audio_recognition) is not None
+                ):
+                    # wait for the user transcript to be committed
+                    audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
 
                 await self._activity.aclose()
                 self._activity = None
@@ -860,13 +871,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self, *, transcript_timeout: float = 2.0) -> None:
+    def commit_user_turn(
+        self, *, transcript_timeout: float = 2.0, stt_flush_duration: float = 2.0
+    ) -> None:
         """Commit the user turn and generate a reply.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
                 to be received after committing the user turn.
                 Increase this value if the STT is slow to respond.
+            stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
+                to flush the buffer and generate the final transcript.
 
         Raises:
             RuntimeError: If the AgentSession isn't running.
@@ -874,7 +889,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn(transcript_timeout=transcript_timeout)
+        self._activity.commit_user_turn(
+            transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
+        )
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -1067,7 +1084,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             end_time = last_speaking_time or time.time()
             self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=int(end_time * 1_000_000_000))  # nanoseconds
+            self._user_speaking_span.end()
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":

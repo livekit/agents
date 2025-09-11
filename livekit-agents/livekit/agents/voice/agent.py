@@ -12,6 +12,7 @@ from ..llm import (
     ChatContext,
     FunctionTool,
     RawFunctionTool,
+    RealtimeModel,
     find_function_tools,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
@@ -314,6 +315,10 @@ class Agent:
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
         """
+        from .transcription.filters import filter_emoji, filter_markdown
+
+        text = filter_markdown(text)
+        text = filter_emoji(text)
         return Agent.default.tts_node(self, text, model_settings)
 
     def realtime_audio_output_node(
@@ -714,6 +719,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+
+        if (
+            task_info.function_call
+            and isinstance(old_activity.llm, RealtimeModel)
+            and not old_activity.llm.capabilities.manual_function_calls
+        ):
+            logger.error(
+                f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context,"
+                "using AgentTask inside a function tool may have unexpected behavior."
+            )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         await session._update_activity(
