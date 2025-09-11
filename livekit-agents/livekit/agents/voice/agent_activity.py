@@ -2320,7 +2320,6 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech = None
 
         if self._session.options.resume_false_interruption and self._session.output.audio:
-            self._session._update_agent_state("speaking")
             self._session.output.audio.resume()
 
     # move them to the end to avoid shadowing the same named modules for mypy
