@@ -42,8 +42,8 @@ class STTOptions:
 class STT(stt.STT):
     def __init__(
         self,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         *,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,  # TODO: add a default model
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
@@ -63,16 +63,24 @@ class STT(stt.STT):
             else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
         )
 
-        lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
+        lk_api_key = (
+            api_key
+            if is_given(api_key)
+            else os.getenv("LIVEKIT_GATEWAY_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+        )
         if not lk_api_key:
             raise ValueError(
-                "LIVEKIT_API_KEY is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+                "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
             )
 
-        lk_api_secret = api_secret if is_given(api_secret) else os.environ.get("LIVEKIT_API_SECRET")
+        lk_api_secret = (
+            api_secret
+            if is_given(api_secret)
+            else os.getenv("LIVEKIT_GATEWAY_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+        )
         if not lk_api_secret:
             raise ValueError(
-                "LIVEKIT_API_SECRET is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
         self._opts = STTOptions(
@@ -292,7 +300,6 @@ class SpeechStream(stt.SpeechStream):
         }
 
         if self._opts.model:
-            # TODO: is this required?
             params["model"] = self._opts.model
 
         if self._opts.language:
@@ -312,7 +319,8 @@ class SpeechStream(stt.SpeechStream):
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            # TODO: handle 429 status code when quota is exceeded
+            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
+                raise APIStatusError("LiveKit STT quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit STT") from e
         return ws
 

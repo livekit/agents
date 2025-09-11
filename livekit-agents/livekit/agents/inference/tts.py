@@ -44,8 +44,8 @@ class _TTSOptions:
 class TTS(tts.TTS):
     def __init__(
         self,
-        *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,  # TODO: add a default model
+        *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
@@ -59,7 +59,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str, optional): TTS model to use, in "provider/model" format, use a default one if not provided
+            model (TTSModels | str, optional): TTS model to use, in "provider/model[:voice_id]" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -81,17 +81,36 @@ class TTS(tts.TTS):
             else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
         )
 
-        lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
+        lk_api_key = (
+            api_key
+            if is_given(api_key)
+            else os.getenv("LIVEKIT_GATEWAY_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+        )
         if not lk_api_key:
             raise ValueError(
-                "LIVEKIT_API_KEY is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+                "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
             )
 
-        lk_api_secret = api_secret if is_given(api_secret) else os.environ.get("LIVEKIT_API_SECRET")
+        lk_api_secret = (
+            api_secret
+            if is_given(api_secret)
+            else os.getenv("LIVEKIT_GATEWAY_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+        )
         if not lk_api_secret:
             raise ValueError(
-                "LIVEKIT_API_SECRET is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
+
+        # read voice id from the model if provided: "provider/model:voice_id"
+        if is_given(model) and (idx := model.rfind(":")) != -1:
+            if is_given(voice) and voice != model[idx + 1 :]:
+                logger.warning(
+                    "`voice` is provided via both argument and model, using the one from the argument",
+                    extra={"voice": voice, "model": model},
+                )
+            else:
+                voice = model[idx + 1 :]
+            model = model[:idx]
 
         self._opts = _TTSOptions(
             model=model,
@@ -128,6 +147,8 @@ class TTS(tts.TTS):
                 session.ws_connect(f"{base_url}/tts", headers=headers), timeout
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
+                raise APIStatusError("LiveKit TTS quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit TTS") from e
 
         params = {
@@ -140,7 +161,7 @@ class TTS(tts.TTS):
         if self._opts.voice:
             params["voice"] = self._opts.voice
         if self._opts.model:
-            params["model"] = self._opts.model  # TODO: what options are required?
+            params["model"] = self._opts.model
         if self._opts.language:
             params["language"] = self._opts.language
 

@@ -58,8 +58,8 @@ class _LLMOptions:
 class LLM(llm.LLM):
     def __init__(
         self,
-        *,
         model: LLMModels | str = DEFAULT_MODEL,
+        *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -81,16 +81,24 @@ class LLM(llm.LLM):
             else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
         )
 
-        lk_api_key = api_key if is_given(api_key) else os.environ.get("LIVEKIT_API_KEY")
+        lk_api_key = (
+            api_key
+            if is_given(api_key)
+            else os.getenv("LIVEKIT_GATEWAY_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+        )
         if not lk_api_key:
             raise ValueError(
-                "LIVEKIT_API_KEY is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+                "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
             )
 
-        lk_api_secret = api_secret if is_given(api_secret) else os.environ.get("LIVEKIT_API_SECRET")
+        lk_api_secret = (
+            api_secret
+            if is_given(api_secret)
+            else os.getenv("LIVEKIT_GATEWAY_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+        )
         if not lk_api_secret:
             raise ValueError(
-                "LIVEKIT_API_SECRET is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
         self._opts = _LLMOptions(
