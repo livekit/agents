@@ -1096,6 +1096,7 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
+            self._session._update_agent_state("listening")
             self._paused_speech = self._current_speech
 
             # reset the false interruption timer
@@ -2287,6 +2288,7 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.done()
             ):
+                self._session._update_agent_state("speaking")
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
@@ -2318,6 +2320,7 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech = None
 
         if self._session.options.resume_false_interruption and self._session.output.audio:
+            self._session._update_agent_state("speaking")
             self._session.output.audio.resume()
 
     # move them to the end to avoid shadowing the same named modules for mypy
