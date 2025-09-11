@@ -49,7 +49,9 @@ But _this should be italic_ and **this should be bold** in markdown.
 Also *single asterisk italic* and __double underscore bold__ should work.
 
 Code identifiers: calculate_total(), get_user_data(), process_file_contents()
-Class names: MyClass_Name, some_module_function, API_ENDPOINT_URL"""  # noqa: E501
+Class names: MyClass_Name, some_module_function, API_ENDPOINT_URL
+
+This is a sentence. 这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台，我们正在测试Markdown~~过滤~~。"""  # noqa: E501
 
 
 MARKDOWN_EXPECTED_OUTPUT = """Mathematics and Markdown Guide
@@ -99,7 +101,9 @@ But this should be italic and this should be bold in markdown.
 Also single asterisk italic and double underscore bold should work.
 
 Code identifiers: calculate_total(), get_user_data(), process_file_contents()
-Class names: MyClass_Name, some_module_function, API_ENDPOINT_URL"""  # noqa: E501
+Class names: MyClass_Name, some_module_function, API_ENDPOINT_URL
+
+This is a sentence. 这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台，我们正在测试Markdown。"""  # noqa: E501
 
 
 @pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 50])
