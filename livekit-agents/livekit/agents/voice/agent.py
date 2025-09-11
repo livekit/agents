@@ -720,7 +720,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             and not old_activity.llm.capabilities.manual_function_calls
         ):
             logger.error(
-                f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context,"
+                f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context, "
                 "using AgentTask inside a function tool may have unexpected behavior."
             )
 
