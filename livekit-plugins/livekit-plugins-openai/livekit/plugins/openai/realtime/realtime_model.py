@@ -729,7 +729,7 @@ class RealtimeSession(
 
                 else:
                     # all other events must be sent after session.created has been received
-                    await self._session_created_future.result()
+                    await self._session_created_future
 
                 if isinstance(msg, ResponseCreateEvent):
                     # response.create event must be sent only after session.created and
