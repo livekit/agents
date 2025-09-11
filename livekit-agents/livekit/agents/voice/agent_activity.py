@@ -2042,9 +2042,6 @@ class AgentActivity(RecognitionHooks):
         async def _read_fnc_stream() -> None:
             async for fnc in fnc_stream_for_tracing:
                 function_calls.append(fnc)
-                # add the function call to the chat context once it's received
-                self._agent._chat_ctx.items.append(fnc)
-                # TODO: add to session.history
 
         tasks.append(
             asyncio.create_task(
@@ -2055,6 +2052,8 @@ class AgentActivity(RecognitionHooks):
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
+            self._agent._chat_ctx.items.append(fnc_call)
+            # TODO(long): add it to session.history
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:

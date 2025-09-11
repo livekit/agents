@@ -202,7 +202,7 @@ class RealtimeModel(llm.RealtimeModel):
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
-                resumable_function_calls=False,
+                manual_function_calls=False,
             )
         )
 

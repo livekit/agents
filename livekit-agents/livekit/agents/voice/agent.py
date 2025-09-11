@@ -709,7 +709,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
-            and not old_activity.llm.capabilities.resumable_function_calls
+            and not old_activity.llm.capabilities.manual_function_calls
         ):
             logger.error(
                 f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context,"

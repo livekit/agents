@@ -58,7 +58,7 @@ class RealtimeCapabilities:
     user_transcription: bool
     auto_tool_reply_generation: bool
     audio_output: bool
-    resumable_function_calls: bool
+    manual_function_calls: bool
 
 
 class RealtimeError(Exception):
