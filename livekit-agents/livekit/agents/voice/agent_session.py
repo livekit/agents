@@ -861,13 +861,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self, *, transcript_timeout: float = 2.0) -> None:
+    def commit_user_turn(
+        self, *, transcript_timeout: float = 2.0, stt_flush_duration: float = 2.0
+    ) -> None:
         """Commit the user turn and generate a reply.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
                 to be received after committing the user turn.
                 Increase this value if the STT is slow to respond.
+            stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
+                to flush the buffer and generate the final transcript.
 
         Raises:
             RuntimeError: If the AgentSession isn't running.
@@ -875,7 +879,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn(transcript_timeout=transcript_timeout)
+        self._activity.commit_user_turn(
+            transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
+        )
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
