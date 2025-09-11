@@ -522,41 +522,31 @@ class _ZeroNotifyCounter:
         self._count = 0
         self._zero_event = asyncio.Event()
         self._zero_event.set()
-        self._lock = asyncio.Lock()
 
     async def inc(self) -> None:
-        async with self._lock:
-            self._count += 1
-            if self._count == 1:
-                self._zero_event.clear()
+        self._count += 1
+        if self._count == 1:
+            self._zero_event.clear()
 
     async def dec(self) -> None:
-        async with self._lock:
-            if self._count > 0:
-                self._count -= 1
-                if self._count == 0:
-                    self._zero_event.set()
+        if self._count > 0:
+            self._count -= 1
+            if self._count == 0:
+                self._zero_event.set()
 
     async def zero(self) -> None:
-        async with self._lock:
-            self._count = 0
-            self._zero_event.set()
+        self._count = 0
+        self._zero_event.set()
 
     @property
     def count(self) -> int:
         return self._count
 
-    async def wait_until_zero(self, timeout: float | None = None) -> bool:
+    async def wait_until_zero(self, timeout: float | None = None) -> None:
         if timeout is None:
             await self._zero_event.wait()
-            return True
         else:
-            try:
-                await asyncio.wait_for(self._zero_event.wait(), timeout=timeout)
-                return True
-            except asyncio.TimeoutError:
-                await self.zero()  # Zero the counter if timeout occurs
-                return False
+            await asyncio.wait_for(self._zero_event.wait(), timeout=timeout)
 
 
 class RealtimeSession(
@@ -732,19 +722,25 @@ class RealtimeSession(
         async def _send_task() -> None:
             nonlocal closing
             async for msg in self._msg_ch:
-                # do not send any events until the session has been created ("session.created" event)
-                # or pending session updates have been acknowledged ("session.updated" event)
-                # except for further "session.update" events
                 if isinstance(msg, SessionUpdateEvent):
+                    # this is the only event that is safe to send before we have received session.created,
+                    # but we need to count it as a pending update
                     await self._session_updates_pending.inc()
+
                 else:
-                    await self._session_created_future
-                    timeout_occurred = not await self._session_updates_pending.wait_until_zero(
-                        timeout=self._realtime_model._opts.session_updates_waiting_timeout
-                    )
-                    if timeout_occurred:
+                    # all other events must be sent after session.created has been received
+                    await self._session_created_future.result()
+
+                if isinstance(msg, ResponseCreateEvent):
+                    # response.create event must be sent only after session.created and
+                    # all pending session.updated events have been received
+                    try:
+                        await self._session_updates_pending.wait_until_zero(
+                            timeout=self._realtime_model._opts.session_updates_waiting_timeout
+                        )
+                    except asyncio.TimeoutError:
                         logger.warning(
-                            f"Waiting for session update acknowledgements (session.updated events) timed out after {self._realtime_model._opts.session_updates_waiting_timeout}s"
+                            f"Waiting for session.updated event(s) timed out after {self._realtime_model._opts.session_updates_waiting_timeout}s"
                         )
 
                 try:
