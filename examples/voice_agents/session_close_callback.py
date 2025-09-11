@@ -62,7 +62,7 @@ async def entrypoint(ctx: JobContext):
 
         # Optionally, you can delete the room when the session is closed
         # this will stop the worker immediately
-        ctx.delete_room()
+        # ctx.delete_room()
 
 
 if __name__ == "__main__":

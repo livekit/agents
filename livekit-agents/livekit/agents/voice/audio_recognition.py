@@ -106,6 +106,7 @@ class AudioRecognition:
         self._tasks: set[asyncio.Task[Any]] = set()
 
         self._user_turn_span: trace.Span | None = None
+        self._closing = asyncio.Event()
 
     def update_options(
         self,
@@ -135,9 +136,12 @@ class AudioRecognition:
             self._vad_ch.send_nowait(frame)
 
     async def aclose(self) -> None:
-        await aio.cancel_and_wait(*self._tasks)
+        self._closing.set()
+
         if self._commit_user_turn_atask is not None:
-            await aio.cancel_and_wait(self._commit_user_turn_atask)
+            await self._commit_user_turn_atask
+
+        await aio.cancel_and_wait(*self._tasks)
 
         if self._stt_atask is not None:
             await aio.cancel_and_wait(self._stt_atask)
@@ -146,7 +150,7 @@ class AudioRecognition:
             await aio.cancel_and_wait(self._vad_atask)
 
         if self._end_of_turn_task is not None:
-            await aio.cancel_and_wait(self._end_of_turn_task)
+            await self._end_of_turn_task
 
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
@@ -192,8 +196,11 @@ class AudioRecognition:
         *,
         audio_detached: bool,
         transcript_timeout: float,
-        stt_flush_duration: float,
+        stt_flush_duration: float = 2.0,
     ) -> None:
+        if not self._stt or self._closing.is_set():
+            return
+
         async def _commit_user_turn() -> None:
             if time.time() - self._last_final_transcript_time > 0.5:
                 # if the last final transcript is received more than 0.5s ago
@@ -221,13 +228,14 @@ class AudioRecognition:
                         timeout=transcript_timeout,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(
-                        "final transcript not received after timeout",
-                        extra={
-                            "transcript_timeout": transcript_timeout,
-                            "interim_transcript": self._audio_interim_transcript,
-                        },
-                    )
+                    if self._audio_interim_transcript:
+                        logger.warning(
+                            "final transcript not received after timeout",
+                            extra={
+                                "transcript_timeout": transcript_timeout,
+                                "interim_transcript": self._audio_interim_transcript,
+                            },
+                        )
 
             if self._audio_interim_transcript:
                 # emit interim transcript as final for frontend display
@@ -430,7 +438,11 @@ class AudioRecognition:
                         )
 
             extra_sleep = last_speaking_time + endpointing_delay - time.time()
-            await asyncio.sleep(max(extra_sleep, 0))
+            if extra_sleep > 0:
+                try:
+                    await asyncio.wait_for(self._closing.wait(), timeout=extra_sleep)
+                except asyncio.TimeoutError:
+                    pass
 
             confidence_avg = (
                 sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
