@@ -15,21 +15,22 @@ INLINE_PATTERNS = [
     (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),
     # links: keep text part [text](url) -> text
     (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),
-    # bold: remove asterisks from **text**
-    (re.compile(r"\*\*([^*]+?)\*\*"), r"\1"),
-    # italic: remove asterisks from *text*
-    (re.compile(r"\*([^*]+?)\*"), r"\1"),
-    # bold with underscores: remove underscores from __text__
-    (re.compile(r"__([^_]+?)__"), r"\1"),
-    # italic with underscores: remove underscores from _text_
-    (re.compile(r"_([^_]+?)_"), r"\1"),
+    # bold: remove asterisks from **text** (not preceded/followed by non-whitespace)
+    (re.compile(r"(?<!\S)\*\*([^*]+?)\*\*(?!\S)"), r"\1"),
+    # italic: remove asterisks from *text* (not preceded/followed by non-whitespace)
+    (re.compile(r"(?<!\S)\*([^*]+?)\*(?!\S)"), r"\1"),
+    # bold with underscores: remove underscores from __text__ (word boundaries)
+    (re.compile(r"(?<!\w)__([^_]+?)__(?!\w)"), r"\1"),
+    # italic with underscores: remove underscores from _text_ (word boundaries)
+    (re.compile(r"(?<!\w)_([^_]+?)_(?!\w)"), r"\1"),
     # code blocks: remove ``` from ```text```
     (re.compile(r"`{3,4}[\S]*"), ""),
     # inline code: remove ` from `text`
     (re.compile(r"`([^`]+?)`"), r"\1"),
-    # strikethrough: remove ~~text~~
-    (re.compile(r"~~([^~]*?)~~"), ""),
+    # strikethrough: remove ~~text~~ (no spaces next to tildes)
+    (re.compile(r"~~(?!\s)([^~]*?)(?<!\s)~~"), ""),
 ]
+INLINE_SPLIT_TOKENS = " ,.?!;，。？！；"
 
 COMPLETE_LINKS_PATTERN = re.compile(r"\[[^\]]*\]\([^)]*\)")  # links [text](url)
 COMPLETE_IMAGES_PATTERN = re.compile(r"!\[[^\]]*\]\([^)]*\)")  # images ![text](url)
@@ -110,10 +111,22 @@ async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
                 yield processed_line + "\n"
 
             buffer_is_newline = True
-        elif not has_incomplete_pattern(buffer):
-            yield process_complete_text(buffer, is_newline=buffer_is_newline)
-            buffer = ""
-            buffer_is_newline = False
+            continue
+
+        # split at the position after the split token
+        last_split_pos = 0
+        for token in INLINE_SPLIT_TOKENS:
+            last_split_pos = max(last_split_pos, buffer.rfind(token, last_split_pos))
+            if last_split_pos >= len(buffer) - 1:
+                break
+
+        if last_split_pos >= 1:
+            processable = buffer[:last_split_pos]  # exclude the split token
+            rest = buffer[last_split_pos:]
+            if not has_incomplete_pattern(processable):
+                yield process_complete_text(processable, is_newline=buffer_is_newline)
+                buffer = rest
+                buffer_is_newline = False
 
     if buffer:
         yield process_complete_text(buffer, is_newline=buffer_is_newline)
