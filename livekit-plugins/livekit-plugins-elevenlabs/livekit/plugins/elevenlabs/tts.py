@@ -88,6 +88,7 @@ class TTS(tts.TTS):
         streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         auto_mode: NotGivenOr[bool] = NOT_GIVEN,
+        apply_text_normalization: Literal["auto", "off", "on"] = "auto",
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
@@ -149,7 +150,6 @@ class TTS(tts.TTS):
                 "auto_mode is enabled, it expects full sentences or phrases, "
                 "please provide a SentenceTokenizer instead of a WordTokenizer."
             )
-
         self._opts = _TTSOptions(
             voice_id=voice_id,
             voice_settings=voice_settings,
@@ -166,6 +166,7 @@ class TTS(tts.TTS):
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
+            apply_text_normalization=apply_text_normalization,
             preferred_alignment=preferred_alignment,
         )
         self._session = http_session
@@ -448,6 +449,7 @@ class _TTSOptions:
     enable_ssml_parsing: bool
     inactivity_timeout: int
     sync_alignment: bool
+    apply_text_normalization: Literal["auto", "on", "off"]
     preferred_alignment: Literal["normalized", "original"]
     auto_mode: NotGivenOr[bool]
 
@@ -784,6 +786,7 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
         params.append(f"language_code={opts.language}")
     params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")
+    params.append(f"apply_text_normalization={opts.apply_text_normalization}")
     if opts.sync_alignment:
         params.append("sync_alignment=true")
     if is_given(opts.auto_mode):
