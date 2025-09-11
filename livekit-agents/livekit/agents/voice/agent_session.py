@@ -320,6 +320,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
+        self._closing: bool = False
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
@@ -444,6 +445,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._closing = False
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
@@ -653,6 +655,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._lock:
             if not self._started:
                 return
+
+            self._closing = True
 
             if self._activity is not None:
                 if not drain:

@@ -1223,14 +1223,15 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
 
-            # add user input to chat context
-            user_message = llm.ChatMessage(
-                role="user",
-                content=[info.new_transcript],
-                transcript_confidence=info.transcript_confidence,
-            )
-            self._agent._chat_ctx.items.append(user_message)
-            self._session._conversation_item_added(user_message)
+            if self._session._closing:
+                # add user input to chat context
+                user_message = llm.ChatMessage(
+                    role="user",
+                    content=[info.new_transcript],
+                    transcript_confidence=info.transcript_confidence,
+                )
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
 
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
@@ -1310,8 +1311,9 @@ class AgentActivity(RecognitionHooks):
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
-            self._agent._chat_ctx.items.append(user_message)
-            self._session._conversation_item_added(user_message)
+            if self._session._closing:
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
             return
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
@@ -1342,7 +1344,7 @@ class AgentActivity(RecognitionHooks):
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
-            if user_message:
+            if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             return
