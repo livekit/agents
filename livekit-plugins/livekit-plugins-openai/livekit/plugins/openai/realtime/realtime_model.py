@@ -1239,8 +1239,11 @@ class RealtimeSession(
             and (client_event_id := event.response.metadata.get("client_event_id"))
             and (fut := self._response_created_futures.pop(client_event_id, None))
         ):
-            generation_ev.user_initiated = True
-            fut.set_result(generation_ev)
+            if not fut.done():
+                generation_ev.user_initiated = True
+                fut.set_result(generation_ev)
+            else:
+                logger.warning("response of generate_reply received after it's timed out.")
 
         self.emit("generation_created", generation_ev)
 
