@@ -1594,6 +1594,7 @@ class AgentActivity(RecognitionHooks):
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
+        read_transcript_from_tts = False
         if audio_output is not None:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
@@ -1609,6 +1610,7 @@ class AgentActivity(RecognitionHooks):
                 and (timed_texts := await tts_gen_data.timed_texts_fut)
             ):
                 tr_input = timed_texts
+                read_transcript_from_tts = True
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
@@ -1751,6 +1753,11 @@ class AgentActivity(RecognitionHooks):
             speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(exe_task)
             return
+
+        if read_transcript_from_tts and text_out and not text_out.text:
+            logger.warning(
+                "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
+            )
 
         if generated_msg:
             self._agent._chat_ctx.insert(generated_msg)
@@ -1939,11 +1946,14 @@ class AgentActivity(RecognitionHooks):
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
 
+        read_transcript_from_tts = False
+
         # read text and audio outputs
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
             outputs: list[tuple[MessageGeneration, _TextOutput | None, _AudioOutput | None]],
         ) -> None:
+            nonlocal read_transcript_from_tts
             assert isinstance(self.llm, llm.RealtimeModel)
 
             forward_tasks: list[asyncio.Task[Any]] = []
@@ -1989,6 +1999,7 @@ class AgentActivity(RecognitionHooks):
                                 and (timed_texts := await tts_gen_data.timed_texts_fut)
                             ):
                                 tr_text_input = timed_texts
+                                read_transcript_from_tts = True
 
                             tasks.append(tts_task)
                             realtime_audio_result = tts_gen_data.audio_ch
@@ -2164,6 +2175,11 @@ class AgentActivity(RecognitionHooks):
                 speech_handle._item_added([msg])
                 self._session._conversation_item_added(msg)
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+            elif read_transcript_from_tts and text_out is not None:
+                logger.warning(
+                    "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
+                )
 
         for tee in tees:
             await tee.aclose()
