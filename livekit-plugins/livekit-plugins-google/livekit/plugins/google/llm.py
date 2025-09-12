@@ -136,6 +136,10 @@ class LLM(llm.LLM):
                 _, gcp_project = default_async(  # type: ignore
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
+            if not gcp_project or not gcp_location:
+                raise ValueError(
+                    "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
+                )
             gemini_api_key = None  # VertexAI does not require an API key
 
         else:
