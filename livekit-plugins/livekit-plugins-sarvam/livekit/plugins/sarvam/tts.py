@@ -100,9 +100,25 @@ MODEL_SPEAKER_COMPATIBILITY = {
     },
     "bulbul:v3-beta": {
         "all": [
-            "sakshi", "harsh", "chirag", "ritu", "aditya", "isha", "priya", "neha",
-            "rahul", "pooja", "rohan", "simran", "kavya", "anjali", "sneha",
-            "kiran", "vikram", "rajesh", "sunita"
+            "sakshi",
+            "harsh",
+            "chirag",
+            "ritu",
+            "aditya",
+            "isha",
+            "priya",
+            "neha",
+            "rahul",
+            "pooja",
+            "rohan",
+            "simran",
+            "kavya",
+            "anjali",
+            "sneha",
+            "kiran",
+            "vikram",
+            "rajesh",
+            "sunita",
         ],
     },
 }
@@ -280,7 +296,8 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam TTS API Error: {error_text}", status_code=res.status
+                        message=f"Sarvam TTS API Error: {error_text}",
+                        status_code=res.status,
                     )
 
                 response_json = await res.json()
