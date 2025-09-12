@@ -4,6 +4,8 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from livekit import rtc
 
 from ...types import NOT_GIVEN, NotGivenOr
@@ -41,14 +43,16 @@ def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     sess.generate_reply(user_input=ev.text)
 
 
-@dataclass
-class TextInputOptions:
+class _BaseOptions(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class TextInputOptions(_BaseOptions):
     enabled: bool = True
     text_input_cb: TextInputCallback = _default_text_input_cb
 
 
-@dataclass
-class AudioInputOptions:
+class AudioInputOptions(_BaseOptions):
     enabled: bool = True
     sample_rate: int = 24000
     num_channels: int = 1
@@ -59,25 +63,22 @@ class AudioInputOptions:
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
 
-@dataclass
-class VideoInputOptions:
+class VideoInputOptions(_BaseOptions):
     enabled: bool = True
 
 
-@dataclass
-class AudioOutputOptions:
+class AudioOutputOptions(_BaseOptions):
     enabled: bool = True
     sample_rate: int = 24000
     num_channels: int = 1
-    track_publish_options: rtc.TrackPublishOptions = field(
+    track_publish_options: rtc.TrackPublishOptions = Field(
         default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
     track_name: NotGivenOr[str] = NOT_GIVEN
     """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
 
 
-@dataclass
-class TranscriptionOutputOptions:
+class TranscriptionOutputOptions(_BaseOptions):
     enabled: bool = True
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
@@ -87,8 +88,7 @@ class TranscriptionOutputOptions:
     Only effective if `sync_transcription` is True."""
 
 
-@dataclass
-class RoomOptions:
+class RoomOptions(_BaseOptions):
     text_input: NotGivenOr[TextInputOptions | bool] = NOT_GIVEN
     """The text input options. If not provided, default to True."""
     audio_input: NotGivenOr[AudioInputOptions | bool] = NOT_GIVEN
@@ -99,6 +99,7 @@ class RoomOptions:
     """The audio output options. If not provided, default to True."""
     transcription_output: NotGivenOr[TranscriptionOutputOptions | bool] = NOT_GIVEN
     """The transcription output options. If not provided, default to True."""
+
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,
     accept `DEFAULT_PARTICIPANT_KINDS`."""
@@ -140,6 +141,8 @@ class RoomOptions:
         input_options: NotGivenOr[RoomInputOptions],
         output_options: NotGivenOr[RoomOutputOptions],
     ) -> RoomOptions:
+        from ..agent_session import AgentSession  # noqa: F401
+
         opts = cls()
         if input_options:
             opts.text_input = TextInputOptions(

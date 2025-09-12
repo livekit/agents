@@ -43,7 +43,7 @@ class RoomIO:
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,
-        options: NotGivenOr[RoomOptions] = NOT_GIVEN,
+        options: NotGivenOr[RoomOptions | dict[str, Any]] = NOT_GIVEN,
         # deprecated
         input_options: NotGivenOr[RoomInputOptions] = NOT_GIVEN,
         output_options: NotGivenOr[RoomOutputOptions] = NOT_GIVEN,
@@ -55,10 +55,13 @@ class RoomIO:
             if not utils.is_given(options):
                 options = RoomOptions._from_legacy(input_options, output_options)
 
-        if not utils.is_given(options):
-            options = RoomOptions()
+        if isinstance(options, RoomOptions):
+            self._options = options
+        elif isinstance(options, dict):
+            self._options = RoomOptions.model_validate(options)
+        else:
+            self._options = RoomOptions()
 
-        self._options: RoomOptions = options
         self._text_input_cb: TextInputCallback | None = None
 
         self._agent_session, self._room = agent_session, room
