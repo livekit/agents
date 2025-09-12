@@ -4,19 +4,12 @@ from ._output import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
-from .room_io import (
-    DEFAULT_ROOM_INPUT_OPTIONS,
-    DEFAULT_ROOM_OUTPUT_OPTIONS,
-    RoomInputOptions,
-    RoomIO,
-    RoomOutputOptions,
-    TextInputEvent,
-)
+from .room_io import RoomIO
+from .types import RoomInputOptions, RoomOptions, RoomOutputOptions, TextInputEvent
 
 __all__ = [
     "RoomIO",
-    "DEFAULT_ROOM_INPUT_OPTIONS",
-    "DEFAULT_ROOM_OUTPUT_OPTIONS",
+    "RoomOptions",
     "RoomInputOptions",
     "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
