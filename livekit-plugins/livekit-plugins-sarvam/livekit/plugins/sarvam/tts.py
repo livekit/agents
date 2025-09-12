@@ -101,7 +101,7 @@ MODEL_SPEAKER_COMPATIBILITY = {
     "bulbul:v3-beta": {
         "all": [
             "sakshi", "harsh", "chirag", "ritu", "aditya", "isha", "priya", "neha",
-            "rahul", "pooja", "rohan", "simran", "kavya", "anjali", "sneha", 
+            "rahul", "pooja", "rohan", "simran", "kavya", "anjali", "sneha",
             "kiran", "vikram", "rajesh", "sunita"
         ],
     },
@@ -167,7 +167,7 @@ class TTS(tts.TTS):
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-20.0 to 20.0) - only supported in v2 for now 
+        pitch: Voice pitch adjustment (-20.0 to 20.0) - only supported in v2 for now
         pace: Speech rate multiplier (0.5 to 2.0)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         enable_preprocessing: Whether to use text preprocessing
@@ -258,7 +258,6 @@ class ChunkedStream(tts.ChunkedStream):
             "enable_preprocessing": self._opts.enable_preprocessing,
             "model": self._opts.model,
         }
-        
         # Only include pitch and loudness for v2 model (not supported in v3-beta)
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
