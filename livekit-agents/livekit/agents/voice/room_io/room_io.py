@@ -48,20 +48,9 @@ class RoomIO:
         input_options: NotGivenOr[RoomInputOptions] = NOT_GIVEN,
         output_options: NotGivenOr[RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
-        if utils.is_given(input_options) or utils.is_given(output_options):
-            logger.warning(
-                "RoomInputOptions and RoomOutputOptions are deprecated, use RoomOptions instead"
-            )
-            if not utils.is_given(options):
-                options = RoomOptions._from_legacy(input_options, output_options)
-
-        if isinstance(options, RoomOptions):
-            self._options = options
-        elif isinstance(options, dict):
-            self._options = RoomOptions.model_validate(options)
-        else:
-            self._options = RoomOptions()
-
+        self._options = RoomOptions.validate(
+            options, room_input_options=input_options, room_output_options=output_options
+        )
         self._text_input_cb: TextInputCallback | None = None
 
         self._agent_session, self._room = agent_session, room
@@ -97,16 +86,16 @@ class RoomIO:
 
     async def start(self) -> None:
         # -- create inputs --
-        input_audio_options = self._options.ensure_audio_input_options()
-        if input_audio_options.pre_connect_audio:
+        input_audio_options = self._options.get_audio_input_options()
+        if input_audio_options and input_audio_options.pre_connect_audio:
             self._pre_connect_audio_handler = PreConnectAudioHandler(
                 room=self._room,
                 timeout=input_audio_options.pre_connect_audio_timeout,
             )
             self._pre_connect_audio_handler.register()
 
-        input_text_options = self._options.ensure_text_input_options()
-        if input_text_options.enabled:
+        input_text_options = self._options.get_text_input_options()
+        if input_text_options:
             self._text_input_cb = input_text_options.text_input_cb
             try:
                 self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
@@ -119,11 +108,11 @@ class RoomIO:
         else:
             self._text_input_cb = None
 
-        input_video_options = self._options.ensure_video_input_options()
-        if input_video_options.enabled:
+        input_video_options = self._options.get_video_input_options()
+        if input_video_options:
             self._video_input = _ParticipantVideoInputStream(self._room)
 
-        if input_audio_options.enabled:
+        if input_audio_options:
             self._audio_input = _ParticipantAudioInputStream(
                 self._room,
                 sample_rate=input_audio_options.sample_rate,
@@ -133,8 +122,8 @@ class RoomIO:
             )
 
         # -- create outputs --
-        output_audio_options = self._options.ensure_audio_output_options()
-        if output_audio_options.enabled:
+        output_audio_options = self._options.get_audio_output_options()
+        if output_audio_options:
             self._audio_output = _ParticipantAudioOutput(
                 self._room,
                 sample_rate=output_audio_options.sample_rate,
@@ -145,8 +134,8 @@ class RoomIO:
                 else "roomio_audio",
             )
 
-        output_transcription_options = self._options.ensure_transcription_output_options()
-        if output_transcription_options.enabled:
+        output_transcription_options = self._options.get_transcription_output_options()
+        if output_transcription_options:
             self._user_tr_output = _ParticipantTranscriptionOutput(
                 room=self._room, is_delta_stream=False, participant=self._participant_identity
             )

@@ -5,7 +5,17 @@ from ._output import (
     _ParticipantTranscriptionOutput,
 )
 from .room_io import RoomIO
-from .types import RoomInputOptions, RoomOptions, RoomOutputOptions, TextInputEvent
+from .types import (
+    AudioInputOptions,
+    AudioOutputOptions,
+    RoomInputOptions,
+    RoomOptions,
+    RoomOutputOptions,
+    TextInputEvent,
+    TextInputOptions,
+    TranscriptionOutputOptions,
+    VideoInputOptions,
+)
 
 __all__ = [
     "RoomIO",
@@ -14,6 +24,11 @@ __all__ = [
     "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
     "TextInputEvent",
+    "TextInputOptions",
+    "AudioInputOptions",
+    "AudioOutputOptions",
+    "TranscriptionOutputOptions",
+    "VideoInputOptions",
     "_ParticipantTranscriptionOutput",
     "_ParticipantAudioOutput",
     "_ParticipantStreamTranscriptionOutput",

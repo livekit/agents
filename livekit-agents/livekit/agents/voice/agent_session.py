@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import time
 from collections.abc import AsyncIterable
@@ -9,6 +8,7 @@ from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Literal,
     Protocol,
@@ -405,6 +405,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions | dict[str, Any]] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> RunResult: ...
@@ -416,6 +417,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions | dict[str, Any]] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -427,6 +429,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions | dict[str, Any]] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> RunResult | None:
@@ -476,40 +480,34 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
 
             elif is_given(room) and not self._room_io:
-                room_input_options = copy.copy(
-                    room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
-                )
-                room_output_options = copy.copy(
-                    room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
-                )
+                room_options = room_io.RoomOptions.validate(
+                    room_options,
+                    room_input_options=room_input_options,
+                    room_output_options=room_output_options,
+                ).model_copy()
 
                 if self.input.audio is not None:
-                    if room_input_options.audio_enabled:
+                    if room_options.audio_input:
                         logger.warning(
                             "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
                         )
-                    room_input_options.audio_enabled = False
+                    room_options.audio_input = False
 
                 if self.output.audio is not None:
-                    if room_output_options.audio_enabled:
+                    if room_options.audio_output:
                         logger.warning(
                             "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
                         )
-                    room_output_options.audio_enabled = False
+                    room_options.audio_output = False
 
                 if self.output.transcription is not None:
-                    if room_output_options.transcription_enabled:
+                    if room_options.transcription_output:
                         logger.warning(
                             "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                         )
-                    room_output_options.transcription_enabled = False
+                    room_options.transcription_output = False
 
-                self._room_io = room_io.RoomIO(
-                    room=room,
-                    agent_session=self,
-                    input_options=room_input_options,
-                    output_options=room_output_options,
-                )
+                self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
 
             # session can be restarted, register the callbacks only once
