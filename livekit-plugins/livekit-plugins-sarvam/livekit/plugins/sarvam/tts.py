@@ -42,7 +42,7 @@ from .log import logger
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 
 # Sarvam TTS specific models and speakers
-SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta"]
+SarvamTTSModels = Literal["bulbul:v2"]
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -69,26 +69,6 @@ SarvamTTSSpeakers = Literal[
     "abhilash",
     "karun",
     "hitesh",
-    # bulbul:v3-beta speakers (lowercase)
-    "sakshi",
-    "harsh",
-    "chirag",
-    "ritu",
-    "aditya",
-    "isha",
-    "priya",
-    "neha",
-    "rahul",
-    "pooja",
-    "rohan",
-    "simran",
-    "kavya",
-    "anjali",
-    "sneha",
-    "kiran",
-    "vikram",
-    "rajesh",
-    "sunita",
 ]
 
 # Model-Speaker compatibility mapping
@@ -97,30 +77,7 @@ MODEL_SPEAKER_COMPATIBILITY = {
         "female": ["anushka", "manisha", "vidya", "arya"],
         "male": ["abhilash", "karun", "hitesh"],
         "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    },
-    "bulbul:v3-beta": {
-        "all": [
-            "sakshi",
-            "harsh",
-            "chirag",
-            "ritu",
-            "aditya",
-            "isha",
-            "priya",
-            "neha",
-            "rahul",
-            "pooja",
-            "rohan",
-            "simran",
-            "kavya",
-            "anjali",
-            "sneha",
-            "kiran",
-            "vikram",
-            "rajesh",
-            "sunita",
-        ],
-    },
+    }
 }
 
 
@@ -179,7 +136,7 @@ class TTS(tts.TTS):
 
     Args:
         target_language_code: BCP-47 language code for supported Indian languages
-        model: Sarvam TTS model to use (bulbul:v2 or bulbul:v3-beta)
+        model: Sarvam TTS model to use (bulbul:v2)
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
