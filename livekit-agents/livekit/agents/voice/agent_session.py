@@ -243,6 +243,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript is received rather than waiting for a definitive turn boundary. This
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
+
+                Note: This option only takes effect when `turn_detection` is set to
+                ``"stt"``, ``"vad"``, or ``None`` (automatic selection). It cannot be used
+                together with an EOU (end-of-utterance) / realtime LLM turn-detection model
+                (i.e. ``turn_detection="realtime_llm"`` or providing an EOU-capable
+                realtime model). In those cases, preemptive generation will be ignored and
+                inference will follow the realtime EOU model's turn boundaries.
                 Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
