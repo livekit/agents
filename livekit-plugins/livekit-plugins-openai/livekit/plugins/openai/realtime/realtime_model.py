@@ -1054,6 +1054,7 @@ class RealtimeSession(
             elif is_raw_function_tool(tool):
                 tool_info = get_raw_function_info(tool)
                 tool_desc = tool_info.raw_schema
+                tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
             else:
                 logger.error(
