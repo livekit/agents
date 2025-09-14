@@ -58,6 +58,7 @@ from openai.types.realtime import (
     RealtimeAudioConfigOutput,
     RealtimeAudioInputTurnDetection,
     RealtimeClientEvent,
+    RealtimeConversationItemFunctionCall,
     RealtimeErrorEvent,
     RealtimeFunctionTool,
     RealtimeResponseCreateParams,
@@ -1405,7 +1406,9 @@ class RealtimeSession(
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
 
-        if item_type == "function_call":
+        if item_type == "function_call" and isinstance(
+            event.item, RealtimeConversationItemFunctionCall
+        ):
             item = event.item
             assert item.call_id is not None, "call_id is None"
             assert item.name is not None, "name is None"

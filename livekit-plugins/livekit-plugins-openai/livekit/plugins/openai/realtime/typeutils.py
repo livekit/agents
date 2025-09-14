@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from typing import cast
 
 from livekit import rtc
 from livekit.agents import llm
@@ -31,7 +32,7 @@ def to_noise_reduction(
     if noise_reduction is None:
         return None
     if isinstance(noise_reduction, InputAudioNoiseReduction):
-        return noise_reduction.type
+        return cast(NoiseReductionType, noise_reduction.type)
     return noise_reduction
 
 
