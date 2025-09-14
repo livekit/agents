@@ -23,24 +23,55 @@ from openai.types.realtime import (
 
 from ..log import logger
 
+# default values got from a "default" session from their API
+DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.SemanticVad(
+    type="semantic_vad",
+    create_response=True,
+    eagerness="medium",
+    interrupt_response=True,
+)
+DEFAULT_TOOL_CHOICE = "auto"
+DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
+DEFAULT_VOICE = "marin"
+
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
+    model="gpt-4o-mini-transcribe",
+)
+
+AZURE_DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.ServerVad(
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
+    create_response=True,
+)
+
+AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
+    model="whisper-1",
+)
+
+DEFAULT_MAX_SESSION_DURATION = 20 * 60  # 20 minutes
+
 
 def to_noise_reduction(
     noise_reduction: NotGivenOr[InputAudioNoiseReduction | NoiseReductionType | None],
 ) -> NoiseReductionType | None:
-    if not is_given(noise_reduction):
-        return None
-    if noise_reduction is None:
+    if not is_given(noise_reduction) or noise_reduction is None:
         return None
     if isinstance(noise_reduction, InputAudioNoiseReduction):
         return cast(NoiseReductionType, noise_reduction.type)
-    return noise_reduction
+    return cast(NoiseReductionType, noise_reduction)
 
 
 def to_audio_transcription(
-    audio_transcription: InputAudioTranscription | AudioTranscription | None,
+    audio_transcription: NotGivenOr[InputAudioTranscription | AudioTranscription | None],
 ) -> AudioTranscription | None:
+    if not is_given(audio_transcription):
+        return DEFAULT_INPUT_AUDIO_TRANSCRIPTION
+
     if audio_transcription is None:
         return None
+
     if isinstance(audio_transcription, InputAudioTranscription):
         return AudioTranscription(
             model=audio_transcription.model,
@@ -51,10 +82,14 @@ def to_audio_transcription(
 
 
 def to_turn_detection(
-    turn_detection: RealtimeAudioInputTurnDetection | TurnDetection | None,
+    turn_detection: NotGivenOr[RealtimeAudioInputTurnDetection | TurnDetection | None],
 ) -> RealtimeAudioInputTurnDetection | None:
+    if not is_given(turn_detection):
+        return DEFAULT_TURN_DETECTION
+
     if turn_detection is None:
         return None
+
     if isinstance(turn_detection, TurnDetection):
         if turn_detection.type == "server_vad":
             return realtime.realtime_audio_input_turn_detection.ServerVad(
@@ -101,42 +136,43 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
 
     elif item.type == "message":
         if item.role == "system" or item.role == "developer":
-            conversation_item = realtime.RealtimeConversationItemSystemMessage(
-                role="system",
-            )
-            content_list: list[realtime.realtime_conversation_item_system_message.Content] = []
+            system_content: list[realtime.realtime_conversation_item_system_message.Content] = []
             for c in item.content:
                 if isinstance(c, str):
-                    content_list.append(
+                    system_content.append(
                         realtime.realtime_conversation_item_system_message.Content(
                             type="input_text",
                             text=c,
                         )
                     )
-            conversation_item.content = content_list
-        elif item.role == "assistant":
-            conversation_item = realtime.RealtimeConversationItemAssistantMessage(
-                role="assistant",
+            conversation_item = realtime.RealtimeConversationItemSystemMessage(
+                type="message",
+                role="system",
+                content=system_content,
             )
-            content_list: list[realtime.realtime_conversation_item_assistant_message.Content] = []
+        elif item.role == "assistant":
+            assistant_content: list[
+                realtime.realtime_conversation_item_assistant_message.Content
+            ] = []
             for c in item.content:
                 if isinstance(c, str):
-                    content_list.append(
+                    assistant_content.append(
                         realtime.realtime_conversation_item_assistant_message.Content(
                             type="output_text",
                             text=c,
                         )
                     )
-            conversation_item.content = content_list
-        elif item.role == "user":
-            conversation_item = realtime.RealtimeConversationItemUserMessage(
-                role="user",
+            conversation_item = realtime.RealtimeConversationItemAssistantMessage(
+                type="message",
+                role="assistant",
+                content=assistant_content,
             )
-            content_list: list[realtime.realtime_conversation_item_user_message.Content] = []
+        elif item.role == "user":
+            user_content: list[realtime.realtime_conversation_item_user_message.Content] = []
             # only user messages could be a list of content
             for c in item.content:
                 if isinstance(c, str):
-                    content_list.append(
+                    user_content.append(
                         realtime.realtime_conversation_item_user_message.Content(
                             type="input_text",
                             text=c,
@@ -147,7 +183,8 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
                     if img.external_url:
                         logger.warning("External URL is not supported for input_image")
                         continue
-                    content_list.append(
+                    assert img.data_bytes is not None
+                    user_content.append(
                         realtime.realtime_conversation_item_user_message.Content(
                             type="input_image",
                             image_url=f"data:{img.mime_type};base64,{base64.b64encode(img.data_bytes).decode('utf-8')}",
@@ -157,18 +194,20 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
                     encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
                         "utf-8"
                     )
-                    content_list.append(
+                    user_content.append(
                         realtime.realtime_conversation_item_user_message.Content(
                             type="input_audio",
                             audio=encoded_audio,
                             transcript=c.transcript,
                         )
                     )
-            conversation_item.content = content_list
+            conversation_item = realtime.RealtimeConversationItemUserMessage(
+                type="message",
+                role="user",
+                content=user_content,
+            )
         else:
             raise ValueError(f"unsupported role: {item.role}")
-
-        conversation_item.type = "message"
 
     conversation_item.id = item.id
     return conversation_item
@@ -206,17 +245,17 @@ def openai_item_to_livekit_item(item: realtime.ConversationItem) -> llm.ChatItem
 
         content: list[llm.ChatContent] = []
         if isinstance(item, realtime.RealtimeConversationItemSystemMessage):
-            for c in item.content:
-                if c.text:
-                    content.append(c.text)
+            for sc in item.content:
+                if sc.text:
+                    content.append(sc.text)
         elif isinstance(item, realtime.RealtimeConversationItemAssistantMessage):
-            for c in item.content:
-                if c.text:
-                    content.append(c.text)
+            for ac in item.content:
+                if ac.text:
+                    content.append(ac.text)
         elif isinstance(item, realtime.RealtimeConversationItemUserMessage):
-            for c in item.content:
-                if c.type == "input_text":
-                    content.append(c.text)
+            for uc in item.content:
+                if uc.type == "input_text" and uc.text is not None:
+                    content.append(uc.text)
                 # intentially ignore image and audio output
                 # this function is used to convert changes to previous chat context
 
@@ -236,4 +275,4 @@ def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
     elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
         return tool_choice["function"]["name"]
 
-    return "auto"
+    return DEFAULT_TOOL_CHOICE

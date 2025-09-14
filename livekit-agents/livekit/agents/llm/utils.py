@@ -12,6 +12,7 @@ from typing import (
     Any,
     Callable,
     Union,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
@@ -137,7 +138,7 @@ class SerializedImage:
 def serialize_image(image: ImageContent, *, use_cache: bool = True) -> SerializedImage:
     cache_key = "serialized_image"  # TODO(long): use hash of encoding options if available
     if use_cache and cache_key in image._cache:
-        return image._cache[cache_key]
+        return cast(SerializedImage, image._cache[cache_key])
 
     serialized_image: SerializedImage
     if isinstance(image.image, str):

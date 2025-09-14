@@ -83,7 +83,12 @@ from openai.types.realtime.realtime_session_create_response import (
 
 from ..log import logger
 from ..models import RealtimeModels
-from .typeutils import (
+from .utils import (
+    AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+    AZURE_DEFAULT_TURN_DETECTION,
+    DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
+    DEFAULT_MAX_SESSION_DURATION,
+    DEFAULT_VOICE,
     livekit_item_to_openai_item,
     openai_item_to_livekit_item,
     to_audio_transcription,
@@ -159,36 +164,6 @@ class _ResponseGeneration:
     """timestamp when the first token was received"""
 
 
-# default values got from a "default" session from their API
-DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.SemanticVad(
-    type="semantic_vad",
-    create_response=True,
-    eagerness="medium",
-    interrupt_response=True,
-)
-DEFAULT_TOOL_CHOICE = "auto"
-DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
-DEFAULT_VOICE = "marin"
-
-DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
-    model="gpt-4o-mini-transcribe",
-)
-
-AZURE_DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.ServerVad(
-    type="server_vad",
-    threshold=0.5,
-    prefix_padding_ms=300,
-    silence_duration_ms=200,
-    create_response=True,
-)
-
-AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
-    model="whisper-1",
-)
-
-DEFAULT_MAX_SESSION_DURATION = 20 * 60  # 20 minutes
-
-
 class RealtimeModel(llm.RealtimeModel):
     @overload
     def __init__(
@@ -234,7 +209,9 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_noise_reduction: NotGivenOr[
             NoiseReductionType | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[
+            RealtimeAudioInputTurnDetection | TurnDetection | None
+        ] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
@@ -314,13 +291,9 @@ class RealtimeModel(llm.RealtimeModel):
             voice=voice,
             tool_choice=tool_choice or None,
             modalities=modalities,
-            input_audio_transcription=to_audio_transcription(input_audio_transcription)
-            if is_given(input_audio_transcription)
-            else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+            input_audio_transcription=to_audio_transcription(input_audio_transcription),
             input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection)
-            if is_given(turn_detection)
-            else DEFAULT_TURN_DETECTION,
+            turn_detection=to_turn_detection(turn_detection),
             api_key=api_key,
             base_url=base_url_val,
             is_azure=is_azure,
@@ -425,9 +398,9 @@ class RealtimeModel(llm.RealtimeModel):
         return cls(
             voice=voice,
             modalities=modalities,
-            input_audio_transcription=input_audio_transcription,
-            input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=turn_detection,
+            input_audio_transcription=to_audio_transcription(input_audio_transcription),
+            input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
+            turn_detection=to_turn_detection(turn_detection),
             temperature=temperature,
             speed=speed,
             tracing=tracing,
@@ -462,16 +435,16 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.voice = voice
 
         if is_given(turn_detection):
-            self._opts.turn_detection = to_turn_detection(turn_detection)
+            self._opts.turn_detection = to_turn_detection(turn_detection)  # type: ignore
 
         if is_given(tool_choice):
             self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if is_given(input_audio_transcription):
-            self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)
+            self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)  # type: ignore
 
         if is_given(input_audio_noise_reduction):
-            self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
+            self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)  # type: ignore
 
         if is_given(max_response_output_tokens):
             self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
@@ -897,9 +870,6 @@ class RealtimeSession(
         if self._instructions is not None:
             session.instructions = self._instructions
 
-        if self._realtime_model._opts.tracing:
-            session.tracing = self._realtime_model._opts.tracing
-
         # initial session update
         return SessionUpdateEvent(
             type="session.update",
@@ -943,7 +913,7 @@ class RealtimeSession(
             kwargs["voice"] = voice
 
         if is_given(turn_detection):
-            self._realtime_model._opts.turn_detection = turn_detection
+            self._realtime_model._opts.turn_detection = turn_detection  # type: ignore
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
@@ -955,7 +925,7 @@ class RealtimeSession(
             kwargs["input_audio_transcription"] = input_audio_transcription
 
         if is_given(input_audio_noise_reduction):
-            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
+            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction  # type: ignore
             kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
 
         if is_given(speed):
@@ -1041,8 +1011,13 @@ class RealtimeSession(
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
+            assert isinstance(ev.session, RealtimeSessionCreateRequest)
             assert ev.session.tools is not None
-            retained_tool_names = {name for t in ev.session.tools if (name := t.name) is not None}
+            retained_tool_names: set[str] = set()
+            for t in ev.session.tools:
+                if isinstance(t, RealtimeFunctionTool) and t.name is not None:
+                    retained_tool_names.add(t.name)
+                # TODO(dz): handle MCP tools
             retained_tools = [
                 tool
                 for tool in tools
@@ -1089,8 +1064,8 @@ class RealtimeSession(
             type="session.update",
             session=RealtimeSessionCreateRequest.model_construct(
                 type="realtime",
-                model=self._realtime_model._opts.model,  # type: ignore
-                tools=oai_tools,
+                model=self._realtime_model._opts.model,
+                tools=oai_tools,  # type: ignore
             ),
             event_id=utils.shortuuid("tools_update_"),
         )
