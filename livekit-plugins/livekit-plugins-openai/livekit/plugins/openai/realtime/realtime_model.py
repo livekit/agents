@@ -61,6 +61,7 @@ from openai.types.beta.realtime import (
     ResponseOutputItemDoneEvent,
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
+    SessionCreatedEvent,
     SessionUpdateEvent,
     session_update_event,
 )
@@ -118,6 +119,8 @@ class _RealtimeOptions:
     modalities: list[Literal["text", "audio"]]
     max_session_duration: float | None
     """reset the connection after this many seconds if provided"""
+    session_updates_waiting_timeout: float
+    """timeout in seconds for waiting for session updates to be acknowledged"""
     conn_options: APIConnectOptions
 
 
@@ -194,6 +197,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        session_updates_waiting_timeout: float = 2.0,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
@@ -217,6 +221,7 @@ class RealtimeModel(llm.RealtimeModel):
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        session_updates_waiting_timeout: float = 2.0,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
@@ -240,6 +245,7 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         api_version: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        session_updates_waiting_timeout: float = 2.0,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         modalities = modalities if is_given(modalities) else ["text", "audio"]
@@ -302,6 +308,7 @@ class RealtimeModel(llm.RealtimeModel):
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
+            session_updates_waiting_timeout=session_updates_waiting_timeout,
             conn_options=conn_options,
         )
         self._http_session = http_session
@@ -327,6 +334,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        session_updates_waiting_timeout: float = 2.0,
     ) -> RealtimeModel:
         """
         Create a RealtimeClient instance configured for Azure OpenAI Service.
@@ -400,6 +408,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             entra_token=entra_token,
             base_url=base_url,
+            session_updates_waiting_timeout=session_updates_waiting_timeout,
         )
 
     def update_options(
@@ -509,6 +518,38 @@ def process_base_url(
     return new_url
 
 
+class _ZeroNotifyCounter:
+    def __init__(self) -> None:
+        self._count = 0
+        self._zero_event = asyncio.Event()
+        self._zero_event.set()
+
+    async def inc(self) -> None:
+        self._count += 1
+        if self._count == 1:
+            self._zero_event.clear()
+
+    async def dec(self) -> None:
+        if self._count > 0:
+            self._count -= 1
+            if self._count == 0:
+                self._zero_event.set()
+
+    async def zero(self) -> None:
+        self._count = 0
+        self._zero_event.set()
+
+    @property
+    def count(self) -> int:
+        return self._count
+
+    async def wait_until_zero(self, timeout: float | None = None) -> None:
+        if timeout is None:
+            await self._zero_event.wait()
+        else:
+            await asyncio.wait_for(self._zero_event.wait(), timeout=timeout)
+
+
 class RealtimeSession(
     llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
 ):
@@ -543,6 +584,9 @@ class RealtimeSession(
 
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
+
+        self._session_created_future: asyncio.Future[SessionCreatedEvent] = asyncio.Future()
+        self._session_updates_pending: _ZeroNotifyCounter = _ZeroNotifyCounter()
 
         # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
@@ -679,6 +723,27 @@ class RealtimeSession(
         async def _send_task() -> None:
             nonlocal closing
             async for msg in self._msg_ch:
+                if isinstance(msg, SessionUpdateEvent):
+                    # this is the only event that is safe to send before we have received session.created,
+                    # but we need to count it as a pending update
+                    await self._session_updates_pending.inc()
+
+                else:
+                    # all other events must be sent after session.created has been received
+                    await self._session_created_future
+
+                if isinstance(msg, ResponseCreateEvent):
+                    # response.create event must be sent only after session.created and
+                    # all pending session.updated events have been received
+                    try:
+                        await self._session_updates_pending.wait_until_zero(
+                            timeout=self._realtime_model._opts.session_updates_waiting_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"Waiting for session.updated event(s) timed out after {self._realtime_model._opts.session_updates_waiting_timeout}s"
+                        )
+
                 try:
                     if isinstance(msg, BaseModel):
                         msg = msg.model_dump(
@@ -732,7 +797,15 @@ class RealtimeSession(
 
                         logger.debug(f"<<< {event_copy}")
 
-                    if event["type"] == "input_audio_buffer.speech_started":
+                    if event["type"] == "session.created":
+                        self._session_created_future.set_result(
+                            SessionCreatedEvent.construct(**event)
+                        )
+
+                    elif event["type"] == "session.updated":
+                        await self._session_updates_pending.dec()
+
+                    elif event["type"] == "input_audio_buffer.speech_started":
                         self._handle_input_audio_buffer_speech_started(
                             InputAudioBufferSpeechStartedEvent.construct(**event)
                         )
