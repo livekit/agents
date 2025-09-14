@@ -649,6 +649,7 @@ class RealtimeSession(
                 headers["api-key"] = self._realtime_model._opts.api_key
         else:
             headers["Authorization"] = f"Bearer {self._realtime_model._opts.api_key}"
+            headers["OpenAI-Beta"] = "realtime=v1"
 
         url = process_base_url(
             self._realtime_model._opts.base_url,
