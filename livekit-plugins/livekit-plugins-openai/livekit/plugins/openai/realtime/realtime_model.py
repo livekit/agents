@@ -40,7 +40,7 @@ from openai.types.beta.realtime.session import (
 )
 from openai.types.realtime import (
     AudioTranscription,
-    ConversationItemCreatedEvent,
+    ConversationItemAdded,
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
@@ -762,14 +762,17 @@ class RealtimeSession(
                         self._handle_response_content_part_added(
                             ResponseContentPartAddedEvent.construct(**event)
                         )
-                    elif event["type"] == "conversation.item.created":
-                        self._handle_conversion_item_created(
-                            ConversationItemCreatedEvent.construct(**event)
-                        )
+                    elif event["type"] == "conversation.item.added":
+                        self._handle_conversion_item_added(ConversationItemAdded.construct(**event))
                     elif event["type"] == "conversation.item.deleted":
                         self._handle_conversion_item_deleted(
                             ConversationItemDeletedEvent.construct(**event)
                         )
+                    elif event["type"] == "conversation.item.input_audio_transcription.delta":
+                        # currently incoming transcripts are transcribed only after the user stops speaking
+                        # it's not very useful to emit these as the transcribe process takes place within ~100ms
+                        # when they handle streaming transcriptions, we'll handle it then.
+                        pass
                     elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
                             ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
@@ -802,6 +805,8 @@ class RealtimeSession(
                         self._handle_response_done(ResponseDoneEvent.construct(**event))
                     elif event["type"] == "error":
                         self._handle_error(RealtimeErrorEvent.construct(**event))
+                    elif lk_oai_debug:
+                        logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
                 except Exception:
                     if event["type"] == "response.output_audio.delta":
                         event["delta"] = event["delta"][:10] + "..."
@@ -1278,7 +1283,7 @@ class RealtimeSession(
                 ["text"] if item_type == "text" else ["audio", "text"]
             )
 
-    def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
+    def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         assert event.item.id is not None, "item.id is None"
 
         try:
