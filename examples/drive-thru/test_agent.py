@@ -9,7 +9,13 @@ from livekit.plugins import openai
 from .drivethru_agent import DriveThruAgent, new_userdata
 
 
-def _llm_model() -> llm.LLM:
+def _main_llm() -> llm.LLM | llm.RealtimeModel:
+    # use any LLM or realtime model
+    return openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45)
+
+
+def _judge_llm() -> llm.LLM:
+    # judge must be a text-based LLM
     return openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45)
 
 
@@ -18,7 +24,7 @@ async def test_item_ordering() -> None:
     userdata = await new_userdata()
 
     async with (
-        _llm_model() as llm,
+        _main_llm() as llm,
         AgentSession(llm=llm, userdata=userdata) as sess,
     ):
         # add big mac
@@ -58,7 +64,8 @@ async def test_meal_order() -> None:
     userdata = await new_userdata()
 
     async with (
-        _llm_model() as llm,
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
         AgentSession(llm=llm, userdata=userdata) as sess,
     ):
         # add combo crispy, forgetting drink
@@ -67,7 +74,7 @@ async def test_meal_order() -> None:
             user_input="Can I get a large Combo McCrispy Original with mayonnaise?"
         )
         msg_assert = result.expect.next_event().is_message(role="assistant")
-        await msg_assert.judge(llm, intent="should prompt the user to choose a drink")
+        await msg_assert.judge(judge_llm, intent="should prompt the user to choose a drink")
         result.expect.no_more_events()
 
         # order the drink
@@ -93,7 +100,8 @@ async def test_failure() -> None:
     userdata = await new_userdata()
 
     async with (
-        _llm_model() as llm,
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
         AgentSession(llm=llm, userdata=userdata) as sess,
     ):
         # simulate a tool error
@@ -110,7 +118,7 @@ async def test_failure() -> None:
             await (
                 result.expect.next_event()
                 .is_message(role="assistant")
-                .judge(llm, intent="should inform the user that an error occurred")
+                .judge(judge_llm, intent="should inform the user that an error occurred")
             )
 
             # leaving this commented, some LLMs may occasionally try to retry.
@@ -126,7 +134,8 @@ async def test_unavailable_item() -> None:
             item.available = False
 
     async with (
-        _llm_model() as llm,
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
         AgentSession(llm=llm, userdata=userdata) as sess,
     ):
         # ask for a coke (unavailable)
@@ -136,7 +145,7 @@ async def test_unavailable_item() -> None:
             await (
                 result.expect.next_event()
                 .is_message(role="assistant")
-                .judge(llm, intent="should inform the user that the coca cola is unavailable")
+                .judge(judge_llm, intent="should inform the user that the coca cola is unavailable")
             )
         except AssertionError:
             result.expect.next_event().is_function_call(
@@ -146,7 +155,7 @@ async def test_unavailable_item() -> None:
             await (
                 result.expect.next_event()
                 .is_message(role="assistant")
-                .judge(llm, intent="should inform the user that the coca cola is unavailable")
+                .judge(judge_llm, intent="should inform the user that the coca cola is unavailable")
             )
         result.expect.no_more_events()
 
@@ -156,7 +165,8 @@ async def test_ask_for_size() -> None:
     userdata = await new_userdata()
 
     async with (
-        _llm_model() as llm,
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
         AgentSession(llm=llm, userdata=userdata) as sess,
     ):
         await sess.start(DriveThruAgent(userdata=userdata))
@@ -165,7 +175,7 @@ async def test_ask_for_size() -> None:
         await (
             result.expect.next_event()
             .is_message(role="assistant")
-            .judge(llm, intent="should ask for the drink size")
+            .judge(judge_llm, intent="should ask for the drink size")
         )
         result.expect.no_more_events()
 
@@ -179,7 +189,7 @@ async def test_ask_for_size() -> None:
         await (
             result.expect.next_event()
             .is_message(role="assistant")
-            .judge(llm, intent="should confirm that the fanta orange was ordered")
+            .judge(judge_llm, intent="should confirm that the fanta orange was ordered")
         )
         result.expect.no_more_events()
 
@@ -188,7 +198,11 @@ async def test_ask_for_size() -> None:
 async def test_consecutive_order() -> None:
     userdata = await new_userdata()
 
-    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+    async with (
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
+        AgentSession(llm=llm, userdata=userdata) as sess,
+    ):
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get two mayonnaise sauces?")
         result.expect.skip_next_event_if(type="message", role="assistant")
@@ -202,10 +216,14 @@ async def test_consecutive_order() -> None:
         await (
             result.expect[-1]
             .is_message(role="assistant")
-            .judge(llm, intent="should confirm that two mayonnaise sauces was ordered")
+            .judge(judge_llm, intent="should confirm that two mayonnaise sauces was ordered")
         )
 
-    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+    async with (
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
+        AgentSession(llm=llm, userdata=userdata) as sess,
+    ):
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get a keychup sauce and a McFlurry Oreo ?")
         result.expect.contains_function_call(
@@ -217,7 +235,9 @@ async def test_consecutive_order() -> None:
         await (
             result.expect[-1]
             .is_message(role="assistant")
-            .judge(llm, intent="should confirm that a ketchup and a McFlurry Oreo was ordered")
+            .judge(
+                judge_llm, intent="should confirm that a ketchup and a McFlurry Oreo was ordered"
+            )
         )
 
 
@@ -225,7 +245,11 @@ async def test_consecutive_order() -> None:
 async def test_conv():
     userdata = await new_userdata()
 
-    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+    async with (
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
+        AgentSession(llm=llm, userdata=userdata) as sess,
+    ):
         agent = DriveThruAgent(userdata=userdata)
         await sess.start(agent)
 
@@ -261,7 +285,7 @@ async def test_conv():
         await (
             result.expect.next_event()
             .is_message(role="assistant")
-            .judge(llm, intent="must confirm a Big Mac Combo meal was added/ordered")
+            .judge(judge_llm, intent="must confirm a Big Mac Combo meal was added/ordered")
         )
         result.expect.no_more_events()
 
@@ -273,7 +297,11 @@ async def test_unknown_item():
     # remove the hamburger
     userdata.regular_items = [item for item in userdata.regular_items if item.id != "hamburger"]
 
-    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+    async with (
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
+        AgentSession(llm=llm, userdata=userdata) as sess,
+    ):
         agent = DriveThruAgent(userdata=userdata)
         await sess.start(agent)
 
@@ -282,13 +310,17 @@ async def test_unknown_item():
             result.expect.next_event()
             .is_message(role="assistant")
             .judge(
-                llm,
+                judge_llm,
                 intent="should say a plain hamburger isn't something they have, or suggest something similar",
             )
         )
         result.expect.no_more_events()
 
-    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+    async with (
+        _main_llm() as llm,
+        _judge_llm() as judge_llm,
+        AgentSession(llm=llm, userdata=userdata) as sess,
+    ):
         agent = DriveThruAgent(userdata=userdata)
         await sess.start(agent)
 
@@ -296,6 +328,6 @@ async def test_unknown_item():
         await (
             result.expect.next_event()
             .is_message(role="assistant")
-            .judge(llm, intent="should say they don't have a redbull")
+            .judge(judge_llm, intent="should say they don't have a redbull")
         )
         result.expect.no_more_events()
