@@ -18,6 +18,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents.voice.io import TimedString
 from livekit.plugins import openai, silero
 from livekit.plugins.turn_detector.english import EnglishModel
 
@@ -44,6 +45,12 @@ async def process_structured_output(
     last_response = ""
     acc_text = ""
     async for chunk in text:
+        if isinstance(chunk, TimedString):
+            # when `use_tts_aligned_transcript` is enabled,
+            # text from `tts_node` is already processed, so we can yield it directly
+            yield chunk
+            continue
+
         acc_text += chunk
         try:
             resp: ResponseEmotion = from_json(acc_text, allow_partial="trailing-strings")
@@ -76,6 +83,9 @@ class MyAgent(Agent):
             stt=openai.STT(model="gpt-4o-transcribe"),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=openai.TTS(model="gpt-4o-mini-tts"),
+            # when enabled, `transcription_node` will read from the `tts_node` output
+            # instead of the LLM output, see more details in examples/voice_agents/timed_agent_transcript.py
+            use_tts_aligned_transcript=True,
         )
 
     async def llm_node(
