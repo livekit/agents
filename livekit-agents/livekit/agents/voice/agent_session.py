@@ -631,11 +631,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         reason: CloseReason = CloseReason.USER_INITIATED,
         drain: bool = False,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+        close_room: bool = True,
     ) -> None:
         if self._closing_task:
             return
         self._closing_task = asyncio.create_task(
-            self._aclose_impl(error=error, drain=drain, reason=reason)
+            self._aclose_impl(error=error, drain=drain, reason=reason, close_room=close_room)
         )
 
     @utils.log_exceptions(logger=logger)
@@ -645,6 +646,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         reason: CloseReason,
         drain: bool = False,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+        close_room: bool = True,
     ) -> None:
         if self._root_span_context:
             # make `activity.drain` and `on_exit` under the root span
@@ -715,6 +717,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            if close_room:
+                job_ctx = get_job_context()
+                await job_ctx.delete_room()
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
