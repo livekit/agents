@@ -287,7 +287,7 @@ class RealtimeModel(llm.RealtimeModel):
                 modalities=["audio"],
                 input_audio_transcription=realtime.AudioTranscription(
                     model="gpt-4o-transcribe",
-                )
+                ),
                 input_audio_noise_reduction="near_field",
                 turn_detection=realtime.realtime_audio_input_turn_detection.SemanticVad(
                     type="semantic_vad",
