@@ -37,7 +37,6 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
-DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
 @dataclass
@@ -58,7 +57,7 @@ class _LLMOptions:
 class LLM(llm.LLM):
     def __init__(
         self,
-        model: LLMModels | str = DEFAULT_MODEL,
+        model: LLMModels | str,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
