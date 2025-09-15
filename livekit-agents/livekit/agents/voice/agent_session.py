@@ -704,6 +704,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._room_io.aclose()
                 self._room_io = None
 
+                if close_room:
+                    job_ctx = get_job_context()
+                    await job_ctx.delete_room()
+
             self._started = False
             if self._session_span:
                 self._session_span.end()
@@ -717,10 +721,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
-
-            if close_room:
-                job_ctx = get_job_context()
-                await job_ctx.delete_room()
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
