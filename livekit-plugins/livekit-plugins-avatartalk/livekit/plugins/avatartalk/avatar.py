@@ -11,7 +11,8 @@ from .log import logger
 
 _AVATAR_AGENT_IDENTITY = "avatartalk-agent"
 _AVATAR_AGENT_NAME = "avatartalk-agent"
-DEFAULT_AVATAR_NAME = "european_man"
+DEFAULT_AVATAR_NAME = "japanese_man"
+DEFAULT_AVATAR_EXPRESSION = "expressive"
 SAMPLE_RATE = 16000
 
 
@@ -31,7 +32,7 @@ class AvatarSession:
         self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
         self._avatar_name = avatar_name or (os.getenv("AVATARTALK_AVATAR_NAME") or DEFAULT_AVATAR_NAME)
         self._avatar_expression = avatar_expression or (
-            os.getenv("AVATARTALK_AVATAR_EXPRESSION") or NOT_GIVEN
+            os.getenv("AVATARTALK_AVATAR_EXPRESSION") or DEFAULT_AVATAR_EXPRESSION
         )
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
