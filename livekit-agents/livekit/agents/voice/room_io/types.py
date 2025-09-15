@@ -109,6 +109,8 @@ class RoomOptions(_BaseOptions):
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
 
     def get_text_input_options(self) -> TextInputOptions | None:
+        from ..agent_session import AgentSession  # noqa: F401
+
         if isinstance(self.text_input, TextInputOptions):
             return self.text_input
         return TextInputOptions() if self.text_input is not False else None
