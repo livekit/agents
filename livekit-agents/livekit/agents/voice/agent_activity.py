@@ -1463,6 +1463,7 @@ class AgentActivity(RecognitionHooks):
                     node=self._agent.tts_node,
                     input=audio_source,
                     model_settings=model_settings,
+                    transcription_filters=self._session.options.transcription_filters,
                 )
                 tasks.append(tts_task)
                 if (
@@ -1604,6 +1605,7 @@ class AgentActivity(RecognitionHooks):
                 node=self._agent.tts_node,
                 input=tts_text_input,
                 model_settings=model_settings,
+                transcription_filters=self._session.options.transcription_filters,
             )
             tasks.append(tts_task)
             if (
@@ -1992,6 +1994,7 @@ class AgentActivity(RecognitionHooks):
                                 node=self._agent.tts_node,
                                 input=tts_text_input,
                                 model_settings=model_settings,
+                                transcription_filters=self._session.options.transcription_filters,
                             )
 
                             if (

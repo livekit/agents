@@ -55,6 +55,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
+    from .transcription.filters import TranscriptionFilterName
 
 
 @dataclass
@@ -81,6 +82,7 @@ class VoiceOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
+    transcription_filters: Sequence[TranscriptionFilterName] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -137,6 +139,9 @@ class VoiceActivityVideoSampler:
         return False
 
 
+DEFAULT_TRANSCRIPTION_FILTERS: list[TranscriptionFilterName] = ["markdown", "emoji"]
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -161,6 +166,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         resume_false_interruption: bool = True,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        transcription_filters: NotGivenOr[Sequence[TranscriptionFilterName] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -235,6 +241,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``. When NOT_GIVEN, it will be enabled for non-streaming TTS
                 and disabled for streaming TTS.
+            transcription_filters (Sequence[TranscriptionFilterName], optional): The filters to apply
+                to the transcript, available filters: ``"markdown"``, ``"emoji"``.
+                Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
             preemptive_generation (bool):
@@ -277,6 +286,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             false_interruption_timeout=false_interruption_timeout,
             resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
+            transcription_filters=(
+                transcription_filters
+                if is_given(transcription_filters)
+                else DEFAULT_TRANSCRIPTION_FILTERS
+            ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
