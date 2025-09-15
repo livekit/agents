@@ -88,7 +88,6 @@ from .utils import (
     AZURE_DEFAULT_TURN_DETECTION,
     DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
     DEFAULT_MAX_SESSION_DURATION,
-    DEFAULT_VOICE,
     livekit_item_to_openai_item,
     openai_item_to_livekit_item,
     to_audio_transcription,
@@ -114,6 +113,7 @@ from .utils import (
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_VOICE = "marin"
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -249,6 +249,56 @@ class RealtimeModel(llm.RealtimeModel):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None:
+        """
+        Initialize a Realtime model client for OpenAI or Azure OpenAI.
+
+        Args:
+            model (str): Realtime model name, e.g., "gpt-realtime".
+            voice (str): Voice used for audio responses. Defaults to "marin".
+            modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
+            tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
+            base_url (str | NotGiven): HTTP base URL of the OpenAI/Azure API. If not provided, uses OPENAI_BASE_URL for OpenAI; for Azure, constructed from AZURE_OPENAI_ENDPOINT.
+            input_audio_transcription (AudioTranscription | None | NotGiven): Options for transcribing input audio.
+            input_audio_noise_reduction (NoiseReductionType | None | NotGiven): Input audio noise reduction settings.
+            turn_detection (RealtimeAudioInputTurnDetection | None | NotGiven): Server-side turn-detection options.
+            speed (float | NotGiven): Audio playback speed multiplier.
+            tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
+            api_key (str | None): OpenAI API key. If None and not using Azure, read from OPENAI_API_KEY.
+            http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
+            azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
+            entra_token (str | None): Azure Entra token auth (alternative to api_key).
+            api_version (str | None): Azure OpenAI API version appended as query parameter.
+            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
+            conn_options (APIConnectOptions): Retry/backoff and connection settings.
+            temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
+
+        Raises:
+            ValueError: If OPENAI_API_KEY is missing in non-Azure mode, or if Azure endpoint cannot be determined when in Azure mode.
+
+        Examples:
+            Basic OpenAI usage:
+
+            ```python
+            from livekit.plugins.openai.realtime import RealtimeModel
+            from openai.types import realtime
+
+            model = RealtimeModel(
+                voice="marin",
+                modalities=["audio"],
+                input_audio_transcription=realtime.AudioTranscription(
+                    model="gpt-4o-transcribe",
+                )
+                input_audio_noise_reduction="near_field",
+                turn_detection=realtime.realtime_audio_input_turn_detection.SemanticVad(
+                    type="semantic_vad",
+                    create_response=True,
+                    eagerness="auto",
+                    interrupt_response=True,
+                ),
+            )
+            session = AgentSession(llm=model)
+            ```
+        """
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -339,30 +389,31 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> RealtimeModel:
         """
-        Create a RealtimeClient instance configured for Azure OpenAI Service.
+        Create a RealtimeModel configured for Azure OpenAI.
 
         Args:
-            azure_deployment (str): The name of your Azure OpenAI deployment.
-            azure_endpoint (str or None, optional): The endpoint URL for your Azure OpenAI resource. If None, will attempt to read from the environment variable AZURE_OPENAI_ENDPOINT.
-            api_version (str or None, optional): API version to use with Azure OpenAI Service. If None, will attempt to read from the environment variable OPENAI_API_VERSION.
-            api_key (str or None, optional): Azure OpenAI API key. If None, will attempt to read from the environment variable AZURE_OPENAI_API_KEY.
-            entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
-            base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
-            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
-            modalities (list[Literal["text", "audio"]], optional): Modalities to use for the session. Defaults to ["text", "audio"].
-            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
-            input_audio_noise_reduction (InputAudioNoiseReduction or None, optional): Options for input audio noise reduction. `near_field` is for close-talking microphones such as headphones, `far_field` is for far-field microphones such as laptop or conference room microphones. Defaults to None.
-            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
-            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
-            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
-            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
+            azure_deployment (str): Azure OpenAI deployment name.
+            azure_endpoint (str | None): Azure endpoint URL; if None, taken from AZURE_OPENAI_ENDPOINT.
+            api_version (str | None): Azure API version; if None, taken from OPENAI_API_VERSION.
+            api_key (str | None): Azure API key; if None, taken from AZURE_OPENAI_API_KEY. Omit if using `entra_token`.
+            entra_token (str | None): Azure Entra token for AAD auth. Provide instead of `api_key`.
+            base_url (str | None): Explicit base URL. Mutually exclusive with `azure_endpoint`. If provided, used as-is.
+            voice (str): Voice used for audio responses.
+            modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
+            input_audio_transcription (AudioTranscription | InputAudioTranscription | None | NotGiven): Transcription options; defaults to Azure-optimized values when not provided.
+            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None | NotGiven): Input noise reduction settings.
+            turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
+            speed (float | NotGiven): Audio playback speed multiplier.
+            tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
+            http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
+            temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
-            RealtimeClient: An instance of RealtimeClient configured for Azure OpenAI Service.
+            RealtimeModel: Configured client for Azure OpenAI Realtime.
 
         Raises:
-            ValueError: If required Azure parameters are missing or invalid.
-        """  # noqa: E501
+            ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
+        """
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         if api_key is None and entra_token is None:
             raise ValueError(
@@ -975,7 +1026,8 @@ class RealtimeSession(
         self, chat_ctx: llm.ChatContext
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
-        diff_ops = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
+        remote_ctx = self._remote_chat_ctx.to_chat_ctx()
+        diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
 
         def _delete_item(msg_id: str) -> None:
             events.append(
@@ -998,7 +1050,18 @@ class RealtimeSession(
                 )
             )
 
+        def _is_content_empty(msg_id: str) -> bool:
+            remote_item = remote_ctx.get_by_id(msg_id)
+            if remote_item and remote_item.type == "message" and not remote_item.content:
+                return True
+            return False
+
         for msg_id in diff_ops.to_remove:
+            # we don't have content synced down for some types of content (audio/images)
+            # these won't be present in the Agent's view of the context
+            # so in those cases, we do not want to remove them from the server context
+            if _is_content_empty(msg_id):
+                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1006,6 +1069,10 @@ class RealtimeSession(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
+            # likewise, empty content almost always means the content is not synced down
+            # we don't want to recreate these items there
+            if _is_content_empty(msg_id):
+                continue
             _delete_item(msg_id)
             _create_item(previous_msg_id, msg_id)
 
@@ -1104,7 +1171,18 @@ class RealtimeSession(
                 self._pushed_duration_s += nf.duration
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        pass
+        message = llm.ChatMessage(
+            role="user",
+            content=[llm.ImageContent(image=frame)],
+        )
+        oai_item = livekit_item_to_openai_item(message)
+        self.send_event(
+            ConversationItemCreateEvent(
+                type="conversation.item.create",
+                item=oai_item,
+                event_id=utils.shortuuid("video_"),
+            )
+        )
 
     def commit_audio(self) -> None:
         if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
@@ -1375,8 +1453,14 @@ class RealtimeSession(
             )
         )
 
-    def _handle_response_audio_transcript_done(self, _: ResponseAudioTranscriptDoneEvent) -> None:
+    def _handle_response_audio_transcript_done(
+        self, event: ResponseAudioTranscriptDoneEvent
+    ) -> None:
         assert self._current_generation is not None, "current_generation is None"
+        # also need to sync existing item's context
+        remote_item = self._remote_chat_ctx.get(event.item_id)
+        if remote_item and event.transcript:
+            remote_item.item.content.append(event.transcript)
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"

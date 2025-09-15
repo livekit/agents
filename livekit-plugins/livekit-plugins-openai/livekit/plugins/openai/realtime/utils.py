@@ -32,7 +32,6 @@ DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.SemanticVa
 )
 DEFAULT_TOOL_CHOICE = "auto"
 DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
-DEFAULT_VOICE = "marin"
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
     model="gpt-4o-mini-transcribe",
@@ -256,9 +255,10 @@ def openai_item_to_livekit_item(item: realtime.ConversationItem) -> llm.ChatItem
             for uc in item.content:
                 if uc.type == "input_text" and uc.text is not None:
                     content.append(uc.text)
-                # intentially ignore image and audio output
-                # this function is used to convert changes to previous chat context
-
+                elif uc.type == "input_image" and uc.image_url is not None:
+                    content.append(llm.ImageContent(image=uc.image_url))
+                elif uc.type == "input_audio" and uc.transcript is not None:
+                    content.append(uc.transcript)
         return llm.ChatMessage(
             id=item.id,
             role=item.role,
