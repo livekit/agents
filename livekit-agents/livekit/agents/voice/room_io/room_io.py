@@ -437,7 +437,7 @@ class RoomIO:
                     ),
                 },
             )
-            self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+            self._agent_session.shutdown(reason=CloseReason.PARTICIPANT_DISCONNECTED)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_atask:
