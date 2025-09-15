@@ -84,11 +84,7 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
-    cache_key = "serialized_image"  # TODO(long): use hash of encoding options if available
-    if cache_key not in image._cache:
-        image._cache[cache_key] = llm.utils.serialize_image(image)
-    img: llm.utils.SerializedImage = image._cache[cache_key]
-
+    img = llm.utils.serialize_image(image)
     if img.external_url:
         return {
             "type": "image_url",
