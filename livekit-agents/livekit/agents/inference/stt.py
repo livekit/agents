@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import aiohttp
 
@@ -17,6 +17,7 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from . import models
 from ._utils import create_access_token
 from .models import STTLanguages, STTModels
 
@@ -40,6 +41,66 @@ class STTOptions:
 
 
 class STT(stt.STT):
+    @overload
+    def __init__(
+        self,
+        model: models.STTModels_Cartesia,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[models.STTOptions_Cartesia] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: models.STTModels_Deepgram,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[models.STTOptions_Deepgram] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: models.STTModels_Assemblyai,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[models.STTOptions_Assemblyai] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: str,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> None: ...
+
     def __init__(
         self,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
@@ -51,8 +112,13 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ):
+        extra_kwargs: NotGivenOr[
+            dict[str, Any]
+            | models.STTOptions_Cartesia
+            | models.STTOptions_Deepgram
+            | models.STTOptions_Assemblyai
+        ] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
         )
@@ -91,7 +157,7 @@ class STT(stt.STT):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else {},
+            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
         )
 
         self._session = http_session

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, overload
 
 import httpx
 import openai
@@ -30,6 +30,7 @@ from ..llm.tool_context import (
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from . import models
 from ._utils import create_access_token
 from .models import LLMModels
 
@@ -43,7 +44,6 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 class _LLMOptions:
     model: LLMModels | str
     temperature: NotGivenOr[float]
-    top_p: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
     max_completion_tokens: NotGivenOr[int]
@@ -55,12 +55,107 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
+    @overload
+    def __init__(
+        self,
+        model: models.LLMModels_OpenAI,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[models.LLMOptions_OpenAI] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: models.LLMModels_Google,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[models.LLMOptions_Google] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: models.LLMModels_Cerebras,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[models.LLMOptions_Cerebras] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: models.LLMModels_Groq,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[models.LLMOptions_Groq] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: models.LLMModels_Baseten,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[models.LLMOptions_Baseten] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
     def __init__(
         self,
         model: LLMModels | str,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        top_p: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
@@ -71,6 +166,31 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    def __init__(
+        self,
+        model: LLMModels | str,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[
+            dict[str, Any]
+            | models.LLMOptions_OpenAI
+            | models.LLMOptions_Google
+            | models.LLMOptions_Cerebras
+            | models.LLMOptions_Groq
+            | models.LLMOptions_Baseten
+        ] = NOT_GIVEN,
     ) -> None:
         super().__init__()
 
@@ -103,7 +223,6 @@ class LLM(llm.LLM):
         self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
-            top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             max_completion_tokens=max_completion_tokens,
@@ -111,7 +230,7 @@ class LLM(llm.LLM):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             verbosity=verbosity,
-            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else {},
+            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
         )
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
@@ -157,9 +276,6 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
-
-        if is_given(self._opts.top_p):
-            extra["top_p"] = self._opts.top_p
 
         if is_given(self._opts.verbosity):
             extra["verbosity"] = self._opts.verbosity
