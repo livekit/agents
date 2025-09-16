@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, overload
+from typing import Any, Literal, TypedDict, Union, overload
 
 import aiohttp
 
@@ -15,9 +15,76 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeo
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from . import models
 from ._utils import create_access_token
-from .models import TTSModels
+
+CartesiaModels = Literal[
+    "cartesia",
+    "cartesia/sonic",
+    "cartesia/sonic-2",
+    "cartesia/sonic-turbo",
+]
+ElevenlabsModels = Literal[
+    "elevenlabs",
+    "elevenlabs/eleven_flash_v2",
+    "elevenlabs/eleven_flash_v2_5",
+    "elevenlabs/eleven_turbo_v2",
+    "elevenlabs/eleven_turbo_v2_5",
+    "elevenlabs/eleven_multilingual_v2",
+]
+RimeModels = Literal[
+    "rime",
+    "rime/mist",
+    "rime/mistv2",
+    "rime/arcana",
+]
+InworldModels = Literal[
+    "inworld",
+    "inworld/inworld-tts-1",
+]
+
+
+class CartesiaOptions(TypedDict, total=False):
+    pass
+
+
+class _ElevenLabsVoiceSettings(TypedDict, total=False):
+    stability: float  # [0.0 - 1.0]
+    similarity_boost: float  # [0.0 - 1.0]
+    style: float  # [0.0 - 1.0]
+    speed: float  # [0.8 - 1.2]
+    use_speaker_boost: bool
+
+
+class ElevenlabsOptions(TypedDict, total=False):
+    voice_settings: _ElevenLabsVoiceSettings
+    streaming_latency: int
+    inactivity_timeout: int
+    apply_text_normalization: Literal["auto", "off", "on"]
+    enable_ssml_parsing: bool
+    chunk_length_schedule: list[int]
+
+
+class RimeOptions(TypedDict, total=False):
+    # Arcana options
+    repetition_penalty: float
+    temperature: float
+    top_p: float
+    max_tokens: int
+    # Mistv2 options
+    speed_alpha: float
+    reduce_latency: bool
+    pause_between_brackets: bool
+    phonemize_between_brackets: bool
+
+
+class InworldOptions(TypedDict, total=False):
+    bit_rate: int
+    pitch: float
+    speaking_rate: float
+    temperature: float
+
+
+TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
 TTSEncoding = Literal[
     "pcm_s16le",
@@ -46,7 +113,7 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
-        model: models.TTSModels_Cartesia,
+        model: CartesiaModels,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -56,14 +123,14 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.TTSOptions_Cartesia] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.TTSModels_ElevenLabs,
+        model: ElevenlabsModels,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -73,14 +140,14 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.TTSOptions_ElevenLabs] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.TTSModels_Rime,
+        model: RimeModels,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -90,14 +157,14 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.TTSOptions_Rime] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[RimeOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.TTSModels_Inworld,
+        model: InworldModels,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -107,7 +174,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.TTSOptions_Inworld] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[InworldOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -141,11 +208,7 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any]
-            | models.TTSOptions_Cartesia
-            | models.TTSOptions_ElevenLabs
-            | models.TTSOptions_Rime
-            | models.TTSOptions_Inworld
+            dict[str, Any] | CartesiaOptions | ElevenlabsOptions | RimeOptions | InworldOptions
         ] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference TTS

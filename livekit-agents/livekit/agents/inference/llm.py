@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, TypedDict, Union, cast, overload
 
 import httpx
 import openai
@@ -30,11 +30,77 @@ from ..llm.tool_context import (
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from . import models
 from ._utils import create_access_token
-from .models import LLMModels
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+
+
+OpenaiModels = Literal[
+    "openai/gpt-4.1",
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4.1-nano",
+    "openai/gpt-4o",
+    "openai/gpt-4o-2024-05-13",
+    "openai/gpt-4o-2024-07-18",
+    "openai/gpt-4o-mini",
+]
+GoogleModels = Literal[
+    "google/gemini-2.5-pro-preview-05-06",
+    "google/gemini-2.5-flash-preview-04-17",
+    "google/gemini-2.5-flash-preview-05-20",
+    "google/gemini-2.0-flash-001",
+    "google/gemini-2.0-flash-lite-preview-02-05",
+]
+CerebrasModels = Literal[
+    "cerebras/llama3.1-8b",
+    "cerebras/llama-3.3-70b",
+    "cerebras/llama-4-scout-17b-16e-instruct",
+    "cerebras/qwen-3-32b",
+    "cerebras/qwen-3-235b-a22b-instruct-2507",
+    "cerebras/gpt-oss-120b",
+]
+GroqModels = Literal[
+    "groq/llama3-8b-8192",
+    "groq/llama3-70b-8192",
+    "groq/llama-3.3-70b-versatile",
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+    "groq/openai/gpt-oss-120b",
+    "groq/moonshotai/kimi-k2-instruct",
+    "groq/qwen/qwen3-32b",
+]
+BasetenModels = Literal[
+    "baseten/deepseek-ai/DeepSeek-V3-0324",
+    "baseten/meta-llama/Llama-4-Scout-17B-16E-Instruct",
+    "baseten/meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+    "baseten/moonshotai/Kimi-K2-Instruct",
+    "baseten/openai/gpt-oss-120b",
+    "baseten/Qwen/Qwen3-235B-A22B-Instruct-2507",
+]
+
+
+class OpenaiOptions(TypedDict, total=False):
+    top_p: float
+
+
+class GoogleOptions(TypedDict, total=False):
+    presence_penalty: float
+    frequency_penalty: float
+
+
+class CerebrasOptions(TypedDict, total=False):
+    top_p: float
+
+
+class GroqOptions(TypedDict, total=False):
+    top_p: float
+
+
+class BasetenOptions(TypedDict, total=False):
+    top_p: float
+
+
+LLMModels = Union[OpenaiModels, GoogleModels, CerebrasModels, GroqModels, BasetenModels]
 
 Verbosity = Literal["low", "medium", "high"]
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -58,7 +124,7 @@ class LLM(llm.LLM):
     @overload
     def __init__(
         self,
-        model: models.LLMModels_OpenAI,
+        model: OpenaiModels,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -70,14 +136,14 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[models.LLMOptions_OpenAI] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.LLMModels_Google,
+        model: GoogleModels,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -89,14 +155,14 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[models.LLMOptions_Google] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.LLMModels_Cerebras,
+        model: CerebrasModels,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -108,14 +174,14 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[models.LLMOptions_Cerebras] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[CerebrasOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.LLMModels_Groq,
+        model: GroqModels,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -127,14 +193,14 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[models.LLMOptions_Groq] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[GroqOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
     @overload
     def __init__(
         self,
-        model: models.LLMModels_Baseten,
+        model: BasetenModels,
         *,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -146,7 +212,7 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[models.LLMOptions_Baseten] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[BasetenOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -185,11 +251,11 @@ class LLM(llm.LLM):
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[
             dict[str, Any]
-            | models.LLMOptions_OpenAI
-            | models.LLMOptions_Google
-            | models.LLMOptions_Cerebras
-            | models.LLMOptions_Groq
-            | models.LLMOptions_Baseten
+            | OpenaiOptions
+            | GoogleOptions
+            | CerebrasOptions
+            | GroqOptions
+            | BasetenOptions
         ] = NOT_GIVEN,
     ) -> None:
         super().__init__()

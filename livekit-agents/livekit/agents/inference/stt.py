@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, overload
+from typing import Any, Literal, TypedDict, Union, overload
 
 import aiohttp
 
@@ -17,10 +17,54 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from . import models
 from ._utils import create_access_token
-from .models import STTLanguages, STTModels
 
+DeepgramModels = Literal[
+    "deepgram",
+    "deepgram/nova-3",
+    "deepgram/nova-3-general",
+    "deepgram/nova-3-medical",
+    "deepgram/nova-2",
+    "deepgram/nova-2-general",
+    "deepgram/nova-2-medical",
+    "deepgram/nova-2-phonecall",
+]
+CartesiaModels = Literal[
+    "cartesia",
+    "cartesia/ink-whisper",
+]
+AssemblyaiModels = Literal["assemblyai"]
+
+
+class CartesiaOptions(TypedDict, total=False):
+    pass
+
+
+class DeepgramOptions(TypedDict, total=False):
+    detect_language: bool
+    punctuate: bool
+    smart_format: bool
+    no_delay: bool
+    endpointing_ms: int
+    enable_diarization: bool
+    filler_words: bool
+    keywords: list[tuple[str, float]]
+    keyterms: list[str]
+    profanity_filter: bool
+    numerals: bool
+    mip_opt_out: bool
+
+
+class AssemblyaiOptions(TypedDict, total=False):
+    end_of_turn_confidence_threshold: float
+    min_end_of_turn_silence_when_confident: int
+    max_turn_silence: int
+    format_turns: bool
+    buffer_size_seconds: float
+
+
+STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels]
+STTLanguages = Literal["en", "de", "es", "fr", "ja", "pt", "zh"]
 STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
@@ -44,7 +88,7 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
-        model: models.STTModels_Cartesia,
+        model: CartesiaModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -53,13 +97,13 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.STTOptions_Cartesia] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
     def __init__(
         self,
-        model: models.STTModels_Deepgram,
+        model: DeepgramModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -68,13 +112,13 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.STTOptions_Deepgram] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
     def __init__(
         self,
-        model: models.STTModels_Assemblyai,
+        model: AssemblyaiModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -83,7 +127,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[models.STTOptions_Assemblyai] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -113,10 +157,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any]
-            | models.STTOptions_Cartesia
-            | models.STTOptions_Deepgram
-            | models.STTOptions_Assemblyai
+            dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
         ] = NOT_GIVEN,
     ) -> None:
         super().__init__(

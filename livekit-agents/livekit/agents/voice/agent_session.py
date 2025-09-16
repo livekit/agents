@@ -54,7 +54,7 @@ from .run_result import RunResult
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from ..inference.models import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
 
 

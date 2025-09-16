@@ -22,7 +22,7 @@ from ..utils import is_given
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from ..inference.models import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
