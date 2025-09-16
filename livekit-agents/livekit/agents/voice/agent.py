@@ -12,6 +12,7 @@ from ..llm import (
     ChatContext,
     FunctionTool,
     RawFunctionTool,
+    RealtimeModel,
     find_function_tools,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
@@ -152,7 +153,9 @@ class Agent:
 
         await self._activity.update_tools(tools)
 
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+    async def update_chat_ctx(
+        self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
+    ) -> None:
         """
         Updates the agent's chat context.
 
@@ -162,15 +165,21 @@ class Agent:
         Args:
             chat_ctx (llm.ChatContext):
                 The new or updated chat context for the agent.
+            exclude_invalid_function_calls (bool): Whether to exclude function calls
+                and outputs not from the agent's tools.
 
         Raises:
             llm.RealtimeError: If updating the realtime session chat context fails.
         """
         if self._activity is None:
-            self._chat_ctx = chat_ctx.copy(tools=self._tools)
+            self._chat_ctx = chat_ctx.copy(
+                tools=self._tools if exclude_invalid_function_calls else NOT_GIVEN
+            )
             return
 
-        await self._activity.update_chat_ctx(chat_ctx)
+        await self._activity.update_chat_ctx(
+            chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
+        )
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -304,6 +313,10 @@ class Agent:
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
         """
+        from .transcription.filters import filter_emoji, filter_markdown
+
+        text = filter_markdown(text)
+        text = filter_emoji(text)
         return Agent.default.tts_node(self, text, model_settings)
 
     def realtime_audio_output_node(
@@ -704,6 +717,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+
+        if (
+            task_info.function_call
+            and isinstance(old_activity.llm, RealtimeModel)
+            and not old_activity.llm.capabilities.manual_function_calls
+        ):
+            logger.error(
+                f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context, "
+                "using AgentTask inside a function tool may have unexpected behavior."
+            )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         await session._update_activity(

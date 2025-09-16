@@ -268,7 +268,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         # If TTS doesn't support streaming, wrap it with StreamAdapter
-        if not tts.capabilities.streaming:
+        if tts.capabilities.streaming:
+            stream = tts.stream(conn_options=conn_options)
+        else:
             from .. import tokenize
 
             wrapped_tts = StreamAdapter(
@@ -276,8 +278,6 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
             )
             stream = wrapped_tts.stream(conn_options=conn_options)
-        else:
-            stream = tts.stream(conn_options=conn_options)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input_task() -> None:
