@@ -44,44 +44,21 @@ InworldModels = Literal[
 
 
 class CartesiaOptions(TypedDict, total=False):
-    pass
-
-
-class _ElevenLabsVoiceSettings(TypedDict, total=False):
-    stability: float  # [0.0 - 1.0]
-    similarity_boost: float  # [0.0 - 1.0]
-    style: float  # [0.0 - 1.0]
-    speed: float  # [0.8 - 1.2]
-    use_speaker_boost: bool
+    duration: float  # max duration of audio in seconds
+    speed: Literal["slow", "normal", "fast"]  # default: not specified
 
 
 class ElevenlabsOptions(TypedDict, total=False):
-    voice_settings: _ElevenLabsVoiceSettings
-    streaming_latency: int
-    inactivity_timeout: int
-    apply_text_normalization: Literal["auto", "off", "on"]
-    enable_ssml_parsing: bool
-    chunk_length_schedule: list[int]
+    inactivity_timeout: int  # default: 60
+    apply_text_normalization: Literal["auto", "off", "on"]  # default: "auto"
 
 
 class RimeOptions(TypedDict, total=False):
-    # Arcana options
-    repetition_penalty: float
-    temperature: float
-    top_p: float
-    max_tokens: int
-    # Mistv2 options
-    speed_alpha: float
-    reduce_latency: bool
-    pause_between_brackets: bool
-    phonemize_between_brackets: bool
+    pass
 
 
 class InworldOptions(TypedDict, total=False):
-    bit_rate: int
-    pitch: float
-    speaking_rate: float
-    temperature: float
+    pass
 
 
 TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]

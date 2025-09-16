@@ -37,17 +37,16 @@ AssemblyaiModels = Literal["assemblyai"]
 
 
 class CartesiaOptions(TypedDict, total=False):
-    pass
+    min_volume: float  # default: not specified
+    max_silence_duration_secs: float  # default: not specified
 
 
 class DeepgramOptions(TypedDict, total=False):
-    detect_language: bool
-    punctuate: bool
+    filler_words: bool  # default: True
+    interim_results: bool  # default: True
+    endpointing: int  # default: 25 (ms)
+    punctuate: bool  # default: False
     smart_format: bool
-    no_delay: bool
-    endpointing_ms: int
-    enable_diarization: bool
-    filler_words: bool
     keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
@@ -56,11 +55,10 @@ class DeepgramOptions(TypedDict, total=False):
 
 
 class AssemblyaiOptions(TypedDict, total=False):
-    end_of_turn_confidence_threshold: float
-    min_end_of_turn_silence_when_confident: int
-    max_turn_silence: int
-    format_turns: bool
-    buffer_size_seconds: float
+    format_turns: bool  # default: False
+    end_of_turn_confidence_threshold: float  # default: 0.01
+    min_end_of_turn_silence_when_confident: int  # default: 0
+    max_turn_silence: int  # default: not specified
 
 
 STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels]
