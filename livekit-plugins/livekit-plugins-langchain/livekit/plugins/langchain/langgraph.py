@@ -145,7 +145,7 @@ class LangGraphStream(llm.LLMStream):
 
 def _serialize_chat_message_content(
     item: ChatMessage,
-) -> str | list[dict[str, Any]] | None:
+) -> str | list[str | dict[Any, Any]] | None:
     """Serialize chat message content into LangChain compatible format."""
     if not any(isinstance(c, ImageContent) for c in item.content):
         return item.text_content
