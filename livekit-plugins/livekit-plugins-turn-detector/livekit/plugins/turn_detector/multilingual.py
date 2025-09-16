@@ -6,7 +6,7 @@ from time import perf_counter
 import aiohttp
 
 from livekit.agents import get_job_context, llm, utils
-from livekit.agents.inference_runner import _InferenceRunner
+from livekit.agents.inference_runner import LocalInferenceRunner
 
 from .base import MAX_HISTORY_TURNS, EOUModelBase, _EUORunnerBase
 from .log import logger
@@ -110,4 +110,4 @@ def _remote_inference_url() -> str | None:
 
 
 if not _remote_inference_url():
-    _InferenceRunner.register_runner(_EUORunnerMultilingual)
+    LocalInferenceRunner.register_runner(_EUORunnerMultilingual)
