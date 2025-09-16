@@ -185,7 +185,6 @@ class RealtimeSpanManager:
             }
         )
 
-
     def attach_realtime_metrics_to_span(self, ev: "RealtimeModelMetrics") -> None:
         """Attach realtime model metrics to the most appropriate active OpenTelemetry span.
 
