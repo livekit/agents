@@ -129,7 +129,7 @@ class STT(stt.STT):
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
             enable_word_time_offsets(bool): whether to enable word time offsets (default: True)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
-            enable_voice_activity_events(bool): whether to enable voice activity events () (default: False)
+            enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
