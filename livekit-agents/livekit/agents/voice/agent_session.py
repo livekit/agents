@@ -1028,16 +1028,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span("agent_speaking")
                 self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
-                # Register the speaking span with active realtime contexts
-                # Only register for realtime LLM sessions
-                if (
-                    self._activity
-                    and self._activity._realtime_span_manager is not None
-                    and isinstance(self._llm, llm.RealtimeModel)
-                ):
-                    self._activity._realtime_span_manager.track_agent_speaking_span(
-                        self._agent_speaking_span
-                    )
         elif self._agent_speaking_span is not None:
             self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()

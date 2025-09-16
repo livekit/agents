@@ -15,11 +15,9 @@ if TYPE_CHECKING:
 
 @dataclass
 class RealtimeSpanContext:
-    """Enhanced span context for hierarchical metrics attribution."""
+    """Span context for realtime metrics attribution."""
 
     realtime_turn: trace.Span
-    agent_speaking: Union[trace.Span, None] = None
-    function_tools: list[trace.Span] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
 
@@ -82,9 +80,8 @@ class BoundedSpanDict(Generic[K, V]):
 class RealtimeSpanManager:
     """Manages OpenTelemetry span attribution for realtime model metrics.
 
-    Tracks references to existing spans and provides hierarchical span attribution
-    to ensure metrics are attached to the most appropriate active span, preventing
-    timing and scope mismatches.
+    Tracks references to realtime_assistant_turn spans to ensure metrics are
+    attached to the appropriate active span, preventing timing and scope mismatches.
 
     This class stores references to existing spans for metrics attribution purposes.
     It sets metrics as attributes on existing spans, or creates new spans dedicated
@@ -112,7 +109,7 @@ class RealtimeSpanManager:
         """Set the model name for use in metrics attribution."""
         self._model_name = value
 
-    def track_realtime_span(self, response_id: str, span: trace.Span) -> None:
+    def track_span(self, response_id: str, span: trace.Span) -> None:
         """Track a realtime_assistant_turn span for metrics attribution.
 
         Stores a reference to an existing span to enable later metric attribution.
@@ -123,58 +120,16 @@ class RealtimeSpanManager:
         """
         self._realtime_spans[response_id] = RealtimeSpanContext(realtime_turn=span)
 
-    def track_agent_speaking_span(self, span: trace.Span) -> None:
-        """Track an agent_speaking span with active realtime contexts.
-
-        Stores a reference to an existing span with all active realtime contexts
-        to enable hierarchical metrics attribution.
-
-        Args:
-            span: The existing agent_speaking span to track
-        """
-        # Track the speaking span with all active realtime contexts
-        for context in self._realtime_spans.cache.values():
-            if context.realtime_turn.is_recording():
-                context.agent_speaking = span
-
-    def track_function_tool_span(self, span: trace.Span) -> None:
-        """Track a function_tool span with active realtime contexts.
-
-        Stores a reference to an existing span with all active realtime contexts
-        to enable hierarchical metrics attribution.
-
-        Args:
-            span: The existing function_tool span to track
-        """
-        # Track the tool span with all active realtime contexts
-        for context in self._realtime_spans.cache.values():
-            if context.realtime_turn.is_recording():
-                context.function_tools.append(span)
-
     def _find_best_active_span(self, context: RealtimeSpanContext) -> Union[trace.Span, None]:
         """Find the most appropriate active span for metrics attribution.
-
-        Priority order:
-        1. Active function_tool span (most specific)
-        2. Active agent_speaking span
-        3. Active realtime_turn span
 
         Args:
             context: The realtime span context
 
         Returns:
-            The best active span, or None if no spans are active
+            The realtime_turn span if it's currently recording, None otherwise
         """
-        # 1. Check for active function tool spans (most specific)
-        for tool_span in context.function_tools:
-            if tool_span.is_recording():
-                return tool_span
-
-        # 2. Check for active agent speaking span
-        if context.agent_speaking and context.agent_speaking.is_recording():
-            return context.agent_speaking
-
-        # 3. Check for active realtime turn span
+        # Check if the realtime turn span is active
         if context.realtime_turn.is_recording():
             return context.realtime_turn
 
@@ -230,25 +185,13 @@ class RealtimeSpanManager:
             }
         )
 
-    def _cleanup_span_context(self, context: RealtimeSpanContext) -> None:
-        """Clean up all span references in a context to prevent memory leaks.
-
-        Args:
-            context: The context to clean up
-        """
-        # Clear function tool span references
-        context.function_tools.clear()
-        # Note: We don't need to explicitly clean up the other span references
-        # as they're just references that will be garbage collected
 
     def attach_realtime_metrics_to_span(self, ev: "RealtimeModelMetrics") -> None:
         """Attach realtime model metrics to the most appropriate active OpenTelemetry span.
 
-        Uses hierarchical span attribution to find the best active span:
-        1. Active function_tool span (most specific)
-        2. Active agent_speaking span
-        3. Active realtime_turn span
-        4. Create fallback metrics span if all spans have ended
+        Uses span attribution to find the active realtime_assistant_turn span:
+        1. Active realtime_turn span
+        2. Create fallback metrics span if span has ended
 
         TODO: expand this code to non OpenAI realtime providers,
         One issue for AWS realtime model would be, at time of writing,
@@ -292,19 +235,15 @@ class RealtimeSpanManager:
                         self._set_metrics_on_span(target_span, ev)
 
                 else:
-                    # All spans have ended, create a dedicated metrics span
-                    # It is possible for e.g. a Realtime tool call span to end before we collect its metrics
-                    # and as spans are immutable in OpenTelemetry, we make an new span to dump the metrics.
+                    # Realtime turn span has ended, create a dedicated metrics span
+                    # It is possible for the realtime_assistant_turn span to end before we collect its metrics
+                    # and as spans are immutable in OpenTelemetry, we make a new span to dump the metrics.
 
                     # logger.debug(
                     #     "All spans have ended, creating fallback metrics span",
                     #     extra={
                     #         "request_id": ev.request_id,
                     #         "realtime_turn_active": span_context.realtime_turn.is_recording(),
-                    #         "agent_speaking_active": span_context.agent_speaking.is_recording()
-                    #         if span_context.agent_speaking
-                    #         else False,
-                    #         "function_tools_count": len(span_context.function_tools),
                     #     },
                     # )
                     self._create_metrics_span(span_context, ev)
@@ -320,15 +259,9 @@ class RealtimeSpanManager:
             # Always clean up the span context after processing metrics to prevent memory leaks
             # This ensures cleanup happens even if there's an exception during metric processing
             if context_found:
-                if span_context:
-                    self._cleanup_span_context(span_context)
                 self._realtime_spans.pop(ev.request_id, None)
 
     def clear(self) -> None:
         """Clear all span contexts and clean up references to prevent memory leaks."""
-        # Clean up all span references in each context
-        for context in self._realtime_spans.cache.values():
-            self._cleanup_span_context(context)
-
-        # Now clear the cache
+        # Clear the cache
         self._realtime_spans.clear()

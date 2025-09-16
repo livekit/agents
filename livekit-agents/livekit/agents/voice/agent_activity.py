@@ -1933,7 +1933,7 @@ class AgentActivity(RecognitionHooks):
         # Store the span context for OpenTelemetry metrics attribution
         # Use the response_id from the generation event when available
         if generation_ev.response_id and self._realtime_span_manager is not None:
-            self._realtime_span_manager.track_realtime_span(generation_ev.response_id, current_span)
+            self._realtime_span_manager.track_span(generation_ev.response_id, current_span)
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
