@@ -222,6 +222,8 @@ class TTS(tts.TTS):
             base_url (str, optional): LIVEKIT_URL, if not provided, read from environment variable.
             api_key (str, optional): LIVEKIT_API_KEY, if not provided, read from environment variable.
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
+            http_session (aiohttp.ClientSession, optional): HTTP session to use.
+            extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
         super().__init__(

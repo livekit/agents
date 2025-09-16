@@ -160,6 +160,19 @@ class STT(stt.STT):
             dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
         ] = NOT_GIVEN,
     ) -> None:
+        """Livekit Cloud Inference STT
+
+        Args:
+            model (STTModels | str, optional): STT model to use.
+            language (str, optional): Language of the STT model.
+            encoding (STTEncoding, optional): Encoding of the STT model.
+            sample_rate (int, optional): Sample rate of the STT model.
+            base_url (str, optional): LIVEKIT_URL, if not provided, read from environment variable.
+            api_key (str, optional): LIVEKIT_API_KEY, if not provided, read from environment variable.
+            api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
+            http_session (aiohttp.ClientSession, optional): HTTP session to use.
+            extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
         )
