@@ -822,7 +822,8 @@ class AudioEmitter:
             last_frame = frame
 
         def _flush_frame() -> None:
-            nonlocal last_frame, segment_ctx, timed_transcripts, sent_start, sent_duration
+            nonlocal last_frame, segment_ctx, timed_transcripts
+            nonlocal flush_timer, sent_start, sent_duration
             assert segment_ctx is not None
 
             if last_frame is None:
@@ -849,6 +850,9 @@ class AudioEmitter:
             # reset sent duration after flush
             sent_start = None
             sent_duration = 0.0
+            if flush_timer is not None:
+                flush_timer.cancel()
+                flush_timer = None
 
         def dump_segment() -> None:
             nonlocal segment_ctx
