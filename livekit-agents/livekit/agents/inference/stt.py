@@ -59,6 +59,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     end_of_turn_confidence_threshold: float  # default: 0.01
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
+    keyterms_prompt: list[str]  # default: not specified
 
 
 STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels]
