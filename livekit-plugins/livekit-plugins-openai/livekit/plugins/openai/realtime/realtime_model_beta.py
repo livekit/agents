@@ -32,37 +32,23 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types import realtime
-from openai.types.beta.realtime.session import (
-    InputAudioNoiseReduction,
-    InputAudioTranscription,
-    TurnDetection,
-)
-from openai.types.realtime import (
-    AudioTranscription,
-    ConversationItemAdded,
+from openai.types.beta.realtime import (
+    ConversationItem,
+    ConversationItemContent,
+    ConversationItemCreatedEvent,
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     ConversationItemInputAudioTranscriptionFailedEvent,
     ConversationItemTruncateEvent,
+    ErrorEvent,
     InputAudioBufferAppendEvent,
     InputAudioBufferClearEvent,
     InputAudioBufferCommitEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
-    NoiseReductionType,
-    RealtimeAudioConfig,
-    RealtimeAudioConfigInput,
-    RealtimeAudioConfigOutput,
-    RealtimeAudioInputTurnDetection,
     RealtimeClientEvent,
-    RealtimeConversationItemFunctionCall,
-    RealtimeErrorEvent,
-    RealtimeFunctionTool,
-    RealtimeResponseCreateParams,
-    RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
     ResponseAudioTranscriptDoneEvent,
@@ -76,45 +62,29 @@ from openai.types.realtime import (
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
     SessionUpdateEvent,
+    session_update_event,
 )
-from openai.types.realtime.realtime_session_create_response import (
+from openai.types.beta.realtime.response_create_event import Response
+from openai.types.beta.realtime.session import (
+    InputAudioNoiseReduction,
+    InputAudioTranscription,
     Tracing,
+    TracingTracingConfiguration,
+    TurnDetection,
 )
 
 from ..log import logger
 from ..models import RealtimeModels
-from .realtime_model_beta import RealtimeModelBeta
-from .utils import (
-    AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-    AZURE_DEFAULT_TURN_DETECTION,
-    DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
-    DEFAULT_MAX_SESSION_DURATION,
-    livekit_item_to_openai_item,
-    openai_item_to_livekit_item,
-    to_audio_transcription,
-    to_noise_reduction,
-    to_oai_tool_choice,
-    to_turn_detection,
-)
 
-# When a response is created with the OpenAI Realtime API, those events are sent in this order:
-# 1. response.created (contains resp_id)
-# 2. response.output_item.added (contains item_id)
-# 3. conversation.item.added
-# 4. response.content_part.added (type audio/text)
-# 5. response.output_audio_transcript.delta (x2, x3, x4, etc)
-# 6. response.output_audio.delta (x2, x3, x4, etc)
-# 7. response.content_part.done
-# 8. response.output_item.done (contains item_status: "completed/incomplete")
-# 9. response.done (contains status_details for cancelled/failed/turn_detected/content_filter)
-#
-# Ourcode assumes a response will generate only one item with type "message"
+# This file contains the implementation for Realtime API beta
+# the beta version of the API does not support new features such as images.
+# It's kept around for backwards compatibility with Azure deployments that still use
+# api-version 2024-10-01-preview
 
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_VOICE = "marin"
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -123,11 +93,13 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 class _RealtimeOptions:
     model: str
     voice: str
+    temperature: float
     tool_choice: llm.ToolChoice | None
-    input_audio_transcription: AudioTranscription | None
-    input_audio_noise_reduction: NoiseReductionType | None
-    turn_detection: RealtimeAudioInputTurnDetection | None
+    input_audio_transcription: InputAudioTranscription | None
+    input_audio_noise_reduction: InputAudioNoiseReduction | None
+    turn_detection: TurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
+    speed: float | None
     tracing: Tracing | None
     api_key: str | None
     base_url: str
@@ -139,7 +111,6 @@ class _RealtimeOptions:
     max_session_duration: float | None
     """reset the connection after this many seconds if provided"""
     conn_options: APIConnectOptions
-    speed: float = 1.0
 
 
 @dataclass
@@ -165,23 +136,48 @@ class _ResponseGeneration:
     """timestamp when the first token was received"""
 
 
-class RealtimeModel(llm.RealtimeModel):
+# default values got from a "default" session from their API
+DEFAULT_TEMPERATURE = 0.8
+DEFAULT_TURN_DETECTION = TurnDetection(
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
+    create_response=True,
+    interrupt_response=True,
+)
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
+    model="gpt-4o-mini-transcribe",
+)
+DEFAULT_TOOL_CHOICE = "auto"
+DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
+
+AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
+    type="semantic_vad",
+    create_response=True,
+    eagerness="auto",
+    interrupt_response=True,
+)
+
+AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
+    model="whisper-1",
+)
+
+DEFAULT_MAX_SESSION_DURATION = 20 * 60  # 20 minutes
+
+
+class RealtimeModelBeta(llm.RealtimeModel):
     @overload
     def __init__(
         self,
         *,
         model: RealtimeModels | str = "gpt-realtime",
-        voice: str = DEFAULT_VOICE,
+        voice: str = "alloy",
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[
-            AudioTranscription | InputAudioTranscription | None
-        ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
-        ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[
-            RealtimeAudioInputTurnDetection | TurnDetection | None
-        ] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
@@ -190,7 +186,6 @@ class RealtimeModel(llm.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None: ...
 
     @overload
@@ -202,43 +197,32 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: str | None = None,
         api_version: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        voice: str = DEFAULT_VOICE,
+        voice: str = "alloy",
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[
-            AudioTranscription | InputAudioTranscription | None
-        ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
-        ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[
-            RealtimeAudioInputTurnDetection | TurnDetection | None
-        ] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None: ...
 
     def __init__(
         self,
         *,
         model: str = "gpt-realtime",
-        voice: str = DEFAULT_VOICE,
+        voice: str = "alloy",
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[
-            AudioTranscription | InputAudioTranscription | None
-        ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
-        ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[
-            RealtimeAudioInputTurnDetection | TurnDetection | None
-        ] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         api_key: str | None = None,
@@ -248,58 +232,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None:
-        """
-        Initialize a Realtime model client for OpenAI or Azure OpenAI.
-
-        Args:
-            model (str): Realtime model name, e.g., "gpt-realtime".
-            voice (str): Voice used for audio responses. Defaults to "marin".
-            modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
-            tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
-            base_url (str | NotGiven): HTTP base URL of the OpenAI/Azure API. If not provided, uses OPENAI_BASE_URL for OpenAI; for Azure, constructed from AZURE_OPENAI_ENDPOINT.
-            input_audio_transcription (AudioTranscription | None | NotGiven): Options for transcribing input audio.
-            input_audio_noise_reduction (NoiseReductionType | None | NotGiven): Input audio noise reduction settings.
-            turn_detection (RealtimeAudioInputTurnDetection | None | NotGiven): Server-side turn-detection options.
-            speed (float | NotGiven): Audio playback speed multiplier.
-            tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
-            api_key (str | None): OpenAI API key. If None and not using Azure, read from OPENAI_API_KEY.
-            http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
-            azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
-            entra_token (str | None): Azure Entra token auth (alternative to api_key).
-            api_version (str | None): Azure OpenAI API version appended as query parameter.
-            max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
-            conn_options (APIConnectOptions): Retry/backoff and connection settings.
-            temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
-
-        Raises:
-            ValueError: If OPENAI_API_KEY is missing in non-Azure mode, or if Azure endpoint cannot be determined when in Azure mode.
-
-        Examples:
-            Basic OpenAI usage:
-
-            ```python
-            from livekit.plugins.openai.realtime import RealtimeModel
-            from openai.types import realtime
-
-            model = RealtimeModel(
-                voice="marin",
-                modalities=["audio"],
-                input_audio_transcription=realtime.AudioTranscription(
-                    model="gpt-4o-transcribe",
-                ),
-                input_audio_noise_reduction="near_field",
-                turn_detection=realtime.realtime_audio_input_turn_detection.SemanticVad(
-                    type="semantic_vad",
-                    create_response=True,
-                    eagerness="auto",
-                    interrupt_response=True,
-                ),
-            )
-            session = AgentSession(llm=model)
-            ```
-        """
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -340,11 +273,14 @@ class RealtimeModel(llm.RealtimeModel):
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
+            temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             tool_choice=tool_choice or None,
             modalities=modalities,
-            input_audio_transcription=to_audio_transcription(input_audio_transcription),
-            input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            input_audio_transcription=input_audio_transcription
+            if is_given(input_audio_transcription)
+            else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            turn_detection=turn_detection if is_given(turn_detection) else DEFAULT_TURN_DETECTION,
             api_key=api_key,
             base_url=base_url_val,
             is_azure=is_azure,
@@ -352,7 +288,7 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token=entra_token,
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
-            speed=speed if is_given(speed) else 1.0,
+            speed=speed if is_given(speed) else None,
             tracing=cast(Union[Tracing, None], tracing) if is_given(tracing) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
@@ -361,7 +297,7 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._http_session = http_session
         self._http_session_owned = False
-        self._sessions = weakref.WeakSet[RealtimeSession]()
+        self._sessions = weakref.WeakSet[RealtimeSessionBeta]()
 
     @classmethod
     def with_azure(
@@ -373,99 +309,41 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: str | None = None,
         entra_token: str | None = None,
         base_url: str | None = None,
-        voice: str = DEFAULT_VOICE,
+        voice: str = "alloy",
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[
-            AudioTranscription | InputAudioTranscription | None
-        ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
-        ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[
-            RealtimeAudioInputTurnDetection | TurnDetection | None
-        ] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        temperature: float = 0.8,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
-    ) -> RealtimeModel | RealtimeModelBeta:
+    ) -> RealtimeModelBeta:
         """
-        Create a RealtimeModel configured for Azure OpenAI.
+        Create a RealtimeClient instance configured for Azure OpenAI Service.
 
         Args:
-            azure_deployment (str): Azure OpenAI deployment name.
-            azure_endpoint (str | None): Azure endpoint URL; if None, taken from AZURE_OPENAI_ENDPOINT.
-            api_version (str | None): Azure API version; if None, taken from OPENAI_API_VERSION.
-            api_key (str | None): Azure API key; if None, taken from AZURE_OPENAI_API_KEY. Omit if using `entra_token`.
-            entra_token (str | None): Azure Entra token for AAD auth. Provide instead of `api_key`.
-            base_url (str | None): Explicit base URL. Mutually exclusive with `azure_endpoint`. If provided, used as-is.
-            voice (str): Voice used for audio responses.
-            modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
-            input_audio_transcription (AudioTranscription | InputAudioTranscription | None | NotGiven): Transcription options; defaults to Azure-optimized values when not provided.
-            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None | NotGiven): Input noise reduction settings.
-            turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
-            speed (float | NotGiven): Audio playback speed multiplier.
-            tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
-            http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
-            temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
+            azure_deployment (str): The name of your Azure OpenAI deployment.
+            azure_endpoint (str or None, optional): The endpoint URL for your Azure OpenAI resource. If None, will attempt to read from the environment variable AZURE_OPENAI_ENDPOINT.
+            api_version (str or None, optional): API version to use with Azure OpenAI Service. If None, will attempt to read from the environment variable OPENAI_API_VERSION.
+            api_key (str or None, optional): Azure OpenAI API key. If None, will attempt to read from the environment variable AZURE_OPENAI_API_KEY.
+            entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
+            base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            modalities (list[Literal["text", "audio"]], optional): Modalities to use for the session. Defaults to ["text", "audio"].
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            input_audio_noise_reduction (InputAudioNoiseReduction or None, optional): Options for input audio noise reduction. `near_field` is for close-talking microphones such as headphones, `far_field` is for far-field microphones such as laptop or conference room microphones. Defaults to None.
+            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
+            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
 
         Returns:
-            RealtimeModel: Configured client for Azure OpenAI Realtime.
+            RealtimeClient: An instance of RealtimeClient configured for Azure OpenAI Service.
 
         Raises:
-            ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
-
-        Examples:
-            Azure usage with api-version 2024-10-01-preview:
-
-            ```python
-            from livekit.plugins.openai.realtime import RealtimeModel
-            from openai.types.beta import realtime
-
-            model = openai.realtime.RealtimeModel.with_azure(
-                azure_deployment="gpt-realtime",
-                azure_endpoint="https://yourendpoint.azure.com",
-                api_version="2024-10-01-preview",
-                api_key="your-api-key",
-                modalities=["text", "audio"],
-                input_audio_transcription=realtime.session.InputAudioTranscription(
-                    model="gpt-4o-transcribe",
-                ),
-                input_audio_noise_reduction=realtime.session.InputAudioNoiseReduction(
-                    type="near_field",
-                ),
-                turn_detection=realtime.session.TurnDetection(
-                    type="semantic_vad",
-                    create_response=True,
-                    eagerness="auto",
-                    interrupt_response=True,
-                ),
-            )
-            ```
-
-            Azure usage with api-version 2025-08-28:
-            ```python
-            from livekit.plugins.openai.realtime import RealtimeModel
-            from openai.types import realtime
-
-            model = RealtimeModel(
-                azure_deployment="gpt-realtime",
-                azure_endpoint="https://yourendpoint.azure.com",
-                api_version="2024-10-01-preview",
-                api_key="your-api-key",
-                input_audio_transcription=realtime.AudioTranscription(
-                    model="gpt-4o-transcribe",
-                ),
-                input_audio_noise_reduction="near_field",
-                turn_detection=realtime.realtime_audio_input_turn_detection.SemanticVad(
-                    type="semantic_vad",
-                    create_response=True,
-                    eagerness="auto",
-                    interrupt_response=True,
-                ),
-            )
-            ```
-        """
+            ValueError: If required Azure parameters are missing or invalid.
+        """  # noqa: E501
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         if api_key is None and entra_token is None:
             raise ValueError(
@@ -498,47 +376,12 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        if api_version == "2024-10-01-preview":
-            if is_given(input_audio_transcription) and not isinstance(
-                input_audio_transcription, InputAudioTranscription
-            ):
-                raise ValueError(
-                    f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
-                )
-            if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
-                raise ValueError(
-                    f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
-                )
-            if is_given(input_audio_noise_reduction) and not isinstance(
-                input_audio_noise_reduction, InputAudioNoiseReduction
-            ):
-                raise ValueError(
-                    f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
-                )
-
-            return RealtimeModelBeta(
-                voice=voice,
-                modalities=modalities,
-                input_audio_transcription=input_audio_transcription,  # type: ignore
-                input_audio_noise_reduction=input_audio_noise_reduction,  # type: ignore
-                turn_detection=turn_detection,  # type: ignore
-                temperature=temperature,
-                speed=speed,
-                tracing=tracing,  # type: ignore
-                api_key=api_key,
-                http_session=http_session,
-                azure_deployment=azure_deployment,
-                api_version=api_version,
-                entra_token=entra_token,
-                base_url=base_url,
-            )
-
         return cls(
             voice=voice,
             modalities=modalities,
-            input_audio_transcription=to_audio_transcription(input_audio_transcription),
-            input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            input_audio_transcription=input_audio_transcription,
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            turn_detection=turn_detection,
             temperature=temperature,
             speed=speed,
             tracing=tracing,
@@ -554,35 +397,32 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection: NotGivenOr[
-            RealtimeAudioInputTurnDetection | TurnDetection | None
-        ] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[
-            InputAudioTranscription | AudioTranscription | None
-        ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            InputAudioNoiseReduction | NoiseReductionType | None
-        ] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
 
+        if is_given(temperature):
+            self._opts.temperature = temperature
+
         if is_given(turn_detection):
-            self._opts.turn_detection = to_turn_detection(turn_detection)  # type: ignore
+            self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
             self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if is_given(input_audio_transcription):
-            self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)  # type: ignore
+            self._opts.input_audio_transcription = input_audio_transcription
 
         if is_given(input_audio_noise_reduction):
-            self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)  # type: ignore
+            self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
             self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
@@ -596,10 +436,10 @@ class RealtimeModel(llm.RealtimeModel):
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
-                turn_detection=self._opts.turn_detection,
+                temperature=temperature,
+                turn_detection=turn_detection,
                 tool_choice=tool_choice,
-                input_audio_transcription=self._opts.input_audio_transcription,
-                input_audio_noise_reduction=self._opts.input_audio_noise_reduction,
+                input_audio_transcription=input_audio_transcription,
                 max_response_output_tokens=max_response_output_tokens,
                 speed=speed,
                 tracing=tracing,
@@ -615,8 +455,8 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self) -> RealtimeSession:
-        sess = RealtimeSession(self)
+    def session(self) -> RealtimeSessionBeta:
+        sess = RealtimeSessionBeta(self)
         self._sessions.add(sess)
         return sess
 
@@ -660,7 +500,7 @@ def process_base_url(
     return new_url
 
 
-class RealtimeSession(
+class RealtimeSessionBeta(
     llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
 ):
     """
@@ -674,9 +514,9 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(self, realtime_model: RealtimeModelBeta) -> None:
         super().__init__(realtime_model)
-        self._realtime_model: RealtimeModel = realtime_model
+        self._realtime_model: RealtimeModelBeta = realtime_model
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -800,6 +640,7 @@ class RealtimeSession(
                 headers["api-key"] = self._realtime_model._opts.api_key
         else:
             headers["Authorization"] = f"Bearer {self._realtime_model._opts.api_key}"
+            headers["OpenAI-Beta"] = "realtime=v1"
 
         url = process_base_url(
             self._realtime_model._opts.base_url,
@@ -877,7 +718,7 @@ class RealtimeSession(
                 try:
                     if lk_oai_debug:
                         event_copy = event.copy()
-                        if event_copy["type"] == "response.output_audio.delta":
+                        if event_copy["type"] == "response.audio.delta":
                             event_copy = {**event_copy, "delta": "..."}
 
                         logger.debug(f"<<< {event_copy}")
@@ -900,17 +741,14 @@ class RealtimeSession(
                         self._handle_response_content_part_added(
                             ResponseContentPartAddedEvent.construct(**event)
                         )
-                    elif event["type"] == "conversation.item.added":
-                        self._handle_conversion_item_added(ConversationItemAdded.construct(**event))
+                    elif event["type"] == "conversation.item.created":
+                        self._handle_conversion_item_created(
+                            ConversationItemCreatedEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.deleted":
                         self._handle_conversion_item_deleted(
                             ConversationItemDeletedEvent.construct(**event)
                         )
-                    elif event["type"] == "conversation.item.input_audio_transcription.delta":
-                        # currently incoming transcripts are transcribed only after the user stops speaking
-                        # it's not very useful to emit these as the transcribe process takes place within ~100ms
-                        # when they handle streaming transcriptions, we'll handle it then.
-                        pass
                     elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
                             ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
@@ -919,21 +757,21 @@ class RealtimeSession(
                         self._handle_conversion_item_input_audio_transcription_failed(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
-                    elif event["type"] == "response.output_text.delta":
+                    elif event["type"] == "response.text.delta":
                         self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
-                    elif event["type"] == "response.output_text.done":
+                    elif event["type"] == "response.text.done":
                         self._handle_response_text_done(ResponseTextDoneEvent.construct(**event))
-                    elif event["type"] == "response.output_audio_transcript.delta":
+                    elif event["type"] == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
-                    elif event["type"] == "response.output_audio.delta":
+                    elif event["type"] == "response.audio.delta":
                         self._handle_response_audio_delta(
                             ResponseAudioDeltaEvent.construct(**event)
                         )
-                    elif event["type"] == "response.output_audio_transcript.done":
+                    elif event["type"] == "response.audio_transcript.done":
                         self._handle_response_audio_transcript_done(
                             ResponseAudioTranscriptDoneEvent.construct(**event)
                         )
-                    elif event["type"] == "response.output_audio.done":
+                    elif event["type"] == "response.audio.done":
                         self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
                         self._handle_response_output_item_done(
@@ -942,11 +780,9 @@ class RealtimeSession(
                     elif event["type"] == "response.done":
                         self._handle_response_done(ResponseDoneEvent.construct(**event))
                     elif event["type"] == "error":
-                        self._handle_error(RealtimeErrorEvent.construct(**event))
-                    elif lk_oai_debug:
-                        logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
+                        self._handle_error(ErrorEvent.construct(**event))
                 except Exception:
-                    if event["type"] == "response.output_audio.delta":
+                    if event["type"] == "response.audio.delta":
                         event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"event": event})
 
@@ -979,46 +815,73 @@ class RealtimeSession(
             await ws_conn.close()
 
     def _create_session_update_event(self) -> SessionUpdateEvent:
-        noise_reduction: realtime.realtime_audio_config_input.NoiseReduction | None = None
-        if self._realtime_model._opts.input_audio_noise_reduction:
-            noise_reduction = realtime.realtime_audio_config_input.NoiseReduction(
-                type=self._realtime_model._opts.input_audio_noise_reduction,
+        input_audio_transcription_opts = self._realtime_model._opts.input_audio_transcription
+        input_audio_transcription = (
+            session_update_event.SessionInputAudioTranscription.model_validate(
+                input_audio_transcription_opts.model_dump(
+                    by_alias=True,
+                    exclude_unset=True,
+                    exclude_defaults=True,
+                )
             )
-
-        audio_format = realtime.realtime_audio_formats.AudioPCM(rate=SAMPLE_RATE, type="audio/pcm")
-        # they do not support both text and audio modalities, it'll respond in audio + transcript
-        modality = "audio" if "audio" in self._realtime_model._opts.modalities else "text"
-
-        session = RealtimeSessionCreateRequest(
-            type="realtime",
-            model=self._realtime_model._opts.model,
-            output_modalities=[modality],
-            audio=RealtimeAudioConfig(
-                input=RealtimeAudioConfigInput(
-                    format=audio_format,
-                    noise_reduction=noise_reduction,
-                    transcription=self._realtime_model._opts.input_audio_transcription,
-                    turn_detection=self._realtime_model._opts.turn_detection,
-                ),
-                output=RealtimeAudioConfigOutput(
-                    format=audio_format,
-                    speed=self._realtime_model._opts.speed,
-                    voice=self._realtime_model._opts.voice,
-                ),
-            ),
-            max_output_tokens=self._realtime_model._opts.max_response_output_tokens,
-            tool_choice=to_oai_tool_choice(self._realtime_model._opts.tool_choice),
-            tracing=self._realtime_model._opts.tracing,
+            if input_audio_transcription_opts
+            else None
         )
+
+        turn_detection_opts = self._realtime_model._opts.turn_detection
+        turn_detection = (
+            session_update_event.SessionTurnDetection.model_validate(
+                turn_detection_opts.model_dump(
+                    by_alias=True,
+                    exclude_unset=True,
+                    exclude_defaults=True,
+                )
+            )
+            if turn_detection_opts
+            else None
+        )
+
+        tracing_opts = self._realtime_model._opts.tracing
+        if isinstance(tracing_opts, TracingTracingConfiguration):
+            tracing: session_update_event.SessionTracing | None = (
+                session_update_event.SessionTracingTracingConfiguration.model_validate(
+                    tracing_opts.model_dump(
+                        by_alias=True,
+                        exclude_unset=True,
+                        exclude_defaults=True,
+                    )
+                )
+            )
+        else:
+            tracing = tracing_opts
+
+        kwargs: dict[str, Any] = {
+            "model": self._realtime_model._opts.model,
+            "voice": self._realtime_model._opts.voice,
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "modalities": self._realtime_model._opts.modalities,
+            "turn_detection": turn_detection,
+            "input_audio_transcription": input_audio_transcription,
+            "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
+            "temperature": self._realtime_model._opts.temperature,
+            "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
+        }
         if self._instructions is not None:
-            session.instructions = self._instructions
+            kwargs["instructions"] = self._instructions
+
+        if self._realtime_model._opts.speed is not None:
+            kwargs["speed"] = self._realtime_model._opts.speed
+
+        if tracing:
+            kwargs["tracing"] = tracing
 
         # initial session update
         return SessionUpdateEvent(
             type="session.update",
             # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
             # Other providers support different voices, so we need to accommodate that.
-            session=session,
+            session=session_update_event.Session.model_construct(**kwargs),
             event_id=utils.shortuuid("session_update_"),
         )
 
@@ -1035,28 +898,31 @@ class RealtimeSession(
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection: NotGivenOr[RealtimeAudioInputTurnDetection | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[NoiseReductionType | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
-        kwargs: dict[str, Any] = {
-            "type": "realtime",
-        }
+        kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
             tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
-            kwargs["tool_choice"] = to_oai_tool_choice(tool_choice)
+            kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
         if is_given(voice):
             self._realtime_model._opts.voice = voice
             kwargs["voice"] = voice
 
+        if is_given(temperature):
+            self._realtime_model._opts.temperature = temperature
+            kwargs["temperature"] = temperature
+
         if is_given(turn_detection):
-            self._realtime_model._opts.turn_detection = turn_detection  # type: ignore
+            self._realtime_model._opts.turn_detection = turn_detection
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
@@ -1068,7 +934,7 @@ class RealtimeSession(
             kwargs["input_audio_transcription"] = input_audio_transcription
 
         if is_given(input_audio_noise_reduction):
-            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction  # type: ignore
+            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
             kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
 
         if is_given(speed):
@@ -1083,7 +949,7 @@ class RealtimeSession(
             self.send_event(
                 SessionUpdateEvent(
                     type="session.update",
-                    session=RealtimeSessionCreateRequest.model_construct(**kwargs),
+                    session=session_update_event.Session.model_construct(**kwargs),
                     event_id=utils.shortuuid("options_update_"),
                 )
             )
@@ -1113,8 +979,7 @@ class RealtimeSession(
         self, chat_ctx: llm.ChatContext
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
-        remote_ctx = self._remote_chat_ctx.to_chat_ctx()
-        diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
 
         def _delete_item(msg_id: str) -> None:
             events.append(
@@ -1131,24 +996,13 @@ class RealtimeSession(
             events.append(
                 ConversationItemCreateEvent(
                     type="conversation.item.create",
-                    item=livekit_item_to_openai_item(chat_item),
+                    item=_livekit_item_to_openai_item(chat_item),
                     previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
                     event_id=utils.shortuuid("chat_ctx_create_"),
                 )
             )
 
-        def _is_content_empty(msg_id: str) -> bool:
-            remote_item = remote_ctx.get_by_id(msg_id)
-            if remote_item and remote_item.type == "message" and not remote_item.content:
-                return True
-            return False
-
         for msg_id in diff_ops.to_remove:
-            # we don't have content synced down for some types of content (audio/images)
-            # these won't be present in the Agent's view of the context
-            # so in those cases, we do not want to remove them from the server context
-            if _is_content_empty(msg_id):
-                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1156,10 +1010,6 @@ class RealtimeSession(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
-            # likewise, empty content almost always means the content is not synced down
-            # we don't want to recreate these items there
-            if _is_content_empty(msg_id):
-                continue
             _delete_item(msg_id)
             _create_item(previous_msg_id, msg_id)
 
@@ -1170,13 +1020,8 @@ class RealtimeSession(
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
-            assert isinstance(ev.session, RealtimeSessionCreateRequest)
             assert ev.session.tools is not None
-            retained_tool_names: set[str] = set()
-            for t in ev.session.tools:
-                if isinstance(t, RealtimeFunctionTool) and t.name is not None:
-                    retained_tool_names.add(t.name)
-                # TODO(dz): handle MCP tools
+            retained_tool_names = {name for t in ev.session.tools if (name := t.name) is not None}
             retained_tools = [
                 tool
                 for tool in tools
@@ -1191,7 +1036,7 @@ class RealtimeSession(
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
     ) -> SessionUpdateEvent:
-        oai_tools: list[RealtimeFunctionTool] = []
+        oai_tools: list[session_update_event.SessionTool] = []
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
@@ -1209,7 +1054,7 @@ class RealtimeSession(
                 continue
 
             try:
-                session_tool = RealtimeFunctionTool.model_validate(tool_desc)
+                session_tool = session_update_event.SessionTool.model_validate(tool_desc)
                 oai_tools.append(session_tool)
                 retained_tools.append(tool)
             except ValidationError:
@@ -1221,10 +1066,9 @@ class RealtimeSession(
 
         return SessionUpdateEvent(
             type="session.update",
-            session=RealtimeSessionCreateRequest.model_construct(
-                type="realtime",
-                model=self._realtime_model._opts.model,
-                tools=oai_tools,  # type: ignore
+            session=session_update_event.Session.model_construct(
+                model=self._realtime_model._opts.model,  # type: ignore
+                tools=oai_tools,
             ),
             event_id=utils.shortuuid("tools_update_"),
         )
@@ -1236,10 +1080,7 @@ class RealtimeSession(
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
-                session=RealtimeSessionCreateRequest.model_construct(
-                    type="realtime",
-                    instructions=instructions,
-                ),
+                session=session_update_event.Session.model_construct(instructions=instructions),
                 event_id=event_id,
             )
         )
@@ -1258,18 +1099,7 @@ class RealtimeSession(
                 self._pushed_duration_s += nf.duration
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        message = llm.ChatMessage(
-            role="user",
-            content=[llm.ImageContent(image=frame)],
-        )
-        oai_item = livekit_item_to_openai_item(message)
-        self.send_event(
-            ConversationItemCreateEvent(
-                type="conversation.item.create",
-                item=oai_item,
-                event_id=utils.shortuuid("video_"),
-            )
-        )
+        pass
 
     def commit_audio(self) -> None:
         if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
@@ -1290,7 +1120,7 @@ class RealtimeSession(
             ResponseCreateEvent(
                 type="response.create",
                 event_id=event_id,
-                response=RealtimeResponseCreateParams(
+                response=Response(
                     instructions=instructions or None,
                     metadata={"client_event_id": event_id},
                 ),
@@ -1394,7 +1224,6 @@ class RealtimeSession(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
-            response_id=event.response.id,
         )
 
         if (
@@ -1449,12 +1278,12 @@ class RealtimeSession(
                 ["text"] if item_type == "text" else ["audio", "text"]
             )
 
-    def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
+    def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
 
         try:
             self._remote_chat_ctx.insert(
-                event.previous_item_id, openai_item_to_livekit_item(event.item)
+                event.previous_item_id, _openai_item_to_livekit_item(event.item)
             )
         except ValueError as e:
             logger.warning(
@@ -1541,14 +1370,8 @@ class RealtimeSession(
             )
         )
 
-    def _handle_response_audio_transcript_done(
-        self, event: ResponseAudioTranscriptDoneEvent
-    ) -> None:
+    def _handle_response_audio_transcript_done(self, _: ResponseAudioTranscriptDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
-        # also need to sync existing item's context
-        remote_item = self._remote_chat_ctx.get(event.item_id)
-        if remote_item and event.transcript and isinstance(remote_item.item, llm.ChatMessage):
-            remote_item.item.content.append(event.transcript)
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1558,9 +1381,7 @@ class RealtimeSession(
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
 
-        if item_type == "function_call" and isinstance(
-            event.item, RealtimeConversationItemFunctionCall
-        ):
+        if item_type == "function_call":
             item = event.item
             assert item.call_id is not None, "call_id is None"
             assert item.name is not None, "name is None"
@@ -1695,7 +1516,7 @@ class RealtimeSession(
         else:
             logger.debug("Unknown response status: %s", event.response.status)
 
-    def _handle_error(self, event: RealtimeErrorEvent) -> None:
+    def _handle_error(self, event: ErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):
             return
 
@@ -1724,3 +1545,111 @@ class RealtimeSession(
                 recoverable=recoverable,
             ),
         )
+
+
+def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
+    conversation_item = ConversationItem(
+        id=item.id,
+    )
+
+    if item.type == "function_call":
+        conversation_item.type = "function_call"
+        conversation_item.call_id = item.call_id
+        conversation_item.name = item.name
+        conversation_item.arguments = item.arguments
+
+    elif item.type == "function_call_output":
+        conversation_item.type = "function_call_output"
+        conversation_item.call_id = item.call_id
+        conversation_item.output = item.output
+
+    elif item.type == "message":
+        role = "system" if item.role == "developer" else item.role
+        conversation_item.type = "message"
+        conversation_item.role = role
+
+        content_list: list[ConversationItemContent] = []
+        for c in item.content:
+            if isinstance(c, str):
+                content_list.append(
+                    ConversationItemContent(
+                        type=("text" if role == "assistant" else "input_text"),
+                        text=c,
+                    )
+                )
+
+            elif isinstance(c, llm.ImageContent):
+                continue  # not supported for now
+            elif isinstance(c, llm.AudioContent):
+                if conversation_item.role == "user":
+                    encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
+                        "utf-8"
+                    )
+
+                    content_list.append(
+                        ConversationItemContent(
+                            type="input_audio",
+                            audio=encoded_audio,
+                            transcript=c.transcript,
+                        )
+                    )
+
+        conversation_item.content = content_list
+
+    return conversation_item
+
+
+def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
+    assert item.id is not None, "id is None"
+
+    if item.type == "function_call":
+        assert item.call_id is not None, "call_id is None"
+        assert item.name is not None, "name is None"
+        assert item.arguments is not None, "arguments is None"
+
+        return llm.FunctionCall(
+            id=item.id,
+            call_id=item.call_id,
+            name=item.name,
+            arguments=item.arguments,
+        )
+
+    if item.type == "function_call_output":
+        assert item.call_id is not None, "call_id is None"
+        assert item.output is not None, "output is None"
+
+        return llm.FunctionCallOutput(
+            id=item.id,
+            call_id=item.call_id,
+            output=item.output,
+            is_error=False,
+        )
+
+    if item.type == "message":
+        assert item.role is not None, "role is None"
+        assert item.content is not None, "content is None"
+
+        content: list[llm.ChatContent] = []
+
+        for c in item.content:
+            if c.type == "text" or c.type == "input_text":
+                assert c.text is not None, "text is None"
+                content.append(c.text)
+
+        return llm.ChatMessage(
+            id=item.id,
+            role=item.role,
+            content=content,
+        )
+
+    raise ValueError(f"unsupported item type: {item.type}")
+
+
+def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+    if isinstance(tool_choice, str):
+        return tool_choice
+
+    elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+        return tool_choice["function"]["name"]
+
+    return "auto"

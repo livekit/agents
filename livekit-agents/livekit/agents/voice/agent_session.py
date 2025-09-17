@@ -4,7 +4,7 @@ import asyncio
 import copy
 import json
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Sequence
 from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
@@ -152,7 +152,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
-        min_endpointing_delay: float = 0.4,
+        min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -210,7 +210,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
-                Default ``0.4`` s.
+                Default ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``6.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
@@ -233,8 +233,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
-                is ``False``. When NOT_GIVEN, it will be enabled for non-streaming TTS
-                and disabled for streaming TTS.
+                is ``False``. When NOT_GIVEN, it's disabled.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
             preemptive_generation (bool):
@@ -320,6 +319,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
+        self._closing: bool = False
         self._job_context_cb_registered: bool = False
 
         self._global_run_state: RunResult | None = None
@@ -444,6 +444,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._closing = False
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
@@ -654,6 +655,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
+            self._closing = True
+
             if self._activity is not None:
                 if not drain:
                     try:
@@ -675,6 +678,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.input.video = None
                 self.output.audio = None
                 self.output.transcription = None
+
+                if (
+                    reason != CloseReason.ERROR
+                    and (audio_recognition := self._activity._audio_recognition) is not None
+                ):
+                    # wait for the user transcript to be committed
+                    audio_recognition.commit_user_turn(audio_detached=True, transcript_timeout=2.0)
 
                 await self._activity.aclose()
                 self._activity = None
@@ -850,13 +860,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self, *, transcript_timeout: float = 2.0) -> None:
+    def commit_user_turn(
+        self, *, transcript_timeout: float = 2.0, stt_flush_duration: float = 2.0
+    ) -> None:
         """Commit the user turn and generate a reply.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
                 to be received after committing the user turn.
                 Increase this value if the STT is slow to respond.
+            stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
+                to flush the buffer and generate the final transcript.
 
         Raises:
             RuntimeError: If the AgentSession isn't running.
@@ -864,7 +878,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn(transcript_timeout=transcript_timeout)
+        self._activity.commit_user_turn(
+            transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
+        )
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -1057,7 +1073,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             end_time = last_speaking_time or time.time()
             self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=int(end_time * 1_000_000_000))  # nanoseconds
+            self._user_speaking_span.end()
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
@@ -1078,6 +1094,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
+        self._chat_ctx.insert(items)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

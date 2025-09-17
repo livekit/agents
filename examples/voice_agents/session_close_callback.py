@@ -57,12 +57,22 @@ async def entrypoint(ctx: JobContext):
                 text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"
                 if item.interrupted:
                     text += " (interrupted)"
-                print(text)
+
+            elif item.type == "function_call":
+                text = f"function_call: {item.name}, arguments: {item.arguments}"
+
+            elif item.type == "function_call_output":
+                text = f"{item.name}: '{item.output}'"
+                if item.is_error:
+                    text += " (error)"
+
+            print(text)
+
         print("=" * 20)
 
         # Optionally, you can delete the room when the session is closed
         # this will stop the worker immediately
-        ctx.delete_room()
+        # ctx.delete_room()
 
 
 if __name__ == "__main__":
