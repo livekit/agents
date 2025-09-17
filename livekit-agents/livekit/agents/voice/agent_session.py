@@ -639,11 +639,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def shutdown(self) -> None:
-        if self._closing_task:
-            return
-        self._closing_task = asyncio.create_task(
-            self._aclose_impl(error=None, drain=True, reason=CloseReason.USER_INITIATED)
-        )
+        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
