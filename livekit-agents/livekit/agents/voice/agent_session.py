@@ -634,10 +634,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if self._closing_task:
             return
-
         self._closing_task = asyncio.create_task(
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
+
+    def shutdown(self) -> None:
+        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
@@ -666,7 +668,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         # TODO(long): force interrupt or wait for it to finish?
                         # it might be an audio played from the error callback
                         pass
-
                 await self._activity.drain()
 
                 # wait any uninterruptible speech to finish
@@ -708,6 +709,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
+
             self.emit("close", CloseEvent(error=error, reason=reason))
 
             self._cancel_user_away_timer()
