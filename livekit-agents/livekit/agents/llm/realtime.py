@@ -81,6 +81,10 @@ class RealtimeModel:
     def label(self) -> str:
         return self._label
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
     @abstractmethod
     def session(self) -> RealtimeSession: ...
 

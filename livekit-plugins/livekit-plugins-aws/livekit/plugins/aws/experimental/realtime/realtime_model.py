@@ -273,6 +273,10 @@ class RealtimeModel(llm.RealtimeModel):
         async def aclose(self) -> None:
             pass
 
+    @property
+    def model(self) -> str:
+        return self.model_id
+
 
 class RealtimeSession(  # noqa: F811
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
@@ -866,7 +870,8 @@ class RealtimeSession(  # noqa: F811
         output_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["output"]
         # Q: should we be counting per turn or utterance?
         metrics = RealtimeModelMetrics(
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
+            model=self._realtime_model.model,
             # TODO: pass in the correct request_id
             request_id=event_data["event"]["usageEvent"]["completionId"],
             timestamp=time.monotonic(),
