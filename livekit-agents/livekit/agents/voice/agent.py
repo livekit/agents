@@ -670,7 +670,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             speech_handle._maybe_run_final_output = result
 
         # if not self.__inline_mode:
-        #    session.shutdown(reason=CloseReason.TASK_COMPLETED, drain=True)
+        #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
 
     async def __await_impl(self) -> TaskResult_T:
         if self.__started:
