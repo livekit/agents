@@ -1660,7 +1660,9 @@ class RealtimeSession(
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=0,
             ),
-            metadata=Metadata(model_name=self._realtime_model.model, model_provider=self._realtime_model.provider),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
+            ),
         )
         self.emit("metrics_collected", metrics)
         self._handle_response_done_but_not_complete(event)
