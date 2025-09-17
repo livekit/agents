@@ -1051,13 +1051,21 @@ class RealtimeSession(
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = to_oai_tool_choice(tool_choice)
 
+        audio_cfg: RealtimeAudioConfig | None = None
+
         if is_given(voice):
             self._realtime_model._opts.voice = voice
-            kwargs["voice"] = voice
+            audio_cfg = RealtimeAudioConfig.model_construct(
+                output=RealtimeAudioConfigOutput.model_construct(voice=voice)
+            )
 
         if is_given(turn_detection):
             self._realtime_model._opts.turn_detection = turn_detection  # type: ignore
-            kwargs["turn_detection"] = turn_detection
+            input_cfg = RealtimeAudioConfigInput.model_construct(turn_detection=turn_detection)
+            if audio_cfg is None:
+                audio_cfg = RealtimeAudioConfig.model_construct(input=input_cfg)
+            else:
+                audio_cfg.input = input_cfg
 
         if is_given(max_response_output_tokens):
             self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
@@ -1065,19 +1073,59 @@ class RealtimeSession(
 
         if is_given(input_audio_transcription):
             self._realtime_model._opts.input_audio_transcription = input_audio_transcription
-            kwargs["input_audio_transcription"] = input_audio_transcription
+            if audio_cfg is None:
+                audio_cfg = RealtimeAudioConfig.model_construct(
+                    input=RealtimeAudioConfigInput.model_construct(
+                        transcription=input_audio_transcription
+                    )
+                )
+            else:
+                if audio_cfg.input is None:
+                    audio_cfg.input = RealtimeAudioConfigInput.model_construct(
+                        transcription=input_audio_transcription
+                    )
+                else:
+                    audio_cfg.input.transcription = input_audio_transcription
 
         if is_given(input_audio_noise_reduction):
             self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction  # type: ignore
-            kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
+            noise_cfg = (
+                None
+                if input_audio_noise_reduction is None
+                else realtime.realtime_audio_config_input.NoiseReduction(
+                    type=input_audio_noise_reduction
+                )
+            )
+            if audio_cfg is None:
+                audio_cfg = RealtimeAudioConfig.model_construct(
+                    input=RealtimeAudioConfigInput.model_construct(noise_reduction=noise_cfg)
+                )
+            else:
+                if audio_cfg.input is None:
+                    audio_cfg.input = RealtimeAudioConfigInput.model_construct(
+                        noise_reduction=noise_cfg
+                    )
+                else:
+                    audio_cfg.input.noise_reduction = noise_cfg
 
         if is_given(speed):
             self._realtime_model._opts.speed = speed
-            kwargs["speed"] = speed
+            if audio_cfg is None:
+                audio_cfg = RealtimeAudioConfig.model_construct(
+                    output=RealtimeAudioConfigOutput.model_construct(speed=speed)
+                )
+            else:
+                if audio_cfg.output is None:
+                    audio_cfg.output = RealtimeAudioConfigOutput.model_construct(speed=speed)
+                else:
+                    audio_cfg.output.speed = speed
 
         if is_given(tracing):
             self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
             kwargs["tracing"] = cast(Union[Tracing, None], tracing)
+
+        if audio_cfg is not None:
+            kwargs["audio"] = audio_cfg
 
         if kwargs:
             self.send_event(
