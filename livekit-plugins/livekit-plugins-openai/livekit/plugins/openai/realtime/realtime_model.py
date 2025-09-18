@@ -777,7 +777,8 @@ class RealtimeSession(
         async def _check_session_update_done() -> None:
             try:
                 await asyncio.wait_for(
-                    self._session_update_done.wait(), timeout=SESSION_UPDATE_TIMEOUT
+                    self._session_update_done.wait(),
+                    timeout=self._realtime_model._opts.conn_options.timeout,
                 )
             except asyncio.TimeoutError as e:
                 logger.error("update_session timed out when creating the connection.")
