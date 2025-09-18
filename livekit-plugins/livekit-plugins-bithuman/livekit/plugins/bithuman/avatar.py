@@ -6,7 +6,6 @@ import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Literal
-import uuid
 
 import aiohttp
 import cv2
