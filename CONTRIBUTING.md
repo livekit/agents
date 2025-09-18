@@ -95,7 +95,7 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
 ### Linting
 
 ```bash
-uv run ruff check .
+uv run ruff check --output-format=github .
 ```
 
 ### Formating
