@@ -305,6 +305,10 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None:
         pass
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
 
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
@@ -830,6 +834,7 @@ class RealtimeSession(llm.RealtimeSession):
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=self._current_generation.response_id,
         )
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -1019,7 +1024,8 @@ class RealtimeSession(llm.RealtimeSession):
             return token_details_map
 
         metrics = RealtimeModelMetrics(
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
+            model=self._realtime_model.model,
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,

@@ -2,6 +2,7 @@ from livekit import rtc
 
 from . import aio, audio, codecs, http_context, http_server, hw, images
 from .audio import AudioBuffer, combine_frames, merge_frames
+from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
 from .exp_filter import ExpFilter
 from .log import log_exceptions
@@ -22,6 +23,7 @@ __all__ = [
     "http_server",
     "ExpFilter",
     "MovingAverage",
+    "BoundedDict",
     "EventEmitter",
     "log_exceptions",
     "codecs",
