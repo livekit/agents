@@ -21,7 +21,10 @@ import os
 import weakref
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from typing import (
+    Any,
+    Optional,
+)
 
 import aiohttp
 
