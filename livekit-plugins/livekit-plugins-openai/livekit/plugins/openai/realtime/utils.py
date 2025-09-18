@@ -37,6 +37,7 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
 
+# use beta version TurnDetection and InputAudioTranscription for compatibility
 AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
     type="server_vad",
     threshold=0.5,
