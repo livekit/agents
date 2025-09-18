@@ -36,39 +36,43 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 OpenaiModels = Literal[
-    "openai/gpt-4.1",
-    "openai/gpt-4.1-mini",
-    "openai/gpt-4.1-nano",
-    "openai/gpt-4o",
-    "openai/gpt-4o-2024-05-13",
-    "openai/gpt-4o-2024-07-18",
-    "openai/gpt-4o-mini",
+    # "azure/gpt-5",
+    # "azure/gpt-5-mini",
+    # "azure/gpt-5-nano",
+    "azure/gpt-4.1",
+    "azure/gpt-4.1-mini",
+    "azure/gpt-4.1-nano",
+    # "azure/gpt-4o",
+    # "azure/gpt-4o-mini",
 ]
-GoogleModels = Literal[
-    "google/gemini-2.5-pro-preview-05-06",
-    "google/gemini-2.5-flash-preview-04-17",
-    "google/gemini-2.5-flash-preview-05-20",
-    "google/gemini-2.0-flash-001",
-    "google/gemini-2.0-flash-lite-preview-02-05",
-]
+
+# https://inference-docs.cerebras.ai/models/overview
 CerebrasModels = Literal[
+    # production models
     "cerebras/llama3.1-8b",
     "cerebras/llama-3.3-70b",
     "cerebras/llama-4-scout-17b-16e-instruct",
-    "cerebras/qwen-3-32b",
-    "cerebras/qwen-3-235b-a22b-instruct-2507",
     "cerebras/gpt-oss-120b",
+    "cerebras/qwen-3-32b",
+    # preview models
+    "cerebras/llama-4-maverick-17b-128e-instruct",
+    "cerebras/qwen-3-235b-a22b-instruct-2507",
 ]
+
+# https://console.groq.com/docs/models
 GroqModels = Literal[
-    "groq/llama3-8b-8192",
-    "groq/llama3-70b-8192",
+    # production models
+    "groq/llama-3.1-8b-instant",
     "groq/llama-3.3-70b-versatile",
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-    "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
     "groq/openai/gpt-oss-120b",
-    "groq/moonshotai/kimi-k2-instruct",
+    "groq/openai/gpt-oss-20b",
+    # preview models
+    "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "groq/qwen/qwen3-32b",
 ]
+
+# https://www.baseten.co/library/tag/llms
 BasetenModels = Literal[
     "baseten/deepseek-ai/DeepSeek-V3-0324",
     "baseten/meta-llama/Llama-4-Scout-17B-16E-Instruct",
@@ -83,11 +87,6 @@ class OpenaiOptions(TypedDict, total=False):
     top_p: float
 
 
-class GoogleOptions(TypedDict, total=False):
-    presence_penalty: float
-    frequency_penalty: float
-
-
 class CerebrasOptions(TypedDict, total=False):
     top_p: float
 
@@ -100,7 +99,7 @@ class BasetenOptions(TypedDict, total=False):
     top_p: float
 
 
-LLMModels = Union[OpenaiModels, GoogleModels, CerebrasModels, GroqModels, BasetenModels]
+LLMModels = Union[OpenaiModels, CerebrasModels, GroqModels, BasetenModels]
 
 Verbosity = Literal["low", "medium", "high"]
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -137,25 +136,6 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: GoogleModels,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -250,12 +230,7 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[
-            dict[str, Any]
-            | OpenaiOptions
-            | GoogleOptions
-            | CerebrasOptions
-            | GroqOptions
-            | BasetenOptions
+            dict[str, Any] | OpenaiOptions | CerebrasOptions | GroqOptions | BasetenOptions
         ] = NOT_GIVEN,
     ) -> None:
         super().__init__()
