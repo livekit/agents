@@ -1,40 +1,31 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
-import copy
 import json
 import logging
 import os
 import time
 import uuid
 import weakref
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
-    Any,
-    Dict,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
     Annotated,
+    Any,
+    Literal,
+    Union,
 )
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
-from livekit import agents, rtc
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIError,
-    Agent,
-    AgentSession,
-    JobContext,
-    RoomInputOptions,
     llm,
     utils,
 )
@@ -42,13 +33,12 @@ from livekit.agents.llm.tool_context import (
     get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
-    function_tool,
 )
 from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
-    DEFAULT_API_CONNECT_OPTIONS,
 )
 from livekit.agents.utils import is_given
 
@@ -68,18 +58,18 @@ DEFAULT_TEMPERATURE = 0.7
 
 
 class AudioProcessingConfig(BaseModel):
-    high_pass_filter: Optional[Dict[str, bool]] = None
-    noise_suppression: Optional[Dict[str, Union[bool, int, str]]] = None
-    gain_controller2: Optional[Dict[str, Any]] = None
-    echo_cancellation: Optional[Dict[str, bool]] = None
+    high_pass_filter: dict[str, bool] | None = None
+    noise_suppression: dict[str, bool | int | str] | None = None
+    gain_controller2: dict[str, Any] | None = None
+    echo_cancellation: dict[str, bool] | None = None
 
 
 class AudioConfig(BaseModel):
     audio_processing_config: AudioProcessingConfig = Field(default_factory=AudioProcessingConfig)
     frame_ms: int = 10
     profiling_enabled: bool = False
-    cng_dbfs: Optional[float] = None
-    aec_config: Optional[Dict] = None
+    cng_dbfs: float | None = None
+    aec_config: dict | None = None
 
 
 class IntentConfig(BaseModel):
@@ -92,18 +82,18 @@ class IntentConfig(BaseModel):
 
 
 class ToolConfig(BaseModel):
-    system_prompt: Optional[str] = None
-    tools: List[Dict] = Field(default_factory=list)
+    system_prompt: str | None = None
+    tools: list[dict] = Field(default_factory=list)
 
 
 class AnswerConfig(BaseModel):
     model_name: str = DEFAULT_MODEL
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
     max_tokens: int = 512
     temperature: float = 0.7
     top_p: float = 1.0
     timeout: float = 30.0
-    tool_config: Optional[ToolConfig] = None
+    tool_config: ToolConfig | None = None
 
 
 class TtsVoice(str, Enum):
@@ -206,7 +196,7 @@ class TtsConfig(BaseModel):
 
 class FunctionCall(BaseModel):
     name: str
-    arguments: Optional[str] = None
+    arguments: str | None = None
 
 
 class ToolCallType(str, Enum):
@@ -280,7 +270,7 @@ class AgentOutputDone(BaseModel):
 class AgentOutputToolCall(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     object: Literal["agent.output.tool_call"] = "agent.output.tool_call"
-    tool_calls: List[ToolCall]
+    tool_calls: list[ToolCall]
 
 
 class Error(BaseModel):
@@ -315,7 +305,7 @@ class AgentOutputTrace(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     object: Literal["agent.output.trace"] = "agent.output.trace"
     trace_id: str
-    timeline: List[Tuple[float, TraceEvent]] = Field(default_factory=list)
+    timeline: list[tuple[float, TraceEvent]] = Field(default_factory=list)
 
 
 class AudioProfile(BaseModel):
@@ -328,7 +318,7 @@ class AudioProfile(BaseModel):
 class AgentOutputProfile(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     object: Literal["agent.output.profile"] = "agent.output.profile"
-    audio: Optional[AudioProfile] = None
+    audio: AudioProfile | None = None
 
 
 AgentEgressTypes = Union[
@@ -349,7 +339,7 @@ AgentEgress = Annotated[AgentEgressTypes, Field(discriminator="object")]
 class AgentInputToolResult(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     object: Literal["agent.input.tool_result"] = "agent.input.tool_result"
-    tool_results: Dict[str, Dict]
+    tool_results: dict[str, dict]
 
 
 class AgentInputTrace(BaseModel):
@@ -394,7 +384,7 @@ class _RealtimeOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     top_p: NotGivenOr[float] = NOT_GIVEN
-    tools: NotGivenOr[List[Dict]] = NOT_GIVEN
+    tools: NotGivenOr[list[dict]] = NOT_GIVEN
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
 
     # TTS
@@ -455,7 +445,7 @@ class RealtimeModel(llm.RealtimeModel):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        tools: NotGivenOr[List[Dict]] = NOT_GIVEN,
+        tools: NotGivenOr[list[dict]] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         # TTS
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -489,7 +479,9 @@ class RealtimeModel(llm.RealtimeModel):
             account_id=account_id,
             conn_options=conn_options,
             max_session_duration=(
-                max_session_duration if is_given(max_session_duration) else DEFAULT_MAX_SESSION_DURATION
+                max_session_duration
+                if is_given(max_session_duration)
+                else DEFAULT_MAX_SESSION_DURATION
             ),
             high_pass_filter=high_pass_filter,
             noise_suppression=noise_suppression,
@@ -523,7 +515,6 @@ class RealtimeModel(llm.RealtimeModel):
         voice: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-
         if is_given(temperature) and self._opts.temperature != temperature:
             self._opts.temperature = temperature
 
@@ -553,7 +544,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._http_session = utils.http_context.http_session()
         return self._http_session
 
-    def session(self) -> "RealtimeSession":
+    def session(self) -> RealtimeSession:
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
@@ -611,7 +602,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         self._tools_lock = asyncio.Lock()
         self._chat_ctx_lock = asyncio.Lock()
 
-    def send_event(self, event: Union[BaseModel, bytes]) -> None:
+    def send_event(self, event: BaseModel | bytes) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
@@ -655,7 +646,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
                 else:
                     self._emit_error(e, recoverable=True)
 
-                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(num_retries)
+                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(
+                        num_retries
+                    )
                     logger.warning(
                         f"Fireworks Agent API connection failed, retrying in {retry_interval}s",
                         exc_info=e,
@@ -685,7 +678,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         return await self._realtime_model._ensure_http_session().ws_connect(
             url=url,
             headers=headers,
-            timeout=aiohttp.ClientWSTimeout(ws_close=self._realtime_model._opts.conn_options.timeout),
+            timeout=aiohttp.ClientWSTimeout(
+                ws_close=self._realtime_model._opts.conn_options.timeout
+            ),
         )
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -779,7 +774,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         opts = self._realtime_model._opts
 
         # Build dictionaries for each configuration object
-        apc_kwargs: Dict[str, Any] = {}
+        apc_kwargs: dict[str, Any] = {}
         if is_given(opts.high_pass_filter):
             apc_kwargs["high_pass_filter"] = {"enabled": opts.high_pass_filter}
         if is_given(opts.noise_suppression):
@@ -801,9 +796,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         if is_given(opts.echo_cancellation):
             apc_kwargs["echo_cancellation"] = {"enabled": opts.echo_cancellation}
 
-        audio_kwargs: Dict[str, Any] = {"audio_processing_config": apc_kwargs}
+        audio_kwargs: dict[str, Any] = {"audio_processing_config": apc_kwargs}
 
-        intent_kwargs: Dict[str, Any] = {}
+        intent_kwargs: dict[str, Any] = {}
         if is_given(opts.model):
             intent_kwargs["model_name"] = opts.model
         if is_given(opts.min_delay):
@@ -813,7 +808,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         if is_given(opts.max_follow_up_delay):
             intent_kwargs["max_follow_up_delay"] = opts.max_follow_up_delay
 
-        answer_kwargs: Dict[str, Any] = {}
+        answer_kwargs: dict[str, Any] = {}
         if is_given(opts.model):
             answer_kwargs["model_name"] = opts.model
         if self._instructions:
@@ -837,7 +832,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
                 tool_config_kwargs["system_prompt"] = self._instructions
             answer_kwargs["tool_config"] = tool_config_kwargs
 
-        tts_kwargs: Dict[str, Any] = {}
+        tts_kwargs: dict[str, Any] = {}
         if is_given(opts.voice):
             try:
                 tts_kwargs["voice"] = TtsVoice(opts.voice)
@@ -846,12 +841,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         if is_given(opts.speed):
             tts_kwargs["speed"] = opts.speed
 
-        config_kwargs: Dict[str, Any] = {}
+        config_kwargs: dict[str, Any] = {}
         if is_given(opts.opening_behavior):
             try:
                 config_kwargs["opening_behavior"] = OpeningBehavior(opts.opening_behavior)
             except ValueError:
-                logger.warning(f"Invalid OpeningBehavior value: {opts.opening_behavior}, using default.")
+                logger.warning(
+                    f"Invalid OpeningBehavior value: {opts.opening_behavior}, using default."
+                )
         if is_given(opts.agent_greeting):
             config_kwargs["agent_greeting"] = opts.agent_greeting
 
@@ -920,7 +917,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         """
         Check for function call outputs in the chat context and create an AgentInputToolResult.
         """
-        tool_results_dict: Dict[str, Dict] = {}
+        tool_results_dict: dict[str, dict] = {}
         for msg in chat_ctx.items:
             if msg.type == "function_call_output" and msg.call_id:
                 tool_results_dict[msg.call_id] = {"output": msg.output}
@@ -975,8 +972,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
     def interrupt(self) -> None:
         self._close_current_generation()
 
-    def truncate(self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN) -> None:
-        logger.debug(f"Truncate is not supported by Fireworks Agent.")
+    def truncate(
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
+        logger.debug("Truncate is not supported by Fireworks Agent.")
         pass
 
     async def aclose(self) -> None:
@@ -1055,7 +1054,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         This is called when the agent is about to start speaking.
         """
         if self._current_generation:
-            logger.info("A new generation is starting while another is in progress. Closing the previous one.")
+            logger.info(
+                "A new generation is starting while another is in progress. Closing the previous one."
+            )
             self._close_current_generation()
 
         self._agent_is_replying = True
@@ -1099,7 +1100,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         if self._current_generation._first_token_timestamp is None:
             self._current_generation._first_token_timestamp = time.time()
 
-        logger.debug(f"Handling AgentOutputDeltaMetadata for output_id: {event.output_id}, delta_id: {event.delta_id}")
+        logger.debug(
+            f"Handling AgentOutputDeltaMetadata for output_id: {event.output_id}, delta_id: {event.delta_id}"
+        )
 
         unique_key = f"{event.delta_id}"
         self._current_generation.pending_audio_metadata[unique_key] = event
@@ -1130,7 +1133,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
 
                 self.emit_input_audio_transcription_completed(event.transcript, is_final=False)
                 if lk_fw_debug:
-                    logger.debug(f"I send a temporary complete event")
+                    logger.debug("I send a temporary complete event")
 
             elif isinstance(event, AgentOutputWaiting):
                 if self._current_generation:
@@ -1140,7 +1143,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
             elif isinstance(event, AgentOutputGenerating):
                 if self._last_user_transcript:
                     self._emit_input_speech_stopped()
-                    self.emit_input_audio_transcription_completed(self._last_user_transcript, is_final=True)
+                    self.emit_input_audio_transcription_completed(
+                        self._last_user_transcript, is_final=True
+                    )
                     self._chat_ctx.add_message(role="user", content=self._last_user_transcript)
                     if lk_fw_debug:
                         logger.debug("I send a final complete event")
@@ -1148,7 +1153,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
 
                 self._handle_new_generation()
                 if lk_fw_debug:
-                    logger.debug(f"Generation created, is_agent_replying: {self._agent_is_replying}")
+                    logger.debug(
+                        f"Generation created, is_agent_replying: {self._agent_is_replying}"
+                    )
 
             elif isinstance(event, AgentOutputDeltaMetadata):
                 self._handle_delta_metadata(event)
@@ -1164,7 +1171,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
                 self._agent_is_replying = False
 
             elif isinstance(event, AgentOutputToolCall):
-                logger.info(f"Received tool call request from Fireworks, executing directly: {event.tool_calls}")
+                logger.info(
+                    f"Received tool call request from Fireworks, executing directly: {event.tool_calls}"
+                )
                 for call in event.tool_calls:
                     self._chat_ctx.insert(
                         llm.FunctionCall(
@@ -1185,8 +1194,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
             elif isinstance(event, AgentOutputProfile):
                 self.emit("audio_profile_received", event)
 
-    async def _execute_tool_calls(self, tool_calls: List[ToolCall]):
-        tool_results_dict: Dict[str, Dict] = {}
+    async def _execute_tool_calls(self, tool_calls: list[ToolCall]):
+        tool_results_dict: dict[str, dict] = {}
         for call in tool_calls:
             tool = self._tools.function_tools.get(call.function.name)
             if not tool:
@@ -1276,7 +1285,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
 
                 try:
                     item_gen.audio_ch.send_nowait(chunk_frame)
-                except Exception as e:
+                except Exception:
                     logger.error(f"Channel closed: {item_gen.audio_ch.closed}")
                     raise
 
@@ -1337,9 +1346,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["agent_interrupted",]]):
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
         self._current_generation.pending_audio_metadata.clear()
-        if (msg := self._chat_ctx.get_by_id(self._current_generation.message.message_id)) and isinstance(
-            msg, llm.ChatMessage
-        ):
+        if (
+            msg := self._chat_ctx.get_by_id(self._current_generation.message.message_id)
+        ) and isinstance(msg, llm.ChatMessage):
             msg.content = [self._current_generation.full_text]
         with contextlib.suppress(asyncio.InvalidStateError):
             self._current_generation._done_fut.set_result(None)
