@@ -238,13 +238,13 @@ class LLM(llm.LLM):
         lk_base_url = (
             base_url
             if is_given(base_url)
-            else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
+            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
         )
 
         lk_api_key = (
             api_key
             if is_given(api_key)
-            else os.getenv("LIVEKIT_GATEWAY_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+            else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
         if not lk_api_key:
             raise ValueError(
@@ -254,7 +254,7 @@ class LLM(llm.LLM):
         lk_api_secret = (
             api_secret
             if is_given(api_secret)
-            else os.getenv("LIVEKIT_GATEWAY_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+            else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
         )
         if not lk_api_secret:
             raise ValueError(
