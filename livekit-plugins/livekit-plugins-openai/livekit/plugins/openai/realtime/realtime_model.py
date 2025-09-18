@@ -75,6 +75,7 @@ from openai.types.realtime import (
     ResponseOutputItemDoneEvent,
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
+    SessionUpdatedEvent,
     SessionUpdateEvent,
 )
 from openai.types.realtime.realtime_session_create_response import (
@@ -115,6 +116,10 @@ SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
+
+SESSION_UPDATE_TIMEOUT = 5.0
+GENERATE_REPLY_TIMEOUT = 5.0
+UPDATE_CHAT_CTX_TIMEOUT = 5.0
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -685,7 +690,6 @@ class RealtimeSession(
 
         self._instructions: str | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
-        self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
@@ -697,6 +701,12 @@ class RealtimeSession(
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
 
+        # the counts of session update events sent and received
+        self._session_update_counts = 0
+        self._session_update_done = asyncio.Event()
+        self._session_update_done.set()
+        self.send_event(self._create_session_update_event())
+
         # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
@@ -706,6 +716,10 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+            if isinstance(event, SessionUpdateEvent):
+                self._session_update_counts += 1
+                self._session_update_done.clear()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -945,6 +959,8 @@ class RealtimeSession(
                         self._handle_response_done(ResponseDoneEvent.construct(**event))
                     elif event["type"] == "error":
                         self._handle_error(RealtimeErrorEvent.construct(**event))
+                    elif event["type"] == "session.updated":
+                        self._handle_session_updated(SessionUpdatedEvent.construct(**event))
                     elif lk_oai_debug:
                         logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
                 except Exception:
@@ -1110,6 +1126,7 @@ class RealtimeSession(
                     event_id=utils.shortuuid("options_update_"),
                 )
             )
+        # TODO: return a future
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
@@ -1128,7 +1145,9 @@ class RealtimeSession(
             if not futs:
                 return
             try:
-                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
+                await asyncio.wait_for(
+                    asyncio.gather(*futs, return_exceptions=True), timeout=UPDATE_CHAT_CTX_TIMEOUT
+                )
             except asyncio.TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
@@ -1192,6 +1211,8 @@ class RealtimeSession(
         async with self._update_fnc_ctx_lock:
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
+
+            await self._session_update_done.wait()  # TODO: add timeout
 
             assert isinstance(ev.session, RealtimeSessionCreateRequest)
             assert ev.session.tools is not None
@@ -1266,6 +1287,7 @@ class RealtimeSession(
                 event_id=event_id,
             )
         )
+        await self._session_update_done.wait()  # TODO: add timeout
         self._instructions = instructions
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -1324,7 +1346,7 @@ class RealtimeSession(
             if fut and not fut.done():
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
-        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        handle = asyncio.get_event_loop().call_later(GENERATE_REPLY_TIMEOUT, _on_timeout)
         fut.add_done_callback(lambda _: handle.cancel())
         return fut
 
@@ -1718,6 +1740,14 @@ class RealtimeSession(
             )
         else:
             logger.debug("Unknown response status: %s", event.response.status)
+
+    def _handle_session_updated(self, event: SessionUpdatedEvent) -> None:
+        if self._session_update_counts <= 0:
+            logger.warning("Received more session.updated events than session.update sent")
+            return
+        self._session_update_counts -= 1
+        if self._session_update_counts == 0:
+            self._session_update_done.set()
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):
