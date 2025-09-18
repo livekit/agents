@@ -1100,10 +1100,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
 
         from .agent_activity import _SpeechHandleContextVar
+
         speech_handle = _SpeechHandleContextVar.get(None)
         speech_id = speech_handle.id if speech_handle else None
 
-        self.emit("conversation_item_added", ConversationItemAddedEvent(item=message, speech_id=speech_id))
+        self.emit(
+            "conversation_item_added", ConversationItemAddedEvent(item=message, speech_id=speech_id)
+        )
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
