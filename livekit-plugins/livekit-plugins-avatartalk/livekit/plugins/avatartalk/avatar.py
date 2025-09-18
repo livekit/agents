@@ -30,7 +30,9 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
     ):
         self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
-        self._avatar_name = avatar_name or (os.getenv("AVATARTALK_AVATAR_NAME") or DEFAULT_AVATAR_NAME)
+        self._avatar_name = avatar_name or (
+            os.getenv("AVATARTALK_AVATAR_NAME") or DEFAULT_AVATAR_NAME
+        )
         self._avatar_expression = avatar_expression or (
             os.getenv("AVATARTALK_AVATAR_EXPRESSION") or DEFAULT_AVATAR_EXPRESSION
         )
@@ -41,8 +43,6 @@ class AvatarSession:
         if self._avatar_expression is NOT_GIVEN:
             self._avatar_expression = "expressive"
 
-
-
     def __generate_lk_token(
         self,
         livekit_api_key: str,
@@ -51,7 +51,7 @@ class AvatarSession:
         participant_identity: str,
         participant_name: str,
         as_agent: bool = True,
-        local_participant_identity: Optional[str] = None
+        local_participant_identity: Optional[str] = None,
     ):
         token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)

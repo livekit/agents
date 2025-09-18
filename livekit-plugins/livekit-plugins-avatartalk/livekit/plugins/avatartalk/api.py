@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_API_URL = "https://api.avatartalk.ai"
 
+
 class AvatarTalkException(Exception):
     """Exception for AvatarTalkAPI errors"""
 
