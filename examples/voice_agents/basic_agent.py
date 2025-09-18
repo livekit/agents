@@ -16,11 +16,10 @@ from livekit.agents import (
     RunContext,
     WorkerOptions,
     cli,
-    inference,  # noqa: F401
     metrics,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
+from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -92,9 +91,9 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm="openai/gpt-4o-mini",
-        stt="deepgram/nova-3",
-        tts="elevenlabs:cgSgspJ2msm6clMCkdW9",  # use inference.TTS() for more options
+        llm=openai.LLM(model="gpt-4o-mini"),
+        stt=deepgram.STT(model="nova-3", language="multi"),
+        tts=openai.TTS(voice="ash"),
         # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,
         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
