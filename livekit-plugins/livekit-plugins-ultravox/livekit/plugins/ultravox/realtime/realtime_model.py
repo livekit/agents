@@ -210,6 +210,10 @@ class RealtimeModel(llm.RealtimeModel):
         self._label = f"ultravox-{model}"
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
+    @property
+    def model(self) -> str:
+        return self._opts.model_id
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""
         if self._http_session is None:
@@ -966,7 +970,8 @@ class RealtimeSession(
             ttft=ttft,
             duration=duration,
             cancelled=interrupted,
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
+            model=self._realtime_model.model,
             input_tokens=0,  # Ultravox doesn't provide token counts
             output_tokens=0,
             total_tokens=0,
