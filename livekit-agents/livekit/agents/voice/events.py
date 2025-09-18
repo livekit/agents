@@ -109,6 +109,7 @@ class AgentStateChangedEvent(BaseModel):
     type: Literal["agent_state_changed"] = "agent_state_changed"
     old_state: AgentState
     new_state: AgentState
+    speech_id: str | None = None
     created_at: float = Field(default_factory=time.time)
 
 
@@ -152,6 +153,7 @@ class _TypeDiscriminator(BaseModel):
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
     item: ChatMessage | _TypeDiscriminator
+    speech_id: str | None = None
     created_at: float = Field(default_factory=time.time)
 
 
