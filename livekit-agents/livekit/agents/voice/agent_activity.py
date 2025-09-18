@@ -9,7 +9,7 @@ from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from opentelemetry import trace, context as otel_context
+from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
