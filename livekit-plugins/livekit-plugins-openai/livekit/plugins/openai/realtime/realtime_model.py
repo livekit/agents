@@ -753,10 +753,16 @@ class RealtimeSession(
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
+                self._session_update_counts = 0  # reset the session update counts
+                self._session_update_done.set()
+
                 for ev in events:
                     msg = ev.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
+                    if isinstance(ev, SessionUpdateEvent):
+                        self._session_update_counts += 1
+                        self._session_update_done.clear()
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
                 raise APIConnectionError(
@@ -768,14 +774,30 @@ class RealtimeSession(
             logger.debug("reconnected to OpenAI Realtime API")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
+        async def _check_session_update_done() -> None:
+            try:
+                await asyncio.wait_for(
+                    self._session_update_done.wait(), timeout=SESSION_UPDATE_TIMEOUT
+                )
+            except asyncio.TimeoutError as e:
+                logger.error("update_session timed out when creating the connection.")
+                raise APIConnectionError(
+                    "update_session timed out when creating the connection"
+                ) from e
+
         reconnecting = False
         while not self._msg_ch.closed:
+            check_session_update_task: asyncio.Task[None] | None = None
             try:
                 ws_conn = await self._create_ws_conn()
                 if reconnecting:
                     await _reconnect()
                     num_retries = 0  # reset the retry counter
-                await self._run_ws(ws_conn)
+
+                check_session_update_task = asyncio.create_task(
+                    _check_session_update_done(), name="check_session_update_done"
+                )
+                await asyncio.gather(self._run_ws(ws_conn), check_session_update_task)
 
             except APIError as e:
                 if max_retries == 0 or not e.retryable:
@@ -803,6 +825,10 @@ class RealtimeSession(
             except Exception as e:
                 self._emit_error(e, recoverable=False)
                 raise
+
+            finally:
+                if check_session_update_task is not None:
+                    check_session_update_task.cancel()
 
             reconnecting = True
 
