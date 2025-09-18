@@ -78,11 +78,18 @@ class _PeriodicCollector:
 
 @dataclass
 class STTOptions:
-    model: str
+    model: NotGivenOr[str]
     sample_rate: int
     language: NotGivenOr[str] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
+    skip_vad: NotGivenOr[bool] = NOT_GIVEN
+    vad_kwargs: NotGivenOr[dict] = NOT_GIVEN
+    audio_window_seconds: NotGivenOr[float] = NOT_GIVEN
+    max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN
+    min_duration_sec: NotGivenOr[float] = NOT_GIVEN
+    n_prefix_words: NotGivenOr[int] = NOT_GIVEN
+    n_speculation_words: NotGivenOr[int] = NOT_GIVEN
     text_timeout_seconds: float = 2.0
     response_format: str = "verbose_json"
     timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN
@@ -99,6 +106,13 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        skip_vad: NotGivenOr[bool] = NOT_GIVEN,
+        vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
+        audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
+        max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
+        min_duration_sec: NotGivenOr[float] = NOT_GIVEN,
+        n_prefix_words: NotGivenOr[int] = NOT_GIVEN,
+        n_speculation_words: NotGivenOr[int] = NOT_GIVEN,
         text_timeout_seconds: float = 2.0,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
         response_format: str = "verbose_json",
@@ -128,6 +142,13 @@ class STT(stt.STT):
             language=language,
             prompt=prompt,
             temperature=temperature,
+            skip_vad=skip_vad,
+            vad_kwargs=vad_kwargs,
+            audio_window_seconds=audio_window_seconds,
+            max_audio_window_seconds=max_audio_window_seconds,
+            min_duration_sec=min_duration_sec,
+            n_prefix_words=n_prefix_words,
+            n_speculation_words=n_speculation_words,
             text_timeout_seconds=text_timeout_seconds,
             response_format=response_format,
             timestamp_granularities=timestamp_granularities,
@@ -149,9 +170,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError(
-            "FireworksAI STT does not support batch recognition, use stream() instead"
-        )
+        raise NotImplementedError("FireworksAI STT does not support batch recognition, use stream() instead")
 
     def stream(
         self,
@@ -177,6 +196,13 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        skip_vad: NotGivenOr[bool] = NOT_GIVEN,
+        vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
+        audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
+        max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
+        min_duration_sec: NotGivenOr[float] = NOT_GIVEN,
+        n_prefix_words: NotGivenOr[int] = NOT_GIVEN,
+        n_speculation_words: NotGivenOr[int] = NOT_GIVEN,
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -188,6 +214,20 @@ class STT(stt.STT):
             self._opts.prompt = prompt
         if is_given(temperature):
             self._opts.temperature = temperature
+        if is_given(skip_vad):
+            self._opts.skip_vad = skip_vad
+        if is_given(vad_kwargs):
+            self._opts.vad_kwargs = vad_kwargs
+        if is_given(audio_window_seconds):
+            self._opts.audio_window_seconds = audio_window_seconds
+        if is_given(max_audio_window_seconds):
+            self._opts.max_audio_window_seconds = max_audio_window_seconds
+        if is_given(min_duration_sec):
+            self._opts.min_duration_sec = min_duration_sec
+        if is_given(n_prefix_words):
+            self._opts.n_prefix_words = n_prefix_words
+        if is_given(n_speculation_words):
+            self._opts.n_speculation_words = n_speculation_words
         if is_given(text_timeout_seconds):
             if not 1.0 <= text_timeout_seconds <= 29.0:
                 raise ValueError("text_timeout_seconds must be between 1.0 and 29.0")
@@ -201,6 +241,13 @@ class STT(stt.STT):
                 language=language,
                 prompt=prompt,
                 temperature=temperature,
+                skip_vad=skip_vad,
+                vad_kwargs=vad_kwargs,
+                audio_window_seconds=audio_window_seconds,
+                max_audio_window_seconds=max_audio_window_seconds,
+                min_duration_sec=min_duration_sec,
+                n_prefix_words=n_prefix_words,
+                n_speculation_words=n_speculation_words,
                 text_timeout_seconds=text_timeout_seconds,
                 timestamp_granularities=timestamp_granularities,
             )
@@ -240,6 +287,13 @@ class SpeechStream(stt.SpeechStream):
         language: NotGivenOr[str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        skip_vad: NotGivenOr[bool] = NOT_GIVEN,
+        vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
+        audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
+        max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
+        min_duration_sec: NotGivenOr[float] = NOT_GIVEN,
+        n_prefix_words: NotGivenOr[int] = NOT_GIVEN,
+        n_speculation_words: NotGivenOr[int] = NOT_GIVEN,
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -251,6 +305,20 @@ class SpeechStream(stt.SpeechStream):
             self._opts.prompt = prompt
         if is_given(temperature):
             self._opts.temperature = temperature
+        if is_given(skip_vad):
+            self._opts.skip_vad = skip_vad
+        if is_given(vad_kwargs):
+            self._opts.vad_kwargs = vad_kwargs
+        if is_given(audio_window_seconds):
+            self._opts.audio_window_seconds = audio_window_seconds
+        if is_given(max_audio_window_seconds):
+            self._opts.max_audio_window_seconds = max_audio_window_seconds
+        if is_given(min_duration_sec):
+            self._opts.min_duration_sec = min_duration_sec
+        if is_given(n_prefix_words):
+            self._opts.n_prefix_words = n_prefix_words
+        if is_given(n_speculation_words):
+            self._opts.n_speculation_words = n_speculation_words
         if is_given(text_timeout_seconds):
             self._opts.text_timeout_seconds = text_timeout_seconds
         if is_given(timestamp_granularities):
@@ -363,12 +431,23 @@ class SpeechStream(stt.SpeechStream):
             "language": self._opts.language if is_given(self._opts.language) else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "temperature": self._opts.temperature if is_given(self._opts.temperature) else None,
+            "skip_vad": self._opts.skip_vad if is_given(self._opts.skip_vad) else None,
+            "vad_kwargs": self._opts.vad_kwargs if is_given(self._opts.vad_kwargs) else None,
+            "audio_window_seconds": (
+                self._opts.audio_window_seconds if is_given(self._opts.audio_window_seconds) else None
+            ),
+            "max_audio_window_seconds": (
+                self._opts.max_audio_window_seconds if is_given(self._opts.max_audio_window_seconds) else None
+            ),
+            "min_duration_sec": self._opts.min_duration_sec if is_given(self._opts.min_duration_sec) else None,
+            "n_prefix_words": self._opts.n_prefix_words if is_given(self._opts.n_prefix_words) else None,
+            "n_speculation_words": (
+                self._opts.n_speculation_words if is_given(self._opts.n_speculation_words) else None
+            ),
             "text_timeout_seconds": self._opts.text_timeout_seconds,
             "response_format": self._opts.response_format,
             "timestamp_granularities": (
-                self._opts.timestamp_granularities
-                if is_given(self._opts.timestamp_granularities)
-                else None
+                self._opts.timestamp_granularities if is_given(self._opts.timestamp_granularities) else None
             ),
         }
 
@@ -433,9 +512,7 @@ class SpeechStream(stt.SpeechStream):
             if is_final:
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(language=self._opts.language or "", text=full_transcript)
-                    ],
+                    alternatives=[stt.SpeechData(language=self._opts.language or "", text=full_transcript)],
                 )
                 self._event_ch.send_nowait(final_event)
                 self._transcript_state.clear()
@@ -446,9 +523,7 @@ class SpeechStream(stt.SpeechStream):
             else:
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(language=self._opts.language or "", text=full_transcript)
-                    ],
+                    alternatives=[stt.SpeechData(language=self._opts.language or "", text=full_transcript)],
                 )
                 self._event_ch.send_nowait(interim_event)
 

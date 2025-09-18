@@ -1,6 +1,6 @@
 # Fireworks AI plugin for LiveKit Agents
 
-Support for speech-to-text and realtime voice agent api with [Fireworks AI](https://fireworks.ai/).
+Support for speech-to-text api with [Fireworks AI](https://fireworks.ai/).
 
 ## Installation
 
