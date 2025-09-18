@@ -9,7 +9,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types import realtime
+from openai.types import realtime, responses
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
@@ -30,7 +30,7 @@ DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.SemanticVa
     eagerness="medium",
     interrupt_response=True,
 )
-DEFAULT_TOOL_CHOICE = "auto"
+DEFAULT_TOOL_CHOICE: responses.ToolChoiceOptions = "auto"
 DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
@@ -268,11 +268,14 @@ def openai_item_to_livekit_item(item: realtime.ConversationItem) -> llm.ChatItem
     raise ValueError(f"unsupported item type: {item.type}")
 
 
-def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> realtime.RealtimeToolChoiceConfig:
     if isinstance(tool_choice, str):
         return tool_choice
 
     elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
-        return tool_choice["function"]["name"]
+        return responses.ToolChoiceFunction(
+            name=tool_choice["function"]["name"],
+            type="function",
+        )
 
     return DEFAULT_TOOL_CHOICE
