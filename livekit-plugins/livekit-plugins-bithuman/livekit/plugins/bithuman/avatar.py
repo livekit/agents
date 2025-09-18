@@ -195,9 +195,7 @@ class AvatarSession:
         from bithuman import AsyncBithuman
 
         if self._runtime:
-            self._runtime.transaction_id = str(uuid.uuid4())
             runtime = self._runtime
-            await runtime._initialize_token()  # refresh the token
         else:
             kwargs = {
                 "model_path": self._model_path,
@@ -211,7 +209,6 @@ class AvatarSession:
 
             runtime = await AsyncBithuman.create(**kwargs)
             self._runtime = runtime
-            await runtime.start()
 
         video_generator = BithumanGenerator(runtime)
 
