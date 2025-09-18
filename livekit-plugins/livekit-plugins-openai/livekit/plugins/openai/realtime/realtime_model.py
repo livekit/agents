@@ -1212,7 +1212,12 @@ class RealtimeSession(
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
-            await self._session_update_done.wait()  # TODO: add timeout
+            try:
+                await asyncio.wait_for(
+                    self._session_update_done.wait(), timeout=SESSION_UPDATE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                raise llm.RealtimeError("update_tools timed out.") from None
 
             assert isinstance(ev.session, RealtimeSessionCreateRequest)
             assert ev.session.tools is not None
@@ -1287,7 +1292,11 @@ class RealtimeSession(
                 event_id=event_id,
             )
         )
-        await self._session_update_done.wait()  # TODO: add timeout
+        try:
+            await asyncio.wait_for(self._session_update_done.wait(), timeout=SESSION_UPDATE_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise llm.RealtimeError("update_instructions timed out.") from None
+
         self._instructions = instructions
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -1745,7 +1754,7 @@ class RealtimeSession(
         if self._session_update_counts <= 0:
             logger.warning("Received more session.updated events than session.update sent")
             return
-        self._session_update_counts -= 1
+        self._session_update_counts = max(0, self._session_update_counts - 1)
         if self._session_update_counts == 0:
             self._session_update_done.set()
 
