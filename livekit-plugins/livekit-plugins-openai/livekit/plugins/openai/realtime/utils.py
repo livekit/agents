@@ -37,7 +37,7 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
 
-AZURE_DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.ServerVad(
+AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
     type="server_vad",
     threshold=0.5,
     prefix_padding_ms=300,
@@ -45,7 +45,7 @@ AZURE_DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.Serv
     create_response=True,
 )
 
-AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
+AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
     model="whisper-1",
 )
 

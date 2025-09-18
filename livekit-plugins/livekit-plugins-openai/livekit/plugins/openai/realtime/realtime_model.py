@@ -378,9 +378,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
-        ] = NOT_GIVEN,
+        input_audio_noise_reduction: NoiseReductionType | InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
         ] = NOT_GIVEN,
@@ -402,7 +400,7 @@ class RealtimeModel(llm.RealtimeModel):
             voice (str): Voice used for audio responses.
             modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
             input_audio_transcription (AudioTranscription | InputAudioTranscription | None | NotGiven): Transcription options; defaults to Azure-optimized values when not provided.
-            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None | NotGiven): Input noise reduction settings.
+            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None): Input noise reduction settings. Defaults to None.
             turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
@@ -509,7 +507,7 @@ class RealtimeModel(llm.RealtimeModel):
                 raise ValueError(
                     f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
                 )
-            if is_given(input_audio_noise_reduction) and not isinstance(
+            if input_audio_noise_reduction is not None and not isinstance(
                 input_audio_noise_reduction, InputAudioNoiseReduction
             ):
                 raise ValueError(
@@ -520,7 +518,7 @@ class RealtimeModel(llm.RealtimeModel):
                 voice=voice,
                 modalities=modalities,
                 input_audio_transcription=input_audio_transcription,  # type: ignore
-                input_audio_noise_reduction=input_audio_noise_reduction,  # type: ignore
+                input_audio_noise_reduction=input_audio_noise_reduction,
                 turn_detection=turn_detection,  # type: ignore
                 temperature=temperature,
                 speed=speed,
