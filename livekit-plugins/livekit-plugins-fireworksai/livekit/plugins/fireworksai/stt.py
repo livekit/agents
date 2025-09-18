@@ -170,7 +170,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError("FireworksAI STT does not support batch recognition, use stream() instead")
+        raise NotImplementedError(
+            "FireworksAI STT does not support batch recognition, use stream() instead"
+        )
 
     def stream(
         self,
@@ -434,20 +436,30 @@ class SpeechStream(stt.SpeechStream):
             "skip_vad": self._opts.skip_vad if is_given(self._opts.skip_vad) else None,
             "vad_kwargs": self._opts.vad_kwargs if is_given(self._opts.vad_kwargs) else None,
             "audio_window_seconds": (
-                self._opts.audio_window_seconds if is_given(self._opts.audio_window_seconds) else None
+                self._opts.audio_window_seconds
+                if is_given(self._opts.audio_window_seconds)
+                else None
             ),
             "max_audio_window_seconds": (
-                self._opts.max_audio_window_seconds if is_given(self._opts.max_audio_window_seconds) else None
+                self._opts.max_audio_window_seconds
+                if is_given(self._opts.max_audio_window_seconds)
+                else None
             ),
-            "min_duration_sec": self._opts.min_duration_sec if is_given(self._opts.min_duration_sec) else None,
-            "n_prefix_words": self._opts.n_prefix_words if is_given(self._opts.n_prefix_words) else None,
+            "min_duration_sec": self._opts.min_duration_sec
+            if is_given(self._opts.min_duration_sec)
+            else None,
+            "n_prefix_words": self._opts.n_prefix_words
+            if is_given(self._opts.n_prefix_words)
+            else None,
             "n_speculation_words": (
                 self._opts.n_speculation_words if is_given(self._opts.n_speculation_words) else None
             ),
             "text_timeout_seconds": self._opts.text_timeout_seconds,
             "response_format": self._opts.response_format,
             "timestamp_granularities": (
-                self._opts.timestamp_granularities if is_given(self._opts.timestamp_granularities) else None
+                self._opts.timestamp_granularities
+                if is_given(self._opts.timestamp_granularities)
+                else None
             ),
         }
 
@@ -512,7 +524,9 @@ class SpeechStream(stt.SpeechStream):
             if is_final:
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language=self._opts.language or "", text=full_transcript)],
+                    alternatives=[
+                        stt.SpeechData(language=self._opts.language or "", text=full_transcript)
+                    ],
                 )
                 self._event_ch.send_nowait(final_event)
                 self._transcript_state.clear()
@@ -523,7 +537,9 @@ class SpeechStream(stt.SpeechStream):
             else:
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language=self._opts.language or "", text=full_transcript)],
+                    alternatives=[
+                        stt.SpeechData(language=self._opts.language or "", text=full_transcript)
+                    ],
                 )
                 self._event_ch.send_nowait(interim_event)
 
