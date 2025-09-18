@@ -868,7 +868,9 @@ class AgentActivity(RecognitionHooks):
             speech.interrupt(force=force)
             interrupted_speeches.append(speech)
 
-        if self._rt_session is not None:
+        if self._rt_session is not None and (
+            not self._rt_session.realtime_model.capabilities.turn_detection or force
+        ):
             self._rt_session.interrupt()
 
         if not interrupted_speeches:
