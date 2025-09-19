@@ -85,12 +85,7 @@ class STTOptions:
     temperature: NotGivenOr[float] = NOT_GIVEN
     skip_vad: NotGivenOr[bool] = NOT_GIVEN
     vad_kwargs: NotGivenOr[dict] = NOT_GIVEN
-    audio_window_seconds: NotGivenOr[float] = NOT_GIVEN
-    max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN
-    min_duration_sec: NotGivenOr[float] = NOT_GIVEN
-    n_prefix_words: NotGivenOr[int] = NOT_GIVEN
-    n_speculation_words: NotGivenOr[int] = NOT_GIVEN
-    text_timeout_seconds: float = 2.0
+    text_timeout_seconds: float = 1.0
     response_format: str = "verbose_json"
     timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN
     base_url: NotGivenOr[str] = NOT_GIVEN
@@ -108,17 +103,37 @@ class STT(stt.STT):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         skip_vad: NotGivenOr[bool] = NOT_GIVEN,
         vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
-        audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
-        max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
-        min_duration_sec: NotGivenOr[float] = NOT_GIVEN,
-        n_prefix_words: NotGivenOr[int] = NOT_GIVEN,
-        n_speculation_words: NotGivenOr[int] = NOT_GIVEN,
-        text_timeout_seconds: float = 2.0,
+        text_timeout_seconds: float = 1.0,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
         response_format: str = "verbose_json",
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1",
     ):
+        """
+        Create a new instance of Fireworks AI STT.
+
+        Args:
+            model: The Fireworks AI STT model to use. Defaults to NOT_GIVEN (server uses default model).
+            language: The target language for transcription. Defaults to NOT_GIVEN (server detects language automatically).
+                Full list: https://fireworks.ai/docs/api-reference/audio-streaming-transcriptions#supported-languages
+            prompt: The input prompt that the model will use when generating the transcription. Defaults to NOT_GIVEN.
+            temperature: Sampling temperature to use when decoding text tokens during transcription. Defaults to NOT_GIVEN.
+            skip_vad: Whether to skip server-side VAD. Defaults to NOT_GIVEN.
+            vad_kwargs: The optional kwargs to pass to the VAD model.
+                Defaults to NOT_GIVEN. Example: Set to {"threshold": 0.15} to adjust the VAD threshold.
+            text_timeout_seconds: Duration of silence before marking transcript as final. Defaults to 1.0.
+            timestamp_granularities: The timestamp granularities to populate for this streaming transcription.
+                Defaults to NOT_GIVEN. Set to "word,segment" to enable timestamp granularities.
+            response_format: The format in which to return the response. Default to "verbose_json".
+            base_url: The base URL for the Fireworks AI STT.
+                Defaults to "wss://audio-streaming.us-virginia-1.direct.fireworks.ai/v1".
+            api_key: The Fireworks AI API key. If not provided, it will be read from
+                the FIREWORKS_API_KEY environment variable.
+            http_session: Optional aiohttp ClientSession to use for requests.
+
+        Raises:
+            ValueError: If no API key is provided, found in environment variables, or if a parameter is invalid.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
         )
@@ -144,11 +159,6 @@ class STT(stt.STT):
             temperature=temperature,
             skip_vad=skip_vad,
             vad_kwargs=vad_kwargs,
-            audio_window_seconds=audio_window_seconds,
-            max_audio_window_seconds=max_audio_window_seconds,
-            min_duration_sec=min_duration_sec,
-            n_prefix_words=n_prefix_words,
-            n_speculation_words=n_speculation_words,
             text_timeout_seconds=text_timeout_seconds,
             response_format=response_format,
             timestamp_granularities=timestamp_granularities,
@@ -200,11 +210,6 @@ class STT(stt.STT):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         skip_vad: NotGivenOr[bool] = NOT_GIVEN,
         vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
-        audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
-        max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
-        min_duration_sec: NotGivenOr[float] = NOT_GIVEN,
-        n_prefix_words: NotGivenOr[int] = NOT_GIVEN,
-        n_speculation_words: NotGivenOr[int] = NOT_GIVEN,
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -220,16 +225,6 @@ class STT(stt.STT):
             self._opts.skip_vad = skip_vad
         if is_given(vad_kwargs):
             self._opts.vad_kwargs = vad_kwargs
-        if is_given(audio_window_seconds):
-            self._opts.audio_window_seconds = audio_window_seconds
-        if is_given(max_audio_window_seconds):
-            self._opts.max_audio_window_seconds = max_audio_window_seconds
-        if is_given(min_duration_sec):
-            self._opts.min_duration_sec = min_duration_sec
-        if is_given(n_prefix_words):
-            self._opts.n_prefix_words = n_prefix_words
-        if is_given(n_speculation_words):
-            self._opts.n_speculation_words = n_speculation_words
         if is_given(text_timeout_seconds):
             if not 1.0 <= text_timeout_seconds <= 29.0:
                 raise ValueError("text_timeout_seconds must be between 1.0 and 29.0")
@@ -245,11 +240,6 @@ class STT(stt.STT):
                 temperature=temperature,
                 skip_vad=skip_vad,
                 vad_kwargs=vad_kwargs,
-                audio_window_seconds=audio_window_seconds,
-                max_audio_window_seconds=max_audio_window_seconds,
-                min_duration_sec=min_duration_sec,
-                n_prefix_words=n_prefix_words,
-                n_speculation_words=n_speculation_words,
                 text_timeout_seconds=text_timeout_seconds,
                 timestamp_granularities=timestamp_granularities,
             )
@@ -291,11 +281,6 @@ class SpeechStream(stt.SpeechStream):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         skip_vad: NotGivenOr[bool] = NOT_GIVEN,
         vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
-        audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
-        max_audio_window_seconds: NotGivenOr[float] = NOT_GIVEN,
-        min_duration_sec: NotGivenOr[float] = NOT_GIVEN,
-        n_prefix_words: NotGivenOr[int] = NOT_GIVEN,
-        n_speculation_words: NotGivenOr[int] = NOT_GIVEN,
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -311,16 +296,6 @@ class SpeechStream(stt.SpeechStream):
             self._opts.skip_vad = skip_vad
         if is_given(vad_kwargs):
             self._opts.vad_kwargs = vad_kwargs
-        if is_given(audio_window_seconds):
-            self._opts.audio_window_seconds = audio_window_seconds
-        if is_given(max_audio_window_seconds):
-            self._opts.max_audio_window_seconds = max_audio_window_seconds
-        if is_given(min_duration_sec):
-            self._opts.min_duration_sec = min_duration_sec
-        if is_given(n_prefix_words):
-            self._opts.n_prefix_words = n_prefix_words
-        if is_given(n_speculation_words):
-            self._opts.n_speculation_words = n_speculation_words
         if is_given(text_timeout_seconds):
             self._opts.text_timeout_seconds = text_timeout_seconds
         if is_given(timestamp_granularities):
@@ -435,25 +410,6 @@ class SpeechStream(stt.SpeechStream):
             "temperature": self._opts.temperature if is_given(self._opts.temperature) else None,
             "skip_vad": self._opts.skip_vad if is_given(self._opts.skip_vad) else None,
             "vad_kwargs": self._opts.vad_kwargs if is_given(self._opts.vad_kwargs) else None,
-            "audio_window_seconds": (
-                self._opts.audio_window_seconds
-                if is_given(self._opts.audio_window_seconds)
-                else None
-            ),
-            "max_audio_window_seconds": (
-                self._opts.max_audio_window_seconds
-                if is_given(self._opts.max_audio_window_seconds)
-                else None
-            ),
-            "min_duration_sec": self._opts.min_duration_sec
-            if is_given(self._opts.min_duration_sec)
-            else None,
-            "n_prefix_words": self._opts.n_prefix_words
-            if is_given(self._opts.n_prefix_words)
-            else None,
-            "n_speculation_words": (
-                self._opts.n_speculation_words if is_given(self._opts.n_speculation_words) else None
-            ),
             "text_timeout_seconds": self._opts.text_timeout_seconds,
             "response_format": self._opts.response_format,
             "timestamp_granularities": (
@@ -464,7 +420,7 @@ class SpeechStream(stt.SpeechStream):
         }
 
         headers = {
-            "User-Agent": "Python/3.12",
+            "User-Agent": "LiveKit Agents",
             "Authorization": self._api_key,
         }
 
