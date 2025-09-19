@@ -42,7 +42,7 @@ from livekit.agents import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 
-from ._utils import PeriodicCollector
+
 from .log import logger
 
 BASE_URL = "https://api.gladia.io/v2/live"
@@ -666,10 +666,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._base_url = base_url
         self._speaking = False
-        self._audio_duration_collector = PeriodicCollector(
-            callback=self._on_audio_duration_report,
-            duration=5.0,
-        )
+        self._speech_duration = 0.0
 
         self._audio_energy_filter: AudioEnergyFilter | None = None
         if opts.energy_filter:
@@ -678,7 +675,6 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
 
-        self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -904,14 +900,13 @@ class SpeechStream(stt.SpeechStream):
                 has_ended = True
 
             for frame in frames:
-                self._audio_duration_collector.push(frame.duration)
+                self._speech_duration += frame.duration
                 # Encode the audio data as base64
                 chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                 message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                 await self._ws.send_str(message)
 
                 if has_ended:
-                    self._audio_duration_collector.flush()
                     await self._ws.send_str(json.dumps({"type": "stop_recording"}))
                     has_ended = False
 
@@ -991,6 +986,17 @@ class SpeechStream(stt.SpeechStream):
                                     request_id=self._request_id,
                                 )
                             )
+                            
+                            # Report usage only at the end of speech
+                            if self._speech_duration > 0:
+                                usage_event = stt.SpeechEvent(
+                                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                                    request_id=self._request_id,
+                                    alternatives=[],
+                                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                                )
+                                self._event_ch.send_nowait(usage_event)
+                                self._speech_duration = 0.0
                     # If translation *is* enabled, we suppress this final event
                     # and wait for the 'translation' message to emit the final event.
                 elif self._opts.interim_results:
@@ -1049,6 +1055,17 @@ class SpeechStream(stt.SpeechStream):
                                 type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
                             )
                         )
+                        
+                        # Report usage only at the end of speech
+                        if self._speech_duration > 0:
+                            usage_event = stt.SpeechEvent(
+                                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                                request_id=self._request_id,
+                                alternatives=[],
+                                recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                            )
+                            self._event_ch.send_nowait(usage_event)
+                            self._speech_duration = 0.0
 
         elif data["type"] == "post_final_transcript":
             # This is sent at the end of a session
@@ -1064,13 +1081,3 @@ class SpeechStream(stt.SpeechStream):
         if self._audio_energy_filter:
             return self._audio_energy_filter.update(frame)
         return AudioEnergyFilter.State.SPEAKING
-
-    def _on_audio_duration_report(self, duration: float) -> None:
-        """Report the audio duration for usage tracking."""
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            request_id=self._request_id,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-        )
-        self._event_ch.send_nowait(usage_event)
