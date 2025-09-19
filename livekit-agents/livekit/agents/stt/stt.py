@@ -114,9 +114,9 @@ class STT(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
+        start_time = time.perf_counter()
         for i in range(conn_options.max_retry + 1):
             try:
-                start_time = time.perf_counter()
                 event = await self._recognize_impl(
                     buffer, language=language, conn_options=conn_options
                 )
