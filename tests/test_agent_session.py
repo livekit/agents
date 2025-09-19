@@ -474,7 +474,9 @@ async def test_generate_reply() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT)
+    t_origin = await asyncio.wait_for(
+        run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT
+    )
 
     # playback_finished
     assert len(playback_finished_events) == 3
