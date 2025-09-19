@@ -287,6 +287,10 @@ class ChatContext:
         Removes leading function calls to avoid partial function outputs.
         Preserves the first system message by adding it back to the beginning.
         """
+
+        if len(self._items) <= max_items:
+            return self
+
         instructions = next(
             (item for item in self._items if item.type == "message" and item.role == "system"),
             None,
