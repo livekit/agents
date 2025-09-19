@@ -1,5 +1,24 @@
 import re
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Sequence
+from typing import Literal
+
+TranscriptionFilterName = Literal["markdown", "emoji"]
+
+
+def apply_transcription_filters(
+    text: AsyncIterable[str], filters: Sequence[TranscriptionFilterName]
+) -> AsyncIterable[str]:
+    all_filters = {
+        "markdown": filter_markdown,
+        "emoji": filter_emoji,
+    }
+
+    for filter in filters:
+        if filter not in all_filters:
+            raise ValueError(f"Invalid filter: {filter}, available filters: {all_filters.keys()}")
+        text = all_filters[filter](text)
+    return text
+
 
 LINE_PATTERNS = [
     # headers: remove # and following spaces

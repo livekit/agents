@@ -324,10 +324,6 @@ class Agent:
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
         """
-        from .transcription.filters import filter_emoji, filter_markdown
-
-        text = filter_markdown(text)
-        text = filter_emoji(text)
         return Agent.default.tts_node(self, text, model_settings)
 
     def realtime_audio_output_node(

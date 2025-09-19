@@ -1,16 +1,13 @@
 import logging
-from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
-from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
-    ModelSettings,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
@@ -44,17 +41,6 @@ class MyAgent(Agent):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
         self.session.generate_reply()
-
-    async def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[rtc.AudioFrame]:
-        # Markdown and emoji filters are enabled in `Agent.tts_node`, markdown symbols
-        # and emojis will be removed from the text sent to the TTS model
-
-        # To disable these filters, customize the `tts_node` method and
-        # use `return Agent.default.tts_node(self, text, model_settings)` instead
-
-        return super().tts_node(text, model_settings)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
