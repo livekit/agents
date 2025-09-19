@@ -187,6 +187,14 @@ class TTS(tts.TTS):
             auth_token=speech_auth_token,
         )
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Azure TTS"
+
     def update_options(
         self,
         *,

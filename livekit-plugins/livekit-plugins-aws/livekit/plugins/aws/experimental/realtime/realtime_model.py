@@ -40,6 +40,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
@@ -258,6 +259,14 @@ class RealtimeModel(llm.RealtimeModel):
             region=region if is_given(region) else "us-east-1",
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self.model_id
+
+    @property
+    def provider(self) -> str:
+        return "Amazon"
 
     def session(self) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
@@ -897,6 +906,9 @@ class RealtimeSession(  # noqa: F811
                 text_tokens=output_tokens["textTokens"],
                 audio_tokens=output_tokens["speechTokens"],
                 image_tokens=0,
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
         self.emit("metrics_collected", metrics)

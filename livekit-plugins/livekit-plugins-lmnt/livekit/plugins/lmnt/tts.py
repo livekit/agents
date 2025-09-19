@@ -134,6 +134,14 @@ class TTS(tts.TTS):
 
         self._session = http_session
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "LMNT"
+
     def synthesize(
         self,
         text: str,

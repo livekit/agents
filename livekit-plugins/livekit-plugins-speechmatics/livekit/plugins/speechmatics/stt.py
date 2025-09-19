@@ -317,6 +317,14 @@ class STT(stt.STT):
         # Lower logging of the SMX module
         logging.getLogger("speechmatics.rt.transport").setLevel(logging.WARNING)
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Speechmatics"
+
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,

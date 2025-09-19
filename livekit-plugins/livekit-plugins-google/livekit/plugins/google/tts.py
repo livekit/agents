@@ -155,6 +155,14 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    @property
+    def model(self) -> str:
+        return "Chirp3"
+
+    @property
+    def provider(self) -> str:
+        return "Google Cloud Platform"
+
     def update_options(
         self,
         *,
