@@ -854,7 +854,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return handle
 
-    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
+    def interrupt(
+        self, *, force: bool = False, omit_rt_interrupt: bool = False
+    ) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
         Returns:
@@ -864,7 +866,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        return self._activity.interrupt(force=force)
+        return self._activity.interrupt(force=force, omit_rt_interrupt=omit_rt_interrupt)
 
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
