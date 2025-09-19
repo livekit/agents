@@ -134,15 +134,11 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=interim_results,
-                diarization=enable_diarization,
+                streaming=True, interim_results=interim_results, diarization=enable_diarization
             )
         )
 
-        deepgram_api_key = (
-            api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        )
+        deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
             raise ValueError("Deepgram API key is required")
         self._api_key = deepgram_api_key
@@ -200,18 +196,14 @@ class STT(stt.STT):
             "numerals": config.numerals,
         }
         if config.enable_diarization:
-            logger.warning(
-                "speaker diarization is not supported in non-streaming mode, ignoring"
-            )
+            logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
 
         if config.language:
             recognize_config["language"] = config.language
 
         try:
             async with self._ensure_session().post(
-                url=_to_deepgram_url(
-                    recognize_config, self._opts.endpoint_url, websocket=False
-                ),
+                url=_to_deepgram_url(recognize_config, self._opts.endpoint_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
                     "Authorization": f"Token {self._api_key}",
@@ -370,9 +362,7 @@ class SpeechStream(stt.SpeechStream):
                 "please disable it and specify a language"
             )
 
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
@@ -511,9 +501,7 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly"
-                    )
+                    raise APIStatusError(message="deepgram connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -570,9 +558,7 @@ class SpeechStream(stt.SpeechStream):
             "vad_events": True,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
-            "endpointing": (
-                False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms
-            ),
+            "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
             "min_confidence_threshold": self._opts.min_confidence_threshold,
@@ -597,9 +583,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
-                    _to_deepgram_url(
-                        live_config, base_url=self._opts.endpoint_url, websocket=True
-                    ),
+                    _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
                 ),
                 self._conn_options.timeout,
@@ -643,10 +627,7 @@ class SpeechStream(stt.SpeechStream):
             self._request_id = request_id
 
             alts = live_transcription_to_speech_data(
-                self._opts.language,
-                data,
-                is_final=is_final_transcript,
-                min_confidence_threshold=self._opts.min_confidence_threshold,
+                self._opts.language, data, is_final=is_final_transcript,min_confidence_threshold=self._opts.min_confidence_threshold
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
@@ -654,9 +635,7 @@ class SpeechStream(stt.SpeechStream):
             if len(alts) > 0 and alts[0].text:
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH
-                    )
+                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     self._event_ch.send_nowait(start_event)
 
                 if is_final_transcript:
@@ -679,9 +658,7 @@ class SpeechStream(stt.SpeechStream):
             # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
             if is_endpoint and self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
@@ -704,17 +681,14 @@ def live_transcription_to_speech_data(
             speaker = None
 
         cur_confidence = alt["confidence"]
-        if (
-            min_confidence_threshold is None
-            or cur_confidence >= min_confidence_threshold
-        ):
+        if min_confidence_threshold is None or cur_confidence >= min_confidence_threshold:
             sd = stt.SpeechData(
                 language=language,
                 start_time=alt["words"][0]["start"] if alt["words"] else 0,
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=cur_confidence,
                 text=alt["transcript"],
-                speaker_id=f"S{speaker}" if speaker is not None else None,
+            speaker_id=f"S{speaker}" if speaker is not None else None,
             )
             if language == "multi" and "languages" in alt:
                 sd.language = alt["languages"][0]  # TODO: handle multiple languages
@@ -765,11 +739,7 @@ def _validate_model(
         "nova-2-drivethru",
         "nova-2-automotive",
     }
-    if (
-        is_given(language)
-        and language not in ("en-US", "en")
-        and model in en_only_models
-    ):
+    if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
         logger.warning(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )
@@ -803,8 +773,7 @@ def _validate_keyterms(
     if is_given(keyterms) and (
         (
             model.startswith("nova-3")
-            and language
-            not in ("en-US", "en", "de", "nl", "sv", "sv-SE", "da", "da-DK")
+            and language not in ("en-US", "en", "de", "nl", "sv", "sv-SE", "da", "da-DK")
         )
         or not model.startswith("nova-3")
     ):
