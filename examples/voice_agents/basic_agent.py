@@ -91,9 +91,9 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(model="gpt-3.5-turbo"),  # Still using OpenAI for LLM
         stt=cartesia.STT(),
-        tts=openai.TTS(voice="alloy"),  # Changed from cartesia.TTS to openai.TTS
+        tts=cartesia.TTS(),  # Using Cartesia TTS with default voice
         # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,
         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
