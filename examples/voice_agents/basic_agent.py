@@ -19,7 +19,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -92,8 +92,8 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(voice="ash"),
+        stt=cartesia.STT(),
+        tts=openai.TTS(voice="alloy"),  # Changed from cartesia.TTS to openai.TTS
         # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,
         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
