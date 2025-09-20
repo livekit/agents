@@ -1,0 +1,7 @@
+livekit-agents[deepgram,silero,turn-detector]
+deepgram-sdk
+silero-vad
+numpy
+pandas
+matplotlib
+python-dotenv

@@ -1,3 +1,30 @@
+[project]
+name = "multi_voice_agents_using_livikit"
+version = "0.1.0"
+description = "Multi-voice agents using LiveKit"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" },
+]
+requires-python = ">=3.9"
+dependencies = [
+    "livekit-agents[deepgram,openai,cartesia,silero,turn-detector]~=1.2",
+    "python-dotenv"
+]
+
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []
+py_modules = []
+package_dir = {}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["examples"]
+exclude = ["tests", "test_*"]
+
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
 
