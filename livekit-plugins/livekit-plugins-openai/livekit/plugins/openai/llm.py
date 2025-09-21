@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -430,7 +430,7 @@ class LLM(llm.LLM):
             or_body["models"] = [model, *fallback_models]
         if plugins:
             or_body["plugins"] = [p.to_dict() for p in plugins]
-        
+
         class _OpenRouterLLM(LLM):
             def __init__(self, *args: Any, _or_body: dict[str, Any], _headers: dict[str, str], **kwargs: Any) -> None:
                 super().__init__(*args, **kwargs)
@@ -454,20 +454,20 @@ class LLM(llm.LLM):
                 # Merge provided extras with OpenRouter-specific defaults
                 merged: dict[str, Any] = {}
                 if is_given(extra_kwargs):
-                    merged.update(cast(dict[str, Any], extra_kwargs))
+                    merged.update(extra_kwargs)
 
                 # Add OpenRouter-specific body parameters
                 if self.__or_body:
                     body = dict(self.__or_body)
                     if "extra_body" in merged and isinstance(merged["extra_body"], dict):
-                        body.update(merged["extra_body"])  # type: ignore[arg-type]
+                        body.update(merged["extra_body"])
                     merged["extra_body"] = body
 
                 # Add OpenRouter-specific headers
                 if self.__headers:
                     headers = dict(self.__headers)
                     if "extra_headers" in merged and isinstance(merged["extra_headers"], dict):
-                        headers.update(merged["extra_headers"])  # type: ignore[arg-type]
+                        headers.update(merged["extra_headers"])
                     merged["extra_headers"] = headers
 
                 return super().chat(
