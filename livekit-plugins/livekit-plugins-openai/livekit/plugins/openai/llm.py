@@ -399,7 +399,7 @@ class LLM(llm.LLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
-        top_p: NotGivenOr[float] = NOT_GIVEN
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of OpenRouter LLM.
@@ -432,7 +432,9 @@ class LLM(llm.LLM):
             or_body["plugins"] = [p.to_dict() for p in plugins]
 
         class _OpenRouterLLM(LLM):
-            def __init__(self, *args: Any, _or_body: dict[str, Any], _headers: dict[str, str], **kwargs: Any) -> None:
+            def __init__(
+                self, *args: Any, _or_body: dict[str, Any], _headers: dict[str, str], **kwargs: Any
+            ) -> None:
                 super().__init__(*args, **kwargs)
                 # Store OpenRouter-specific data
                 self.__or_body = _or_body
@@ -450,7 +452,7 @@ class LLM(llm.LLM):
                     completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
                 ] = NOT_GIVEN,
                 extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-            ) -> _LLMStream:
+            ) -> LLMStream:
                 # Merge provided extras with OpenRouter-specific defaults
                 merged: dict[str, Any] = {}
                 if is_given(extra_kwargs):
