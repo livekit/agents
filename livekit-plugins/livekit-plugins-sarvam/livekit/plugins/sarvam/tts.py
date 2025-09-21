@@ -77,7 +77,7 @@ MODEL_SPEAKER_COMPATIBILITY = {
         "female": ["anushka", "manisha", "vidya", "arya"],
         "male": ["abhilash", "karun", "hitesh"],
         "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    },
+    }
 }
 
 
@@ -136,13 +136,13 @@ class TTS(tts.TTS):
 
     Args:
         target_language_code: BCP-47 language code for supported Indian languages
-        model: Sarvam TTS model to use (only bulbul:v2 supported)
+        model: Sarvam TTS model to use (bulbul:v2)
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-20.0 to 20.0)
+        pitch: Voice pitch adjustment (-20.0 to 20.0) - only supported in v2 for now
         pace: Speech rate multiplier (0.5 to 2.0)
-        loudness: Volume multiplier (0.5 to 2.0)
+        loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         enable_preprocessing: Whether to use text preprocessing
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
@@ -226,13 +226,15 @@ class ChunkedStream(tts.ChunkedStream):
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
             "speaker": self._opts.speaker,
-            "pitch": self._opts.pitch,
             "pace": self._opts.pace,
-            "loudness": self._opts.loudness,
             "speech_sample_rate": self._opts.speech_sample_rate,
             "enable_preprocessing": self._opts.enable_preprocessing,
             "model": self._opts.model,
         }
+        # Only include pitch and loudness for v2 model (not supported in v3-beta)
+        if self._opts.model == "bulbul:v2":
+            payload["pitch"] = self._opts.pitch
+            payload["loudness"] = self._opts.loudness
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
@@ -251,7 +253,8 @@ class ChunkedStream(tts.ChunkedStream):
                     error_text = await res.text()
                     logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message=f"Sarvam TTS API Error: {error_text}", status_code=res.status
+                        message=f"Sarvam TTS API Error: {error_text}",
+                        status_code=res.status,
                     )
 
                 response_json = await res.json()

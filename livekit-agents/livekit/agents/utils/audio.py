@@ -153,6 +153,9 @@ class AudioByteStream:
         self._buf.clear()
         return frames
 
+    def clear(self) -> None:
+        self._buf.clear()
+
 
 async def audio_frames_from_file(
     file_path: str, sample_rate: int = 48000, num_channels: int = 1

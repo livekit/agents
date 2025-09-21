@@ -48,6 +48,11 @@ ChatModels = Literal[
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-16k-0613",
 ]
+RealtimeModels = Literal[
+    "gpt-realtime",
+    "gpt-realtime-2025-08-28",
+    "gpt-4o-realtime-preview",
+]
 EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
@@ -59,6 +64,36 @@ AssistantTools = Literal["code_interpreter", "file_search", "function"]
 TelnyxChatModels = Literal[
     "meta-llama/Meta-Llama-3.1-8B-Instruct",
     "meta-llama/Meta-Llama-3.1-70B-Instruct",
+]
+
+NebiusChatModels = Literal[
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Llama-3.3-8B-Instruct",
+    "meta-llama/Meta-Llama-3.1-405B-Instruct",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "moonshotai/Kimi-K2-Instruct",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "NousResearch/Hermes-4-405B",
+    "NousResearch/Hermes-4-70B",
+    "zai-org/GLM-4.5",
+    "zai-org/GLM-4.5-Air",
+    "deepseek-ai/DeepSeek-R1-0528",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "Qwen/Qwen3-235B-A22B",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-30B-A3B",
+    "Qwen/Qwen3-4B-fast",
+    "Qwen/Qwen3-14B",
+    "Qwen/Qwen2.5-Coder-7B",
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "mistralai/Mistral-Nemo-Instruct-2407",
+    "google/gemma-2-2b-it",
 ]
 
 CerebrasChatModels = Literal[

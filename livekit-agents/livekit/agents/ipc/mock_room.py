@@ -11,7 +11,7 @@ def create_mock_room() -> Any:
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
     MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)  # type: ignore
     MockRoom.isconnected.return_value = True
-    MockRoom.name = "fake_room"
+    MockRoom.name = "mock_room"
     MockRoom.metadata = ""
     MockRoom.num_participants = 2
     MockRoom.num_publishers = 2
@@ -19,11 +19,11 @@ def create_mock_room() -> Any:
     MockRoom.departure_timeout = 0
     MockRoom.empty_timeout = 0
 
-    MockRoom.sid = AsyncMock(return_value="RM_fake_sid")
+    MockRoom.sid = AsyncMock(return_value="RM_mock_sid")
 
     mock_remote_participant = create_autospec(rtc.RemoteParticipant, instance=True)
-    mock_remote_participant.identity = "fake_human"
-    mock_remote_participant.sid = "PA_fake_human"
+    mock_remote_participant.identity = "mock_user"
+    mock_remote_participant.sid = "PA_mock_user"
     mock_remote_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
     MockRoom.remote_participants = {mock_remote_participant.sid: mock_remote_participant}
     return MockRoom

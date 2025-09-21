@@ -266,6 +266,7 @@ class LLMStream(ABC):
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
+            model=self._llm.model,
         )
         if self._llm_request_span:
             # livekit metrics attribute

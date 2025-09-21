@@ -18,6 +18,7 @@ class LLMMetrics(BaseModel):
     prompt_cached_tokens: int
     total_tokens: int
     tokens_per_second: float
+    model: str
     speech_id: str | None = None
 
 
@@ -100,6 +101,7 @@ class RealtimeModelMetrics(BaseModel):
 
     type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
     label: str
+    model: str
     request_id: str
     timestamp: float
     """The timestamp of the response creation."""

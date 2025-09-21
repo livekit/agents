@@ -195,7 +195,6 @@ class AvatarSession:
 
         if self._runtime:
             runtime = self._runtime
-            await runtime._initialize_token()  # refresh the token
         else:
             kwargs = {
                 "model_path": self._model_path,
@@ -209,7 +208,6 @@ class AvatarSession:
 
             runtime = await AsyncBithuman.create(**kwargs)
             self._runtime = runtime
-            await runtime.start()
 
         video_generator = BithumanGenerator(runtime)
 
@@ -292,9 +290,6 @@ class AvatarSession:
 
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
-
-        logger.debug("waiting for avatar agent to join the room")
-        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,

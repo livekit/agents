@@ -42,6 +42,7 @@ class _STTOptions:
     api_key: str
     base_url: str
     language_code: str = "en"
+    tag_audio_events: bool = True
 
 
 class STT(stt.STT):
@@ -51,6 +52,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         language_code: NotGivenOr[str] = NOT_GIVEN,
+        tag_audio_events: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -60,6 +62,7 @@ class STT(stt.STT):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the STT model. Optional.
+            tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription. Default is True.
         """  # noqa: E501
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
 
@@ -73,6 +76,7 @@ class STT(stt.STT):
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             language_code=language_code if is_given(language_code) else "en",
+            tag_audio_events=tag_audio_events,
         )
         self._session = http_session
 
@@ -97,15 +101,25 @@ class STT(stt.STT):
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", "scribe_v1")
         form.add_field("language_code", self._opts.language_code)
+        form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
 
         try:
             async with self._ensure_session().post(
-                f"{API_BASE_URL_V1}/speech-to-text",
+                f"{self._opts.base_url}/speech-to-text",
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
                 response_json = await response.json()
                 extracted_text = response_json.get("text")
+
+                speaker_id = None
+                start_time, end_time = 0, 0
+                words = response_json.get("words")
+                if words:
+                    speaker_id = words[0].get("speaker_id", None)
+                    start_time = min(w.get("start", 0) for w in words)
+                    end_time = max(w.get("end", 0) for w in words)
+
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -118,10 +132,29 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
-        return self._transcription_to_speech_event(text=extracted_text)
+        return self._transcription_to_speech_event(
+            text=extracted_text,
+            start_time=start_time,
+            end_time=end_time,
+            speaker_id=speaker_id,
+        )
 
-    def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
+    def _transcription_to_speech_event(
+        self,
+        text: str,
+        start_time: float,
+        end_time: float,
+        speaker_id: str | None,
+    ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=text, language=self._opts.language_code)],
+            alternatives=[
+                stt.SpeechData(
+                    text=text,
+                    language=self._opts.language_code,
+                    speaker_id=speaker_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            ],
         )

@@ -244,7 +244,7 @@ class InputTrack:
         for lang in target_languages:
             if lang != self.language:
                 self._add_translator(lang, room)
-        for lang in self._translators.keys():
+        for lang in list(self._translators.keys()):
             if lang != self.language and lang not in target_languages:
                 self._remove_translator(lang)
 

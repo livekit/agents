@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import cast
 
 import aioboto3  # type: ignore
 import botocore  # type: ignore
@@ -74,10 +75,11 @@ class TTS(tts.TTS):
         See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
 
         Args:
-            Voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
-            language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
+            voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
+            language (TTSLanguages, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
+            speech_engine(TTSSpeechEngine, optional): The engine to use for the synthesis. Defaults to "generative".
+            text_type(TTSTextType, optional): Type of text to synthesize. Use "ssml" for SSML-enhanced text. Defaults to "text".
             sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
-            speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
             region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
@@ -109,6 +111,23 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, text=text, conn_options=conn_options)
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        speech_engine: NotGivenOr[TTSSpeechEngine] = NOT_GIVEN,
+        text_type: NotGivenOr[TTSTextType] = NOT_GIVEN,
+    ) -> None:
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(language):
+            self._opts.language = language
+        if is_given(speech_engine):
+            self._opts.speech_engine = cast(TTSSpeechEngine, speech_engine)
+        if is_given(text_type):
+            self._opts.text_type = cast(TTSTextType, text_type)
 
 
 class ChunkedStream(tts.ChunkedStream):
