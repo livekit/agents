@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -72,6 +72,40 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+
+
+# OpenRouter typed helpers
+@dataclass
+class OpenRouterWebPlugin:
+    """OpenRouter web search plugin configuration"""
+
+    id: str = "web"
+    max_results: int = 5
+    search_prompt: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"id": self.id, "max_results": self.max_results}
+        if self.search_prompt is not None:
+            d["search_prompt"] = self.search_prompt
+        return d
+
+
+@dataclass
+class OpenRouterProviderPreferences:
+    """OpenRouter provider routing preferences."""
+
+    order: list[str] | None = None
+    allow_fallbacks: bool | None = None
+    require_parameters: bool | None = None
+    data_collection: Literal["allow", "deny"] | None = None
+    only: list[str] | None = None
+    ignore: list[str] | None = None
+    quantizations: list[str] | None = None
+    sort: Literal["price", "throughput", "latency"] | None = None
+    max_price: dict[str, float] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if v is not None}
 
 
 class LLM(llm.LLM):
@@ -344,6 +378,123 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+        )
+
+    @staticmethod
+    def with_openrouter(
+        *,
+        model: str = "auto",
+        api_key: str | None = None,
+        base_url: str = "https://openrouter.ai/api/v1",
+        client: openai.AsyncClient | None = None,
+        site_url: str | None = None,
+        app_name: str | None = None,
+        fallback_models: list[str] | None = None,
+        provider: OpenRouterProviderPreferences | None = None,
+        plugins: list[OpenRouterWebPlugin] | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN
+    ) -> LLM:
+        """
+        Create a new instance of OpenRouter LLM.
+
+        ``api_key`` must be set to your OpenRouter API key, either using the argument or by setting
+        the ``OPENROUTER_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "OpenRouter API key is required, either as argument or set OPENROUTER_API_KEY environment variable"
+            )
+
+        # Set up analytics headers for OpenRouter
+        default_headers: dict[str, str] = {}
+        if site_url:
+            default_headers["HTTP-Referer"] = site_url
+        if app_name:
+            default_headers["X-Title"] = app_name
+
+        # Build OpenRouter-specific request body
+        or_body: dict[str, Any] = {}
+        if provider:
+            or_body["provider"] = provider.to_dict()
+        if fallback_models:
+            # Set fallback models for routing
+            or_body["models"] = [model, *fallback_models]
+        if plugins:
+            or_body["plugins"] = [p.to_dict() for p in plugins]
+        
+        class _OpenRouterLLM(LLM):
+            def __init__(self, *args: Any, _or_body: dict[str, Any], _headers: dict[str, str], **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                # Store OpenRouter-specific data
+                self.__or_body = _or_body
+                self.__headers = _headers
+
+            def chat(
+                self,
+                *,
+                chat_ctx: ChatContext,
+                tools: list[FunctionTool | RawFunctionTool] | None = None,
+                conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+                parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+                tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+                response_format: NotGivenOr[
+                    completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+                ] = NOT_GIVEN,
+                extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+            ) -> _LLMStream:
+                # Merge provided extras with OpenRouter-specific defaults
+                merged: dict[str, Any] = {}
+                if is_given(extra_kwargs):
+                    merged.update(cast(dict[str, Any], extra_kwargs))
+
+                # Add OpenRouter-specific body parameters
+                if self.__or_body:
+                    body = dict(self.__or_body)
+                    if "extra_body" in merged and isinstance(merged["extra_body"], dict):
+                        body.update(merged["extra_body"])  # type: ignore[arg-type]
+                    merged["extra_body"] = body
+
+                # Add OpenRouter-specific headers
+                if self.__headers:
+                    headers = dict(self.__headers)
+                    if "extra_headers" in merged and isinstance(merged["extra_headers"], dict):
+                        headers.update(merged["extra_headers"])  # type: ignore[arg-type]
+                    merged["extra_headers"] = headers
+
+                return super().chat(
+                    chat_ctx=chat_ctx,
+                    tools=tools,
+                    conn_options=conn_options,
+                    parallel_tool_calls=parallel_tool_calls,
+                    tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
+                    response_format=response_format,
+                    extra_kwargs=merged,
+                )
+
+        return _OpenRouterLLM(
+            model=model,
+            api_key=api_key,
+            client=client,
+            base_url=base_url,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            _or_body=or_body,
+            _headers=default_headers,
         )
 
     @staticmethod
