@@ -565,7 +565,7 @@ class RealtimeModel(llm.RealtimeModel):
             InputAudioTranscription | AudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReduction | NoiseReductionType | None
+            NoiseReduction | NoiseReductionType | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
