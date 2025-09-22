@@ -1,107 +1,134 @@
-# livekit/plugins/minimax/tts.py (WebSocket version)
-
-# Copyright 2023 LiveKit, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
-import asyncio, base64, json, os, weakref, ssl
-from dataclasses import dataclass, replace
 
-from typing import List, Dict, Any
-import websockets
-# <--- Using websockets for WebSocket connections
+import asyncio
+import json
+import os
+import weakref
+from dataclasses import dataclass, replace
+from typing import Any, Literal, Optional, cast
+
+import aiohttp
+
 from livekit.agents import (
-    APIConnectionError, APIStatusError, APITimeoutError, tts, utils, tokenize,
-    APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    tokenize,
+    tts,
+    utils,
 )
-# Removed http_context as we're using WebSocket connections now
-from livekit.agents.voice.io import TimedString
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .log import logger
-from .models import (
-    SUPPORTED_VOICES, TTSDefaultBitRates, TTSBitRates, TTSSampleRates, TTSDefaultSampleRates, TTSDefaultVoiceId,
-    TTSModels, TTSVoices, TTSSubtitleType, TTSDefaultEmotion, TTSEmotion, TTSLanguages, TTSDefaultLanguage
-)
 
-MINIMAX_API_BASE_URL = "https://api-uw.minimax.io"
+TTSModel = Literal[
+    "speech-2.5-hd-preview",
+    "speech-2.5-turbo-preview",
+    "speech-02-hd",
+    "speech-02-turbo",
+    "speech-01-hd",
+    "speech-01-turbo",
+]
+
+# Minimax TTS Voice IDs
+# Defines small part of supported voices using a Literal type for static analysis.
+# See more voices in docs of Minimax
+TTSVoice = Literal[
+    "voice_agent_Female_Phone_4",
+    "voice_agent_Male_Phone_1",
+    "English_StressedLady",
+    "English_SentimentalLady",
+    "English_WiseScholar",
+    "English_radiant_girl",
+    "moss_audio_84f32de9-2363-11f0-b7ab-d255fae1f27b",
+    "japanese_male_social_media_1_v2",
+    "japanese_female_social_media_1_v2",
+    "French_CasualMan",
+    "French_Female Journalist",
+    "Spanish_Narrator",
+    "Spanish_WiseScholar",
+    "Spanish_ThoughtfulMan",
+    "Arabic_CalmWoman",
+    "Arabic_FriendlyGuy",
+    "Portuguese_ThoughtfulLady",
+    "German_PlayfulMan",
+    "German_SweetLady",
+]
+
+DEFAULT_MODEL = "speech-02-turbo"
+DEFAULT_VOICE_ID = "English_radiant_girl"
+
+
+TTSEmotion = Literal["happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral"]
+
+
+TTSAudioFormat = Literal["pcm", "mp3", "flac", "wav"]
+TTSSampleRate = Literal[8000, 16000, 22050, 24000, 32000, 44100]
+TTSBitRate = Literal[32000, 64000, 128000, 256000]  # only for mp3 format
+
+MINIMAX_API_BASE_URL = "https://api.minimax.io"
 
 
 @dataclass
 class _TTSOptions:
-    # This internal class holds all the configuration options for a TTS request.
     api_key: str
-    group_id: str
     base_url: str
-    model: TTSModels
-    voice_id: TTSVoices
-    sample_rate: TTSSampleRates
-    bitrate: TTSBitRates
-    emotion: TTSEmotion
-    speed: float
-    vol: float
-    pitch: int
-    subtitle_enable: bool
-    subtitle_type: TTSSubtitleType
-    language: TTSLanguages
-    pronunciation_dict: Dict[str, List[str]] | None
+    model: TTSModel | str
+    voice_id: TTSVoice | str
+    sample_rate: TTSSampleRate
+    bitrate: TTSBitRate
+    emotion: TTSEmotion | None
+    speed: float  # [0.5, 2.0]
+    vol: float  # (0, 10]
+    pitch: int  # [-12, 12]
+    english_normalization: bool
+    pronunciation_dict: dict[str, list[str]] | None
     # voice_modify
     intensity: int | None
     timbre: int | None
     sound_effects: str | None
-
-    def get_http_url(self, path: str) -> str:
-        """Constructs the full API URL for a given path."""
-        return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
+    audio_format: TTSAudioFormat
 
 
 class TTS(tts.TTS):
     def __init__(
-            self, *,
-            model: TTSModels = "speech-02-turbo",
-            voice_id: TTSVoices = TTSDefaultVoiceId,
-            sample_rate: TTSSampleRates = TTSDefaultSampleRates,
-            bitrate: TTSBitRates = TTSDefaultBitRates,
-            emotion: TTSEmotion = TTSDefaultEmotion,
-            speed: float = 1.0,
-            vol: float = 1.0,
-            pitch: int = 0,
-            subtitle_enable: bool = True,
-            subtitle_type: TTSSubtitleType = "word",
-            api_key: str | None = None,
-            group_id: str | None = None,
-            base_url: str = MINIMAX_API_BASE_URL,
-            language: TTSLanguages = TTSDefaultLanguage,
-            websocket = None,  # WebSocket connection
-            # --- **Advanced para** ---
-            pronunciation_dict: Dict[str, List[str]] | None = None,
-            intensity: int | None = None,
-            timbre: int | None = None,
-            sound_effects: str | None = None,
+        self,
+        *,
+        model: TTSModel | str = DEFAULT_MODEL,
+        voice: TTSVoice | str = DEFAULT_VOICE_ID,
+        emotion: TTSEmotion | None = None,
+        speed: float = 1.0,
+        vol: float = 1.0,
+        pitch: int = 0,
+        english_normalization: bool = False,
+        audio_format: TTSAudioFormat = "mp3",
+        pronunciation_dict: dict[str, list[str]] | None = None,
+        intensity: int | None = None,
+        timbre: int | None = None,
+        sound_effects: str | None = None,
+        sample_rate: TTSSampleRate = 24000,
+        bitrate: TTSBitRate = 128000,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        api_key: str | None = None,
+        base_url: str = MINIMAX_API_BASE_URL,
+        http_session: aiohttp.ClientSession | None = None,
     ):
-        enable_aligned_transcript = subtitle_enable and subtitle_type == "word"
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=enable_aligned_transcript),
-            sample_rate=sample_rate, num_channels=1)
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
+            sample_rate=sample_rate,
+            num_channels=1,
+        )
 
         # Parameter validation
         minimax_api_key = api_key or os.environ.get("MINIMAX_API_KEY")
-        minimax_group_id = group_id or os.environ.get("MINIMAX_GROUP_ID")
-        if not minimax_api_key: raise ValueError("MINIMAX_API_KEY must be set")
-        if not minimax_group_id: raise ValueError("MINIMAX_GROUP_ID must be set")
-        if not (0.5 <= speed <= 2.0): raise ValueError(f"speed must be between 0.5 and 2.0, but got {speed}")
-        if voice_id not in SUPPORTED_VOICES: logger.warning("Voice '%s' is not officially supported.", voice_id)
+        if not minimax_api_key:
+            raise ValueError("MINIMAX_API_KEY must be set")
 
+        if not (0.5 <= speed <= 2.0):
+            raise ValueError(f"speed must be between 0.5 and 2.0, but got {speed}")
         if intensity is not None and not (-100 <= intensity <= 100):
             raise ValueError(f"intensity must be between -100 and 100, but got {intensity}")
         if timbre is not None and not (-100 <= timbre <= 100):
@@ -109,21 +136,18 @@ class TTS(tts.TTS):
 
         supported_effects = ["spacious_echo", "auditorium_echo", "lofi_telephone", "robotic"]
         if sound_effects is not None and sound_effects not in supported_effects:
-            raise ValueError(f"sound_effects must be one of {supported_effects}, but got {sound_effects}")
-
-        if subtitle_type == "sentence":
-            # We print a warning instead of raising an error to provide more flexibility.
-            logger.warning(
-                "Minimax streaming TTS does not support 'sentence' level subtitles. "
-                "This option will be ignored in streaming mode and may cause errors. "
-                "Please use 'word' for streaming timestamps."
+            raise ValueError(
+                f"sound_effects must be one of {supported_effects}, but got {sound_effects}"
             )
+
+        self._sentence_tokenizer = (
+            tokenizer if utils.is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
+        )
 
         self._opts = _TTSOptions(
             model=model,
-            voice_id=voice_id,
+            voice_id=voice,
             api_key=minimax_api_key,
-            group_id=minimax_group_id,
             base_url=base_url,
             sample_rate=sample_rate,
             emotion=emotion,
@@ -131,187 +155,118 @@ class TTS(tts.TTS):
             speed=speed,
             pitch=pitch,
             vol=vol,
-            subtitle_enable=subtitle_enable,
-            subtitle_type=subtitle_type,
-            language=language,
+            english_normalization=english_normalization,
             timbre=timbre,
             pronunciation_dict=pronunciation_dict,
             sound_effects=sound_effects,
-            intensity=intensity
+            intensity=intensity,
+            audio_format=audio_format,
         )
 
-        self._websocket = websocket
-        self._streams = weakref.WeakSet["SynthesizeStream"]()
-        
-        # Add connection pool like Deepgram for better performance
-        self._pool = utils.ConnectionPool(
+        self._session = http_session
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._pool = utils.ConnectionPool[
+            aiohttp.ClientWebSocketResponse
+        ](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,  # 1 hour
-            mark_refreshed_on_get=False,
+            max_session_duration=120,  # minimax will close the connection after 120s if no data is sent
         )
 
-    async def _connect_ws(self, timeout: float):
-        """Create a new WebSocket connection for the pool"""
-        url = "wss://api.minimax.io/ws/v1/t2a_v2"
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[TTSModel | str] = NOT_GIVEN,
+        voice: NotGivenOr[TTSVoice | str] = NOT_GIVEN,
+        emotion: NotGivenOr[TTSEmotion | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        vol: NotGivenOr[float] = NOT_GIVEN,
+        pitch: NotGivenOr[int] = NOT_GIVEN,
+        english_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        audio_format: NotGivenOr[TTSAudioFormat] = NOT_GIVEN,
+        pronunciation_dict: NotGivenOr[dict[str, list[str]]] = NOT_GIVEN,
+        intensity: NotGivenOr[int] = NOT_GIVEN,
+        timbre: NotGivenOr[int] = NOT_GIVEN,
+        sound_effects: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        """Update the TTS configuration options."""
+        if utils.is_given(model):
+            self._opts.model = model
+
+        if utils.is_given(voice):
+            self._opts.voice_id = voice
+
+        if utils.is_given(emotion):
+            self._opts.emotion = cast(Optional[TTSEmotion], emotion)
+
+        if utils.is_given(speed):
+            self._opts.speed = speed
+
+        if utils.is_given(vol):
+            self._opts.vol = vol
+
+        if utils.is_given(pitch):
+            self._opts.pitch = pitch
+
+        if utils.is_given(english_normalization):
+            self._opts.english_normalization = english_normalization
+
+        if utils.is_given(audio_format):
+            self._opts.audio_format = cast(TTSAudioFormat, audio_format)
+
+        if utils.is_given(pronunciation_dict):
+            self._opts.pronunciation_dict = pronunciation_dict
+
+        if utils.is_given(intensity):
+            self._opts.intensity = intensity
+
+        if utils.is_given(timbre):
+            self._opts.timbre = timbre
+
+        if utils.is_given(sound_effects):
+            self._opts.sound_effects = sound_effects
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+
+        return self._session
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        url = self._opts.base_url
+        if url.startswith("http"):
+            url = url.replace("http", "ws", 1)
+        url = f"{url}/ws/v1/t2a_v2"
+
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        
-        ws = await asyncio.wait_for(
-            websockets.connect(url, additional_headers=headers, ssl=ssl_context),
-            timeout
-        )
-        
-        # Wait for connection confirmation
-        response = json.loads(await ws.recv())
-        if response.get("event") != "connected_success":
-            await ws.close()
-            raise APIConnectionError("Failed to establish WebSocket connection")
-        
-        # Send task_start message immediately after connection
-        start_msg = {
-            "event": "task_start",
-            "model": self._opts.model,
-            "voice_setting": {
-                "voice_id": self._opts.voice_id,
-                "speed": self._opts.speed,
-                "vol": self._opts.vol,
-                "pitch": self._opts.pitch
-            },
-            "audio_setting": {
-                "sample_rate": self._opts.sample_rate,
-                "bitrate": self._opts.bitrate,
-                "format": "pcm",
-                "channel": 1
-            }
-        }
-        
-        if self._opts.emotion is not None:
-            start_msg["voice_setting"]["emotion"] = self._opts.emotion
-            
-        if self._opts.subtitle_enable:
-            start_msg["subtitle_enable"] = True
-            start_msg["subtitle_type"] = self._opts.subtitle_type
-        
-        voice_modify = {}
-        if self._opts.intensity is not None:
-            voice_modify['intensity'] = self._opts.intensity
-        if self._opts.timbre is not None:
-            voice_modify['timbre'] = self._opts.timbre
-        if self._opts.sound_effects is not None:
-            voice_modify['sound_effects'] = self._opts.sound_effects
-        
-        if voice_modify:
-            start_msg['voice_modify'] = voice_modify
-        
-        # Send task_start and wait for confirmation
-        await ws.send(json.dumps(start_msg))
-        response = json.loads(await ws.recv())
-        if response.get("event") != "task_started":
-            await ws.close()
-            raise APIConnectionError("Failed to start TTS task")
-        
+        session = self._ensure_session()
+        ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
         return ws
 
-    async def _close_ws(self, ws) -> None:
-        """Close a WebSocket connection from the pool"""
-        try:
-            await ws.send(json.dumps({"event": "task_finish"}))
-        except:
-            pass  # Connection might already be closed
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
-    async def _ensure_websocket(self):
-        """Get or create a shared WebSocket connection and start the TTS task."""
-        if not self._websocket:
-            url = "wss://api.minimax.io/ws/v1/t2a_v2"
-            headers = {"Authorization": f"Bearer {self._opts.api_key}"}
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
-            try:
-                self._websocket = await websockets.connect(url, additional_headers=headers, ssl=ssl_context)
-                response = json.loads(await self._websocket.recv())
-                if response.get("event") != "connected_success":
-                    raise APIConnectionError("Failed to establish WebSocket connection")
-                
-                # Send task_start message immediately after connection
-                start_msg = {
-                    "event": "task_start",
-                    "model": self._opts.model,
-                    "voice_setting": {
-                        "voice_id": self._opts.voice_id,
-                        "speed": self._opts.speed,
-                        "vol": self._opts.vol,
-                        "pitch": self._opts.pitch
-                    },
-                    "audio_setting": {
-                        "sample_rate": self._opts.sample_rate,
-                        "bitrate": self._opts.bitrate,
-                        "format": "pcm",
-                        "channel": 1
-                    }
-                }
-                
-                if self._opts.emotion is not None:
-                    start_msg["voice_setting"]["emotion"] = self._opts.emotion
-                    
-                if self._opts.subtitle_enable:
-                    start_msg["subtitle_enable"] = True
-                    start_msg["subtitle_type"] = self._opts.subtitle_type
-                
-                voice_modify = {}
-                if self._opts.intensity is not None:
-                    voice_modify['intensity'] = self._opts.intensity
-                if self._opts.timbre is not None:
-                    voice_modify['timbre'] = self._opts.timbre
-                if self._opts.sound_effects is not None:
-                    voice_modify['sound_effects'] = self._opts.sound_effects
-                
-                if voice_modify:
-                    start_msg['voice_modify'] = voice_modify
-                
-                # Send task_start and wait for confirmation
-                await self._websocket.send(json.dumps(start_msg))
-                response = json.loads(await self._websocket.recv())
-                if response.get("event") != "task_started":
-                    raise APIConnectionError("Failed to start TTS task")
-                    
-            except Exception as e:
-                raise APIConnectionError(f"WebSocket connection failed: {e}") from e
-        return self._websocket
-
-    def synthesize(self, text: str, *,
-                   conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> "ChunkedStream":
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
-    def stream(self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> "SynthesizeStream":
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def prewarm(self) -> None:
-        """Pre-warm connection pool to reduce first response latency"""
         self._pool.prewarm()
 
     async def aclose(self) -> None:
-        await asyncio.gather(*(s.aclose() for s in self._streams))
+        for stream in list(self._streams):
+            await stream.aclose()
+
         self._streams.clear()
-        
-        # Close connection pool
         await self._pool.aclose()
-        
-        # Clean up old websocket if still around
-        if self._websocket:
-            try:
-                # Send task_finish before closing the connection
-                await self._websocket.send(json.dumps({"event": "task_finish"}))
-            except:
-                pass  # Connection might already be closed
-            await self._websocket.close()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -320,113 +275,113 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-        # Use a channel to decouple sentence production (from the tokenizer)
-        # from sentence consumption (by the API consumer task).
-        self._sentences_ch = utils.aio.Chan[str]()
-
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Start producer-consumer tasks to handle text-to-audio conversion."""
+        request_id = utils.shortuuid()
         output_emitter.initialize(
-            request_id=utils.shortuuid(),
+            request_id=request_id,
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            mime_type="audio/pcm",
+            mime_type=f"audio/{self._opts.audio_format}",
             stream=True,
         )
 
-        async def _tokenize_input() -> None:
-            # Converts incoming text into sentences and sends them into _sentences_ch
-            # Similar to Deepgram's _tokenize_input but for sentences instead of words
-            sentence_tokenizer = tokenize.basic.SentenceTokenizer()
-            sentence_stream = sentence_tokenizer.stream()
-            
-            async for input in self._input_ch:
-                if isinstance(input, str):
-                    sentence_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+        sentence_stream = self._tts._sentence_tokenizer.stream()
+        task_started = asyncio.Future[None]()
+
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
                     sentence_stream.flush()
-                    # Process any pending sentences
-                    async for sentence in sentence_stream:
-                        self._sentences_ch.send_nowait(sentence.token)
-                    
-            # Process final sentences
+                    continue
+
+                sentence_stream.push_text(data)
             sentence_stream.end_input()
-            async for sentence in sentence_stream:
-                self._sentences_ch.send_nowait(sentence.token)
-                
-            self._sentences_ch.close()
 
-        async def _run_sentences() -> None:
-            async for sentence in self._sentences_ch:
-                await self._run_sentence(sentence, output_emitter)
+        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            start_msg = _to_minimax_options(self._opts)
+            start_msg["event"] = "task_start"
+            await ws.send_str(json.dumps(start_msg))
 
-        # Run the tokenizer and sentence processing tasks concurrently.
-        tasks = [
-            asyncio.create_task(_tokenize_input()),
-            asyncio.create_task(_run_sentences()),
-        ]
-        
-        try:
-            await asyncio.gather(*tasks)
-        except Exception:
-            logger.exception("synthesize stream failed")
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
-
-    async def _run_sentence(self, sentence: str, output_emitter: tts.AudioEmitter) -> None:
-        """Process a single sentence through the Minimax API, similar to Deepgram's _run_ws"""
-        if not sentence.strip():
-            return
-
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-        self._mark_started()
-
-        # Use connection pool like Deepgram for better performance
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             try:
-                # Send task_continue with sentence text (task_start handled in _connect_ws)
-                await ws.send(json.dumps({
-                    "event": "task_continue",
-                    "text": sentence
-                }))
-                
-                # Collect audio chunks
-                while True:
-                    response = json.loads(await ws.recv())
-                    
-                    if "data" in response and "audio" in response["data"]:
-                        audio_hex = response["data"]["audio"]
-                        output_emitter.push(bytes.fromhex(audio_hex))
-                        
-                        # Handle subtitles if present
-                        if "subtitle" in response["data"]:
-                            subtitle_obj = response["data"]["subtitle"]
-                            if subtitle_obj and isinstance(subtitle_obj, dict):
-                                word_timestamps = subtitle_obj.get("timestamped_words")
-                                if word_timestamps and isinstance(word_timestamps, list):
-                                    for word_data in word_timestamps:
-                                        start_time_sec = word_data['time_begin'] / 1000.0
-                                        end_time_sec = word_data['time_end'] / 1000.0
-                                        output_emitter.push_timed_transcript(
-                                            TimedString(
-                                                text=word_data['word'],
-                                                start_time=start_time_sec,
-                                                end_time=end_time_sec
-                                            )
-                                        )
-                    
-                    if response.get("is_final"):
-                        break
-                        
-            except websockets.exceptions.ConnectionClosed as e:
-                logger.error(f"WebSocket connection closed: {e}")
-            except websockets.exceptions.WebSocketException as e:
-                logger.error(f"WebSocket error: {e}")
-            except Exception as e:
-                logger.error(f"API call error for sentence '{sentence}': {e}")
+                await asyncio.wait_for(task_started, self._conn_options.timeout)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError("task_start timed out") from e
 
-        output_emitter.end_segment()
+            async for sentence in sentence_stream:
+                await ws.send_str(json.dumps({"event": "task_continue", "text": sentence.token}))
+
+            await ws.send_str(json.dumps({"event": "task_finish"}))
+
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError(
+                        "Minimax connection closed unexpectedly", request_id=request_id
+                    )
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected Minimax message type %s", msg.type)
+                    continue
+
+                data: dict[str, Any] = json.loads(msg.data)
+                status_code = data.get("base_resp", {}).get("status_code")
+                if status_code != 0:
+                    raise APIStatusError(
+                        f"Minimax returned non-zero status code: {status_code}",
+                        request_id=request_id,
+                        body=data,
+                    )
+
+                if data.get("event") == "connected_success":
+                    pass
+
+                elif data.get("event") == "task_started":
+                    task_started.set_result(None)
+
+                elif data.get("event") == "task_continue":
+                    audio = data.get("data", {}).get("audio")
+                    if audio:
+                        output_emitter.push(bytes.fromhex(audio))
+                    if data.get("is_final"):
+                        output_emitter.end_input()
+                        break
+
+                elif data.get("event") == "task_finish":
+                    output_emitter.end_input()
+                    break
+
+                elif data.get("event") == "task_failed":
+                    raise APIError(f"Minimax returned task failed: {msg.data}")
+
+                else:
+                    logger.warning(f"unexpected Minimax message: {msg.data}")
+
+        try:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                tasks = [
+                    asyncio.create_task(_input_task()),
+                    asyncio.create_task(_sentence_stream_task(ws)),
+                    asyncio.create_task(_recv_task(ws)),
+                ]
+
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await sentence_stream.aclose()
+                    await utils.aio.gracefully_cancel(*tasks)
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -439,68 +394,93 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        output_emitter.initialize(
-            request_id=utils.shortuuid(),
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type="audio/pcm",
-            stream=False  # This is a non-streaming synthesis
-        )
-
         if not self._input_text.strip():
             return
 
-        # ChunkedStream will use the same WebSocket connection but with different flow
-        ws = await self._tts._ensure_websocket()
+        url = self._opts.base_url + "/v1/t2a_v2"
+        msg = _to_minimax_options(self._opts)
+        msg.update(
+            {
+                "text": self._input_text,
+                "stream": True,
+                "stream_options": {
+                    "exclude_aggregated_audio": True,  # don't include complete audio in last chunk
+                },
+            }
+        )
         try:
-            # Send the entire text at once for chunked stream (task_start handled in _ensure_websocket)
-            await ws.send(json.dumps({
-                "event": "task_continue",
-                "text": self._input_text
-            }))
-            
-            # Collect all audio chunks
-            all_audio = ""
-            while True:
-                response = json.loads(await ws.recv())
-                
-                if "data" in response and "audio" in response["data"]:
-                    audio_hex = response["data"]["audio"]
-                    all_audio += audio_hex
-                    
-                    # Handle subtitles if present
-                    if "subtitle" in response["data"]:
-                        subtitle_obj = response["data"]["subtitle"]
-                        if subtitle_obj and isinstance(subtitle_obj, dict):
-                            word_timestamps = subtitle_obj.get("timestamped_words")
-                            if word_timestamps and isinstance(word_timestamps, list):
-                                for word_data in word_timestamps:
-                                    start_time_sec = word_data['time_begin'] / 1000.0
-                                    end_time_sec = word_data['time_end'] / 1000.0
-                                    output_emitter.push_timed_transcript(
-                                        TimedString(
-                                            text=word_data['word'],
-                                            start_time=start_time_sec,
-                                            end_time=end_time_sec
-                                        )
-                                    )
-                
-                if response.get("is_final"):
-                    break
-                    
-            # Push all audio at once
-            if all_audio:
-                output_emitter.push(bytes.fromhex(all_audio))
-                
-            # Send task_finish message
-            await ws.send(json.dumps({"event": "task_finish"}))
-            output_emitter.flush()
+            async with self._tts._ensure_session().post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._opts.api_key}",
+                },
+                json=msg,
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
-        except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"WebSocket connection closed: {e}") from e
-        except websockets.exceptions.WebSocketException as e:
-            raise APIConnectionError(f"WebSocket error: {e}") from e
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    mime_type=f"audio/{self._opts.audio_format}",
+                )
+
+                async for line in resp.content:
+                    data = json.loads(line.decode())
+
+                    if audio := data.get("data", {}).get("audio"):
+                        output_emitter.push(bytes.fromhex(audio))
+                    elif (status_code := data.get("base_resp", {}).get("status_code")) != 0:
+                        raise APIStatusError(
+                            f"Minimax returned non-zero status code: {status_code}",
+                            request_id=None,
+                            body=data,
+                        )
+                output_emitter.flush()
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
+
+
+def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "model": opts.model,
+        "voice_setting": {
+            "voice_id": opts.voice_id,
+            "speed": opts.speed,
+            "vol": opts.vol,
+            "pitch": opts.pitch,
+        },
+        "audio_setting": {
+            "sample_rate": opts.sample_rate,
+            "bitrate": opts.bitrate,
+            "format": opts.audio_format,
+            "channel": 1,
+        },
+    }
+
+    if opts.emotion is not None:
+        config["voice_setting"]["emotion"] = opts.emotion
+
+    if opts.pronunciation_dict:
+        config["pronunciation_dict"] = opts.pronunciation_dict
+
+    voice_modify: dict[str, Any] = {}
+    if opts.intensity is not None:
+        voice_modify["intensity"] = opts.intensity
+    if opts.timbre is not None:
+        voice_modify["timbre"] = opts.timbre
+    if opts.sound_effects is not None:
+        voice_modify["sound_effects"] = opts.sound_effects
+
+    if voice_modify:
+        config["voice_modify"] = voice_modify
+
+    return config

@@ -1,24 +1,41 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-minimax"
-version = "0.1.0"
-description = "Minimax Text-to-Speech plugin for LiveKit Agents."
+dynamic = ["version"]
+description = "LiveKit Agents Plugin for services from AWS"
 readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+requires-python = ">=3.9.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "minimax"]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents",
-    "aiohttp >= 3.9.0"  # <--- **将 httpx 改为 aiohttp**
+    "livekit-agents[codecs]>=1.2.8",
 ]
 
-[project.entry-points."livekit.agents.plugins"]
-minimax = "livekit.plugins.minimax:TTS"
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/minimax/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]

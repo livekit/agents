@@ -31,11 +31,13 @@ from livekit.agents import Plugin
 # 4. Import the package-specific logger.
 from .log import logger
 
+
 # 5. Define and register the plugin.
 class MiniMaxPlugin(Plugin):
     def __init__(self) -> None:
         # The super() call requires the plugin name, version, package path, and logger.
         super().__init__(__name__, __version__, __package__, logger)
+
 
 # Register an instance of our plugin with the LiveKit Agents framework.
 Plugin.register_plugin(MiniMaxPlugin())
