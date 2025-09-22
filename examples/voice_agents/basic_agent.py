@@ -15,6 +15,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    room_io,
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import deepgram, openai, silero
@@ -121,12 +122,12 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_options={
-            "audio_input": {
-                # "noise_cancellation": noise_cancellation.BVC(),
-            },
-            "transcription_output": {"sync_transcription": True},
-        },
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                # uncomment to enable the Krisp BVC noise cancellation
+                # noise_cancellation=noise_cancellation.BVC(),
+            ),
+        ),
     )
 
 

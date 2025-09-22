@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional
-
-from pydantic import BaseModel, ConfigDict, Field
+from typing import TYPE_CHECKING, Callable, Optional
 
 from livekit import rtc
 
@@ -45,15 +43,13 @@ def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     sess.generate_reply(user_input=ev.text)
 
 
-class _BaseOptions(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-class TextInputOptions(_BaseOptions):
+@dataclass
+class TextInputOptions:
     text_input_cb: TextInputCallback = _default_text_input_cb
 
 
-class AudioInputOptions(_BaseOptions):
+@dataclass
+class AudioInputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
@@ -63,21 +59,24 @@ class AudioInputOptions(_BaseOptions):
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
 
-class VideoInputOptions(_BaseOptions):
+@dataclass
+class VideoInputOptions:
     pass
 
 
-class AudioOutputOptions(_BaseOptions):
+@dataclass
+class AudioOutputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
-    track_publish_options: rtc.TrackPublishOptions = Field(
+    track_publish_options: rtc.TrackPublishOptions = field(
         default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
     track_name: NotGivenOr[str] = NOT_GIVEN
     """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
 
 
-class TranscriptionOutputOptions(_BaseOptions):
+@dataclass
+class TextOutputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
@@ -86,7 +85,8 @@ class TranscriptionOutputOptions(_BaseOptions):
     Only effective if `sync_transcription` is True."""
 
 
-class RoomOptions(_BaseOptions):
+@dataclass
+class RoomOptions:
     text_input: NotGivenOr[TextInputOptions | bool] = NOT_GIVEN
     """The text input options. If not provided, default to True."""
     audio_input: NotGivenOr[AudioInputOptions | bool] = NOT_GIVEN
@@ -95,7 +95,7 @@ class RoomOptions(_BaseOptions):
     """The video input options. If not provided, default to False."""
     audio_output: NotGivenOr[AudioOutputOptions | bool] = NOT_GIVEN
     """The audio output options. If not provided, default to True."""
-    transcription_output: NotGivenOr[TranscriptionOutputOptions | bool] = NOT_GIVEN
+    text_output: NotGivenOr[TextOutputOptions | bool] = NOT_GIVEN
     """The transcription output options. If not provided, default to True."""
 
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
@@ -109,8 +109,6 @@ class RoomOptions(_BaseOptions):
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
 
     def get_text_input_options(self) -> TextInputOptions | None:
-        from ..agent_session import AgentSession  # noqa: F401
-
         if isinstance(self.text_input, TextInputOptions):
             return self.text_input
         return TextInputOptions() if self.text_input is not False else None
@@ -130,21 +128,19 @@ class RoomOptions(_BaseOptions):
             return self.audio_output
         return AudioOutputOptions() if self.audio_output is not False else None
 
-    def get_transcription_output_options(self) -> TranscriptionOutputOptions | None:
-        if isinstance(self.transcription_output, TranscriptionOutputOptions):
-            return self.transcription_output
-        return TranscriptionOutputOptions() if self.transcription_output is not False else None
+    def get_text_output_options(self) -> TextOutputOptions | None:
+        if isinstance(self.text_output, TextOutputOptions):
+            return self.text_output
+        return TextOutputOptions() if self.text_output is not False else None
 
     @classmethod
-    def validate(
+    def _ensure_options(
         cls,
-        options: NotGivenOr[RoomOptions | dict[str, Any]],
+        options: NotGivenOr[RoomOptions],
         *,
         room_input_options: NotGivenOr[RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[RoomOutputOptions] = NOT_GIVEN,
     ) -> RoomOptions:
-        from ..agent_session import AgentSession  # noqa: F401
-
         if is_given(room_input_options) or is_given(room_output_options):
             logger.warning(
                 "RoomInputOptions and RoomOutputOptions are deprecated, use RoomOptions instead"
@@ -152,9 +148,7 @@ class RoomOptions(_BaseOptions):
             if not is_given(options):
                 return cls._create_from_legacy(room_input_options, room_output_options)
 
-        if isinstance(options, dict):
-            return cls.model_validate(options)
-        elif isinstance(options, RoomOptions):
+        if isinstance(options, RoomOptions):
             return options
         else:
             return cls()
@@ -165,8 +159,6 @@ class RoomOptions(_BaseOptions):
         input_options: NotGivenOr[RoomInputOptions],
         output_options: NotGivenOr[RoomOutputOptions],
     ) -> RoomOptions:
-        from ..agent_session import AgentSession  # noqa: F401
-
         opts = cls()
         if input_options:
             opts.text_input = (
@@ -200,8 +192,8 @@ class RoomOptions(_BaseOptions):
                 if output_options.audio_enabled is not False
                 else False
             )
-            opts.transcription_output = (
-                TranscriptionOutputOptions(
+            opts.text_output = (
+                TextOutputOptions(
                     sync_transcription=output_options.sync_transcription,
                     transcription_speed_factor=output_options.transcription_speed_factor,
                 )

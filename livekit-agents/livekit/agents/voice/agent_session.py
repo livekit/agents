@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 from collections.abc import AsyncIterable, Sequence
@@ -8,7 +9,6 @@ from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Generic,
     Literal,
     Protocol,
@@ -414,7 +414,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
-        room_options: NotGivenOr[room_io.RoomOptions | dict[str, Any]] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> RunResult: ...
@@ -426,7 +427,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
-        room_options: NotGivenOr[room_io.RoomOptions | dict[str, Any]] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -438,7 +440,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
-        room_options: NotGivenOr[room_io.RoomOptions | dict[str, Any]] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -489,11 +491,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
 
             elif is_given(room) and not self._room_io:
-                room_options = room_io.RoomOptions.validate(
+                room_options = room_io.RoomOptions._ensure_options(
                     room_options,
                     room_input_options=room_input_options,
                     room_output_options=room_output_options,
-                ).model_copy()
+                )
+                room_options = copy.copy(room_options)  # shadow copy is enough
 
                 if self.input.audio is not None:
                     if room_options.audio_input:
@@ -510,11 +513,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_options.audio_output = False
 
                 if self.output.transcription is not None:
-                    if room_options.transcription_output:
+                    if room_options.text_output:
                         logger.warning(
                             "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                         )
-                    room_options.transcription_output = False
+                    room_options.text_output = False
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))

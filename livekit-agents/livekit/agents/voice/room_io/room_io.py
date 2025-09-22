@@ -43,12 +43,12 @@ class RoomIO:
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,
-        options: NotGivenOr[RoomOptions | dict[str, Any]] = NOT_GIVEN,
+        options: NotGivenOr[RoomOptions] = NOT_GIVEN,
         # deprecated
         input_options: NotGivenOr[RoomInputOptions] = NOT_GIVEN,
         output_options: NotGivenOr[RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
-        self._options = RoomOptions.validate(
+        self._options = RoomOptions._ensure_options(
             options, room_input_options=input_options, room_output_options=output_options
         )
         self._text_input_cb: TextInputCallback | None = None
@@ -134,8 +134,8 @@ class RoomIO:
                 else "roomio_audio",
             )
 
-        output_transcription_options = self._options.get_transcription_output_options()
-        if output_transcription_options:
+        output_text_options = self._options.get_text_output_options()
+        if output_text_options:
             self._user_tr_output = _ParticipantTranscriptionOutput(
                 room=self._room, is_delta_stream=False, participant=self._participant_identity
             )
@@ -148,13 +148,13 @@ class RoomIO:
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
             # (e.g the audio output isn't using RoomIO with our avatar datastream impl)
-            if output_transcription_options.sync_transcription is not False and (
+            if output_text_options.sync_transcription is not False and (
                 audio_output := self._audio_output or self._agent_session.output.audio
             ):
                 self._tr_synchronizer = TranscriptSynchronizer(
                     next_in_chain_audio=audio_output,
                     next_in_chain_text=self._agent_tr_output,
-                    speed=output_transcription_options.transcription_speed_factor,
+                    speed=output_text_options.transcription_speed_factor,
                 )
 
         # -- set the room event handlers --

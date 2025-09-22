@@ -13,7 +13,7 @@ from .types import (
     RoomOutputOptions,
     TextInputEvent,
     TextInputOptions,
-    TranscriptionOutputOptions,
+    TextOutputOptions,
     VideoInputOptions,
 )
 
@@ -27,7 +27,7 @@ __all__ = [
     "TextInputOptions",
     "AudioInputOptions",
     "AudioOutputOptions",
-    "TranscriptionOutputOptions",
+    "TextOutputOptions",
     "VideoInputOptions",
     "_ParticipantTranscriptionOutput",
     "_ParticipantAudioOutput",
