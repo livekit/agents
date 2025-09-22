@@ -70,6 +70,7 @@ class STTOptions:
     spoken_punctuation: bool
     enable_word_time_offsets: bool
     enable_word_confidence: bool
+    enable_voice_activity_events: bool
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
@@ -103,6 +104,7 @@ class STT(stt.STT):
         spoken_punctuation: bool = False,
         enable_word_time_offsets: bool = True,
         enable_word_confidence: bool = False,
+        enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
         sample_rate: int = 16000,
@@ -127,6 +129,7 @@ class STT(stt.STT):
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
             enable_word_time_offsets(bool): whether to enable word time offsets (default: True)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
+            enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
@@ -168,6 +171,7 @@ class STT(stt.STT):
             spoken_punctuation=spoken_punctuation,
             enable_word_time_offsets=enable_word_time_offsets,
             enable_word_confidence=enable_word_confidence,
+            enable_voice_activity_events=enable_voice_activity_events,
             model=model,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
@@ -507,6 +511,7 @@ class SpeechStream(stt.SpeechStream):
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
                             interim_results=self._config.interim_results,
+                            enable_voice_activity_events=self._config.enable_voice_activity_events,
                         ),
                     )
 

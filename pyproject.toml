@@ -43,6 +43,7 @@ livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-minimax = { workspace = true }
+livekit-plugins-ultravox = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
@@ -98,6 +99,7 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 [tool.mypy]
 strict = true
 disallow_any_generics = false
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = "mcp.*"

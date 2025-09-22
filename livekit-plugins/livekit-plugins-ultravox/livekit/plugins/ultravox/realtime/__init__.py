@@ -2,11 +2,11 @@ from .events import (
     ClientToolInvocationEvent,
     ClientToolResultEvent,
     DebugEvent,
-    InputTextMessageEvent,
     PingEvent,
     PlaybackClearBufferEvent,
     PongEvent,
     SetOutputMediumEvent,
+    UserTextMessageEvent,
 )
 from .realtime_model import RealtimeModel, RealtimeSession
 
@@ -16,7 +16,7 @@ __all__ = [
     "ClientToolInvocationEvent",
     "ClientToolResultEvent",
     "DebugEvent",
-    "InputTextMessageEvent",
+    "UserTextMessageEvent",
     "PingEvent",
     "PlaybackClearBufferEvent",
     "PongEvent",

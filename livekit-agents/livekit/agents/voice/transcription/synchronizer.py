@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
+import itertools
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -25,8 +25,7 @@ STANDARD_SPEECH_RATE = 3.83  # hyphens (syllables) per second
 class _TextSyncOptions:
     speed: float
     hyphenate_word: Callable[[str], list[str]]
-    split_words: Callable[[str], list[tuple[str, int, int]]]
-    sentence_tokenizer: tokenize.SentenceTokenizer
+    word_tokenizer: tokenize.WordTokenizer
     speaking_rate_detector: SpeakingRateDetector
 
 
@@ -58,17 +57,16 @@ class _SpeakingRateData:
         text: str,
         start_time: float | None,
         end_time: float | None,
-        text_to_hyphens: Callable[[str], list[str]],
     ) -> None:
         if start_time is not None:
             # calculate the integral of the speaking rate up to the start time
             integral = self.speak_integrals[-1] if self.timestamps else 0
 
             dt = start_time - self.pushed_duration
-            full_text = "".join(self._text_buffer)
-            d_hyphens = len(text_to_hyphens(full_text))
-            integral += d_hyphens
-            rate = d_hyphens / dt if dt > 0 else 0
+            # use the length of the text directly instead of hyphens
+            text_len = sum(len(text) for text in self._text_buffer)
+            integral += text_len
+            rate = text_len / dt if dt > 0 else 0
 
             self.timestamps.append(start_time)
             self.speaking_rate.append(rate)
@@ -78,9 +76,7 @@ class _SpeakingRateData:
         self._text_buffer.append(text)
 
         if end_time is not None:
-            self.add_by_annotation(
-                text="", start_time=end_time, end_time=None, text_to_hyphens=text_to_hyphens
-            )
+            self.add_by_annotation(text="", start_time=end_time, end_time=None)
 
     def accumulate_to(self, timestamp: float) -> float:
         """Get accumulated speaking units up to the given timestamp."""
@@ -118,13 +114,13 @@ class _AudioData:
     sr_stream: SpeakingRateStream  # speaking rate estimation
     pushed_duration: float = 0.0
     done: bool = False
-    sr_data_est: _SpeakingRateData = field(default_factory=_SpeakingRateData)
-    sr_data_annotated: _SpeakingRateData | None = None  # speaking rate from `start_time`
+    estimated_rate: _SpeakingRateData = field(default_factory=_SpeakingRateData)
+    annotated_rate: _SpeakingRateData | None = None  # speaking rate from `start_time`
 
 
 @dataclass
 class _TextData:
-    sentence_stream: tokenize.SentenceStream
+    word_stream: tokenize.WordStream
     pushed_text: str = ""
     done: bool = False
     forwarded_hyphens: int = 0
@@ -136,7 +132,7 @@ class _SegmentSynchronizerImpl:
 
     def __init__(self, options: _TextSyncOptions, *, next_in_chain: io.TextOutput) -> None:
         self._opts = options
-        self._text_data = _TextData(sentence_stream=self._opts.sentence_tokenizer.stream())
+        self._text_data = _TextData(word_stream=self._opts.word_tokenizer.stream())
         self._audio_data = _AudioData(sr_stream=self._opts.speaking_rate_detector.stream())
 
         self._next_in_chain = next_in_chain
@@ -207,26 +203,16 @@ class _SegmentSynchronizerImpl:
         if isinstance(text, io.TimedString):
             start_time = text.start_time if utils.is_given(text.start_time) else None
             end_time = text.end_time if utils.is_given(text.end_time) else None
-            if not self._audio_data.sr_data_annotated:
-                self._audio_data.sr_data_annotated = _SpeakingRateData()
+            if not self._audio_data.annotated_rate:
+                self._audio_data.annotated_rate = _SpeakingRateData()
 
-            if start_time is not None or end_time is not None:
-                # flush if we have time annotations
-                self._text_data.sentence_stream.flush()
-
-            # accumulate the actual hyphens if time annotations are present
-            self._audio_data.sr_data_annotated.add_by_annotation(
-                text=text,
-                start_time=start_time,
-                end_time=end_time,
-                text_to_hyphens=self._calc_hyphens,
+            # accumulate the actual text length if time annotations are present
+            self._audio_data.annotated_rate.add_by_annotation(
+                text=text, start_time=start_time, end_time=end_time
             )
 
-        self._text_data.sentence_stream.push_text(text)
+        self._text_data.word_stream.push_text(text)
         self._text_data.pushed_text += text
-
-        if start_time is not None or end_time is not None:
-            self._text_data.sentence_stream.flush()
 
     def end_text_input(self) -> None:
         if self.closed:
@@ -234,16 +220,24 @@ class _SegmentSynchronizerImpl:
             return
 
         self._text_data.done = True
-        self._text_data.sentence_stream.end_input()
+        self._text_data.word_stream.end_input()
 
         self._reestimate_speed()
 
     def pause(self) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.pause called after close")
+            return
+
         if self._paused_wall_time is None:
             self._paused_wall_time = time.time()
         self._output_enabled_ev.clear()
 
     def resume(self) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.resume called after close")
+            return
+
         if self._paused_wall_time is not None:
             self._paused_duration += time.time() - self._paused_wall_time
             self._paused_wall_time = None
@@ -259,7 +253,7 @@ class _SegmentSynchronizerImpl:
             self._speed = pushed_hyphens / self._audio_data.pushed_duration
 
         # hyphens per speaking unit
-        pushed_speaking_units = self._audio_data.sr_data_est.accumulate_to(
+        pushed_speaking_units = self._audio_data.estimated_rate.accumulate_to(
             self._audio_data.pushed_duration
         )
         if pushed_speaking_units > 0:
@@ -294,7 +288,6 @@ class _SegmentSynchronizerImpl:
     async def _capture_task(self) -> None:
         try:
             async for text in self._out_ch:
-                self._text_data.forwarded_text += text
                 await self._next_in_chain.capture_text(text)
         finally:
             self._next_in_chain.flush()
@@ -302,7 +295,7 @@ class _SegmentSynchronizerImpl:
     @utils.log_exceptions(logger=logger)
     async def _speaking_rate_task(self) -> None:
         async for ev in self._audio_data.sr_stream:
-            self._audio_data.sr_data_est.add_by_rate(
+            self._audio_data.estimated_rate.add_by_rate(
                 timestamp=ev.timestamp, speaking_rate=ev.speaking_rate
             )
 
@@ -315,65 +308,63 @@ class _SegmentSynchronizerImpl:
 
         assert self._start_wall_time is not None
 
-        async for text_seg in self._text_data.sentence_stream:
-            sentence = text_seg.token
-            text_cursor = 0
-            for word, _, end_pos in self._opts.split_words(sentence):
-                if not self._output_enabled_ev.is_set():
-                    await self._output_enabled_ev.wait()
-                    if self._interrupted:
-                        return
+        async for data in self._text_data.word_stream:
+            word = data.token
 
-                if self.closed and not self._playback_completed:
+            if not self._output_enabled_ev.is_set():
+                await self._output_enabled_ev.wait()
+                if self._interrupted:
                     return
 
-                if self._playback_completed:
-                    self._out_ch.send_nowait(sentence[text_cursor:end_pos])
-                    text_cursor = end_pos
-                    continue
+            if self.closed and not self._playback_completed:
+                return
 
-                word_hyphens = len(self._opts.hyphenate_word(word))
-                elapsed = time.time() - self._start_wall_time - self._paused_duration
+            if self._playback_completed:
+                self._out_ch.send_nowait(word)
+                continue
 
-                target_hyphens: float | None = None
-                if (annotated := self._audio_data.sr_data_annotated) and (
-                    annotated.pushed_duration >= elapsed
-                ):
-                    # use the actual speaking rate
-                    target_hyphens = annotated.accumulate_to(elapsed)
-                elif self._speed_on_speaking_unit:
-                    # use the estimated speed from speaking rate
-                    target_speaking_units = self._audio_data.sr_data_est.accumulate_to(elapsed)
-                    target_hyphens = target_speaking_units * self._speed_on_speaking_unit
+            word_hyphens = len(self._opts.hyphenate_word(word))
+            elapsed = time.time() - self._start_wall_time - self._paused_duration
 
-                if target_hyphens is not None:
-                    dt = np.ceil(target_hyphens) - self._text_data.forwarded_hyphens
-                    delay = max(0.0, word_hyphens - dt) / self._speed
+            d_hyphens = 0
+            if (annotated := self._audio_data.annotated_rate) and (
+                annotated.pushed_duration >= elapsed
+            ):
+                # use the actual speaking rate
+                target_len = int(annotated.accumulate_to(elapsed))
+                forwarded_len = len(self._text_data.forwarded_text)
+                if target_len >= forwarded_len:
+                    d_text = self._text_data.pushed_text[forwarded_len:target_len]
+                    d_hyphens = len(self._calc_hyphens(d_text))
                 else:
-                    delay = word_hyphens / self._speed
+                    d_text = self._text_data.pushed_text[target_len:forwarded_len]
+                    d_hyphens = -len(self._calc_hyphens(d_text))
 
-                # if playback completed, flush the word as soon as possible
-                if self._playback_completed:
-                    delay = 0
+            elif self._speed_on_speaking_unit:
+                # use the estimated speed from speaking rate
+                target_speaking_units = self._audio_data.estimated_rate.accumulate_to(elapsed)
+                target_hyphens = target_speaking_units * self._speed_on_speaking_unit
+                d_hyphens = np.ceil(target_hyphens) - self._text_data.forwarded_hyphens
 
-                await self._sleep_if_not_closed(delay / 2.0)
-                self._out_ch.send_nowait(sentence[text_cursor:end_pos])
-                await self._sleep_if_not_closed(delay / 2.0)
+            delay = max(0.0, word_hyphens - d_hyphens) / self._speed
 
-                self._text_data.forwarded_hyphens += word_hyphens
-                text_cursor = end_pos
+            # if playback completed, flush the word as soon as possible
+            if self._playback_completed:
+                delay = 0
 
-            if text_cursor < len(sentence):
-                # send the remaining text (e.g. new line or spaces)
-                self._out_ch.send_nowait(sentence[text_cursor:])
+            await self._sleep_if_not_closed(delay / 2.0)
+            self._out_ch.send_nowait(word)
+            await self._sleep_if_not_closed(delay / 2.0)
+
+            self._text_data.forwarded_hyphens += word_hyphens
+            self._text_data.forwarded_text += word
 
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""
-        hyphens: list[str] = []
-        words: list[tuple[str, int, int]] = self._opts.split_words(text)
-        for word, _, _ in words:
-            new = self._opts.hyphenate_word(word)
-            hyphens.extend(new)
+        words = self._opts.word_tokenizer.tokenize(text)
+        hyphens = list(
+            itertools.chain.from_iterable(self._opts.hyphenate_word(word) for word in words)
+        )
         return hyphens
 
     async def _sleep_if_not_closed(self, delay: float) -> None:
@@ -386,11 +377,11 @@ class _SegmentSynchronizerImpl:
 
         self._close_future.set_result(None)
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
-        await self._text_data.sentence_stream.aclose()
+        self._output_enabled_ev.set()
+        await self._text_data.word_stream.aclose()
         await self._audio_data.sr_stream.aclose()
         await self._capture_atask
         await self._speaking_rate_atask
-        self._output_enabled_ev.set()
 
 
 class TranscriptSynchronizer:
@@ -408,10 +399,7 @@ class TranscriptSynchronizer:
         next_in_chain_text: io.TextOutput,
         speed: float = 1.0,
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
-        split_words: Callable[[str], list[tuple[str, int, int]]] = functools.partial(
-            tokenize.basic.split_words, ignore_punctuation=False, split_character=True
-        ),
-        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
     ) -> None:
         super().__init__()
 
@@ -421,9 +409,11 @@ class TranscriptSynchronizer:
         self._opts = _TextSyncOptions(
             speed=speed,
             hyphenate_word=hyphenate_word,
-            split_words=split_words,
-            sentence_tokenizer=(
-                sentence_tokenizer or tokenize.basic.SentenceTokenizer(retain_format=True)
+            word_tokenizer=(
+                word_tokenizer
+                or tokenize.basic.WordTokenizer(
+                    retain_format=True, ignore_punctuation=False, split_character=True
+                )
             ),
             speaking_rate_detector=SpeakingRateDetector(),
         )
@@ -456,7 +446,10 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
-        self.rotate_segment()
+        if enabled or not self._rotate_segment_atask or self._rotate_segment_atask.done():
+            # avoid calling rotate_segment twice when closing the session during agent speaking
+            # first time when speech interrupted, second time here when output detached
+            self.rotate_segment()
 
     def _on_attachment_changed(
         self,
