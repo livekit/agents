@@ -827,22 +827,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         run_state = self._global_run_state
-        if self._activity.scheduling_paused:
-            if self._next_activity is None:
-                raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-            handle = self._next_activity._generate_reply(
-                user_message=user_message,
-                instructions=instructions,
-                tool_choice=tool_choice,
-                allow_interruptions=allow_interruptions,
-            )
-            if run_state:
-                run_state._watch_handle(handle)
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-            return handle
-
-        handle = self._activity._generate_reply(
+        handle = activity._generate_reply(
             user_message=user_message,
             instructions=instructions,
             tool_choice=tool_choice,
