@@ -62,7 +62,7 @@ class ImageContent(BaseModel):
     # With an external URL
     chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
-    """  # noqa: E501
+    """
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
     """
@@ -150,19 +150,16 @@ class FunctionCallOutput(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-""""
 class AgentHandoff(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
     old_agent_id: str | None
     new_agent_id: str
-    old_agent: Agent | None = Field(exclude=True)
-    new_agent: Agent | None = Field(exclude=True)
     created_at: float = Field(default_factory=time.time)
-"""
+
 
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput], Field(discriminator="type")
+    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff], Field(discriminator="type")
 ]
 
 
