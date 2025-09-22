@@ -39,8 +39,7 @@ async def entrypoint(ctx: JobContext):
             )
             await asyncio.sleep(10)
 
-        await asyncio.shield(session.aclose())
-        ctx.delete_room()
+        session.shutdown()
 
     @session.on("user_state_changed")
     def _user_state_changed(ev: UserStateChangedEvent):

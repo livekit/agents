@@ -738,6 +738,31 @@ class AudioEmitter:
         debug_frames: list[rtc.AudioFrame] = []
         timed_transcripts: list[TimedString] = []
 
+        flush_timer: asyncio.TimerHandle | None = None
+        sent_start: float | None = None
+        sent_duration: float = 0.0
+        event_loop = asyncio.get_event_loop()
+
+        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
+            nonlocal sent_start, sent_duration, flush_timer
+
+            self._dst_ch.send_nowait(ev)
+            if sent_start is None:
+                sent_start = event_loop.time()
+            sent_duration += ev.frame.duration
+
+            if flush_timer is not None:
+                flush_timer.cancel()
+
+            def _flush() -> None:
+                self.flush()
+                logger.debug("flush audio emitter due to slow audio generation")
+
+            if flush_if_delayed:
+                # force flush the buffer if the audio comes slower than realtime
+                delay = sent_duration - (event_loop.time() - sent_start) - 0.02
+                flush_timer = event_loop.call_later(delay, _flush)
+
         def _emit_frame(frame: rtc.AudioFrame | None = None, *, is_final: bool = False) -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
             assert segment_ctx is not None
@@ -764,26 +789,28 @@ class AudioEmitter:
                             debug_frames.append(frame)
 
                     frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
-                    self._dst_ch.send_nowait(
+                    _send_audio(
                         SynthesizedAudio(
                             frame=frame,
                             request_id=self._request_id,
                             segment_id=segment_ctx.segment_id,
                             is_final=True,
-                        )
+                        ),
+                        flush_if_delayed=False,
                     )
                     timed_transcripts = []
                     return
 
             if last_frame is not None:
                 last_frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
-                self._dst_ch.send_nowait(
+                _send_audio(
                     SynthesizedAudio(
                         frame=last_frame,
                         request_id=self._request_id,
                         segment_id=segment_ctx.segment_id,
                         is_final=is_final,
-                    )
+                    ),
+                    flush_if_delayed=not is_final,
                 )
                 timed_transcripts = []
                 segment_ctx.audio_duration += last_frame.duration
@@ -796,19 +823,21 @@ class AudioEmitter:
 
         def _flush_frame() -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
+            nonlocal flush_timer, sent_start, sent_duration
             assert segment_ctx is not None
 
             if last_frame is None:
                 return
 
             last_frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
-            self._dst_ch.send_nowait(
+            _send_audio(
                 SynthesizedAudio(
                     frame=last_frame,
                     request_id=self._request_id,
                     segment_id=segment_ctx.segment_id,
                     is_final=False,  # flush isn't final
-                )
+                ),
+                flush_if_delayed=False,  # don't flush again before new frames are pushed
             )
             timed_transcripts = []
             segment_ctx.audio_duration += last_frame.duration
@@ -818,6 +847,12 @@ class AudioEmitter:
                 debug_frames.append(last_frame)
 
             last_frame = None
+            # reset sent duration after flush
+            sent_start = None
+            sent_duration = 0.0
+            if flush_timer is not None:
+                flush_timer.cancel()
+                flush_timer = None
 
         def dump_segment() -> None:
             nonlocal segment_ctx
@@ -925,11 +960,12 @@ class AudioEmitter:
                             decode_atask = asyncio.create_task(_decode_task())
                         audio_decoder.push(data)
                     elif decode_atask:
-                        if isinstance(data, AudioEmitter._FlushSegment) and audio_decoder:
-                            audio_decoder.end_input()
-                            await decode_atask
-                            _flush_frame()
-                            audio_decoder = None
+                        if isinstance(data, AudioEmitter._FlushSegment):
+                            if audio_decoder:
+                                audio_decoder.end_input()
+                                await decode_atask
+                                _flush_frame()
+                                audio_decoder = None
 
                         elif isinstance(data, AudioEmitter._EndSegment) and segment_ctx:
                             if audio_decoder:
@@ -942,6 +978,9 @@ class AudioEmitter:
                             logger.warning("unknown data type: %s", type(data))
 
         finally:
+            if flush_timer is not None:
+                flush_timer.cancel()
+
             if audio_decoder and decode_atask:
                 await audio_decoder.aclose()
                 await aio.cancel_and_wait(decode_atask)

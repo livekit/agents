@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Sequence
 from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
@@ -22,7 +22,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import llm, stt, tts, utils, vad
+from .. import inference, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
@@ -54,6 +54,7 @@ from .run_result import RunResult
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
 
 
@@ -113,9 +114,6 @@ class _VideoSampler(Protocol):
 # TODO(theomonnom): Should this be moved to another file?
 class VoiceActivityVideoSampler:
     def __init__(self, *, speaking_fps: float = 1.0, silent_fps: float = 0.3):
-        if speaking_fps <= 0 or silent_fps <= 0:
-            raise ValueError("FPS values must be greater than zero")
-
         self.speaking_fps = speaking_fps
         self.silent_fps = silent_fps
         self._last_sampled_time: float | None = None
@@ -124,6 +122,8 @@ class VoiceActivityVideoSampler:
         now = time.time()
         is_speaking = session.user_state == "speaking"
         target_fps = self.speaking_fps if is_speaking else self.silent_fps
+        if target_fps == 0:
+            return False
         min_frame_interval = 1.0 / target_fps
 
         if self._last_sampled_time is None:
@@ -142,17 +142,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
-        min_endpointing_delay: float = 0.4,
+        min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -191,10 +191,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 If *NOT_GIVEN*, the session chooses the best available mode in
                 priority order ``realtime_llm → vad → stt → manual``; it
                 automatically falls back if the necessary model is missing.
-            stt (stt.STT, optional): Speech-to-text backend.
+            stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
-            llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
-            tts (tts.TTS, optional): Text-to-speech engine.
+            llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
+            tts (tts.TTS | str, optional): Text-to-speech engine.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
@@ -210,7 +210,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
-                Default ``0.4`` s.
+                Default ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``6.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
@@ -233,8 +233,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
-                is ``False``. When NOT_GIVEN, it will be enabled for non-streaming TTS
-                and disabled for streaming TTS.
+                is ``False``. When NOT_GIVEN, it's disabled.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
             preemptive_generation (bool):
@@ -283,6 +282,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
+
+        if isinstance(stt, str):
+            stt = inference.STT(model=stt)
+
+        if isinstance(llm, str):
+            llm = inference.LLM(model=llm)
+
+        if isinstance(tts, str):
+            tts = inference.TTS(model=tts)
+
         self._stt = stt or None
         self._vad = vad or None
         self._llm = llm or None
@@ -633,10 +642,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if self._closing_task:
             return
-
         self._closing_task = asyncio.create_task(
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
+
+    def shutdown(self) -> None:
+        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
@@ -665,7 +676,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         # TODO(long): force interrupt or wait for it to finish?
                         # it might be an audio played from the error callback
                         pass
-
                 await self._activity.drain()
 
                 # wait any uninterruptible speech to finish
@@ -707,6 +717,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
+
             self.emit("close", CloseEvent(error=error, reason=reason))
 
             self._cancel_user_away_timer()
@@ -1093,6 +1104,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
+        self._chat_ctx.insert(items)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

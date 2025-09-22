@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9.0"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'darwin'",
@@ -58,11 +58,14 @@ members = [
     "livekit-plugins-silero",
     "livekit-plugins-simli",
     "livekit-plugins-smallestai",
+    "livekit-plugins-soniox",
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
     "livekit-plugins-tavus",
     "livekit-plugins-turn-detector",
+    "livekit-plugins-ultravox",
+    "livekit-plugins-upliftai",
 ]
 constraints = [{ name = "onnxruntime", marker = "python_full_version == '3.9.*'", specifier = "<1.20.0" }]
 
@@ -1722,6 +1725,7 @@ dependencies = [
     { name = "nest-asyncio" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "openai" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
@@ -1859,6 +1863,12 @@ tavus = [
 turn-detector = [
     { name = "livekit-plugins-turn-detector" },
 ]
+ultravox = [
+    { name = "livekit-plugins-ultravox" },
+]
+upliftai = [
+    { name = "livekit-plugins-upliftai" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1870,7 +1880,7 @@ requires-dist = [
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "livekit", specifier = ">=1.0.12,<2" },
-    { name = "livekit-api", specifier = ">=1.0.4,<2" },
+    { name = "livekit-api", specifier = ">=1.0.5,<2" },
     { name = "livekit-blingfire", specifier = "~=1.0" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
@@ -1909,11 +1919,14 @@ requires-dist = [
     { name = "livekit-plugins-spitch", marker = "extra == 'spitch'", editable = "livekit-plugins/livekit-plugins-spitch" },
     { name = "livekit-plugins-tavus", marker = "extra == 'tavus'", editable = "livekit-plugins/livekit-plugins-tavus" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
+    { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
+    { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-protocol", specifier = "~=1.0" },
     { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.10.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
+    { name = "openai", specifier = ">=1.99.2" },
     { name = "opentelemetry-api", specifier = ">=1.34" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.34.1" },
     { name = "opentelemetry-sdk", specifier = ">=1.34.1" },
@@ -1924,15 +1937,15 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0,<3" },
     { name = "pyjwt", specifier = ">=2.0" },
     { name = "sounddevice", specifier = ">=0.5" },
-    { name = "types-protobuf", specifier = ">=4,<5" },
+    { name = "types-protobuf", specifier = ">=4" },
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "mistralai", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "speechify", "speechmatics", "spitch", "tavus", "turn-detector"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "mistralai", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
 
 [[package]]
 name = "livekit-api"
-version = "1.0.4"
+version = "1.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1941,9 +1954,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/3a/abf4135de6ac7b43b5cc467a68731ee1adbdaa9dadea8149d37a4b0ef85f/livekit_api-1.0.4.tar.gz", hash = "sha256:90d68423e9d398834cbef300e65b7dc8f0f380f279ba25764d35296df1703152", size = 15032, upload-time = "2025-07-23T09:30:46.535Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/af/a3ecf8d204330a07cfeff60c42318df788601a9ade72fc032221bb272f21/livekit_api-1.0.5.tar.gz", hash = "sha256:1607f640ebef177208e3257098ac1fa25e37d1f72a87d0f9953d616d6eb9f18e", size = 15117, upload-time = "2025-07-24T16:43:02.467Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/1a/13f4cfdd0fb60b7057adf0a1ffeb2f0bdb13ad140d59fd34cff45e0c52a3/livekit_api-1.0.4-py3-none-any.whl", hash = "sha256:583004fc6aa7255d53932c5863145dbec16a4645fbf3944f0fdcbf2bb8ed9f86", size = 17472, upload-time = "2025-07-23T09:30:45.412Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/6f/8d978416467af2a14c4c8ff4c0285c7b2d92507da58b1f3c14cba48930f8/livekit_api-1.0.5-py3-none-any.whl", hash = "sha256:6af149b58b182f43e9a5d2d764582ed6f083c80b520ab3d489c817cea554255e", size = 17577, upload-time = "2025-07-24T16:43:00.961Z" },
 ]
 
 [[package]]
@@ -2199,16 +2212,14 @@ source = { editable = "livekit-plugins/livekit-plugins-groq" }
 dependencies = [
     { name = "aiohttp" },
     { name = "livekit" },
-    { name = "livekit-agents", extra = ["codecs"] },
-    { name = "livekit-plugins-openai" },
+    { name = "livekit-agents", extra = ["codecs", "openai"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
     { name = "livekit" },
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "livekit-plugins-openai", editable = "livekit-plugins/livekit-plugins-openai" },
+    { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
 ]
 
 [[package]]
@@ -2338,7 +2349,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=1.99.2" },
+    { name = "openai", extras = ["realtime"], specifier = ">=1.107.2" },
 ]
 provides-extras = ["vertex"]
 
@@ -2439,6 +2450,16 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-soniox"
+source = { editable = "livekit-plugins/livekit-plugins-soniox" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
 name = "livekit-plugins-speechify"
 source = { editable = "livekit-plugins/livekit-plugins-speechify" }
 dependencies = [
@@ -2506,6 +2527,31 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
     { name = "transformers", specifier = ">=4.47.1" },
+]
+
+[[package]]
+name = "livekit-plugins-ultravox"
+source = { editable = "livekit-plugins/livekit-plugins-ultravox" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-upliftai"
+source = { editable = "livekit-plugins/livekit-plugins-upliftai" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
@@ -3360,7 +3406,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "1.99.3"
+version = "1.107.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -3372,9 +3418,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/72/d3/c372420c8ca1c60e785fd8c19e536cea8f16b0cfdcdad6458e1d8884f2ea/openai-1.99.3.tar.gz", hash = "sha256:1a0e2910e4545d828c14218f2ac3276827c94a043f5353e43b9413b38b497897", size = 504932, upload-time = "2025-08-07T20:35:15.893Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a0/66/61b0c63b68df8a22f8763d7d632ea7255edb4021dca1859f4359a5659b85/openai-1.107.2.tar.gz", hash = "sha256:a11fe8d4318e98e94309308dd3a25108dec4dfc1b606f9b1c5706e8d88bdd3cb", size = 564155, upload-time = "2025-09-12T19:52:21.159Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/bc/e52f49940b4e320629da7db09c90a2407a48c612cff397b4b41b7e58cdf9/openai-1.99.3-py3-none-any.whl", hash = "sha256:c786a03f6cddadb5ee42c6d749aa4f6134fe14fdd7d69a667e5e7ce7fd29a719", size = 785776, upload-time = "2025-08-07T20:35:13.653Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/65/e51a77a368eed7b9cc22ce394087ab43f13fa2884724729b716adf2da389/openai-1.107.2-py3-none-any.whl", hash = "sha256:d159d4f3ee3d9c717b248c5d69fe93d7773a80563c8b1ca8e9cad789d3cf0260", size = 946937, upload-time = "2025-09-12T19:52:19.355Z" },
 ]
 
 [package.optional-dependencies]
