@@ -178,7 +178,7 @@ class RealtimeModel(llm.RealtimeModel):
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | NoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
@@ -209,7 +209,7 @@ class RealtimeModel(llm.RealtimeModel):
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | NoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
@@ -235,7 +235,7 @@ class RealtimeModel(llm.RealtimeModel):
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
@@ -261,7 +261,7 @@ class RealtimeModel(llm.RealtimeModel):
             tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
             base_url (str | NotGiven): HTTP base URL of the OpenAI/Azure API. If not provided, uses OPENAI_BASE_URL for OpenAI; for Azure, constructed from AZURE_OPENAI_ENDPOINT.
             input_audio_transcription (AudioTranscription | None | NotGiven): Options for transcribing input audio.
-            input_audio_noise_reduction (NoiseReductionType | NoiseReduction | None | NotGiven): Input audio noise reduction settings.
+            input_audio_noise_reduction (NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None | NotGiven): Input audio noise reduction settings.
             turn_detection (RealtimeAudioInputTurnDetection | None | NotGiven): Server-side turn-detection options.
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
@@ -1036,7 +1036,7 @@ class RealtimeSession(
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | NoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
@@ -1086,7 +1086,7 @@ class RealtimeSession(
             has_audio_config = True
 
         if is_given(input_audio_noise_reduction):
-            input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
+            input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)  # type: ignore
             self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
             audio_input.noise_reduction = input_audio_noise_reduction
             has_audio_config = True
