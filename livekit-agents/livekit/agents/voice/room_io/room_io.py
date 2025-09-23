@@ -485,5 +485,6 @@ class RoomIO:
         self._update_state_atask = asyncio.create_task(_set_state())
 
     def _on_agent_session_close(self, ev: CloseEvent) -> None:
-        job_ctx = get_job_context()
-        self._delete_room_task = job_ctx.delete_room()
+        if self._input_options.delete_room_on_close:
+            job_ctx = get_job_context()
+            self._delete_room_task = job_ctx.delete_room()
