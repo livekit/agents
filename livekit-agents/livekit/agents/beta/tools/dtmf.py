@@ -60,21 +60,3 @@ async def send_dtmf_events(
             return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
 
     return f"Successfully sent DTMF events: {', '.join(events)}"
-
-
-@function_tool
-async def send_dtmf_event(event: DtmfEvent) -> None:
-    """
-    Send a single DTMF event to the telephony provider.
-
-    Call when:
-    - User wants to send a single DTMF event
-    """
-    job_ctx = get_job_context()
-    try:
-        code = dtmf_event_to_code(event)
-        await job_ctx.room.local_participant.publish_dtmf(code=code, digit=event.value)
-    except Exception as e:
-        return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
-
-    return f"Successfully sent DTMF event: {event.value}"
