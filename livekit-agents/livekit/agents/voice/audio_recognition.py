@@ -237,8 +237,8 @@ class AudioRecognition:
                             },
                         )
 
-            # emit interim transcript as final for frontend display
             if self._audio_interim_transcript:
+                # emit interim transcript as final for frontend display
                 self._hooks.on_final_transcript(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
