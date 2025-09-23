@@ -45,10 +45,7 @@ async def send_dtmf_events(
     Send a list of DTMF events to the telephony provider.
 
     Call when:
-    - User wants to send a DTMF events sequence
-
-    Do not call when:
-    - User only wants to send a single DTMF event
+    - User wants to send DTMF events
     """
     job_ctx = get_job_context()
 
