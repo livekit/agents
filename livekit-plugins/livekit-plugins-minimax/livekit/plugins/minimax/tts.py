@@ -69,7 +69,7 @@ TTSAudioFormat = Literal["pcm", "mp3", "flac", "wav"]
 TTSSampleRate = Literal[8000, 16000, 22050, 24000, 32000, 44100]
 TTSBitRate = Literal[32000, 64000, 128000, 256000]  # only for mp3 format
 
-DEFAULT_BASE_URL = "https://api.minimaxi.io"
+DEFAULT_BASE_URL = "https://api.minimaxi.io"  # or "https://api.minimaxi.com"
 
 
 @dataclass
@@ -112,6 +112,7 @@ class TTS(tts.TTS):
         sample_rate: TTSSampleRate = 24000,
         bitrate: TTSBitRate = 128000,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        text_pacing: tts.SentenceStreamPacer | bool = False,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -148,6 +149,12 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if utils.is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
         )
+
+        self._stream_pacer: tts.SentenceStreamPacer | None = None
+        if text_pacing is True:
+            self._stream_pacer = tts.SentenceStreamPacer()
+        elif isinstance(text_pacing, tts.SentenceStreamPacer):
+            self._stream_pacer = text_pacing
 
         self._opts = _TTSOptions(
             model=model,
@@ -280,6 +287,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         sentence_stream = self._tts._sentence_tokenizer.stream()
+        if self._tts._stream_pacer:
+            sentence_stream = self._tts._stream_pacer.wrap(
+                sent_stream=sentence_stream,
+                audio_emitter=output_emitter,
+            )
+
         task_started = asyncio.Future[None]()
 
         async def _input_task() -> None:
