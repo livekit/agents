@@ -770,22 +770,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         run_state = self._global_run_state
-        if self._activity.scheduling_paused:
-            if self._next_activity is None:
-                raise RuntimeError("AgentSession is closing, cannot use say()")
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
-            handle = self._next_activity.say(
-                text,
-                audio=audio,
-                allow_interruptions=allow_interruptions,
-                add_to_chat_ctx=add_to_chat_ctx,
-            )
-            if run_state:
-                run_state._watch_handle(handle)
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use say()")
 
-            return handle
-
-        handle = self._activity.say(
+        handle = activity.say(
             text,
             audio=audio,
             allow_interruptions=allow_interruptions,
