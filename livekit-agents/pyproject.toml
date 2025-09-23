@@ -95,6 +95,7 @@ spitch = ["livekit-plugins-spitch>=1.2.11"]
 tavus = ["livekit-plugins-tavus>=1.2.11"]
 turn-detector = ["livekit-plugins-turn-detector>=1.2.11"]
 upliftai = ["livekit-plugins-upliftai>=1.2.11"]
+minimax = ["livekit-plugins-minimax>=1.2.11"]
 ultravox = ["livekit-plugins-ultravox>=1.2.11"]
 
 [project.urls]

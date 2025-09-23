@@ -42,6 +42,7 @@ livekit-plugins-tavus = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
+livekit-plugins-minimax = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 
 [tool.uv.workspace]
