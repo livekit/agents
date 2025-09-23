@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -43,6 +43,8 @@ from .models import (
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
+    OpenRouterProviderPreferences,
+    OpenRouterWebPlugin,
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
@@ -72,41 +74,9 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
-
-
-# OpenRouter typed helpers
-@dataclass
-class OpenRouterWebPlugin:
-    """OpenRouter web search plugin configuration"""
-
-    id: str = "web"
-    max_results: int = 5
-    search_prompt: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"id": self.id, "max_results": self.max_results}
-        if self.search_prompt is not None:
-            d["search_prompt"] = self.search_prompt
-        return d
-
-
-@dataclass
-class OpenRouterProviderPreferences:
-    """OpenRouter provider routing preferences."""
-
-    order: list[str] | None = None
-    allow_fallbacks: bool | None = None
-    require_parameters: bool | None = None
-    data_collection: Literal["allow", "deny"] | None = None
-    only: list[str] | None = None
-    ignore: list[str] | None = None
-    quantizations: list[str] | None = None
-    sort: Literal["price", "throughput", "latency"] | None = None
-    max_price: dict[str, float] | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items() if v is not None}
-
+    extra_body: NotGivenOr[dict[str, Any]]
+    extra_headers: NotGivenOr[dict[str, str]]
+    extra_query: NotGivenOr[dict[str, str]]
 
 class LLM(llm.LLM):
     def __init__(
@@ -131,6 +101,9 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
@@ -160,6 +133,9 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            extra_body=extra_body,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
@@ -424,65 +400,14 @@ class LLM(llm.LLM):
         # Build OpenRouter-specific request body
         or_body: dict[str, Any] = {}
         if provider:
-            or_body["provider"] = provider.to_dict()
+            or_body["provider"] = provider
         if fallback_models:
             # Set fallback models for routing
             or_body["models"] = [model, *fallback_models]
         if plugins:
-            or_body["plugins"] = [p.to_dict() for p in plugins]
+            or_body["plugins"] = [{k: v for k, v in asdict(p).items() if v is not None} for p in plugins]
 
-        class _OpenRouterLLM(LLM):
-            def __init__(
-                self, *args: Any, _or_body: dict[str, Any], _headers: dict[str, str], **kwargs: Any
-            ) -> None:
-                super().__init__(*args, **kwargs)
-                # Store OpenRouter-specific data
-                self.__or_body = _or_body
-                self.__headers = _headers
-
-            def chat(
-                self,
-                *,
-                chat_ctx: ChatContext,
-                tools: list[FunctionTool | RawFunctionTool] | None = None,
-                conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-                parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-                tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-                response_format: NotGivenOr[
-                    completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
-                ] = NOT_GIVEN,
-                extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-            ) -> LLMStream:
-                # Merge provided extras with OpenRouter-specific defaults
-                merged: dict[str, Any] = {}
-                if is_given(extra_kwargs):
-                    merged.update(extra_kwargs)
-
-                # Add OpenRouter-specific body parameters
-                if self.__or_body:
-                    body = dict(self.__or_body)
-                    if "extra_body" in merged and isinstance(merged["extra_body"], dict):
-                        body.update(merged["extra_body"])
-                    merged["extra_body"] = body
-
-                # Add OpenRouter-specific headers
-                if self.__headers:
-                    headers = dict(self.__headers)
-                    if "extra_headers" in merged and isinstance(merged["extra_headers"], dict):
-                        headers.update(merged["extra_headers"])
-                    merged["extra_headers"] = headers
-
-                return super().chat(
-                    chat_ctx=chat_ctx,
-                    tools=tools,
-                    conn_options=conn_options,
-                    parallel_tool_calls=parallel_tool_calls,
-                    tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
-                    response_format=response_format,
-                    extra_kwargs=merged,
-                )
-
-        return _OpenRouterLLM(
+        return LLM(
             model=model,
             api_key=api_key,
             client=client,
@@ -495,8 +420,8 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
-            _or_body=or_body,
-            _headers=default_headers,
+            extra_body=or_body,
+            extra_headers=default_headers,
         )
 
     @staticmethod
@@ -855,6 +780,15 @@ class LLM(llm.LLM):
         extra = {}
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
+
+        if is_given(self._opts.extra_body):
+            extra["extra_body"] = self._opts.extra_body
+
+        if is_given(self._opts.extra_headers):
+            extra["extra_headers"] = self._opts.extra_headers
+
+        if is_given(self._opts.extra_query):
+            extra["extra_query"] = self._opts.extra_query
 
         if is_given(self._opts.metadata):
             extra["metadata"] = self._opts.metadata
