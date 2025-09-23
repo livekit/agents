@@ -424,9 +424,15 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.audio_format}",
                 )
 
-                async for line in resp.content:
-                    data = json.loads(line.decode())
+                async for chunk in resp.content:
+                    line = chunk.decode().strip()
+                    if not line:
+                        continue
+                    if not line.startswith("data:"):
+                        logger.warning("unexpected Minimax message: %s", line)
+                        continue
 
+                    data = json.loads(line[5:])
                     if audio := data.get("data", {}).get("audio"):
                         output_emitter.push(bytes.fromhex(audio))
                     elif (status_code := data.get("base_resp", {}).get("status_code")) != 0:
