@@ -69,7 +69,7 @@ TTSAudioFormat = Literal["pcm", "mp3", "flac", "wav"]
 TTSSampleRate = Literal[8000, 16000, 22050, 24000, 32000, 44100]
 TTSBitRate = Literal[32000, 64000, 128000, 256000]  # only for mp3 format
 
-MINIMAX_API_BASE_URL = "https://api.minimax.io"
+DEFAULT_BASE_URL = "https://api.minimaxi.io"
 
 
 @dataclass
@@ -113,7 +113,7 @@ class TTS(tts.TTS):
         bitrate: TTSBitRate = 128000,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         api_key: str | None = None,
-        base_url: str = MINIMAX_API_BASE_URL,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
@@ -122,7 +122,12 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        # Parameter validation
+        base_url = (
+            base_url
+            if utils.is_given(base_url)
+            else os.environ.get("MINIMAX_BASE_URL", DEFAULT_BASE_URL)
+        )
+
         minimax_api_key = api_key or os.environ.get("MINIMAX_API_KEY")
         if not minimax_api_key:
             raise ValueError("MINIMAX_API_KEY must be set")
@@ -165,13 +170,6 @@ class TTS(tts.TTS):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pool = utils.ConnectionPool[
-            aiohttp.ClientWebSocketResponse
-        ](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=120,  # minimax will close the connection after 120s if no data is sent
-        )
 
     def update_options(
         self,
@@ -258,15 +256,11 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
-    def prewarm(self) -> None:
-        self._pool.prewarm()
-
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -308,6 +302,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APITimeoutError("task_start timed out") from e
 
             async for sentence in sentence_stream:
+                self._mark_started()
                 await ws.send_str(json.dumps({"event": "task_continue", "text": sentence.token}))
 
             await ws.send_str(json.dumps({"event": "task_finish"}))
@@ -342,16 +337,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 elif data.get("event") == "task_started":
                     task_started.set_result(None)
+                    session_id = data.get("session_id", "")
+                    output_emitter.start_segment(segment_id=session_id)
 
-                elif data.get("event") == "task_continue":
+                elif data.get("event") == "task_continued":
                     audio = data.get("data", {}).get("audio")
                     if audio:
                         output_emitter.push(bytes.fromhex(audio))
                     if data.get("is_final"):
-                        output_emitter.end_input()
-                        break
+                        output_emitter.flush()
 
-                elif data.get("event") == "task_finish":
+                elif data.get("event") == "task_finished":
                     output_emitter.end_input()
                     break
 
@@ -362,24 +358,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning(f"unexpected Minimax message: {msg.data}")
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                tasks = [
-                    asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
-                ]
+            ws = await self._tts._connect_ws(self._conn_options.timeout)
+            tasks = [
+                asyncio.create_task(_input_task()),
+                asyncio.create_task(_sentence_stream_task(ws)),
+                asyncio.create_task(_recv_task(ws)),
+            ]
 
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await sentence_stream.aclose()
-                    await utils.aio.gracefully_cancel(*tasks)
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await self._tts._close_ws(ws)
+                await sentence_stream.aclose()
+                await utils.aio.gracefully_cancel(*tasks)
+
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 
