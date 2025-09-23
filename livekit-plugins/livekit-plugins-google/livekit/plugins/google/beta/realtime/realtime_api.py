@@ -420,6 +420,9 @@ class RealtimeSession(llm.RealtimeSession):
             self._opts.tool_response_scheduling = tool_response_scheduling
             # no need to restart
 
+        if is_given(tool_choice):
+            logger.warning("tool_choice is not supported by the Google Realtime API.")
+
         if should_restart:
             self._mark_restart_needed()
 
