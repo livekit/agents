@@ -209,7 +209,6 @@ class SpeechStream(stt.SpeechStream):
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
-                        logger.debug("Received WebSocket message: %s", data)
                     except json.JSONDecodeError:
                         logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
                         continue
