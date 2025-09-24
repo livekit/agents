@@ -446,13 +446,22 @@ class SpeechStream(stt.SpeechStream):
                     == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED  # noqa: E501
                 ):
                     result = resp.results[0]
-                    speech_data = _streaming_recognize_response_to_speech_data(
-                        resp,
-                        min_confidence_threshold=self._config.min_confidence_threshold,
-                    )
+                    if self._config.model != "chirp_3":
+                        speech_data = _streaming_recognize_response_to_speech_data(
+                            resp,
+                            min_confidence_threshold=self._config.min_confidence_threshold,
+                        )
+
+                    else:
+                        speech_data = stt.SpeechData(
+                            language=result.language_code,
+                            start_time=0,
+                            end_time=0,
+                            confidence=1.0,
+                            text=result.alternatives[0].transcript,
+                        )
                     if speech_data is None:
                         continue
-
                     if not result.is_final:
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
