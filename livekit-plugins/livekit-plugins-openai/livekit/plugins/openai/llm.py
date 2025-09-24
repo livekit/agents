@@ -78,6 +78,7 @@ class _LLMOptions:
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
 
+
 class LLM(llm.LLM):
     def __init__(
         self,
@@ -405,7 +406,9 @@ class LLM(llm.LLM):
             # Set fallback models for routing
             or_body["models"] = [model, *fallback_models]
         if plugins:
-            or_body["plugins"] = [{k: v for k, v in asdict(p).items() if v is not None} for p in plugins]
+            or_body["plugins"] = [
+                {k: v for k, v in asdict(p).items() if v is not None} for p in plugins
+            ]
 
         return LLM(
             model=model,

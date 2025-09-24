@@ -254,15 +254,19 @@ def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
         "gpt-5-nano",
     ]
 
+
 @dataclass
 class OpenRouterWebPlugin:
     """OpenRouter web search plugin configuration"""
+
     max_results: int = 5
     search_prompt: str | None = None
     id: str = "web"
 
+
 class OpenRouterProviderPreferences(TypedDict, total=False):
     """OpenRouter provider routing preferences."""
+
     order: list[str]
     allow_fallbacks: bool
     require_parameters: bool
