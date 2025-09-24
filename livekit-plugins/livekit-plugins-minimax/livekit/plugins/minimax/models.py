@@ -22,25 +22,22 @@ TTSVoiceEmotions = Literal["happy", "sad", "angry", "fearful", "disgusted", "sur
 # Minimax TTS Voice IDs
 # Defines all supported voices using a Literal type for static analysis.
 TTSVoices = Literal[
-    "voice_agent_Female_Phone_4",
-    "voice_agent_Male_Phone_1",
-    "English_StressedLady",
-    "English_SentimentalLady",
-    "English_WiseScholar",
+    "socialmedia_female_2_v1",
+    "socialmedia_female_1_v1",
+    "moss_audio_7c7e7ae2-7356-11f0-9540-7ef9b4b62566",
+    "moss_audio_b118f320-78c0-11f0-bbeb-26e8167c4779",
     "English_radiant_girl",
-    "moss_audio_84f32de9-2363-11f0-b7ab-d255fae1f27b",
-    "japanese_male_social_media_1_v2",
     "japanese_female_social_media_1_v2",
-    "French_CasualMan",
     "French_Female Journalist",
-    "Spanish_Narrator",
-    "Spanish_WiseScholar",
-    "Spanish_ThoughtfulMan",
-    "Arabic_CalmWoman",
-    "Arabic_FriendlyGuy",
-    "Portuguese_ThoughtfulLady",
+    "voice_agent_Female_Phone_4",
+    "moss_audio_84f32de9-2363-11f0-b7ab-d255fae1f27b",
+    "moss_audio_82ebf67c-78c8-11f0-8e8e-36b92fbb4f95",
+    "English_Persuasive_Man",
+    "English_Explanatory_Man",
+    "English_Insightful_Speaker",
+    "French_CasualMan",
     "German_PlayfulMan",
-    "German_SweetLady"
+    "voice_agent_Male_Phone_2"
 ]
 
 # A list of supported voices for runtime checks and internal logic.
