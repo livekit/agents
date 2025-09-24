@@ -59,11 +59,8 @@ class Agent:
 
         self._instructions = instructions
         self._tools = find_function_tools(self)
-        if tools:
-            for tool in tools:
-                self._tools.extend(
-                    tool.__livekit_tools__() if isinstance(tool, ToolSet) else [tool]
-                )
+        for tool in tools or []:
+            self._tools += tool.__livekit_tools__() if isinstance(tool, ToolSet) else [tool]
 
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
@@ -139,7 +136,9 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | ToolSet]
+    ) -> None:
         """
         Updates the agent's available function tools.
 
@@ -147,18 +146,22 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool]):
+            tools (list[llm.FunctionTool | llm.RawFunctionTool | ToolSet]):
                 The new list of function tools available to the agent.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
+        fnc_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+        for tool in tools:
+            fnc_tools.extend(tool.__livekit_tools__() if isinstance(tool, ToolSet) else [tool])
+
         if self._activity is None:
-            self._tools = list(set(tools))
+            self._tools = list(set(fnc_tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
-        await self._activity.update_tools(tools)
+        await self._activity.update_tools(fnc_tools)
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """
