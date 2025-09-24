@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 import platform
+import re
 import time
 import uuid
 from typing import TypeVar

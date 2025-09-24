@@ -23,7 +23,7 @@ from livekit import rtc
 
 from .. import cli, llm, stt, tts, utils, vad
 from ..job import get_job_context
-from ..llm import ChatContext, AgentHandoff
+from ..llm import AgentHandoff, ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -561,6 +561,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         await self._activity.drain()
+
+    def close_soon(self) -> None:
+        self._close_soon(reason=CloseReason.USER_INITIATED, drain=True)
 
     def _close_soon(
         self,
