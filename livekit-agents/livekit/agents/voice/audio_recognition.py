@@ -239,15 +239,14 @@ class AudioRecognition:
 
             if self._audio_interim_transcript:
                 # emit interim transcript as final for frontend display
-                if self._audio_interim_transcript:
-                    self._hooks.on_final_transcript(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                stt.SpeechData(language="", text=self._audio_interim_transcript)
-                            ],
-                        )
+                self._hooks.on_final_transcript(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=[
+                            stt.SpeechData(language="", text=self._audio_interim_transcript)
+                        ],
                     )
+                )
 
                 # append interim transcript in case the final transcript is not ready
                 self._audio_transcript = (

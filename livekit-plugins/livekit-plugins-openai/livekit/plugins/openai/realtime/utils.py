@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from typing import Any, cast
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
@@ -20,6 +20,7 @@ from openai.types.realtime import (
     NoiseReductionType,
     RealtimeAudioInputTurnDetection,
 )
+from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 
 from ..log import logger
 
@@ -54,13 +55,17 @@ DEFAULT_MAX_SESSION_DURATION = 20 * 60  # 20 minutes
 
 
 def to_noise_reduction(
-    noise_reduction: NotGivenOr[InputAudioNoiseReduction | NoiseReductionType | None],
-) -> NoiseReductionType | None:
+    noise_reduction: NotGivenOr[
+        InputAudioNoiseReduction | NoiseReduction | NoiseReductionType | None
+    ],
+) -> NoiseReduction | None:
     if not is_given(noise_reduction) or noise_reduction is None:
         return None
+    if isinstance(noise_reduction, NoiseReduction):
+        return noise_reduction
     if isinstance(noise_reduction, InputAudioNoiseReduction):
-        return cast(NoiseReductionType, noise_reduction.type)
-    return cast(NoiseReductionType, noise_reduction)
+        return NoiseReduction(type=noise_reduction.type)
+    return NoiseReduction(type=noise_reduction)
 
 
 def to_audio_transcription(
