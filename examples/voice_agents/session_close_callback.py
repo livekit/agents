@@ -1,9 +1,9 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, CloseEvent, JobContext, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli, utils
+from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -16,24 +16,29 @@ load_dotenv()
 # or when the worker is shutting down. When closing the session, agent will be interrupted
 # and the last agent message will be added to the chat context.
 
+server = AgentServer()
+
 
 class MyAgent(Agent):
     def __init__(self):
-        super().__init__(instructions="You are a helpful assistant.")
+        super().__init__(
+            instructions="You are a helpful assistant.",
+            tools=[EndCallTool()],
+        )
 
-        self._closing_task: asyncio.Task[None] | None = None
+    @utils.log_exceptions(logger=logger)
+    async def on_exit(self) -> None:
+        logger.info("exiting the agent")
+        if self.session.current_speech:
+            await self.session.current_speech
 
-    @llm.function_tool
-    async def close_session(self):
-        """Called when user want to leave the conversation"""
-
-        logger.info("Closing session from function tool")
-        await self.session.generate_reply(instructions="say goodbye to the user")
-
-        # don't await it, the function call will be awaited before closing
-        self._closing_task = asyncio.create_task(self.session.aclose())
+        logger.info("generating goodbye message")
+        await self.session.generate_reply(
+            instructions="say goodbye to the user", tool_choice="none"
+        )
 
 
+@server.realtime_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -60,10 +65,6 @@ async def entrypoint(ctx: JobContext):
                 print(text)
         print("=" * 20)
 
-        # Optionally, you can delete the room when the session is closed
-        # this will stop the worker immediately
-        ctx.delete_room()
-
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -19,6 +19,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
+from .tool_set import ToolSet
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -40,7 +41,7 @@ class Agent:
         instructions: str,
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | ToolSet] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -51,14 +52,19 @@ class Agent:
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        tools = tools or []
         if type(self) is Agent:
             self._id = "default_agent"
         else:
             self._id = id or misc.camel_to_snake_case(type(self).__name__)
 
         self._instructions = instructions
-        self._tools = tools.copy() + find_function_tools(self)
+        self._tools = find_function_tools(self)
+        if tools:
+            for tool in tools:
+                self._tools.extend(
+                    tool.__livekit_tools__() if isinstance(tool, ToolSet) else [tool]
+                )
+
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
         self._stt = stt
@@ -588,7 +594,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | ToolSet] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -597,7 +603,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        tools = tools or []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,

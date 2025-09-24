@@ -1,11 +1,11 @@
 from ...llm import FunctionTool, function_tool
 from ...log import logger
-from ...voice import Tool
+from ...voice import ToolSet
 
 
-class EndCallTool(Tool):
+class EndCallTool(ToolSet):
     @function_tool(name="end_call")
-    def _end_call(self) -> None:
+    async def _end_call(self) -> None:
         """
         Ends the current call and disconnects immediately.
 
@@ -16,7 +16,7 @@ class EndCallTool(Tool):
         Do not call when:
         - The user asks to pause, hold, or transfer.
         - Intent is unclear.
-,
+
         This is the final action the agent can take.
         Once called, no further interaction is possible with the user.
         """

@@ -23,7 +23,7 @@ from livekit import rtc
 
 from .. import cli, llm, stt, tts, utils, vad
 from ..job import get_job_context
-from ..llm import ChatContext, AgentHandoff
+from ..llm import AgentHandoff, ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
