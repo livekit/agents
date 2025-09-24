@@ -9,6 +9,7 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
+    AgentHandoff,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .llm import (

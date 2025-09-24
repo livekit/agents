@@ -23,7 +23,7 @@ from livekit import rtc
 
 from .. import cli, llm, stt, tts, utils, vad
 from ..job import get_job_context
-from ..llm import ChatContext
+from ..llm import ChatContext, AgentHandoff
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -842,6 +842,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     old_agent=previous_activity_v.agent if previous_activity_v else None,
                     new_agent=self._activity.agent,
                 )
+
+            self._chat_ctx.insert(
+                AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
+                )
+            )
 
             if new_activity == "start":
                 await self._activity.start()
