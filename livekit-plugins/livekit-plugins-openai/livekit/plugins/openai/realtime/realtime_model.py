@@ -389,7 +389,8 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> RealtimeModel | RealtimeModelBeta:
         """
-        Create a RealtimeModel configured for Azure OpenAI.
+        Create a RealtimeModelBeta configured for Azure OpenAI. Azure does not currently support the GA API,
+        so we return RealtimeModelBeta instead of RealtimeModel.
 
         Args:
             azure_deployment (str): Azure OpenAI deployment name.
@@ -409,7 +410,7 @@ class RealtimeModel(llm.RealtimeModel):
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
-            RealtimeModel: Configured client for Azure OpenAI Realtime.
+            RealtimeModelBeta: Configured client for Azure OpenAI Realtime.
 
         Raises:
             ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
@@ -497,50 +498,32 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        if api_version == "2024-10-01-preview":
-            if is_given(input_audio_transcription) and not isinstance(
-                input_audio_transcription, InputAudioTranscription
-            ):
-                raise ValueError(
-                    f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
-                )
-            if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
-                raise ValueError(
-                    f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
-                )
-            if input_audio_noise_reduction is not None and not isinstance(
-                input_audio_noise_reduction, InputAudioNoiseReduction
-            ):
-                raise ValueError(
-                    f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
-                )
-
-            return RealtimeModelBeta(
-                voice=voice,
-                modalities=modalities,
-                input_audio_transcription=input_audio_transcription,  # type: ignore
-                input_audio_noise_reduction=input_audio_noise_reduction,
-                turn_detection=turn_detection,  # type: ignore
-                temperature=temperature,
-                speed=speed,
-                tracing=tracing,  # type: ignore
-                api_key=api_key,
-                http_session=http_session,
-                azure_deployment=azure_deployment,
-                api_version=api_version,
-                entra_token=entra_token,
-                base_url=base_url,
+        if is_given(input_audio_transcription) and not isinstance(
+            input_audio_transcription, InputAudioTranscription
+        ):
+            raise ValueError(
+                f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
+            )
+        if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
+            raise ValueError(
+                f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
+            )
+        if input_audio_noise_reduction is not None and not isinstance(
+            input_audio_noise_reduction, InputAudioNoiseReduction
+        ):
+            raise ValueError(
+                f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
             )
 
-        return cls(
+        return RealtimeModelBeta(
             voice=voice,
             modalities=modalities,
-            input_audio_transcription=to_audio_transcription(input_audio_transcription),
-            input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            input_audio_transcription=input_audio_transcription,  # type: ignore
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            turn_detection=turn_detection,  # type: ignore
             temperature=temperature,
             speed=speed,
-            tracing=tracing,
+            tracing=tracing,  # type: ignore
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
