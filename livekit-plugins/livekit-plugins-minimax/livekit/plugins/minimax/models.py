@@ -17,12 +17,10 @@ TTSModels = Literal["speech-02-turbo", "speech-2.5-turbo-preview"]
 TTSLanguages = Literal['Chinese', 'Chinese,Yue', 'English', 'Arabic', 'Russian', 'Spanish', 'French', 'Portuguese', 'German', 'Turkish', 'Dutch', 'Ukrainian', 'Vietnamese', 'Indonesian', 'Japanese', 'Italian', 'Korean', 'Thai', 'Polish', 'Romanian', 'Greek', 'Czech', 'Finnish', 'Hindi', 'Bulgarian', 'Danish', 'Hebrew', 'Malay', 'Persian', 'Slovak', 'Swedish', 'Croatian', 'Filipino', 'Hungarian', 'Norwegian', 'Slovenian', 'Catalan', 'Nynorsk', 'Tamil', 'Afrikaans', 'auto']
 TTSDefaultLanguage = "English"
 TTSDefaultVoiceId = "English_radiant_girl"
-TTSVoiceEmotion = Literal[
-"happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral"
-]
+TTSVoiceEmotions = Literal["happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral"]
 
 # Minimax TTS Voice IDs
-# Defines small part of supported voices using a Literal type for static analysis.
+# Defines all supported voices using a Literal type for static analysis.
 TTSVoices = Literal[
     "voice_agent_Female_Phone_4",
     "voice_agent_Male_Phone_1",
@@ -48,25 +46,7 @@ TTSVoices = Literal[
 # A list of supported voices for runtime checks and internal logic.
 # This should match the TTSVoices Literal above.
 SUPPORTED_VOICES = [
-    "voice_agent_Female_Phone_4",
-    "voice_agent_Male_Phone_1",
-    "English_StressedLady",
-    "English_SentimentalLady",
-    "English_WiseScholar",
-    "English_radiant_girl",
-    "moss_audio_84f32de9-2363-11f0-b7ab-d255fae1f27b",
-    "japanese_male_social_media_1_v2",
-    "japanese_female_social_media_1_v2",
-    "French_CasualMan",
-    "French_Female Journalist",
-    "Spanish_Narrator",
-    "Spanish_WiseScholar",
-    "Spanish_ThoughtfulMan",
-    "Arabic_CalmWoman",
-    "Arabic_FriendlyGuy",
-    "Portuguese_ThoughtfulLady",
-    "German_PlayfulMan",
-    "German_SweetLady"
+    
 ]
 TTSSubtitleType = Literal["word", "sentence"]
 TTSDefaultEmotion = None
