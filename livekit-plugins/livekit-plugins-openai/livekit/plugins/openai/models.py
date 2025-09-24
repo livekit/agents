@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, TypedDict, Union
+from typing import Literal, Optional, TypedDict, Union
 
 from openai.types import AudioModel
 
@@ -260,7 +260,7 @@ class OpenRouterWebPlugin:
     """OpenRouter web search plugin configuration"""
 
     max_results: int = 5
-    search_prompt: str | None = None
+    search_prompt: Optional[str] = None
     id: str = "web"
 
 
