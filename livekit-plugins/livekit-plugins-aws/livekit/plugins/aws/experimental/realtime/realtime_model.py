@@ -282,10 +282,6 @@ class RealtimeModel(llm.RealtimeModel):
         async def aclose(self) -> None:
             pass
 
-    @property
-    def model(self) -> str:
-        return self.model_id
-
 
 class RealtimeSession(  # noqa: F811
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]

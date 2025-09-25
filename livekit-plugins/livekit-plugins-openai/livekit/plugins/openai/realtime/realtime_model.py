@@ -543,10 +543,6 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
         )
 
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
     def update_options(
         self,
         *,

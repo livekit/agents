@@ -333,10 +333,6 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None:
         pass
 
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
 
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
