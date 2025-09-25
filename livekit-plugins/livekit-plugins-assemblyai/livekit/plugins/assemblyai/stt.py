@@ -180,6 +180,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._speech_duration: float = 0
         self._reconnect_event = asyncio.Event()
+        self._start_of_speech_sent = False
 
     def update_options(
         self,
@@ -339,6 +340,13 @@ class SpeechStream(stt.SpeechStream):
             words = data.get("words", [])
             end_of_turn = data.get("end_of_turn")
 
+            # Emit START_OF_SPEECH when we receive the first word (only once per turn)
+            if len(words) == 1 and not self._start_of_speech_sent:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                )
+                self._start_of_speech_sent = True
+
             if transcript and end_of_turn:
                 turn_is_formatted = data.get("turn_is_formatted", False)
                 if not self._opts.format_turns or (self._opts.format_turns and turn_is_formatted):
@@ -351,8 +359,10 @@ class SpeechStream(stt.SpeechStream):
                     # skip emitting final transcript if format_turns is enabled but this
                     # turn isn't formatted
                     return
-                self._event_ch.send_nowait(final_event)
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._event_ch.send_nowait(final_event)
+                # Reset flag for next turn
+                self._start_of_speech_sent = False
 
                 if self._speech_duration > 0.0:
                     usage_event = stt.SpeechEvent(
