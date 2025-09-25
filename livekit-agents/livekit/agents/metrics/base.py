@@ -112,7 +112,6 @@ class RealtimeModelMetrics(BaseModel):
 
     type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
     label: str
-    model: str
     request_id: str
     timestamp: float
     """The timestamp of the response creation."""
