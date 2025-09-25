@@ -306,16 +306,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             context_id = utils.shortuuid()
-            base_pkt = _to_cartesia_options(self._opts, streaming=True)
             async for ev in sent_tokenizer_stream:
-                token_pkt = base_pkt.copy()
+                # The opts may have changed between the time this class was instantiated and the time we start receiving
+                # sentences to synthesize. We use the latest options here by doing self._tts._opts instead of self._opts.
+                token_pkt = _to_cartesia_options(self._tts._opts, streaming=True)
                 token_pkt["context_id"] = context_id
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
 
-            end_pkt = base_pkt.copy()
+            end_pkt = _to_cartesia_options(self._tts._opts, streaming=True)
             end_pkt["context_id"] = context_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
