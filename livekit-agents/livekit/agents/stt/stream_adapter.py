@@ -17,7 +17,13 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 
 class StreamAdapter(STT):
     def __init__(self, *, stt: STT, vad: VAD) -> None:
-        super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=True,
+                interim_results=False,
+                diarization=False,  # diarization requires streaming STT
+            )
+        )
         self._vad = vad
         self._stt = stt
 

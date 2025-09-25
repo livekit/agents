@@ -167,6 +167,14 @@ class TTS(tts.TTS):
         )
         self._session = http_session
 
+    @property
+    def model(self) -> str:
+        return "Octave"
+
+    @property
+    def provider(self) -> str:
+        return "Hume"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

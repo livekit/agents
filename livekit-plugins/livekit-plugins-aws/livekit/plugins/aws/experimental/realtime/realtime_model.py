@@ -40,6 +40,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
@@ -240,6 +241,7 @@ class RealtimeModel(llm.RealtimeModel):
                 user_transcription=True,
                 auto_tool_reply_generation=True,
                 audio_output=True,
+                manual_function_calls=False,
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
@@ -258,6 +260,14 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
+    @property
+    def model(self) -> str:
+        return self.model_id
+
+    @property
+    def provider(self) -> str:
+        return "Amazon"
+
     def session(self) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
         sess = RealtimeSession(self)
@@ -271,6 +281,10 @@ class RealtimeModel(llm.RealtimeModel):
         # stub b/c RealtimeSession.aclose() is invoked directly
         async def aclose(self) -> None:
             pass
+
+    @property
+    def model(self) -> str:
+        return self.model_id
 
 
 class RealtimeSession(  # noqa: F811
@@ -556,6 +570,7 @@ class RealtimeSession(  # noqa: F811
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=self._current_generation.response_id,
         )
         self.emit("generation_created", generation_ev)
 
@@ -864,7 +879,8 @@ class RealtimeSession(  # noqa: F811
         output_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["output"]
         # Q: should we be counting per turn or utterance?
         metrics = RealtimeModelMetrics(
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
+            model=self._realtime_model.model,
             # TODO: pass in the correct request_id
             request_id=event_data["event"]["usageEvent"]["completionId"],
             timestamp=time.monotonic(),
@@ -890,6 +906,9 @@ class RealtimeSession(  # noqa: F811
                 text_tokens=output_tokens["textTokens"],
                 audio_tokens=output_tokens["speechTokens"],
                 image_tokens=0,
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
         self.emit("metrics_collected", metrics)
