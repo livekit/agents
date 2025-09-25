@@ -2,21 +2,23 @@ import re
 from collections.abc import AsyncIterable, Sequence
 from typing import Literal
 
-TranscriptionFilterName = Literal["markdown", "emoji"]
+TextTransforms = Literal["filter_markdown", "filter_emoji"]
 
 
-def apply_transcription_filters(
-    text: AsyncIterable[str], filters: Sequence[TranscriptionFilterName]
+def apply_text_transforms(
+    text: AsyncIterable[str], transforms: Sequence[TextTransforms]
 ) -> AsyncIterable[str]:
-    all_filters = {
-        "markdown": filter_markdown,
-        "emoji": filter_emoji,
+    all_transforms = {
+        "filter_markdown": filter_markdown,
+        "filter_emoji": filter_emoji,
     }
 
-    for filter in filters:
-        if filter not in all_filters:
-            raise ValueError(f"Invalid filter: {filter}, available filters: {all_filters.keys()}")
-        text = all_filters[filter](text)
+    for transform in transforms:
+        if transform not in all_transforms:
+            raise ValueError(
+                f"Invalid transform: {transform}, available transforms: {all_transforms.keys()}"
+            )
+        text = all_transforms[transform](text)
     return text
 
 

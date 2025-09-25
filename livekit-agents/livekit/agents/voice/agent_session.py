@@ -56,7 +56,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
-    from .transcription.filters import TranscriptionFilterName
+    from .transcription.filters import TextTransforms
 
 
 @dataclass
@@ -83,7 +83,7 @@ class VoiceOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
-    transcription_filters: Sequence[TranscriptionFilterName] | None
+    tts_text_transforms: Sequence[TextTransforms] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -140,7 +140,7 @@ class VoiceActivityVideoSampler:
         return False
 
 
-DEFAULT_TRANSCRIPTION_FILTERS: list[TranscriptionFilterName] = ["markdown", "emoji"]
+DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
@@ -167,7 +167,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         resume_false_interruption: bool = True,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
-        transcription_filters: NotGivenOr[Sequence[TranscriptionFilterName] | None] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -241,8 +241,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``. When NOT_GIVEN, it's disabled.
-            transcription_filters (Sequence[TranscriptionFilterName], optional): The filters to apply
-                to the transcript, available filters: ``"markdown"``, ``"emoji"``.
+            tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
+                to the transcript, available transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
@@ -286,10 +286,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             false_interruption_timeout=false_interruption_timeout,
             resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
-            transcription_filters=(
-                transcription_filters
-                if is_given(transcription_filters)
-                else DEFAULT_TRANSCRIPTION_FILTERS
+            tts_text_transforms=(
+                tts_text_transforms
+                if is_given(tts_text_transforms)
+                else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,

@@ -36,7 +36,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
-    from .transcription.filters import TranscriptionFilterName
+    from .transcription.filters import TextTransforms
 
 
 @runtime_checkable
@@ -178,16 +178,16 @@ def perform_tts_inference(
     node: io.TTSNode,
     input: AsyncIterable[str],
     model_settings: ModelSettings,
-    transcription_filters: Sequence[TranscriptionFilterName] | None,
+    text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
     timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
-    if transcription_filters is not None:
-        from .transcription.filters import apply_transcription_filters
+    if text_transforms:
+        from .transcription.filters import apply_text_transforms
 
-        input = apply_transcription_filters(input, transcription_filters)
+        input = apply_text_transforms(input, text_transforms)
 
     tts_task = asyncio.create_task(_tts_inference_task(node, input, model_settings, data))
 
