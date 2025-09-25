@@ -1,4 +1,5 @@
-from typing import Literal, Union
+from dataclasses import dataclass
+from typing import Literal, Optional, TypedDict, Union
 
 from openai.types import AudioModel
 
@@ -252,3 +253,26 @@ def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
         "gpt-5-mini",
         "gpt-5-nano",
     ]
+
+
+@dataclass
+class OpenRouterWebPlugin:
+    """OpenRouter web search plugin configuration"""
+
+    max_results: int = 5
+    search_prompt: Optional[str] = None
+    id: str = "web"
+
+
+class OpenRouterProviderPreferences(TypedDict, total=False):
+    """OpenRouter provider routing preferences."""
+
+    order: list[str]
+    allow_fallbacks: bool
+    require_parameters: bool
+    data_collection: Literal["allow", "deny"]
+    only: list[str]
+    ignore: list[str]
+    quantizations: list[str]
+    sort: Literal["price", "throughput", "latency"]
+    max_price: dict[str, float]

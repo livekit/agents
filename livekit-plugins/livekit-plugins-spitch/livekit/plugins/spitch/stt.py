@@ -32,6 +32,14 @@ class STT(stt.STT):
         self._opts = _STTOptions(language=language)
         self._client = AsyncSpitch()
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Spitch"
+
     def update_options(self, language: str):
         self._opts.language = language or self._opts.language
 

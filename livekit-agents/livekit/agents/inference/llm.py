@@ -36,55 +36,46 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 OpenaiModels = Literal[
-    # "azure/gpt-5",
-    # "azure/gpt-5-mini",
-    # "azure/gpt-5-nano",
+    "azure/gpt-5",
+    "azure/gpt-5-mini",
+    "azure/gpt-5-nano",
     "azure/gpt-4.1",
     "azure/gpt-4.1-mini",
     "azure/gpt-4.1-nano",
-    # "azure/gpt-4o",
-    # "azure/gpt-4o-mini",
+    "azure/gpt-4o",
+    "azure/gpt-4o-mini",
 ]
 
-# https://inference-docs.cerebras.ai/models/overview
 CerebrasModels = Literal[
-    # production models
     "cerebras/llama3.1-8b",
     "cerebras/llama-3.3-70b",
-    "cerebras/llama-4-scout-17b-16e-instruct",
-    "cerebras/gpt-oss-120b",
+    "cerebras/llama-4-scout",
     "cerebras/qwen-3-32b",
-    # preview models
-    "cerebras/llama-4-maverick-17b-128e-instruct",
-    "cerebras/qwen-3-235b-a22b-instruct-2507",
+    "cerebras/qwen-3-235b",
 ]
 
-# https://console.groq.com/docs/models
 GroqModels = Literal[
-    # production models
-    "groq/llama-3.1-8b-instant",
-    "groq/llama-3.3-70b-versatile",
-    "groq/openai/gpt-oss-120b",
-    "groq/openai/gpt-oss-20b",
-    # preview models
-    "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-    "groq/qwen/qwen3-32b",
+    "groq/llama-3.3-70b",
+    "groq/llama-4-scout",
+    "groq/llama-4-maverick",
+    "groq/gpt-oss-120b",
+    "groq/kimi-k2",
+    "groq/qwen-3-32b",
 ]
 
-# https://www.baseten.co/library/tag/llms
 BasetenModels = Literal[
-    "baseten/deepseek-ai/DeepSeek-V3-0324",
-    "baseten/meta-llama/Llama-4-Scout-17B-16E-Instruct",
-    "baseten/meta-llama/Llama-4-Maverick-17B-128E-Instruct",
-    "baseten/moonshotai/Kimi-K2-Instruct",
-    "baseten/openai/gpt-oss-120b",
-    "baseten/Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "baseten/qwen-3-235b",
+    "baseten/llama-4-maverick",
+    "baseten/llama-4-scout",
+    "baseten/deepseek-v3",
+    "baseten/kimi-k2",
+    "baseten/gpt-oss-120b",
 ]
 
 
 class OpenaiOptions(TypedDict, total=False):
     top_p: float
+    reasoning_effort: Literal["minimal", "low", "medium", "high"]
 
 
 class CerebrasOptions(TypedDict, total=False):

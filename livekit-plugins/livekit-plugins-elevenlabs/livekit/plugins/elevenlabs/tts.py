@@ -175,6 +175,14 @@ class TTS(tts.TTS):
         self._current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "ElevenLabs"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

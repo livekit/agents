@@ -43,6 +43,14 @@ class _PreemptiveGenerationInfo:
 
 
 class _TurnDetector(Protocol):
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "unknown"
+
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
     async def unlikely_threshold(self, language: str | None) -> float | None: ...
     async def supports_language(self, language: str | None) -> bool: ...
