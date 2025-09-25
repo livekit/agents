@@ -1519,6 +1519,12 @@ class RealtimeSession(
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+        if (
+            item_generation.audio_ch.closed
+            and self._current_generation._first_token_timestamp is None
+        ):
+            # only if audio is not available
+            self._current_generation._first_token_timestamp = time.time()
 
         item_generation.text_ch.send_nowait(event.delta)
         item_generation.audio_transcript += event.delta
@@ -1542,6 +1548,8 @@ class RealtimeSession(
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+        if self._current_generation._first_token_timestamp is None:
+            self._current_generation._first_token_timestamp = time.time()
 
         if not item_generation.modalities.done():
             item_generation.modalities.set_result(["audio", "text"])
