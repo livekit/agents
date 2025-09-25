@@ -494,7 +494,7 @@ class JobRequest:
         self,
         *,
         job: agent.Job,
-        on_reject: Callable[[], Coroutine[None, None, None]],
+        on_reject: Callable[[bool], Coroutine[None, None, None]],
         on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
@@ -523,8 +523,8 @@ class JobRequest:
         return self._job.agent_name
 
     async def reject(self) -> None:
-        """Reject the job request. The job may be assigned to another worker"""
-        await self._on_reject()
+        """Reject the job request. The job will not be assigned to another worker"""
+        await self._on_reject(True)
 
     async def accept(
         self,

@@ -283,6 +283,7 @@ class LLMStream(ABC):
                 model_name=self._llm.model,
                 model_provider=self._llm.provider,
             ),
+            model=self._llm.model,  # TODO: remove it
         )
         if self._llm_request_span:
             # livekit metrics attribute

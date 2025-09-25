@@ -78,6 +78,7 @@ from openai.types.realtime import (
     ResponseTextDoneEvent,
     SessionUpdateEvent,
 )
+from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 from openai.types.realtime.realtime_session_create_response import (
     Tracing,
 )
@@ -126,7 +127,7 @@ class _RealtimeOptions:
     voice: str
     tool_choice: llm.ToolChoice | None
     input_audio_transcription: AudioTranscription | None
-    input_audio_noise_reduction: NoiseReductionType | None
+    input_audio_noise_reduction: NoiseReduction | None
     turn_detection: RealtimeAudioInputTurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
     tracing: Tracing | None
@@ -178,7 +179,7 @@ class RealtimeModel(llm.RealtimeModel):
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
@@ -209,7 +210,7 @@ class RealtimeModel(llm.RealtimeModel):
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
@@ -235,7 +236,7 @@ class RealtimeModel(llm.RealtimeModel):
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
@@ -261,7 +262,7 @@ class RealtimeModel(llm.RealtimeModel):
             tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
             base_url (str | NotGiven): HTTP base URL of the OpenAI/Azure API. If not provided, uses OPENAI_BASE_URL for OpenAI; for Azure, constructed from AZURE_OPENAI_ENDPOINT.
             input_audio_transcription (AudioTranscription | None | NotGiven): Options for transcribing input audio.
-            input_audio_noise_reduction (NoiseReductionType | None | NotGiven): Input audio noise reduction settings.
+            input_audio_noise_reduction (NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None | NotGiven): Input audio noise reduction settings.
             turn_detection (RealtimeAudioInputTurnDetection | None | NotGiven): Server-side turn-detection options.
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
@@ -389,9 +390,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[
             AudioTranscription | InputAudioTranscription | None
         ] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | InputAudioNoiseReduction | None
-        ] = NOT_GIVEN,
+        input_audio_noise_reduction: NoiseReductionType | InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[
             RealtimeAudioInputTurnDetection | TurnDetection | None
         ] = NOT_GIVEN,
@@ -401,7 +400,8 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> RealtimeModel | RealtimeModelBeta:
         """
-        Create a RealtimeModel configured for Azure OpenAI.
+        Create a RealtimeModelBeta configured for Azure OpenAI. Azure does not currently support the GA API,
+        so we return RealtimeModelBeta instead of RealtimeModel.
 
         Args:
             azure_deployment (str): Azure OpenAI deployment name.
@@ -413,7 +413,7 @@ class RealtimeModel(llm.RealtimeModel):
             voice (str): Voice used for audio responses.
             modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
             input_audio_transcription (AudioTranscription | InputAudioTranscription | None | NotGiven): Transcription options; defaults to Azure-optimized values when not provided.
-            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None | NotGiven): Input noise reduction settings.
+            input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None): Input noise reduction settings. Defaults to None.
             turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
@@ -421,7 +421,7 @@ class RealtimeModel(llm.RealtimeModel):
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
-            RealtimeModel: Configured client for Azure OpenAI Realtime.
+            RealtimeModelBeta: Configured client for Azure OpenAI Realtime.
 
         Raises:
             ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
@@ -509,50 +509,32 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        if api_version == "2024-10-01-preview":
-            if is_given(input_audio_transcription) and not isinstance(
-                input_audio_transcription, InputAudioTranscription
-            ):
-                raise ValueError(
-                    f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
-                )
-            if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
-                raise ValueError(
-                    f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
-                )
-            if is_given(input_audio_noise_reduction) and not isinstance(
-                input_audio_noise_reduction, InputAudioNoiseReduction
-            ):
-                raise ValueError(
-                    f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
-                )
-
-            return RealtimeModelBeta(
-                voice=voice,
-                modalities=modalities,
-                input_audio_transcription=input_audio_transcription,  # type: ignore
-                input_audio_noise_reduction=input_audio_noise_reduction,  # type: ignore
-                turn_detection=turn_detection,  # type: ignore
-                temperature=temperature,
-                speed=speed,
-                tracing=tracing,  # type: ignore
-                api_key=api_key,
-                http_session=http_session,
-                azure_deployment=azure_deployment,
-                api_version=api_version,
-                entra_token=entra_token,
-                base_url=base_url,
+        if is_given(input_audio_transcription) and not isinstance(
+            input_audio_transcription, InputAudioTranscription
+        ):
+            raise ValueError(
+                f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
+            )
+        if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
+            raise ValueError(
+                f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
+            )
+        if input_audio_noise_reduction is not None and not isinstance(
+            input_audio_noise_reduction, InputAudioNoiseReduction
+        ):
+            raise ValueError(
+                f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
             )
 
-        return cls(
+        return RealtimeModelBeta(
             voice=voice,
             modalities=modalities,
-            input_audio_transcription=to_audio_transcription(input_audio_transcription),
-            input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            input_audio_transcription=input_audio_transcription,  # type: ignore
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            turn_detection=turn_detection,  # type: ignore
             temperature=temperature,
             speed=speed,
-            tracing=tracing,
+            tracing=tracing,  # type: ignore
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
@@ -560,6 +542,10 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token=entra_token,
             base_url=base_url,
         )
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
 
     def update_options(
         self,
@@ -573,7 +559,7 @@ class RealtimeModel(llm.RealtimeModel):
             InputAudioTranscription | AudioTranscription | None
         ] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            InputAudioNoiseReduction | NoiseReductionType | None
+            NoiseReduction | NoiseReductionType | InputAudioNoiseReduction | None
         ] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
@@ -990,12 +976,6 @@ class RealtimeSession(
             await ws_conn.close()
 
     def _create_session_update_event(self) -> SessionUpdateEvent:
-        noise_reduction: realtime.realtime_audio_config_input.NoiseReduction | None = None
-        if self._realtime_model._opts.input_audio_noise_reduction:
-            noise_reduction = realtime.realtime_audio_config_input.NoiseReduction(
-                type=self._realtime_model._opts.input_audio_noise_reduction,
-            )
-
         audio_format = realtime.realtime_audio_formats.AudioPCM(rate=SAMPLE_RATE, type="audio/pcm")
         # they do not support both text and audio modalities, it'll respond in audio + transcript
         modality = "audio" if "audio" in self._realtime_model._opts.modalities else "text"
@@ -1007,7 +987,7 @@ class RealtimeSession(
             audio=RealtimeAudioConfig(
                 input=RealtimeAudioConfigInput(
                     format=audio_format,
-                    noise_reduction=noise_reduction,
+                    noise_reduction=self._realtime_model._opts.input_audio_noise_reduction,
                     transcription=self._realtime_model._opts.input_audio_transcription,
                     turn_detection=self._realtime_model._opts.turn_detection,
                 ),
@@ -1049,52 +1029,76 @@ class RealtimeSession(
         turn_detection: NotGivenOr[RealtimeAudioInputTurnDetection | None] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[NoiseReductionType | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[
+            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
+        ] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
-        kwargs: dict[str, Any] = {
-            "type": "realtime",
-        }
+        session = RealtimeSessionCreateRequest(
+            type="realtime",
+        )
+        has_changes = False
 
         if is_given(tool_choice):
             tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
-            kwargs["tool_choice"] = to_oai_tool_choice(tool_choice)
-
-        if is_given(voice):
-            self._realtime_model._opts.voice = voice
-            kwargs["voice"] = voice
-
-        if is_given(turn_detection):
-            self._realtime_model._opts.turn_detection = turn_detection  # type: ignore
-            kwargs["turn_detection"] = turn_detection
+            session.tool_choice = to_oai_tool_choice(tool_choice)
+            has_changes = True
 
         if is_given(max_response_output_tokens):
             self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
-            kwargs["max_response_output_tokens"] = max_response_output_tokens
-
-        if is_given(input_audio_transcription):
-            self._realtime_model._opts.input_audio_transcription = input_audio_transcription
-            kwargs["input_audio_transcription"] = input_audio_transcription
-
-        if is_given(input_audio_noise_reduction):
-            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction  # type: ignore
-            kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
-
-        if is_given(speed):
-            self._realtime_model._opts.speed = speed
-            kwargs["speed"] = speed
+            session.max_output_tokens = max_response_output_tokens  # type: ignore
+            has_changes = True
 
         if is_given(tracing):
             self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
-            kwargs["tracing"] = cast(Union[Tracing, None], tracing)
+            session.tracing = cast(Union[Tracing, None], tracing)  # type: ignore
+            has_changes = True
 
-        if kwargs:
+        has_audio_config = False
+        audio_output = RealtimeAudioConfigOutput()
+        audio_input = RealtimeAudioConfigInput()
+        audio_config = RealtimeAudioConfig(
+            output=audio_output,
+            input=audio_input,
+        )
+
+        if is_given(voice):
+            self._realtime_model._opts.voice = voice
+            audio_output.voice = voice
+            has_audio_config = True
+
+        if is_given(turn_detection):
+            self._realtime_model._opts.turn_detection = turn_detection  # type: ignore
+            audio_input.turn_detection = turn_detection  # type: ignore
+            has_audio_config = True
+
+        if is_given(input_audio_transcription):
+            self._realtime_model._opts.input_audio_transcription = input_audio_transcription
+            audio_input.transcription = input_audio_transcription
+            has_audio_config = True
+
+        if is_given(input_audio_noise_reduction):
+            input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)  # type: ignore
+            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
+            audio_input.noise_reduction = input_audio_noise_reduction
+            has_audio_config = True
+
+        if is_given(speed):
+            self._realtime_model._opts.speed = speed
+            audio_output.speed = speed
+            has_audio_config = True
+
+        if has_audio_config:
+            session.audio = audio_config
+            has_changes = True
+
+        if has_changes:
             self.send_event(
                 SessionUpdateEvent(
                     type="session.update",
-                    session=RealtimeSessionCreateRequest.model_construct(**kwargs),
+                    session=session,
                     event_id=utils.shortuuid("options_update_"),
                 )
             )
@@ -1405,6 +1409,7 @@ class RealtimeSession(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=event.response.id,
         )
 
         if (
@@ -1633,7 +1638,8 @@ class RealtimeSession(
             ttft=ttft,
             duration=duration,
             cancelled=event.response.status == "cancelled",
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
+            model=self._realtime_model.model,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),

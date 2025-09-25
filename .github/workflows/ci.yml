@@ -99,3 +99,5 @@ jobs:
               -p livekit.plugins.simli
               -p livekit.plugins.anam
               -p livekit.plugins.ultravox
+              -p livekit.plugins.fireworksai
+              -p livekit.plugins.minimax

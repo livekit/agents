@@ -22,7 +22,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import llm, stt, tts, utils, vad
+from .. import inference, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
@@ -54,6 +54,7 @@ from .run_result import RunResult
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
 
 
@@ -113,9 +114,6 @@ class _VideoSampler(Protocol):
 # TODO(theomonnom): Should this be moved to another file?
 class VoiceActivityVideoSampler:
     def __init__(self, *, speaking_fps: float = 1.0, silent_fps: float = 0.3):
-        if speaking_fps <= 0 or silent_fps <= 0:
-            raise ValueError("FPS values must be greater than zero")
-
         self.speaking_fps = speaking_fps
         self.silent_fps = silent_fps
         self._last_sampled_time: float | None = None
@@ -124,6 +122,8 @@ class VoiceActivityVideoSampler:
         now = time.time()
         is_speaking = session.user_state == "speaking"
         target_fps = self.speaking_fps if is_speaking else self.silent_fps
+        if target_fps == 0:
+            return False
         min_frame_interval = 1.0 / target_fps
 
         if self._last_sampled_time is None:
@@ -142,10 +142,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
@@ -191,10 +191,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 If *NOT_GIVEN*, the session chooses the best available mode in
                 priority order ``realtime_llm → vad → stt → manual``; it
                 automatically falls back if the necessary model is missing.
-            stt (stt.STT, optional): Speech-to-text backend.
+            stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
-            llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
-            tts (tts.TTS, optional): Text-to-speech engine.
+            llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
+            tts (tts.TTS | str, optional): Text-to-speech engine.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
@@ -282,6 +282,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
+
+        if isinstance(stt, str):
+            stt = inference.STT(model=stt)
+
+        if isinstance(llm, str):
+            llm = inference.LLM(model=llm)
+
+        if isinstance(tts, str):
+            tts = inference.TTS(model=tts)
+
         self._stt = stt or None
         self._vad = vad or None
         self._llm = llm or None
@@ -634,10 +644,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if self._closing_task:
             return
-
         self._closing_task = asyncio.create_task(
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
+
+    def shutdown(self) -> None:
+        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
@@ -666,7 +678,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         # TODO(long): force interrupt or wait for it to finish?
                         # it might be an audio played from the error callback
                         pass
-
                 await self._activity.drain()
 
                 # wait any uninterruptible speech to finish
@@ -708,6 +719,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
+
             self.emit("close", CloseEvent(error=error, reason=reason))
 
             self._cancel_user_away_timer()
@@ -758,22 +770,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         run_state = self._global_run_state
-        if self._activity.scheduling_paused:
-            if self._next_activity is None:
-                raise RuntimeError("AgentSession is closing, cannot use say()")
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
-            handle = self._next_activity.say(
-                text,
-                audio=audio,
-                allow_interruptions=allow_interruptions,
-                add_to_chat_ctx=add_to_chat_ctx,
-            )
-            if run_state:
-                run_state._watch_handle(handle)
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use say()")
 
-            return handle
-
-        handle = self._activity.say(
+        handle = activity.say(
             text,
             audio=audio,
             allow_interruptions=allow_interruptions,

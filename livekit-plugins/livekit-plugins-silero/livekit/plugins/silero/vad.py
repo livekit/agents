@@ -386,7 +386,7 @@ class VADStream(agents.vad.VADStream):
                     speech_buffer_index += to_copy_buffer
                 elif not self._speech_buffer_max_reached:
                     # reached self._opts.max_buffered_speech (padding is included)
-                    speech_buffer_max_reached = True
+                    self._speech_buffer_max_reached = True
                     logger.warning(
                         "max_buffered_speech reached, ignoring further data for the current speech input"  # noqa: E501
                     )
@@ -403,7 +403,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index, speech_buffer_max_reached
+                    nonlocal speech_buffer_index
                     assert self._speech_buffer is not None
 
                     if speech_buffer_index <= self._prefix_padding_samples:

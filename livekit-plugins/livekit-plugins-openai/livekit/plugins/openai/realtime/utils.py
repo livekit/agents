@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from typing import cast
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
@@ -9,7 +9,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types import realtime
+from openai.types import realtime, responses
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
@@ -20,6 +20,7 @@ from openai.types.realtime import (
     NoiseReductionType,
     RealtimeAudioInputTurnDetection,
 )
+from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 
 from ..log import logger
 
@@ -30,14 +31,15 @@ DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.SemanticVa
     eagerness="medium",
     interrupt_response=True,
 )
-DEFAULT_TOOL_CHOICE = "auto"
+DEFAULT_TOOL_CHOICE: responses.ToolChoiceOptions = "auto"
 DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
 
-AZURE_DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.ServerVad(
+# use beta version TurnDetection and InputAudioTranscription for compatibility
+AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
     type="server_vad",
     threshold=0.5,
     prefix_padding_ms=300,
@@ -45,7 +47,7 @@ AZURE_DEFAULT_TURN_DETECTION = realtime.realtime_audio_input_turn_detection.Serv
     create_response=True,
 )
 
-AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
+AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
     model="whisper-1",
 )
 
@@ -53,13 +55,17 @@ DEFAULT_MAX_SESSION_DURATION = 20 * 60  # 20 minutes
 
 
 def to_noise_reduction(
-    noise_reduction: NotGivenOr[InputAudioNoiseReduction | NoiseReductionType | None],
-) -> NoiseReductionType | None:
+    noise_reduction: NotGivenOr[
+        InputAudioNoiseReduction | NoiseReduction | NoiseReductionType | None
+    ],
+) -> NoiseReduction | None:
     if not is_given(noise_reduction) or noise_reduction is None:
         return None
+    if isinstance(noise_reduction, NoiseReduction):
+        return noise_reduction
     if isinstance(noise_reduction, InputAudioNoiseReduction):
-        return cast(NoiseReductionType, noise_reduction.type)
-    return cast(NoiseReductionType, noise_reduction)
+        return NoiseReduction(type=noise_reduction.type)
+    return NoiseReduction(type=noise_reduction)
 
 
 def to_audio_transcription(
@@ -72,10 +78,10 @@ def to_audio_transcription(
         return None
 
     if isinstance(audio_transcription, InputAudioTranscription):
-        return AudioTranscription(
-            model=audio_transcription.model,
-            prompt=audio_transcription.prompt,
-            language=audio_transcription.language,
+        return AudioTranscription.model_construct(
+            **audio_transcription.model_dump(
+                by_alias=True, exclude_unset=True, exclude_defaults=True
+            )
         )
     return audio_transcription
 
@@ -90,21 +96,27 @@ def to_turn_detection(
         return None
 
     if isinstance(turn_detection, TurnDetection):
+        kwargs: dict[str, Any] = {}
         if turn_detection.type == "server_vad":
-            return realtime.realtime_audio_input_turn_detection.ServerVad(
-                type="server_vad",
-                threshold=turn_detection.threshold,
-                prefix_padding_ms=turn_detection.prefix_padding_ms,
-                silence_duration_ms=turn_detection.silence_duration_ms,
-                create_response=turn_detection.create_response,
-            )
+            kwargs["type"] = "server_vad"
+            if turn_detection.threshold is not None:
+                kwargs["threshold"] = turn_detection.threshold
+            if turn_detection.prefix_padding_ms is not None:
+                kwargs["prefix_padding_ms"] = turn_detection.prefix_padding_ms
+            if turn_detection.silence_duration_ms is not None:
+                kwargs["silence_duration_ms"] = turn_detection.silence_duration_ms
+            if turn_detection.create_response is not None:
+                kwargs["create_response"] = turn_detection.create_response
+            return realtime.realtime_audio_input_turn_detection.ServerVad(**kwargs)
         elif turn_detection.type == "semantic_vad":
-            return realtime.realtime_audio_input_turn_detection.SemanticVad(
-                type="semantic_vad",
-                create_response=turn_detection.create_response,
-                eagerness=turn_detection.eagerness,
-                interrupt_response=turn_detection.interrupt_response,
-            )
+            kwargs["type"] = "semantic_vad"
+            if turn_detection.create_response is not None:
+                kwargs["create_response"] = turn_detection.create_response
+            if turn_detection.eagerness is not None:
+                kwargs["eagerness"] = turn_detection.eagerness
+            if turn_detection.interrupt_response is not None:
+                kwargs["interrupt_response"] = turn_detection.interrupt_response
+            return realtime.realtime_audio_input_turn_detection.SemanticVad(**kwargs)
         else:
             raise ValueError(f"unsupported turn detection type: {turn_detection.type}")
     return turn_detection
@@ -268,11 +280,14 @@ def openai_item_to_livekit_item(item: realtime.ConversationItem) -> llm.ChatItem
     raise ValueError(f"unsupported item type: {item.type}")
 
 
-def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> realtime.RealtimeToolChoiceConfig:
     if isinstance(tool_choice, str):
         return tool_choice
 
     elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
-        return tool_choice["function"]["name"]
+        return responses.ToolChoiceFunction(
+            name=tool_choice["function"]["name"],
+            type="function",
+        )
 
     return DEFAULT_TOOL_CHOICE
