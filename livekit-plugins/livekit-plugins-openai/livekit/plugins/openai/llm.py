@@ -159,8 +159,11 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
 
     @staticmethod
     def with_azure(

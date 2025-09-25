@@ -113,6 +113,14 @@ class STT(stt.STT):
         self._vad_stream = vad.stream() if vad else None
         self._params = params or STTOptions()
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Soniox"
+
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,

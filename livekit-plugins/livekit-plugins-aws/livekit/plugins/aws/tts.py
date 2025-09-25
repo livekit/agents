@@ -107,6 +107,14 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.speech_engine
+
+    @property
+    def provider(self) -> str:
+        return "Amazon Polly"
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:

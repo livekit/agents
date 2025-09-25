@@ -25,6 +25,7 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -363,6 +364,16 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session = http_session
         self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        from urllib.parse import urlparse
+
+        return urlparse(self._opts.base_url).netloc
 
     @classmethod
     def with_azure(
@@ -1654,6 +1665,9 @@ class RealtimeSession(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=0,
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
         self.emit("metrics_collected", metrics)

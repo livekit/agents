@@ -15,6 +15,7 @@ from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -276,6 +277,17 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        if self._opts.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
 
     def session(self) -> RealtimeSession:
         sess = RealtimeSession(self)
@@ -1085,6 +1097,9 @@ class RealtimeSession(llm.RealtimeSession):
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 **_token_details_map(usage_metadata.response_tokens_details),
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
         self.emit("metrics_collected", metrics)

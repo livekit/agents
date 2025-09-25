@@ -74,6 +74,14 @@ class RealtimeModel:
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "unknown"
+
+    @property
     def capabilities(self) -> RealtimeCapabilities:
         return self._capabilities
 

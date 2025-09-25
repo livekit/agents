@@ -93,6 +93,14 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
+    def model(self) -> str:
+        return "Universal-Streaming"
+
+    @property
+    def provider(self) -> str:
+        return "AssemblyAI"
+
+    @property
     def session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
