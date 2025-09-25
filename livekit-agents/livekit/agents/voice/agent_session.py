@@ -242,7 +242,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``. When NOT_GIVEN, it's disabled.
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
-                to the transcript, available transforms: ``"filter_markdown"``, ``"filter_emoji"``.
+                to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
