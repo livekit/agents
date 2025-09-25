@@ -10,8 +10,8 @@ This example demonstrates how to create a animated avatar using [AvatarTalk](htt
 # AvatarTalk Config
 export AVATARTALK_API_KEY="..."
 export AVATARTALK_API_URL="..."
-export AVATARTALK_AVATAR_NAME="..."
-export AVATARTALK_AVATAR_EXPRESSION="..."
+export AVATARTALK_AVATAR="..."
+export AVATARTALK_EMOTION="..."
 
 # OpenAI config (or other models, tts, stt)
 export OPENAI_API_KEY="..."

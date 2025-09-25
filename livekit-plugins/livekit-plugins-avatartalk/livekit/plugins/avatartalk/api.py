@@ -39,14 +39,14 @@ class AvatarTalkAPI:
                 else:
                     r = await response.json()
                     raise AvatarTalkException(
-                        f"API request failed: {response.status} {r['detail']}"
+                        f"API request failed: {response.status} {r}"
                     )
 
     async def start_session(
         self,
         livekit_url: str,
-        avatar_name: str,
-        avatar_expression: str,
+        avatar: str,
+        emotion: str,
         room_name: str,
         livekit_listener_token: str,
         livekit_room_token: str,
@@ -57,8 +57,8 @@ class AvatarTalkAPI:
             "/livekit/create-session",
             json={
                 "livekit_url": livekit_url,
-                "avatar_name": avatar_name,
-                "avatar_expression": avatar_expression,
+                "avatar": avatar,
+                "emotion": emotion,
                 "room_name": room_name,
                 "room_token": livekit_room_token,
                 "listener_token": livekit_listener_token,

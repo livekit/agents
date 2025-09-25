@@ -12,7 +12,7 @@ from .log import logger
 _AVATAR_AGENT_IDENTITY = "avatartalk-agent"
 _AVATAR_AGENT_NAME = "avatartalk-agent"
 DEFAULT_AVATAR_NAME = "japanese_man"
-DEFAULT_AVATAR_EXPRESSION = "expressive"
+DEFAULT_AVATAR_EMOTION = "expressive"
 SAMPLE_RATE = 16000
 
 
@@ -24,24 +24,21 @@ class AvatarSession:
         *,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        avatar_name: NotGivenOr[str | None] = NOT_GIVEN,
-        avatar_expression: NotGivenOr[str | None] = NOT_GIVEN,
+        avatar: NotGivenOr[str | None] = NOT_GIVEN,
+        emotion: NotGivenOr[str | None] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
     ):
         self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
-        self._avatar_name = avatar_name or (
-            os.getenv("AVATARTALK_AVATAR_NAME") or DEFAULT_AVATAR_NAME
+        self._avatar = avatar or (
+            os.getenv("AVATARTALK_AVATAR") or DEFAULT_AVATAR_NAME
         )
-        self._avatar_expression = avatar_expression or (
-            os.getenv("AVATARTALK_AVATAR_EXPRESSION") or DEFAULT_AVATAR_EXPRESSION
+        self._emotion = emotion or (
+            os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION
         )
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._agent_track = None
-
-        if self._avatar_expression is NOT_GIVEN:
-            self._avatar_expression = "expressive"
 
     def __generate_lk_token(
         self,
@@ -126,13 +123,13 @@ class AvatarSession:
 
         logger.debug(
             "Starting Avatartalk agent session",
-            extra={"avatar_name": self._avatar_name, "room_name": room.name},
+            extra={"avatar": self._avatar, "room_name": room.name},
         )
         try:
             resp = await self._avatartalk_api.start_session(
                 livekit_url=livekit_url,
-                avatar_name=self._avatar_name,
-                avatar_expression=self._avatar_expression,
+                avatar=self._avatar,
+                emotion=self._emotion,
                 room_name=room.name,
                 livekit_listener_token=livekit_listener_token,
                 livekit_room_token=livekit_token,
@@ -143,7 +140,8 @@ class AvatarSession:
             logger.debug(
                 "Avatartalk agent session started",
                 extra={
-                    "avatar_name": self._avatar_name,
+                    "avatar": self._avatar,
+                    "emotion": self._emotion,
                     "room_name": room.name,
                     "task_id": self.conversation_id,
                 },
