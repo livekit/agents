@@ -1,5 +1,26 @@
 import re
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Sequence
+from typing import Literal
+
+TextTransforms = Literal["filter_markdown", "filter_emoji"]
+
+
+def apply_text_transforms(
+    text: AsyncIterable[str], transforms: Sequence[TextTransforms]
+) -> AsyncIterable[str]:
+    all_transforms = {
+        "filter_markdown": filter_markdown,
+        "filter_emoji": filter_emoji,
+    }
+
+    for transform in transforms:
+        if transform not in all_transforms:
+            raise ValueError(
+                f"Invalid transform: {transform}, available transforms: {all_transforms.keys()}"
+            )
+        text = all_transforms[transform](text)
+    return text
+
 
 LINE_PATTERNS = [
     # headers: remove # and following spaces
