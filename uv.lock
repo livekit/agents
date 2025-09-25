@@ -38,6 +38,7 @@ members = [
     "livekit-plugins-deepgram",
     "livekit-plugins-elevenlabs",
     "livekit-plugins-fal",
+    "livekit-plugins-fireworksai",
     "livekit-plugins-gladia",
     "livekit-plugins-google",
     "livekit-plugins-groq",
@@ -47,6 +48,7 @@ members = [
     "livekit-plugins-langchain",
     "livekit-plugins-lmnt",
     "livekit-plugins-minimal",
+    "livekit-plugins-minimax",
     "livekit-plugins-mistralai",
     "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
@@ -504,7 +506,7 @@ wheels = [
 
 [[package]]
 name = "bithuman"
-version = "0.5.22"
+version = "0.5.26"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -534,26 +536,26 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/a6/c068316ff88aa8d3506723be94bd975bdeff40203ed11bdbf05e9f128e71/bithuman-0.5.22-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:497bc71f776af5894b1eab5a397729c389f0f16f046757fbcf0aad1db1355485", size = 24346221, upload-time = "2025-07-24T09:14:14.997Z" },
-    { url = "https://files.pythonhosted.org/packages/ca/4a/efd52bfcaee627f9beb13fb6b3529b03e5da2ee980cfcc669374753e016b/bithuman-0.5.22-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:cbce3496df9613c40a9224550e6ce8d6fcf15ef605b1369380f0eb8105c8bcf7", size = 22689172, upload-time = "2025-07-24T09:14:17.646Z" },
-    { url = "https://files.pythonhosted.org/packages/54/5d/136dbb70836550da93defd7ab521a54316096ebd9f40bebff529a60bdbcf/bithuman-0.5.22-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:20df3f6bacbd2ac10fc587af5dd2c5a37a7225dd8cc4adacbb66fb99c4cb53b2", size = 22500112, upload-time = "2025-07-24T09:34:07.08Z" },
-    { url = "https://files.pythonhosted.org/packages/20/c4/b7339351c342af396e7ae8fef71dc6172b4fc565d0bdd2edee74d8465e76/bithuman-0.5.22-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:cbc3de1d4c3f6764d1c4209313b0550e3089859d4c2532442b1d9de8421c95cb", size = 23897821, upload-time = "2025-07-24T09:14:48.803Z" },
-    { url = "https://files.pythonhosted.org/packages/75/30/061ef00f4f21ac869060117768c4e980625b6cd79ef7a0bfc0fe9fc53f9f/bithuman-0.5.22-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:443a68b6c6fff9bf2885db5b876681c4ab4631af8e34fa521417880268252195", size = 24347903, upload-time = "2025-07-24T09:14:19.622Z" },
-    { url = "https://files.pythonhosted.org/packages/e7/bf/07066914afd41a367abadb867e32e210f9c3329e3f25c1596e4e8084fc24/bithuman-0.5.22-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:da7669e3250c7b714ca90ce5c74122efde839fa961f0e000d771c09c463ba34e", size = 22690212, upload-time = "2025-07-24T09:14:23.024Z" },
-    { url = "https://files.pythonhosted.org/packages/ae/35/7471ca99fdea3ae8578a1baedec58e598d3b287447d5935c7e04d3dbbc14/bithuman-0.5.22-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:b58716c20d2879d04d639208e8955400bdfa9ef8120e458e57ba7cc557e766f5", size = 22501687, upload-time = "2025-07-24T09:34:09.352Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/51/4231ab81d43e1684b736a1c798df24309210ab9359947e98fe217acb7165/bithuman-0.5.22-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:a94acf09e4d2948e2938ee520873d9aa92ad6192a4bd1c2c92d62db147917d6b", size = 23898366, upload-time = "2025-07-24T09:14:50.802Z" },
-    { url = "https://files.pythonhosted.org/packages/58/51/278a65ccf2a64bfcfccdbbecea4102a79d190a3120478f023af63125239d/bithuman-0.5.22-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:882a334fcaad11205a0ba89d4b6bf1b2d33de8edc89292f5adbc272424db5e59", size = 24348411, upload-time = "2025-07-24T09:14:25.831Z" },
-    { url = "https://files.pythonhosted.org/packages/f3/52/fc13c1d6514db909af18319aa03b07e431e286ebc7a86245ae5b54acc649/bithuman-0.5.22-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:3f91cb40e510456d7005d5fad2eeece9b2411dc444891ab414a040348be1914a", size = 22689957, upload-time = "2025-07-24T09:14:27.872Z" },
-    { url = "https://files.pythonhosted.org/packages/ee/74/42fd1d1a537eeca584df8c662fc19724446abf25d571895efa74b63ee244/bithuman-0.5.22-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:3359622acef8b583ffd3c0a961a5d85664e3c37414f257b1011cc9c95e4e2106", size = 22501244, upload-time = "2025-07-24T09:34:11.736Z" },
-    { url = "https://files.pythonhosted.org/packages/93/59/c9abe479a4acd3c0ff7ee02c6f4064ff81cc970ceff7b8056bb0b4c44482/bithuman-0.5.22-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:5eb60f8f0635fc85522e8206e196e4ec8551d6d01dc099906941851547b5d920", size = 23898433, upload-time = "2025-07-24T09:14:54.23Z" },
-    { url = "https://files.pythonhosted.org/packages/15/e3/4c345f81f338c7334a9583f7bc87189230761402ab6d061514a9dca8dcdc/bithuman-0.5.22-cp313-cp313-macosx_10_9_x86_64.whl", hash = "sha256:bd04c2ade002abe47bceed77caa10ea4eac56f441e108458d79022c4e8ac1a07", size = 24348541, upload-time = "2025-07-24T09:14:30.298Z" },
-    { url = "https://files.pythonhosted.org/packages/66/09/623c123e119611e1a3fb01dc34cca95332ac5f76a6a42163b6a4de650c55/bithuman-0.5.22-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:24356e649d7db4705c97ca958ef491586ab25f7cc30617561a300b16f1e90a8a", size = 22690057, upload-time = "2025-07-24T09:14:32.897Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/29/bf04c76433f6ff8f9eaa9a01c2f2c87ff9e548681050e3ea4a8a61d96674/bithuman-0.5.22-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:bd86686f21eda6390f02124fab124570a1e8f358cb5b095b7d0bb9a581518338", size = 22501136, upload-time = "2025-07-24T09:34:13.639Z" },
-    { url = "https://files.pythonhosted.org/packages/58/e6/f16a6f92e0aa9798b967bcbd55fc544332efde5951690be3cdc25bf2ab41/bithuman-0.5.22-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:258638c1e9073ba6abacda1631f911c25333ee570725a9ce215ea3a031265661", size = 23898367, upload-time = "2025-07-24T09:14:56.712Z" },
-    { url = "https://files.pythonhosted.org/packages/7d/70/2a35f6316e8ba9471d2fd853a54c8ec5dc3fad48958a5e0ed1d1b7102620/bithuman-0.5.22-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:1a77e1183d430147767fd6a5e0f2f071da717b0c2dcec23f558c5ed8b5821671", size = 24346363, upload-time = "2025-07-24T09:14:36.427Z" },
-    { url = "https://files.pythonhosted.org/packages/80/bb/b96576fce7e58745cc03b9f9431ca36afe6c3662b78eccf128d2d8456b15/bithuman-0.5.22-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:2fb3fbe356138f83a09cbd3a5ff43109082345e5efa3686b1e89688eb8653781", size = 22689326, upload-time = "2025-07-24T09:14:39.536Z" },
-    { url = "https://files.pythonhosted.org/packages/03/04/e15f2e295528725c6bd4b376a1bc28edb415f5372a6b3dd5cf3860e91cfc/bithuman-0.5.22-cp39-cp39-manylinux_2_28_aarch64.whl", hash = "sha256:7578ed109347814c0ad62d5037e29c1e0916f99ea7fdb1f98b4e3360c3ac0edc", size = 22500328, upload-time = "2025-07-24T09:34:15.93Z" },
-    { url = "https://files.pythonhosted.org/packages/80/e4/c36f78caf6231d61cdd70a9a4aa5889779c0fca961106d7c5fb74d9e0ae2/bithuman-0.5.22-cp39-cp39-manylinux_2_28_x86_64.whl", hash = "sha256:e526161b3c90234303a08aaf8a49e8c68c17ee37b0e91deadb5171facdbdcdcf", size = 23897816, upload-time = "2025-07-24T09:14:59.521Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/fc/0e42aea742c8103a643df4e6d86bdc38ea9a0536443bc96c5bae7e121282/bithuman-0.5.26-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:d01fe5b034d4d96a284131c61453f80738783ac474c395d288942d139a9d069d", size = 24346397, upload-time = "2025-09-24T11:44:29.69Z" },
+    { url = "https://files.pythonhosted.org/packages/94/38/282275f1afd3bfc6975d6bb6499d002994507cec2a5ac66b020b62af5e97/bithuman-0.5.26-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:f5490d6318130125158d4d83c6cb35b484198cc70302bc5dd73263ab81954b27", size = 22689529, upload-time = "2025-09-24T11:44:32.62Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/88/be9a68fc64be6bb5c61a9797d4a2890e7624ed592732c6a7a29bbe6e8dd6/bithuman-0.5.26-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:20d670fbc078e9050fef70b7000849742a696236bf39b4259a16a8854e7a4b96", size = 22500556, upload-time = "2025-09-24T12:49:06.666Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/78/54bb2f9cfe175737502dc99a96a0b384b3e1dea8cfe38af77fb174c7675d/bithuman-0.5.26-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:8cf6e4e7d5c73668e876bbfb27dc0a053543e9e2d57c68f484ef3397cce656aa", size = 23898251, upload-time = "2025-09-24T11:43:48.128Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/cc/a3b500a325488db30d0eb9df6f5f62286c93d683290c8543dbc9b9dbb880/bithuman-0.5.26-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:8d5f29ca5baa1f9ac991d088368172ab0a732ca0e11dc4915c3f2b5fbc38b019", size = 24347993, upload-time = "2025-09-24T11:44:35.139Z" },
+    { url = "https://files.pythonhosted.org/packages/51/41/284c959546f6e0aaf0745a230e248b267638e1a42562104f6207f06f17a9/bithuman-0.5.26-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:4c9727afecce47405209b6777ae16d7a3f597dc158464c37ffc2e0fc612653c0", size = 22690385, upload-time = "2025-09-24T11:44:37.532Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/48/824a8987391b9f3bd1c362a5ab5e9765861324223c4b38a2251115d6783d/bithuman-0.5.26-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:73c9888c9b1b120a4e0ab0b809388774a5c10bd54ed9e6299c65ae49e2d16314", size = 22502125, upload-time = "2025-09-24T12:49:08.861Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/ef/efa712b74f14344f4a6387645071ff201d3ca01c3e3dd398b20f0837ac2a/bithuman-0.5.26-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:b1cacbce051e5d639256c287f4fed7892964a0398883499e673a290f4ee73005", size = 23898803, upload-time = "2025-09-24T11:43:51.098Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/f8/c63c7b0c5de9e89301a0848fb8a000a5ad26b53823577d05ebd7d2f2c29c/bithuman-0.5.26-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:3a11945588d971182085ccb2c4cbdd7e5f4e8dd8ddbb12f24579b57a4e6b2264", size = 24348594, upload-time = "2025-09-24T11:44:39.967Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/8f/98e6b30219594b6613fe100c12b8010626695357c0679d47257c70929dfe/bithuman-0.5.26-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:80d3a2a61f6df4139e51ce4909ddfb4c68f3c7b0a16d0b87711be6c811820ff7", size = 22690267, upload-time = "2025-09-24T11:44:42.268Z" },
+    { url = "https://files.pythonhosted.org/packages/90/9c/61c06d90b6038754d9cef5f5118f0c5e5864911bb127ec744d73b2890d73/bithuman-0.5.26-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:8e17304bd7484c469b6010c4f53512514f1654dcc34ca996407b4e9d158afe67", size = 22501679, upload-time = "2025-09-24T12:49:11.899Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/40/9147d888698c0c04bcbbf9d4347dc571eafec264e7fbe273cf9e24f68656/bithuman-0.5.26-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:90cc2dc4acba3d48ce3001d635dca7a65793a6a487cf7399f8ab99e11f5a3f8f", size = 23898870, upload-time = "2025-09-24T11:43:53.317Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/b6/26fdbbeb07a2b31d7cc6ad937bb73f724abc1214c4174fe40e3fdfd71fea/bithuman-0.5.26-cp313-cp313-macosx_10_9_x86_64.whl", hash = "sha256:b6553f69f15769a2f7ec44711c313447863906ac1641a7bf26f6e5ae5ef9dbe8", size = 24348650, upload-time = "2025-09-24T12:52:59.48Z" },
+    { url = "https://files.pythonhosted.org/packages/73/ba/960d6617538472eea7ab2bd241196218204d5c823743fcc21e6096c8b58a/bithuman-0.5.26-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:9800e7ea0a79263192bd907db8d22bcc95b6e70c3b97de211597e8197b4665cd", size = 22690401, upload-time = "2025-09-24T12:53:01.746Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/f1/812066be3f208add71f158fefca9e20be4880c0bf87c5f6818a8632a74f4/bithuman-0.5.26-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:81bb18ee1888ca85f13001fc475d8e3b58f0938f4e80a9f57ba2dad1475e1572", size = 22501570, upload-time = "2025-09-24T12:49:14.231Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/10/b2c3e0a55d479917d4db623e57c2600e531c22a2e4cde41b7798c58aeaf8/bithuman-0.5.26-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:2b0533675ebfcb10c560747d2092c6933774aa608ec5c52386ea7b9fabec541b", size = 23898804, upload-time = "2025-09-24T11:43:55.328Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/11/d4e5d0e355295b03fd732993b71ef4877d5aa0ef9d873f9b7589b2ca6e3a/bithuman-0.5.26-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:fbc62b4e0739541f5ef64e7f0db122cbe1e3da66f324c9f3f2fb93c201d088ea", size = 24346814, upload-time = "2025-09-24T12:53:04.227Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/10/f2f52d1928e839eb18dff1ae568d694e9da712d3f1525929bff96489ff5f/bithuman-0.5.26-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:44da3d216902526243b2c7755649a6ba7489f40750359270178a271d9b5104cc", size = 22689598, upload-time = "2025-09-24T12:53:06.742Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/02/662a1d853dc1393228069b67df165497f32b48cbf4a2ee88711077628490/bithuman-0.5.26-cp39-cp39-manylinux_2_28_aarch64.whl", hash = "sha256:2d24aab7b357d45bd7e043b943c1c5fae448b528c30cec0c19bb4db68014dba9", size = 22500765, upload-time = "2025-09-24T12:49:16.459Z" },
+    { url = "https://files.pythonhosted.org/packages/19/f4/0e7c2a3716a7d0244adec3f458b90d0e01501d3ddc979d610608c8e11b11/bithuman-0.5.26-cp39-cp39-manylinux_2_28_x86_64.whl", hash = "sha256:e3fe71c43b31cfcc291303f7d58a8590122c48359708ecbcb429705dbd345c91", size = 23898251, upload-time = "2025-09-24T11:43:57.821Z" },
 ]
 
 [[package]]
@@ -1815,6 +1817,9 @@ lmnt = [
 mcp = [
     { name = "mcp", marker = "python_full_version >= '3.10'" },
 ]
+minimax = [
+    { name = "livekit-plugins-minimax" },
+]
 mistralai = [
     { name = "livekit-plugins-mistralai" },
 ]
@@ -1903,6 +1908,7 @@ requires-dist = [
     { name = "livekit-plugins-inworld", marker = "extra == 'inworld'", editable = "livekit-plugins/livekit-plugins-inworld" },
     { name = "livekit-plugins-langchain", marker = "extra == 'langchain'", editable = "livekit-plugins/livekit-plugins-langchain" },
     { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
+    { name = "livekit-plugins-minimax", marker = "extra == 'minimax'", editable = "livekit-plugins/livekit-plugins-minimax" },
     { name = "livekit-plugins-mistralai", marker = "extra == 'mistralai'", editable = "livekit-plugins/livekit-plugins-mistralai" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
@@ -1941,7 +1947,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "mistralai", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
 
 [[package]]
 name = "livekit-api"
@@ -2102,7 +2108,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", specifier = ">=0.5.22" },
+    { name = "bithuman", specifier = ">=0.5.25" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -2168,6 +2174,16 @@ requires-dist = [
     { name = "fal-client" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-fireworksai"
+source = { editable = "livekit-plugins/livekit-plugins-fireworksai" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-gladia"
@@ -2291,6 +2307,16 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-minimax"
+source = { editable = "livekit-plugins/livekit-plugins-minimax" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-mistralai"
