@@ -23,7 +23,6 @@ class LLMMetrics(BaseModel):
     prompt_cached_tokens: int
     total_tokens: int
     tokens_per_second: float
-    model: str
     speech_id: str | None = None
     metadata: Metadata | None = None
 
