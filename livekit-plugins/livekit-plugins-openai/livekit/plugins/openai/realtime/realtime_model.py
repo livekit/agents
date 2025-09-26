@@ -725,7 +725,7 @@ class RealtimeSession(
                 exclude_instructions=True,
                 exclude_empty_message=True,
             )
-            old_chat_ctx_copy = copy.deepcopy(self._remote_chat_ctx)
+            old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
@@ -735,7 +735,7 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
             except Exception as e:
-                self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
+                self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
                     message=(
                         "Failed to send message to OpenAI Realtime API during session re-connection"
