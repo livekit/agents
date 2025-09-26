@@ -12,15 +12,19 @@ class Debounced(Generic[T]):
         self._task: asyncio.Task[T] | None = None
 
     def schedule(self) -> asyncio.Task[T]:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            self._task = None
+        self.cancel()
 
         async def _func_with_timer() -> T:
             await asyncio.sleep(self._delay)
             return await self._func()
 
         self._task = asyncio.create_task(_func_with_timer())
+        return self._task
+
+    def run(self) -> asyncio.Task[T]:
+        self.cancel()
+
+        self._task = asyncio.create_task(self._func())
         return self._task
 
     def cancel(self) -> None:
@@ -37,7 +41,7 @@ class Debounced(Generic[T]):
         )
 
     def __call__(self) -> asyncio.Task[T]:
-        return self.schedule()
+        return self.run()
 
 
 def debounced(delay: float) -> Callable[[Callable[[], Awaitable[T]]], Debounced[T]]:
