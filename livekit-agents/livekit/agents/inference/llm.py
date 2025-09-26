@@ -36,54 +36,42 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 OpenaiModels = Literal[
-    # "azure/gpt-5",
-    # "azure/gpt-5-mini",
-    # "azure/gpt-5-nano",
+    "azure/gpt-5",
+    "azure/gpt-5-mini",
+    "azure/gpt-5-nano",
     "azure/gpt-4.1",
     "azure/gpt-4.1-mini",
     "azure/gpt-4.1-nano",
-    # "azure/gpt-4o",
-    # "azure/gpt-4o-mini",
+    "azure/gpt-4o",
+    "azure/gpt-4o-mini",
 ]
 
-# https://inference-docs.cerebras.ai/models/overview
-CerebrasModels = Literal[
-    # production models
-    "cerebras/llama3.1-8b",
-    "cerebras/llama-3.3-70b",
-    "cerebras/llama-4-scout-17b-16e-instruct",
-    "cerebras/gpt-oss-120b",
-    "cerebras/qwen-3-32b",
-    # preview models
-    "cerebras/llama-4-maverick-17b-128e-instruct",
-    "cerebras/qwen-3-235b-a22b-instruct-2507",
+GoogleModels = Literal[
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "google/gemini-2.0-flash",
+    "google/gemini-2.0-flash-lite",
 ]
 
-# https://console.groq.com/docs/models
-GroqModels = Literal[
-    # production models
-    "groq/llama-3.1-8b-instant",
-    "groq/llama-3.3-70b-versatile",
-    "groq/openai/gpt-oss-120b",
-    "groq/openai/gpt-oss-20b",
-    # preview models
-    "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-    "groq/qwen/qwen3-32b",
-]
+CerebrasModels = Literal["cerebras/qwen-3-32b"]
 
-# https://www.baseten.co/library/tag/llms
+GroqModels = Literal["groq/gpt-oss-120b"]
+
 BasetenModels = Literal[
-    "baseten/deepseek-ai/DeepSeek-V3-0324",
-    "baseten/meta-llama/Llama-4-Scout-17B-16E-Instruct",
-    "baseten/meta-llama/Llama-4-Maverick-17B-128E-Instruct",
-    "baseten/moonshotai/Kimi-K2-Instruct",
-    "baseten/openai/gpt-oss-120b",
-    "baseten/Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "baseten/qwen-3-235b",
+    "baseten/deepseek-v3",
+    "baseten/kimi-k2",
+    "baseten/gpt-oss-120b",
 ]
 
 
 class OpenaiOptions(TypedDict, total=False):
+    top_p: float
+    reasoning_effort: Literal["minimal", "low", "medium", "high"]
+
+
+class GoogleOptions(TypedDict, total=False):
     top_p: float
 
 
@@ -99,7 +87,7 @@ class BasetenOptions(TypedDict, total=False):
     top_p: float
 
 
-LLMModels = Union[OpenaiModels, CerebrasModels, GroqModels, BasetenModels]
+LLMModels = Union[OpenaiModels, CerebrasModels, GroqModels, BasetenModels, GoogleModels]
 
 Verbosity = Literal["low", "medium", "high"]
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -136,6 +124,25 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: GoogleModels,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -230,7 +237,12 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | OpenaiOptions | CerebrasOptions | GroqOptions | BasetenOptions
+            dict[str, Any]
+            | OpenaiOptions
+            | CerebrasOptions
+            | GroqOptions
+            | BasetenOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
     ) -> None:
         super().__init__()
@@ -294,6 +306,10 @@ class LLM(llm.LLM):
     def model(self) -> str:
         """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "LiveKit"
 
     def chat(
         self,

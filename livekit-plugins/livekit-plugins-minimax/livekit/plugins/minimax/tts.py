@@ -89,7 +89,6 @@ class _TTSOptions:
     # voice_modify
     intensity: int | None
     timbre: int | None
-    sound_effects: str | None
     audio_format: TTSAudioFormat
 
 
@@ -108,7 +107,6 @@ class TTS(tts.TTS):
         pronunciation_dict: dict[str, list[str]] | None = None,
         intensity: int | None = None,
         timbre: int | None = None,
-        sound_effects: str | None = None,
         sample_rate: TTSSampleRate = 24000,
         bitrate: TTSBitRate = 128000,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -117,6 +115,29 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ):
+        """Minimax TTS plugin
+
+        Args:
+            model (TTSModel | str, optional): The Minimax TTS model to use. Defaults to DEFAULT_MODEL.
+            voice (TTSVoice | str, optional): The voice to use. Defaults to DEFAULT_VOICE_ID.
+            emotion (TTSEmotion | None, optional): Emotion control for speech synthesis. Defaults to None.
+            speed (float, optional): Speech speed, higher values speak faster. Range is [0.5, 2.0].
+            vol (float, optional): Speech volume, range is [0, 10].
+            pitch (int, optional): Speech pitch adjustment, range is [-12, 12].
+            english_normalization (bool, optional): Enable text normalization in English. Improves performance
+                in digit-reading scenarios at the cost of slightly higher latency. Defaults to False.
+            audio_format (TTSAudioFormat, optional): The audio format to use. Defaults to "mp3".
+            pronunciation_dict (dict[str, list[str]] | None, optional): Defines pronunciation rules for specific characters or symbols.
+            intensity (int | None, optional): Corresponds to the "Strong/Softer" slider on the official page. Range [-100, 100].
+            timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
+            sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
+            bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
+            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to NOT_GIVEN.
+            text_pacing (tts.SentenceStreamPacer | bool, optional): Enable text pacing for sentence-level timing control. Defaults to False.
+            api_key (str | None, optional): The Minimax API key. Defaults to None.
+            base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
+            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
             sample_rate=sample_rate,
@@ -139,12 +160,6 @@ class TTS(tts.TTS):
             raise ValueError(f"intensity must be between -100 and 100, but got {intensity}")
         if timbre is not None and not (-100 <= timbre <= 100):
             raise ValueError(f"timbre must be between -100 and 100, but got {timbre}")
-
-        supported_effects = ["spacious_echo", "auditorium_echo", "lofi_telephone", "robotic"]
-        if sound_effects is not None and sound_effects not in supported_effects:
-            raise ValueError(
-                f"sound_effects must be one of {supported_effects}, but got {sound_effects}"
-            )
 
         self._sentence_tokenizer = (
             tokenizer if utils.is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
@@ -170,7 +185,6 @@ class TTS(tts.TTS):
             english_normalization=english_normalization,
             timbre=timbre,
             pronunciation_dict=pronunciation_dict,
-            sound_effects=sound_effects,
             intensity=intensity,
             audio_format=audio_format,
         )
@@ -192,7 +206,6 @@ class TTS(tts.TTS):
         pronunciation_dict: NotGivenOr[dict[str, list[str]]] = NOT_GIVEN,
         intensity: NotGivenOr[int] = NOT_GIVEN,
         timbre: NotGivenOr[int] = NOT_GIVEN,
-        sound_effects: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Update the TTS configuration options."""
         if utils.is_given(model):
@@ -227,9 +240,6 @@ class TTS(tts.TTS):
 
         if utils.is_given(timbre):
             self._opts.timbre = timbre
-
-        if utils.is_given(sound_effects):
-            self._opts.sound_effects = sound_effects
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -494,8 +504,6 @@ def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:
         voice_modify["intensity"] = opts.intensity
     if opts.timbre is not None:
         voice_modify["timbre"] = opts.timbre
-    if opts.sound_effects is not None:
-        voice_modify["sound_effects"] = opts.sound_effects
 
     if voice_modify:
         config["voice_modify"] = voice_modify

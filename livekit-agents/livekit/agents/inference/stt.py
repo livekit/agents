@@ -27,13 +27,17 @@ DeepgramModels = Literal[
     "deepgram/nova-2",
     "deepgram/nova-2-general",
     "deepgram/nova-2-medical",
+    "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
 CartesiaModels = Literal[
     "cartesia",
     "cartesia/ink-whisper",
 ]
-AssemblyaiModels = Literal["assemblyai"]
+AssemblyaiModels = Literal[
+    "assemblyai",
+    "assemblyai/universal-streaming",
+]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -62,8 +66,22 @@ class AssemblyaiOptions(TypedDict, total=False):
     keyterms_prompt: list[str]  # default: not specified
 
 
-STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels]
-STTLanguages = Literal["en", "de", "es", "fr", "ja", "pt", "zh"]
+STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
+_LanguageAsModels = Literal[
+    "lang/multi",
+    "lang/en",
+    "lang/de",
+    "lang/es",
+    "lang/fr",
+    "lang/ja",
+    "lang/pt",
+    "lang/zh",
+    "lang/hi",
+    # other languages not listed here are also supported
+]
+
+
+STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels, _LanguageAsModels]
 STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
@@ -202,6 +220,17 @@ class STT(stt.STT):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
+        if is_given(model) and model.startswith("lang/"):
+            if is_given(language):
+                logger.warning(
+                    "language is provided via both argument and model, using the one from the argument",
+                    extra={"language": language, "model": model},
+                )
+            else:
+                language = model[len("lang/") :].strip()
+
+            model = NOT_GIVEN
+
         self._opts = STTOptions(
             model=model,
             language=language,
@@ -215,6 +244,14 @@ class STT(stt.STT):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "LiveKit"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

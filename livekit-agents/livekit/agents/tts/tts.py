@@ -14,6 +14,7 @@ from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIError
 from ..log import logger
@@ -83,6 +84,30 @@ class TTS(
     @property
     def label(self) -> str:
         return self._label
+
+    @property
+    def model(self) -> str:
+        """Get the model name/identifier for this TTS instance.
+
+        Returns:
+            The model name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their model information.
+        """
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """Get the provider name/identifier for this TTS instance.
+
+        Returns:
+            The provider name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their provider information.
+        """
+        return "unknown"
 
     @property
     def capabilities(self) -> TTSCapabilities:
@@ -194,6 +219,7 @@ class ChunkedStream(ABC):
             cancelled=self._synthesize_task.cancelled(),
             label=self._tts._label,
             streamed=False,
+            metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
         )
         if self._tts_request_span:
             self._tts_request_span.set_attribute(
@@ -444,6 +470,7 @@ class SynthesizeStream(ABC):
                 cancelled=self._task.cancelled(),
                 label=self._tts._label,
                 streamed=True,
+                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
             )
             if self._tts_request_span:
                 self._tts_request_span.set_attribute(

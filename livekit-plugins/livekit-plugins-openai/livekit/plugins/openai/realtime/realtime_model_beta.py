@@ -25,6 +25,7 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -397,6 +398,12 @@ class RealtimeModelBeta(llm.RealtimeModel):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        from urllib.parse import urlparse
+
+        return urlparse(self._opts.base_url).netloc
+
     def update_options(
         self,
         *,
@@ -576,7 +583,7 @@ class RealtimeSessionBeta(
                 exclude_instructions=True,
                 exclude_empty_message=True,
             )
-            old_chat_ctx_copy = copy.deepcopy(self._remote_chat_ctx)
+            old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
@@ -586,7 +593,7 @@ class RealtimeSessionBeta(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
             except Exception as e:
-                self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
+                self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
                     message=(
                         "Failed to send message to OpenAI Realtime API during session re-connection"
@@ -1337,6 +1344,12 @@ class RealtimeSessionBeta(
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+        if (
+            item_generation.audio_ch.closed
+            and self._current_generation._first_token_timestamp is None
+        ):
+            # only if audio is not available
+            self._current_generation._first_token_timestamp = time.time()
 
         item_generation.text_ch.send_nowait(event.delta)
         item_generation.audio_transcript += event.delta
@@ -1360,6 +1373,8 @@ class RealtimeSessionBeta(
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+        if self._current_generation._first_token_timestamp is None:
+            self._current_generation._first_token_timestamp = time.time()
 
         if not item_generation.modalities.done():
             item_generation.modalities.set_result(["audio", "text"])
@@ -1449,7 +1464,6 @@ class RealtimeSessionBeta(
             duration=duration,
             cancelled=event.response.status == "cancelled",
             label=self._realtime_model.label,
-            model=self._realtime_model.model,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
@@ -1475,6 +1489,10 @@ class RealtimeSessionBeta(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=0,
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model,
+                model_provider=self._realtime_model.provider,
             ),
         )
         self.emit("metrics_collected", metrics)

@@ -25,6 +25,7 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -364,6 +365,16 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        from urllib.parse import urlparse
+
+        return urlparse(self._opts.base_url).netloc
+
     @classmethod
     def with_azure(
         cls,
@@ -389,7 +400,8 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> RealtimeModel | RealtimeModelBeta:
         """
-        Create a RealtimeModel configured for Azure OpenAI.
+        Create a RealtimeModelBeta configured for Azure OpenAI. Azure does not currently support the GA API,
+        so we return RealtimeModelBeta instead of RealtimeModel.
 
         Args:
             azure_deployment (str): Azure OpenAI deployment name.
@@ -409,7 +421,7 @@ class RealtimeModel(llm.RealtimeModel):
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
-            RealtimeModel: Configured client for Azure OpenAI Realtime.
+            RealtimeModelBeta: Configured client for Azure OpenAI Realtime.
 
         Raises:
             ValueError: If credentials are missing, `api_version` is not provided, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
@@ -497,50 +509,32 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        if api_version == "2024-10-01-preview":
-            if is_given(input_audio_transcription) and not isinstance(
-                input_audio_transcription, InputAudioTranscription
-            ):
-                raise ValueError(
-                    f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
-                )
-            if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
-                raise ValueError(
-                    f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
-                )
-            if input_audio_noise_reduction is not None and not isinstance(
-                input_audio_noise_reduction, InputAudioNoiseReduction
-            ):
-                raise ValueError(
-                    f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
-                )
-
-            return RealtimeModelBeta(
-                voice=voice,
-                modalities=modalities,
-                input_audio_transcription=input_audio_transcription,  # type: ignore
-                input_audio_noise_reduction=input_audio_noise_reduction,
-                turn_detection=turn_detection,  # type: ignore
-                temperature=temperature,
-                speed=speed,
-                tracing=tracing,  # type: ignore
-                api_key=api_key,
-                http_session=http_session,
-                azure_deployment=azure_deployment,
-                api_version=api_version,
-                entra_token=entra_token,
-                base_url=base_url,
+        if is_given(input_audio_transcription) and not isinstance(
+            input_audio_transcription, InputAudioTranscription
+        ):
+            raise ValueError(
+                f"input_audio_transcription must be an instance of InputAudioTranscription for api-version {api_version}"
+            )
+        if is_given(turn_detection) and not isinstance(turn_detection, TurnDetection):
+            raise ValueError(
+                f"turn_detection must be an instance of TurnDetection for api-version {api_version}"
+            )
+        if input_audio_noise_reduction is not None and not isinstance(
+            input_audio_noise_reduction, InputAudioNoiseReduction
+        ):
+            raise ValueError(
+                f"input_audio_noise_reduction must be an instance of InputAudioNoiseReduction for api-version {api_version}"
             )
 
-        return cls(
+        return RealtimeModelBeta(
             voice=voice,
             modalities=modalities,
-            input_audio_transcription=to_audio_transcription(input_audio_transcription),
-            input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            input_audio_transcription=input_audio_transcription,  # type: ignore
+            input_audio_noise_reduction=input_audio_noise_reduction,
+            turn_detection=turn_detection,  # type: ignore
             temperature=temperature,
             speed=speed,
-            tracing=tracing,
+            tracing=tracing,  # type: ignore
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
@@ -548,10 +542,6 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token=entra_token,
             base_url=base_url,
         )
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
 
     def update_options(
         self,
@@ -735,7 +725,7 @@ class RealtimeSession(
                 exclude_instructions=True,
                 exclude_empty_message=True,
             )
-            old_chat_ctx_copy = copy.deepcopy(self._remote_chat_ctx)
+            old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
@@ -745,7 +735,7 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
             except Exception as e:
-                self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
+                self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
                     message=(
                         "Failed to send message to OpenAI Realtime API during session re-connection"
@@ -1525,6 +1515,12 @@ class RealtimeSession(
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+        if (
+            item_generation.audio_ch.closed
+            and self._current_generation._first_token_timestamp is None
+        ):
+            # only if audio is not available
+            self._current_generation._first_token_timestamp = time.time()
 
         item_generation.text_ch.send_nowait(event.delta)
         item_generation.audio_transcript += event.delta
@@ -1548,6 +1544,8 @@ class RealtimeSession(
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
+        if self._current_generation._first_token_timestamp is None:
+            self._current_generation._first_token_timestamp = time.time()
 
         if not item_generation.modalities.done():
             item_generation.modalities.set_result(["audio", "text"])
@@ -1645,7 +1643,6 @@ class RealtimeSession(
             duration=duration,
             cancelled=event.response.status == "cancelled",
             label=self._realtime_model.label,
-            model=self._realtime_model.model,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
@@ -1671,6 +1668,9 @@ class RealtimeSession(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
                 image_tokens=0,
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
         self.emit("metrics_collected", metrics)

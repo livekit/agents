@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -43,6 +43,8 @@ from .models import (
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
+    OpenRouterProviderPreferences,
+    OpenRouterWebPlugin,
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
@@ -72,6 +74,9 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+    extra_body: NotGivenOr[dict[str, Any]]
+    extra_headers: NotGivenOr[dict[str, str]]
+    extra_query: NotGivenOr[dict[str, str]]
 
 
 class LLM(llm.LLM):
@@ -97,6 +102,9 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
@@ -126,6 +134,9 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            extra_body=extra_body,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
@@ -148,8 +159,11 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
 
     @staticmethod
     def with_azure(
@@ -344,6 +358,76 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+        )
+
+    @staticmethod
+    def with_openrouter(
+        *,
+        model: str = "auto",
+        api_key: str | None = None,
+        base_url: str = "https://openrouter.ai/api/v1",
+        client: openai.AsyncClient | None = None,
+        site_url: str | None = None,
+        app_name: str | None = None,
+        fallback_models: list[str] | None = None,
+        provider: OpenRouterProviderPreferences | None = None,
+        plugins: list[OpenRouterWebPlugin] | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of OpenRouter LLM.
+
+        ``api_key`` must be set to your OpenRouter API key, either using the argument or by setting
+        the ``OPENROUTER_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "OpenRouter API key is required, either as argument or set OPENROUTER_API_KEY environment variable"
+            )
+
+        # Set up analytics headers for OpenRouter
+        default_headers: dict[str, str] = {}
+        if site_url:
+            default_headers["HTTP-Referer"] = site_url
+        if app_name:
+            default_headers["X-Title"] = app_name
+
+        # Build OpenRouter-specific request body
+        or_body: dict[str, Any] = {}
+        if provider:
+            or_body["provider"] = provider
+        if fallback_models:
+            # Set fallback models for routing
+            or_body["models"] = [model, *fallback_models]
+        if plugins:
+            or_body["plugins"] = [
+                {k: v for k, v in asdict(p).items() if v is not None} for p in plugins
+            ]
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            client=client,
+            base_url=base_url,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_body=or_body,
+            extra_headers=default_headers,
         )
 
     @staticmethod
@@ -702,6 +786,15 @@ class LLM(llm.LLM):
         extra = {}
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
+
+        if is_given(self._opts.extra_body):
+            extra["extra_body"] = self._opts.extra_body
+
+        if is_given(self._opts.extra_headers):
+            extra["extra_headers"] = self._opts.extra_headers
+
+        if is_given(self._opts.extra_query):
+            extra["extra_query"] = self._opts.extra_query
 
         if is_given(self._opts.metadata):
             extra["metadata"] = self._opts.metadata
