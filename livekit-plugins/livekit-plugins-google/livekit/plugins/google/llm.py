@@ -187,13 +187,6 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
-    @property
-    def provider(self) -> str:
-        if self._client.vertexai:
-            return "Vertex AI"
-        else:
-            return "Gemini"
-
     def chat(
         self,
         *,

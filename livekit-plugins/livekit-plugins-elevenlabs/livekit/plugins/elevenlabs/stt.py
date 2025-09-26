@@ -80,14 +80,6 @@ class STT(stt.STT):
         )
         self._session = http_session
 
-    @property
-    def model(self) -> str:
-        return "Scribe"
-
-    @property
-    def provider(self) -> str:
-        return "ElevenLabs"
-
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = http_context.http_session()

@@ -36,14 +36,6 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(language=language, voice=voice)
         self._client = AsyncSpitch()
 
-    @property
-    def model(self) -> str:
-        return "unknown"
-
-    @property
-    def provider(self) -> str:
-        return "Spitch"
-
     def synthesize(
         self,
         text: str,

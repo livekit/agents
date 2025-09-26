@@ -66,11 +66,3 @@ class LLM(OpenAILLM):
             timeout=timeout,
             reasoning_effort=reasoning_effort,
         )
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
-    @property
-    def provider(self) -> str:
-        return "Baseten"

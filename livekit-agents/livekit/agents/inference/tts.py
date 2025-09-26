@@ -63,7 +63,10 @@ class InworldOptions(TypedDict, total=False):
 
 TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
-TTSEncoding = Literal["pcm_s16le"]
+TTSEncoding = Literal[
+    "pcm_s16le",
+    # "pcm_mulaw",
+]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -72,7 +75,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 @dataclass
 class _TTSOptions:
-    model: TTSModels | str
+    model: NotGivenOr[TTSModels | str]
     voice: NotGivenOr[str]
     language: NotGivenOr[str]
     encoding: TTSEncoding
@@ -155,7 +158,7 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
-        model: str,
+        model: NotGivenOr[str] = NOT_GIVEN,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -171,7 +174,7 @@ class TTS(tts.TTS):
 
     def __init__(
         self,
-        model: TTSModels | str,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,  # TODO: add a default model
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -188,7 +191,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str): TTS model to use, in "provider/model[:voice_id]" format
+            model (TTSModels | str, optional): TTS model to use, in "provider/model[:voice_id]" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -262,14 +265,6 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
-    @property
-    def provider(self) -> str:
-        return "LiveKit"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

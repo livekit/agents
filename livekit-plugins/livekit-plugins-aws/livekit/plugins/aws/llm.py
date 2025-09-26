@@ -125,10 +125,6 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
-    @property
-    def provider(self) -> str:
-        return "AWS Bedrock"
-
     def chat(
         self,
         *,
