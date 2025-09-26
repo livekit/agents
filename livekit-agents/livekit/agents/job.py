@@ -523,7 +523,11 @@ class JobRequest:
         return self._job.agent_name
 
     async def reject(self) -> None:
-        """Reject the job request. The job will not be assigned to another worker"""
+        """Reject the job request. The job may be assigned to another worker"""
+        await self._on_reject(False)
+
+    async def terminate(self) -> None:
+        """Terminate the job request. The job will not be assigned to another worker"""
         await self._on_reject(True)
 
     async def accept(
