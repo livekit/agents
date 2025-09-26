@@ -101,7 +101,7 @@ class MultiDigitConfig:
         )
 
 
-class GetDtmfTask(AgentTask[list[DtmfEvent]]):
+class GetDtmfTask(AgentTask[str]):
     def __init__(
         self,
         input_config: SingleDigitConfig | MultiDigitConfig,
@@ -160,7 +160,7 @@ class GetDtmfTask(AgentTask[list[DtmfEvent]]):
 
     @function_tool
     async def confirm_dtmf_inputs(self, inputs: list[DtmfEvent]) -> None:
-        self.complete(inputs)
+        self.complete(format_dtmf(inputs))
 
     async def on_enter(self) -> None:
         ctx = get_job_context()
