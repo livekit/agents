@@ -35,4 +35,4 @@ def dtmf_event_to_code(event: DtmfEvent) -> int:
 
 
 def format_dtmf(events: list[DtmfEvent]) -> str:
-    return "".join(event.value for event in events)
+    return " ".join(event.value for event in events)

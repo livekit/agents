@@ -8,6 +8,7 @@ from livekit.agents.beta.tools.dtmf import DtmfEvent, format_dtmf
 from livekit.agents.job import get_job_context
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import function_tool
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.aio.debounce import debounced
 
 from ...voice.agent import AgentTask
@@ -100,11 +101,11 @@ class MultiDigitConfig:
         )
 
 
-class DtmfInputsTask(AgentTask[list[str]]):
+class DtmfInputsTask(AgentTask[list[DtmfEvent]]):
     def __init__(
         self,
-        chat_ctx: ChatContext,
         input_config: SingleDigitConfig | MultiDigitConfig,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         input_timeout: float = 5.0,
         interrupt_on_dtmf_sent: bool = False,
     ) -> None:
@@ -124,7 +125,7 @@ class DtmfInputsTask(AgentTask[list[str]]):
             instructions = (
                 (
                     "<dtmf_inputs>\n"
-                    "User has provided the following valid DTMF inputs:"
+                    "User has provided the following valid DTMF inputs: "
                     f"{dmtf_str}. Please confirm it with the user.\n"
                     "</dtmf_inputs>"
                 )
@@ -136,6 +137,7 @@ class DtmfInputsTask(AgentTask[list[str]]):
                     "</dtmf_inputs>"
                 )
             )
+            logger.info(f"Generating DTMF reply, instructions: {instructions}")
 
             handle = self.session.generate_reply(instructions=instructions)
             self._curr_dtmf_inputs = []
@@ -158,7 +160,7 @@ class DtmfInputsTask(AgentTask[list[str]]):
 
     @function_tool
     async def confirm_dtmf_inputs(self, inputs: list[DtmfEvent]) -> None:
-        self.complete([inp.value for inp in inputs])
+        self.complete(inputs)
 
     async def on_enter(self) -> None:
         ctx = get_job_context()

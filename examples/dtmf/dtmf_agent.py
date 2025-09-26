@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentSession,
-    AgentTask,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
@@ -15,9 +14,13 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.agents.beta.tools.dtmf import DtmfEvent, collect_dtmf_inputs, send_dtmf_events
-from livekit.agents.beta.workflows.dtmf_inputs import DtmfInputsTask
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.beta.tools.dtmf import DtmfEvent
+from livekit.agents.beta.workflows.dtmf_inputs import (
+    DtmfInputsTask,
+    MultiDigitConfig,
+    SingleDigitConfig,
+)
+from livekit.agents.llm.tool_context import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -29,33 +32,45 @@ load_dotenv()
 DTMF_AGENT_DISPATCH_NAME = os.getenv("DTMF_AGENT_DISPATCH_NAME", "my-telephony-agent")
 
 
-class CollectConsent(AgentTask[list[str]]):
-    def __init__(self, chat_ctx: ChatContext) -> None:
-        super().__init__(
-            instructions="""You are a voice assistant that collect information from the user through phone call.""",
-            chat_ctx=chat_ctx,
-        )
-
-    async def on_enter(self) -> None:
-        await self.session.generate_reply(
-            instructions="""Ask user to collect the phone number, make sure to specify the format of the phone number""",
-        )
-        numbers = await collect_dtmf_inputs(max_digits=10, terminator_key=DtmfEvent.POUND)
-        self.complete(numbers)
-
-
 class DtmfAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions=("You are a voice assistant."),
-            tools=[send_dtmf_events],
+            instructions=(
+                "You are a voice assistant. First ask user to provide a phone number. After that, ask user to select an option from the list of options."
+            ),
         )
 
     async def on_enter(self) -> None:
-        result = await DtmfInputsTask(chat_ctx=self.chat_ctx)
-        await self.session.generate_reply(
-            instructions=f"User has provided the following DTMF inputs: {', '.join(result)}"
+        self.session.generate_reply(instructions="Ask user to provide a phone number")
+
+    @function_tool
+    async def ask_for_phone_number(self) -> str:
+        """Ask user to provide a phone number."""
+        result = await DtmfInputsTask(
+            input_config=MultiDigitConfig(
+                name="phone number",
+                num_digits=10,
+                description="The phone number of the user which is 10 digits long.",
+            ),
         )
+
+        return f"User's phone number is {result}"
+
+    @function_tool
+    async def ask_for_options(self, options: list[str]) -> str:
+        """Ask user to select an option from the list of options."""
+        choices = {
+            DtmfEvent.ONE: "Check credit card balance",
+            DtmfEvent.TWO: "Check recent transactions",
+            DtmfEvent.THREE: "Connect to a live agent",
+        }
+
+        result = await DtmfInputsTask(
+            input_config=SingleDigitConfig(choices=choices),
+            interrupt_on_dtmf_sent=True,
+        )
+
+        return f"User want to {choices[result[0]]}"
 
 
 def prewarm(proc: JobProcess) -> None:
