@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from livekit import rtc
-from livekit.agents.beta.tools.dtmf import DtmfEvent
+from livekit.agents.beta.tools.dtmf import DtmfEvent, format_dtmf
 from livekit.agents.job import get_job_context
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import function_tool
@@ -29,12 +29,12 @@ class DtmfInputsTask(AgentTask[list[str]]):
         @debounced(delay=input_timeout)
         async def _generate_dtmf_reply() -> None:
             logger.info(
-                f"Generating DTMF reply, current inputs: {', '.join(self._curr_dtmf_inputs)}"
+                f"Generating DTMF reply, current inputs: {format_dtmf(self._curr_dtmf_inputs)}"
             )
             handle = self.session.generate_reply(
                 instructions=(
                     "User has provided the following DTMF inputs: "
-                    f"{', '.join(self._curr_dtmf_inputs)}"
+                    f"{format_dtmf(self._curr_dtmf_inputs)}"
                     "Please confirm it with the user."
                 ),
             )
@@ -42,11 +42,11 @@ class DtmfInputsTask(AgentTask[list[str]]):
             await handle
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
-            logger.info(
-                f"DTMF input received: {ev.digit}, current inputs: {', '.join(self._curr_dtmf_inputs)}"
-            )
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
             self._generate_dtmf_reply.schedule()
+            logger.info(
+                f"DTMF input received. Current inputs: {format_dtmf(self._curr_dtmf_inputs)}"
+            )
 
         self._curr_dtmf_inputs: list[DtmfEvent] = []
         self._generate_dtmf_reply = _generate_dtmf_reply
@@ -60,6 +60,7 @@ class DtmfInputsTask(AgentTask[list[str]]):
         ctx = get_job_context()
 
         ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
+        self.session.generate_reply()
 
     async def on_exit(self) -> None:
         ctx = get_job_context()

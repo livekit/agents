@@ -42,6 +42,10 @@ def dtmf_event_to_code(event: DtmfEvent) -> int:
         raise ValueError(f"Invalid DTMF event: {event}")
 
 
+def format_dtmf(events: list[DtmfEvent]) -> str:
+    return "".join(event.value for event in events)
+
+
 @function_tool
 async def send_dtmf_events(
     events: list[DtmfEvent],
