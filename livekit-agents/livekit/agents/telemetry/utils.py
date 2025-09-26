@@ -25,8 +25,9 @@ def record_exception(span: trace.Span, exception: Exception) -> None:
 
 
 def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
+    model_name = ev.metadata.model_name if ev.metadata else None
     attrs: dict[str, str | int] = {
-        trace_types.ATTR_GEN_AI_REQUEST_MODEL: ev.model,
+        trace_types.ATTR_GEN_AI_REQUEST_MODEL: model_name or "unknown",
         trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,

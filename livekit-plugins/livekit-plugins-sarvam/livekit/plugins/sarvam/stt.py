@@ -60,8 +60,8 @@ class SarvamSTTOptions:
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
+    api_key: str
     model: SarvamSTTModels | str = "saarika:v2.5"
-    api_key: str | None = None
     base_url: str = SARVAM_STT_BASE_URL
 
 

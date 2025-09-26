@@ -333,10 +333,6 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None:
         pass
 
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
 
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
@@ -1073,7 +1069,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
-            model=self._realtime_model.model,
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,

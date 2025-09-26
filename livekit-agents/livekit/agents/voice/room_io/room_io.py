@@ -5,7 +5,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from livekit import rtc
+from livekit import api, rtc
 
 from ... import utils
 from ...job import get_job_context
@@ -149,7 +149,7 @@ class RoomIO:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
         self._close_session_atask: asyncio.Task[None] | None = None
-        self._delete_room_task: asyncio.Task[None] | None = None
+        self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False

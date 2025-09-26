@@ -543,10 +543,6 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
         )
 
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
     def update_options(
         self,
         *,
@@ -1639,7 +1635,6 @@ class RealtimeSession(
             duration=duration,
             cancelled=event.response.status == "cancelled",
             label=self._realtime_model.label,
-            model=self._realtime_model.model,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
