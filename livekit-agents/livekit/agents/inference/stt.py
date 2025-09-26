@@ -245,6 +245,14 @@ class STT(stt.STT):
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "LiveKit"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

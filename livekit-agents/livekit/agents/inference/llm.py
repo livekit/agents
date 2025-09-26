@@ -46,27 +46,20 @@ OpenaiModels = Literal[
     "azure/gpt-4o-mini",
 ]
 
-CerebrasModels = Literal[
-    "cerebras/llama3.1-8b",
-    "cerebras/llama-3.3-70b",
-    "cerebras/llama-4-scout",
-    "cerebras/qwen-3-32b",
-    "cerebras/qwen-3-235b",
+GoogleModels = Literal[
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "google/gemini-2.0-flash",
+    "google/gemini-2.0-flash-lite",
 ]
 
-GroqModels = Literal[
-    "groq/llama-3.3-70b",
-    "groq/llama-4-scout",
-    "groq/llama-4-maverick",
-    "groq/gpt-oss-120b",
-    "groq/kimi-k2",
-    "groq/qwen-3-32b",
-]
+CerebrasModels = Literal["cerebras/qwen-3-32b"]
+
+GroqModels = Literal["groq/gpt-oss-120b"]
 
 BasetenModels = Literal[
     "baseten/qwen-3-235b",
-    "baseten/llama-4-maverick",
-    "baseten/llama-4-scout",
     "baseten/deepseek-v3",
     "baseten/kimi-k2",
     "baseten/gpt-oss-120b",
@@ -76,6 +69,10 @@ BasetenModels = Literal[
 class OpenaiOptions(TypedDict, total=False):
     top_p: float
     reasoning_effort: Literal["minimal", "low", "medium", "high"]
+
+
+class GoogleOptions(TypedDict, total=False):
+    top_p: float
 
 
 class CerebrasOptions(TypedDict, total=False):
@@ -90,7 +87,7 @@ class BasetenOptions(TypedDict, total=False):
     top_p: float
 
 
-LLMModels = Union[OpenaiModels, CerebrasModels, GroqModels, BasetenModels]
+LLMModels = Union[OpenaiModels, CerebrasModels, GroqModels, BasetenModels, GoogleModels]
 
 Verbosity = Literal["low", "medium", "high"]
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -127,6 +124,25 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
+        model: GoogleModels,
+        *,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -221,7 +237,12 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | OpenaiOptions | CerebrasOptions | GroqOptions | BasetenOptions
+            dict[str, Any]
+            | OpenaiOptions
+            | CerebrasOptions
+            | GroqOptions
+            | BasetenOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
     ) -> None:
         super().__init__()
@@ -285,6 +306,10 @@ class LLM(llm.LLM):
     def model(self) -> str:
         """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "LiveKit"
 
     def chat(
         self,
