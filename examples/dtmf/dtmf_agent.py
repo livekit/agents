@@ -16,7 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.tools.dtmf import DtmfEvent
 from livekit.agents.beta.workflows.dtmf_inputs import (
-    DtmfInputsTask,
+    GetDtmfTask,
     MultiDigitConfig,
     SingleDigitConfig,
 )
@@ -46,7 +46,7 @@ class DtmfAgent(Agent):
     @function_tool
     async def ask_for_phone_number(self) -> str:
         """Ask user to provide a phone number."""
-        result = await DtmfInputsTask(
+        result = await GetDtmfTask(
             input_config=MultiDigitConfig(
                 name="phone number",
                 num_digits=10,
@@ -65,7 +65,7 @@ class DtmfAgent(Agent):
             DtmfEvent.THREE: "Connect to a live agent",
         }
 
-        result = await DtmfInputsTask(
+        result = await GetDtmfTask(
             input_config=SingleDigitConfig(choices=choices),
             interrupt_on_dtmf_sent=True,
         )

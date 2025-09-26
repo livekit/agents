@@ -101,7 +101,7 @@ class MultiDigitConfig:
         )
 
 
-class DtmfInputsTask(AgentTask[list[DtmfEvent]]):
+class GetDtmfTask(AgentTask[list[DtmfEvent]]):
     def __init__(
         self,
         input_config: SingleDigitConfig | MultiDigitConfig,
