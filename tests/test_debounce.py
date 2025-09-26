@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents.utils.aio.debounce import Debounce, debounce
+from livekit.agents.utils.aio.debounce import Debounced, debounced
 
 
 class TestDebounce:
@@ -16,7 +16,7 @@ class TestDebounce:
             result.append("executed")
             return "success"
 
-        debouncer = Debounce(test_func, 0.1)
+        debouncer = Debounced(test_func, 0.1)
         task = debouncer.schedule()
 
         # Should not execute immediately
@@ -39,7 +39,7 @@ class TestDebounce:
             execution_count += 1
             return execution_count
 
-        debouncer = Debounce(test_func, 0.1)
+        debouncer = Debounced(test_func, 0.1)
 
         # Schedule multiple times rapidly
         task1 = debouncer.schedule()
@@ -68,7 +68,7 @@ class TestDebounce:
             executed = True
             return "done"
 
-        debouncer = Debounce(test_func, 0.1)
+        debouncer = Debounced(test_func, 0.1)
         task = debouncer.schedule()
 
         assert debouncer.is_running()
@@ -89,7 +89,7 @@ class TestDebounce:
             result.append("called")
             return "result"
 
-        debouncer = Debounce(test_func, 0.05)
+        debouncer = Debounced(test_func, 0.05)
         task = debouncer()  # Using __call__
 
         value = await task
@@ -103,7 +103,7 @@ class TestDebounce:
             await asyncio.sleep(0.05)
             return "done"
 
-        debouncer = Debounce(test_func, 0.02)
+        debouncer = Debounced(test_func, 0.02)
 
         # Initially not running
         assert not debouncer.is_running()
@@ -122,7 +122,7 @@ class TestDebounce:
         async def failing_func() -> None:
             raise ValueError("Test error")
 
-        debouncer = Debounce(failing_func, 0.05)
+        debouncer = Debounced(failing_func, 0.05)
         task = debouncer.schedule()
 
         with pytest.raises(ValueError, match="Test error"):
@@ -140,8 +140,8 @@ class TestDebounce:
             results["func2"].append("executed")
             return "func2_result"
 
-        debouncer1 = Debounce(func1, 0.05)
-        debouncer2 = Debounce(func2, 0.05)
+        debouncer1 = Debounced(func1, 0.05)
+        debouncer2 = Debounced(func2, 0.05)
 
         task1 = debouncer1.schedule()
         task2 = debouncer2.schedule()
@@ -161,7 +161,7 @@ class TestDebounce:
             executed.append("done")
             return "immediate"
 
-        debouncer = Debounce(test_func, 0.0)
+        debouncer = Debounced(test_func, 0.0)
         task = debouncer.schedule()
 
         result = await task
@@ -176,14 +176,14 @@ class TestDebounceDecorator:
         """Test basic usage of @debounce decorator."""
         execution_count = 0
 
-        @debounce(0.1)
+        @debounced(0.1)
         async def decorated_func() -> str:
             nonlocal execution_count
             execution_count += 1
             return f"executed_{execution_count}"
 
         # The decorator returns a Debounce instance
-        assert isinstance(decorated_func, Debounce)
+        assert isinstance(decorated_func, Debounced)
 
         # Schedule execution
         task = decorated_func.schedule()
@@ -196,7 +196,7 @@ class TestDebounceDecorator:
         """Test that decorator properly handles cancellation."""
         execution_count = 0
 
-        @debounce(0.1)
+        @debounced(0.1)
         async def decorated_func() -> int:
             nonlocal execution_count
             execution_count += 1
@@ -221,7 +221,7 @@ class TestDebounceDecorator:
         """Test that decorated function can be called directly."""
         results: list[str] = []
 
-        @debounce(0.05)
+        @debounced(0.05)
         async def decorated_func() -> str:
             results.append("executed")
             return "success"
@@ -236,11 +236,11 @@ class TestDebounceDecorator:
     async def test_decorator_with_parameters(self) -> None:
         """Test decorator with different delay parameters."""
 
-        @debounce(0.01)  # Very short delay
+        @debounced(0.01)  # Very short delay
         async def fast_func() -> str:
             return "fast"
 
-        @debounce(0.1)  # Longer delay
+        @debounced(0.1)  # Longer delay
         async def slow_func() -> str:
             return "slow"
 
@@ -256,7 +256,7 @@ class TestDebounceDecorator:
     async def test_decorator_maintains_function_signature(self) -> None:
         """Test that decorator preserves the original function's behavior."""
 
-        @debounce(0.05)
+        @debounced(0.05)
         async def original_func() -> str:
             """Original docstring."""
             return "original_result"

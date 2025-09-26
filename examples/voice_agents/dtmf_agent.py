@@ -16,8 +16,9 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.beta.tools.dtmf import DtmfEvent, collect_dtmf_inputs, send_dtmf_events
+from livekit.agents.beta.workflows.dtmf_inputs import DtmfInputsTask
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("dtmf-agent")
@@ -46,16 +47,14 @@ class CollectConsent(AgentTask[list[str]]):
 class DtmfAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions=(
-                "You are a voice assistant that can press number on the phone to interact with the user or a IVR system."
-            ),
+            instructions=("You are a voice assistant."),
             tools=[send_dtmf_events],
         )
 
     async def on_enter(self) -> None:
-        numbers = await CollectConsent(chat_ctx=self.chat_ctx)
+        result = await DtmfInputsTask(chat_ctx=self.chat_ctx)
         await self.session.generate_reply(
-            user_input="User has provided the phone number: " + ", ".join(numbers)
+            instructions=f"User has provided the following DTMF inputs: {', '.join(result)}"
         )
 
 
@@ -70,9 +69,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(model="gpt-5"),
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(voice="ash"),
+        llm="azure/gpt-4.1-mini",
+        stt="deepgram/nova-3",
+        tts="cartesia/sonic-2",
         turn_detection=MultilingualModel(),
     )
 

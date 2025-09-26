@@ -5,7 +5,7 @@ from typing import Callable, Generic, TypeVar
 T = TypeVar("T")
 
 
-class Debounce(Generic[T]):
+class Debounced(Generic[T]):
     def __init__(self, func: Callable[[], Awaitable[T]], delay: float) -> None:
         self._func = func
         self._delay = delay
@@ -40,8 +40,8 @@ class Debounce(Generic[T]):
         return self.schedule()
 
 
-def debounce(delay: float) -> Callable[[Callable[[], Awaitable[T]]], Debounce[T]]:
-    def decorator(func: Callable[[], Awaitable[T]]) -> Debounce[T]:
-        return Debounce(func, delay)
+def debounced(delay: float) -> Callable[[Callable[[], Awaitable[T]]], Debounced[T]]:
+    def decorator(func: Callable[[], Awaitable[T]]) -> Debounced[T]:
+        return Debounced(func, delay)
 
     return decorator
