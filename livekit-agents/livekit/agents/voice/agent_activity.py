@@ -1800,6 +1800,7 @@ class AgentActivity(RecognitionHooks):
             )
 
         if generated_msg:
+            chat_ctx.insert(generated_msg)
             self._agent._chat_ctx.insert(generated_msg)
             self._session._conversation_item_added(generated_msg)
             current_span.set_attribute(
