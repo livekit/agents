@@ -45,10 +45,7 @@ class StreamAdapter(TTS):
         elif isinstance(text_pacing, SentenceStreamPacer):
             self._stream_pacer = text_pacing
 
-        @self._wrapped_tts.on("metrics_collected")
-        def _forward_metrics(*args: Any, **kwargs: Any) -> None:
-            # TODO(theomonnom): The segment_id needs to be populated!
-            self.emit("metrics_collected", *args, **kwargs)
+        self._wrapped_tts.on("metrics_collected", self._on_metrics_collected)
 
     @property
     def model(self) -> str:
@@ -70,6 +67,12 @@ class StreamAdapter(TTS):
 
     def prewarm(self) -> None:
         self._wrapped_tts.prewarm()
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
+
+    async def aclose(self) -> None:
+        self._wrapped_tts.off("metrics_collected", self._on_metrics_collected)
 
 
 class StreamAdapterWrapper(SynthesizeStream):
