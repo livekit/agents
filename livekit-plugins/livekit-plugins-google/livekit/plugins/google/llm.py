@@ -132,9 +132,9 @@ class LLM(llm.LLM):
         gcp_credentials: Credentials | None = None
         if use_vertexai:
             if is_given(credentials_info):
-                gcp_credentials = Credentials.from_service_account_info(credentials_info)
+                gcp_credentials = Credentials.from_service_account_info(credentials_info)  # type: ignore
             elif is_given(credentials_file):
-                gcp_credentials = Credentials.from_service_account_file(credentials_file)
+                gcp_credentials = Credentials.from_service_account_file(credentials_file)  # type: ignore
 
             if is_given(project):
                 gcp_project = project
