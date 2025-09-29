@@ -41,6 +41,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from .version import __version__
 
 from ._utils import PeriodicCollector
 from .log import logger
@@ -145,6 +146,13 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         },
         "realtime_processing": {
             "words_accurate_timestamps": False,
+        },
+        "messages_config": {
+            "receive_partial_transcripts": opts.interim_results,
+            "receive_final_transcripts": True,
+        },
+        "custom_metadata": {
+            "livekit": __version__,
         },
     }
 
