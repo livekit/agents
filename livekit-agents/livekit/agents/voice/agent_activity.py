@@ -78,7 +78,7 @@ class _PreemptiveGeneration:
     speech_handle: SpeechHandle
     info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
-    tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]
     tool_choice: llm.ToolChoice | None
     created_at: float
 
@@ -240,7 +240,7 @@ class AgentActivity(RecognitionHooks):
         return self._current_speech
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet | mcp.MCPTool]:
         return self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
@@ -275,12 +275,20 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]
+    ) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 
         if self._rt_session is not None:
-            await self._rt_session.update_tools(tools)
+            fnc_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+            for tool in tools:
+                if isinstance(tool, llm.ToolSet):
+                    fnc_tools.extend(tool.__livekit_tools__())
+                else:
+                    fnc_tools.append(tool)
+            await self._rt_session.update_tools(fnc_tools)
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
@@ -462,7 +470,13 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the chat_ctx")
 
             try:
-                await self._rt_session.update_tools(self.tools)
+                fnc_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+                for tool in self.tools:
+                    if isinstance(tool, llm.ToolSet):
+                        fnc_tools.extend(tool.__livekit_tools__())
+                    else:
+                        fnc_tools.append(tool)
+                await self._rt_session.update_tools(fnc_tools)
             except llm.RealtimeError:
                 logger.exception("failed to update the tools")
 
@@ -1445,7 +1459,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,

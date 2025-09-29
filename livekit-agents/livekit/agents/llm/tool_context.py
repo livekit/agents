@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -86,6 +86,11 @@ class FunctionTool(Protocol):
     __livekit_tool_info: _FunctionToolInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class ToolSet(Protocol):
+    def __livekit_tools__(self) -> Sequence[FunctionTool | RawFunctionTool]: ...
 
 
 class RawFunctionDescription(TypedDict):
@@ -215,7 +220,7 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: list[FunctionTool | RawFunctionTool]) -> None:
+    def __init__(self, tools: Sequence[FunctionTool | RawFunctionTool | ToolSet]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -226,15 +231,19 @@ class ToolContext:
     def function_tools(self) -> dict[str, FunctionTool | RawFunctionTool]:
         return self._tools_map.copy()
 
-    def update_tools(self, tools: list[FunctionTool | RawFunctionTool]) -> None:
-        self._tools = tools.copy()
+    def update_tools(self, tools: Sequence[FunctionTool | RawFunctionTool | ToolSet]) -> None:
+        self._tools = list(tools)
 
-        for method in find_function_tools(self):
-            tools.append(method)
+        fnc_tools = find_function_tools(self)
+        for method in tools:
+            if isinstance(method, ToolSet):
+                fnc_tools.extend(method.__livekit_tools__())
+            else:
+                fnc_tools.append(method)
 
         self._tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         info: _FunctionToolInfo | _RawFunctionToolInfo
-        for tool in tools:
+        for tool in fnc_tools:
             if is_raw_function_tool(tool):
                 info = get_raw_function_info(tool)
             elif is_function_tool(tool):

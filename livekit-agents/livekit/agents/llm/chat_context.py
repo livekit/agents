@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool, RawFunctionTool
+    from ..llm import FunctionTool, RawFunctionTool, ToolSet
 
 
 class ImageContent(BaseModel):
@@ -228,27 +228,38 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
-        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[
+            Sequence[FunctionTool | RawFunctionTool | ToolSet | str | Any]
+        ] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
         from .tool_context import (
+            ToolSet,
             get_function_info,
             get_raw_function_info,
-            is_function_tool,
-            is_raw_function_tool,
         )
 
+        def _get_tool_names(tool: FunctionTool | RawFunctionTool | ToolSet | str | Any) -> set[str]:
+            if isinstance(tool, str):
+                return {tool}
+            elif isinstance(tool, FunctionTool):
+                return {get_function_info(tool).name}
+            elif isinstance(tool, RawFunctionTool):
+                return {get_raw_function_info(tool).name}
+            elif isinstance(tool, ToolSet):
+                names = set()
+                for t in tool.__livekit_tools__():
+                    names.update(_get_tool_names(t))
+                return names
+
+            # TODO(theomonnom): other tools
+            return set()
+
         valid_tools = set[str]()
-        if is_given(tools):
+        if is_given(tools) and not exclude_function_call:
             for tool in tools:
-                if isinstance(tool, str):
-                    valid_tools.add(tool)
-                elif is_function_tool(tool):
-                    valid_tools.add(get_function_info(tool).name)
-                elif is_raw_function_tool(tool):
-                    valid_tools.add(get_raw_function_info(tool).name)
-                # TODO(theomonnom): other tools
+                valid_tools.update(_get_tool_names(tool))
 
         for item in self.items:
             if exclude_function_call and item.type in [

@@ -82,6 +82,8 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
             "content": msg.output,
         }
 
+    raise ValueError(f"unknown message type: {msg.type}")
+
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
     cache_key = "serialized_image"  # TODO(long): use hash of encoding options if available

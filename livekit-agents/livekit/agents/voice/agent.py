@@ -40,7 +40,7 @@ class Agent:
         instructions: str,
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -92,10 +92,10 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]:
         """
         Returns:
-            list[llm.FunctionTool | llm.RawFunctionTool]:
+            list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]:
                 A list of function tools available to the agent.
         """
         return self._tools.copy()
@@ -133,7 +133,9 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]
+    ) -> None:
         """
         Updates the agent's available function tools.
 
@@ -141,7 +143,7 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool]):
+            tools (list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]):
                 The new list of function tools available to the agent.
 
         Raises:
@@ -588,7 +590,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -597,7 +599,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        tools = tools or []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
