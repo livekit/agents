@@ -19,7 +19,6 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
-from .tool_set import ToolSet
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -41,7 +40,7 @@ class Agent:
         instructions: str,
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool | ToolSet] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -52,16 +51,14 @@ class Agent:
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        tools = tools or []
         if type(self) is Agent:
             self._id = "default_agent"
         else:
             self._id = id or misc.camel_to_snake_case(type(self).__name__)
 
         self._instructions = instructions
-        self._tools = find_function_tools(self)
-        for tool in tools or []:
-            self._tools += tool.__livekit_tools__() if isinstance(tool, ToolSet) else [tool]
-
+        self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
         self._stt = stt
@@ -95,10 +92,10 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]:
         """
         Returns:
-            list[llm.FunctionTool | llm.RawFunctionTool]:
+            list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]:
                 A list of function tools available to the agent.
         """
         return self._tools.copy()
@@ -137,7 +134,7 @@ class Agent:
         await self._activity.update_instructions(instructions)
 
     async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | ToolSet]
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]
     ) -> None:
         """
         Updates the agent's available function tools.
@@ -146,22 +143,18 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool | llm.RawFunctionTool | ToolSet]):
+            tools (list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet]):
                 The new list of function tools available to the agent.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
-        fnc_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
-        for tool in tools:
-            fnc_tools.extend(tool.__livekit_tools__() if isinstance(tool, ToolSet) else [tool])
-
         if self._activity is None:
-            self._tools = list(set(fnc_tools))
+            self._tools = list(set(tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
-        await self._activity.update_tools(fnc_tools)
+        await self._activity.update_tools(tools)
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """
@@ -597,7 +590,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool | ToolSet] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,

@@ -1,6 +1,5 @@
-from ...llm import FunctionTool, function_tool
+from ...llm import FunctionTool, function_tool, ToolSet
 from ...log import logger
-from ...voice import ToolSet
 
 
 class EndCallTool(ToolSet):
