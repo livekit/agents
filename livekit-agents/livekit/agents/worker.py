@@ -820,14 +820,13 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         answered = False
 
-        async def _on_reject(terminate: bool = False) -> None:
+        async def _on_reject() -> None:
             nonlocal answered
             answered = True
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
-            availability_resp.availability.terminate = terminate
             await self._queue_msg(availability_resp)
 
         async def _on_accept(args: JobAcceptArguments) -> None:
