@@ -71,6 +71,7 @@ class STTOptions:
     additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
     punctuation_overrides: dict = dataclasses.field(default_factory=dict)
     diarization_sensitivity: float = 0.5
+    max_speakers: int | None = None
     speaker_active_format: str = "{text}"
     speaker_passive_format: str = "{text}"
     prefer_current_speaker: bool = False
@@ -98,6 +99,7 @@ class STT(stt.STT):
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
         punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
         diarization_sensitivity: float = 0.5,
+        max_speakers: NotGivenOr[int] = NOT_GIVEN,
         speaker_active_format: str = "{text}",
         speaker_passive_format: str = "{text}",
         prefer_current_speaker: bool = False,
@@ -172,6 +174,11 @@ class STT(stt.STT):
                 the sensitivity of diarization and helps when two or more speakers have similar voices.
                 Defaults to 0.5.
 
+            max_speakers (int): Maximum number of speakers to detect during diarization. When set,
+                the STT engine will limit the number of unique speakers identified in the transcription.
+                This is useful for scenarios where you know the maximum number of participants (e.g.,
+                2-person interviews, small group meetings). Optional.
+
             speaker_active_format (str): Formatter for active speaker ID. This formatter is used
                 to format the text output for individual speakers and ensures that the context is
                 clear for language models further down the pipeline. The attributes `text` and
@@ -234,7 +241,7 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, diarization=enable_diarization
+                streaming=True, interim_results=True
             ),
         )
 
@@ -259,6 +266,13 @@ class STT(stt.STT):
                 if is_given(punctuation_overrides)
                 else config.punctuation_overrides
             )
+            # Extract max_speakers from speaker_diarization_config if present
+            if not is_given(max_speakers) and hasattr(config, "speaker_diarization_config"):
+                if (
+                    config.speaker_diarization_config
+                    and "max_speakers" in config.speaker_diarization_config
+                ):
+                    max_speakers = config.speaker_diarization_config["max_speakers"]
 
         if is_given(audio_settings):
             logger.warning(
@@ -282,6 +296,7 @@ class STT(stt.STT):
             additional_vocab=additional_vocab if is_given(additional_vocab) else [],
             punctuation_overrides=punctuation_overrides if is_given(punctuation_overrides) else {},
             diarization_sensitivity=diarization_sensitivity,
+            max_speakers=max_speakers if is_given(max_speakers) else None,
             speaker_active_format=speaker_active_format,
             speaker_passive_format=speaker_passive_format,
             prefer_current_speaker=prefer_current_speaker,
@@ -382,6 +397,8 @@ class STT(stt.STT):
             dz_cfg: dict[str, Any] = {}
             if self._stt_options.diarization_sensitivity is not None:
                 dz_cfg["speaker_sensitivity"] = self._stt_options.diarization_sensitivity
+            if self._stt_options.max_speakers is not None:
+                dz_cfg["max_speakers"] = self._stt_options.max_speakers
             if self._stt_options.prefer_current_speaker is not None:
                 dz_cfg["prefer_current_speaker"] = self._stt_options.prefer_current_speaker
             if self._stt_options.known_speakers:
