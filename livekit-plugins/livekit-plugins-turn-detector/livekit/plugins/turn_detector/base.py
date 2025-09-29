@@ -178,7 +178,7 @@ class EOUModelBase(ABC):
 
     @property
     def provider(self) -> str:
-        return "Livekit"
+        return "LiveKit"
 
     @abstractmethod
     def _inference_method(self) -> str: ...

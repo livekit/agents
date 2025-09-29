@@ -35,6 +35,14 @@ class StreamAdapter(STT):
     def wrapped_stt(self) -> STT:
         return self._stt
 
+    @property
+    def model(self) -> str:
+        return self._stt.model
+
+    @property
+    def provider(self) -> str:
+        return self._stt.provider
+
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,

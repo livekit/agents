@@ -50,6 +50,14 @@ class StreamAdapter(TTS):
             # TODO(theomonnom): The segment_id needs to be populated!
             self.emit("metrics_collected", *args, **kwargs)
 
+    @property
+    def model(self) -> str:
+        return self._wrapped_tts.model
+
+    @property
+    def provider(self) -> str:
+        return self._wrapped_tts.provider
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
