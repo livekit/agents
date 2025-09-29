@@ -27,6 +27,7 @@ class StreamAdapter(STT):
         self._vad = vad
         self._stt = stt
 
+        # TODO(theomonnom): The segment_id needs to be populated!
         self._stt.on("metrics_collected", self._on_metrics_collected)
 
     @property
