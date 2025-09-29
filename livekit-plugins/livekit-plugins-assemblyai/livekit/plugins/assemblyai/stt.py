@@ -335,23 +335,31 @@ class SpeechStream(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
         if message_type == "Turn":
-            transcript = data.get("transcript")
             words = data.get("words", [])
             end_of_turn = data.get("end_of_turn")
+            utterance = data.get("utterance")
 
-            if transcript and end_of_turn:
-                turn_is_formatted = data.get("turn_is_formatted", False)
-                if not self._opts.format_turns or (self._opts.format_turns and turn_is_formatted):
-                    final_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        # TODO: We can't know the language?
-                        alternatives=[stt.SpeechData(language="en-US", text=transcript)],
-                    )
-                else:
-                    # skip emitting final transcript if format_turns is enabled but this
-                    # turn isn't formatted
-                    return
+            non_final_words = [word["text"] for word in words if not word.get("word_is_final", False)]
+            final_words = [word["text"] for word in words if word.get("word_is_final", False)]
+            
+            if non_final_words:
+                all_words = final_words + non_final_words
+                interim_text = " ".join(all_words)
+                interim_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="en", text=interim_text)],
+                )
+                self._event_ch.send_nowait(interim_event)
+            
+            if utterance:
+                final_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="en", text=utterance)],
+                )
                 self._event_ch.send_nowait(final_event)
+
+            if end_of_turn:
+                
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
                 if self._speech_duration > 0.0:
@@ -365,11 +373,3 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(usage_event)
                     self._speech_duration = 0
 
-            else:
-                non_final_words = [word["text"] for word in words if not word["word_is_final"]]
-                interim = " ".join(non_final_words)
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language="en-US", text=f"{transcript} {interim}")],
-                )
-                self._event_ch.send_nowait(interim_event)
