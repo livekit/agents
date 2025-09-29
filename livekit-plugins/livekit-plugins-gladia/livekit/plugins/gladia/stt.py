@@ -41,10 +41,10 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from .version import __version__
 
 from ._utils import PeriodicCollector
 from .log import logger
+from .version import __version__
 
 BASE_URL = "https://api.gladia.io/v2/live"
 
