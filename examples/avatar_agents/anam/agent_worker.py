@@ -15,6 +15,7 @@ load_dotenv()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
+        resume_false_interruption=False,
     )
 
     anam_api_key = os.getenv("ANAM_API_KEY")

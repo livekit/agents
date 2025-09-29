@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import cast
 
 import aioboto3  # type: ignore
 import botocore  # type: ignore
@@ -106,10 +107,35 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.speech_engine
+
+    @property
+    def provider(self) -> str:
+        return "Amazon Polly"
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, text=text, conn_options=conn_options)
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        speech_engine: NotGivenOr[TTSSpeechEngine] = NOT_GIVEN,
+        text_type: NotGivenOr[TTSTextType] = NOT_GIVEN,
+    ) -> None:
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(language):
+            self._opts.language = language
+        if is_given(speech_engine):
+            self._opts.speech_engine = cast(TTSSpeechEngine, speech_engine)
+        if is_given(text_type):
+            self._opts.text_type = cast(TTSTextType, text_type)
 
 
 class ChunkedStream(tts.ChunkedStream):

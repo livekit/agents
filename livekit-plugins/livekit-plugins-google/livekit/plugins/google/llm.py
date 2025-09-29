@@ -187,6 +187,13 @@ class LLM(llm.LLM):
     def model(self) -> str:
         return self._opts.model
 
+    @property
+    def provider(self) -> str:
+        if self._client.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
+
     def chat(
         self,
         *,
@@ -423,7 +430,7 @@ class LLMStream(llm.LLMStream):
                     tool_calls=[
                         llm.FunctionToolCall(
                             arguments=json.dumps(part.function_call.args),
-                            name=part.function_call.name,  # type: ignore
+                            name=part.function_call.name,
                             call_id=part.function_call.id or utils.shortuuid("function_call_"),
                         )
                     ],

@@ -132,11 +132,17 @@ class PlaybackFinishedEvent:
     When None, the transcript is not synchronized with the playback"""
 
 
+@dataclass
+class AudioOutputCapabilities:
+    pause: bool
+
+
 class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def __init__(
         self,
         *,
         label: str,
+        capabilities: AudioOutputCapabilities,
         next_in_chain: AudioOutput | None = None,
         sample_rate: int | None = None,
     ) -> None:
@@ -150,6 +156,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         self.__label = label
         self.__capturing = False
         self.__playback_finished_event = asyncio.Event()
+        self._capabilities = capabilities
 
         self.__playback_segments_count = 0
         self.__playback_finished_count = 0
@@ -225,6 +232,10 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         """The sample rate required by the audio sink, if None, any sample rate is accepted"""
         return self._sample_rate
 
+    @property
+    def can_pause(self) -> bool:
+        return self._capabilities.pause and (not self.next_in_chain or self.next_in_chain.can_pause)
+
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture an audio frame for playback, frames can be pushed faster than real-time"""
@@ -248,6 +259,16 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def on_detached(self) -> None:
         if self.next_in_chain:
             self.next_in_chain.on_detached()
+
+    def pause(self) -> None:
+        """Pause the audio playback"""
+        if self.next_in_chain:
+            self.next_in_chain.pause()
+
+    def resume(self) -> None:
+        """Resume the audio playback"""
+        if self.next_in_chain:
+            self.next_in_chain.resume()
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(label={self.label!r}, next={self.next_in_chain!r})"

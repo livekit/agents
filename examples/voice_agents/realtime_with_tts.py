@@ -14,7 +14,7 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-# This example is showing a half-duplex realtime LLM usage where we:
+# This example is showing a half-cascade realtime LLM usage where we:
 # - use a multimodal/realtime LLM that takes audio input, generating text output
 # - then use a separate TTS to synthesize audio output
 #

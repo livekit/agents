@@ -100,6 +100,14 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Deepgram"
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config = {

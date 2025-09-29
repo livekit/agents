@@ -57,6 +57,7 @@ class STTOptions:
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
+    explicit_punctuation: bool = False
 
 
 class STT(stt.STT):
@@ -77,6 +78,7 @@ class STT(stt.STT):
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
+        explicit_punctuation: bool = False,
     ):
         """
         Create a new instance of Azure STT.
@@ -92,6 +94,9 @@ class STT(stt.STT):
         Args:
             phrase_list: List of words or phrases to boost recognition accuracy.
                         Azure will give higher priority to these phrases during recognition.
+            explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
+                        where punctuation marks are added explicitly. If False (default), uses Azure's
+                        default punctuation behavior.
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
@@ -138,8 +143,17 @@ class STT(stt.STT):
             profanity=profanity,
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
+            explicit_punctuation=explicit_punctuation,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Azure STT"
 
     async def _recognize_impl(
         self,
@@ -366,6 +380,12 @@ def _create_speech_recognizer(
         )
     if is_given(config.profanity):
         speech_config.set_profanity(config.profanity)
+
+    # Set punctuation behavior if specified
+    if config.explicit_punctuation:
+        speech_config.set_service_property(
+            "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
+        )
 
     kwargs: dict[str, Any] = {}
     if config.language and len(config.language) > 1:

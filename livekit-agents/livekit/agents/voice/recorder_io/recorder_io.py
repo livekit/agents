@@ -257,7 +257,12 @@ class RecorderAudioOutput(io.AudioOutput):
         audio_output: io.AudioOutput | None = None,
         write_fnc: Callable[[list[rtc.AudioFrame]], Any],
     ) -> None:
-        super().__init__(label="RecorderIO", next_in_chain=audio_output, sample_rate=None)
+        super().__init__(
+            label="RecorderIO",
+            next_in_chain=audio_output,
+            sample_rate=None,
+            capabilities=io.AudioOutputCapabilities(pause=True),  # depends on the next_in_chain
+        )
         self.__recording_io = recording_io
         self.__write = write_fnc
         self.__acc_frames: list[rtc.AudioFrame] = []
