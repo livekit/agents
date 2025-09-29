@@ -29,8 +29,17 @@ class GetDtmfTask(AgentTask[str | None]):
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         input_timeout: float = 5.0,
         ask_for_confirmation: bool = False,
-        interrupt_on_dtmf_sent: bool = False,
+        interrupt_on_complete_input: bool = False,
     ) -> None:
+        """
+        Args:
+            name: The name of the input to collect.
+            num_digits: The number of digits to collect.
+            chat_ctx: The chat context to use.
+            input_timeout: The per-digit timeout.
+            ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
+            interrupt_on_complete_input: Whether to interrupt any active speech on full digits been collected.
+        """
         if num_digits <= 0:
             raise ValueError("num_digits must be greater than 0")
 
@@ -56,7 +65,7 @@ class GetDtmfTask(AgentTask[str | None]):
 
         @debounced(delay=input_timeout)
         async def _generate_dtmf_reply() -> None:
-            if interrupt_on_dtmf_sent:
+            if interrupt_on_complete_input:
                 self.session.interrupt()
 
             dmtf_str = format_dtmf(self._curr_dtmf_inputs)
