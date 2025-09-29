@@ -60,7 +60,7 @@ class GetDtmfTask(AgentTask[str | None]):
                 self.session.interrupt()
 
             dmtf_str = format_dtmf(self._curr_dtmf_inputs)
-            logger.info(f"Generating DTMF reply, current inputs: {dmtf_str}")
+            logger.debug(f"Generating DTMF reply, current inputs: {dmtf_str}")
 
             # if input not fully received (i.e. timeout), return None
             if len(self._curr_dtmf_inputs) != num_digits:
@@ -77,14 +77,14 @@ class GetDtmfTask(AgentTask[str | None]):
                 "Once you are sure, call `confirm_dtmf_inputs` with the inputs.\n"
                 "</dtmf_inputs>"
             )
-            logger.info(f"Generating DTMF reply, instructions: {instructions}")
+            logger.debug("Generating DTMF confirmation prompt")
 
             self._curr_dtmf_inputs = []
             await self.session.generate_reply(instructions=instructions)
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
-            logger.info(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
+            logger.debug(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
 
             if len(self._curr_dtmf_inputs) == num_digits:
                 self._generate_dtmf_reply()
