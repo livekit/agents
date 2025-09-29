@@ -339,12 +339,8 @@ class SpeechStream(stt.SpeechStream):
             end_of_turn = data.get("end_of_turn")
             utterance = data.get("utterance")
 
-            non_final_words = [word["text"] for word in words if not word.get("word_is_final", False)]
-            final_words = [word["text"] for word in words if word.get("word_is_final", False)]
-            
-            if non_final_words:
-                all_words = final_words + non_final_words
-                interim_text = " ".join(all_words)
+            if words:
+                interim_text = " ".join(word.get("text", "") for word in words)
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=[stt.SpeechData(language="en", text=interim_text)],
