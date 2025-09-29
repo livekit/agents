@@ -777,17 +777,25 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
+        ignore_agent_instructions: bool = False, 
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and allow_interruptions is False
         ):
-            logger.warning(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
-            )
-            allow_interruptions = NOT_GIVEN
+            if (
+                self.llm.capabilities.turn_detection
+                and allow_interruptions is False
+            ):
+                logger.warning(
+                    "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
+                    "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
+                )
+                allow_interruptions = NOT_GIVEN
+
+            if ignore_agent_instructions:
+                logger.warning(
+                    "generate_reply cannot ignore agent instructions in RealtimeModel"  # noqa: E501
+                )
 
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
@@ -823,10 +831,7 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
-            # instructions used inside generate_reply are "extra" instructions.
-            # this matches the behavior of the Realtime API:
-            # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
-            if instructions:
+            if instructions and not ignore_agent_instructions:
                 instructions = "\n".join([self._agent.instructions, instructions])
 
             task = self._create_speech_task(
