@@ -777,7 +777,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
-        ignore_agent_instructions: bool = False, 
+        ignore_agent_instructions: bool = False,
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
