@@ -14,13 +14,11 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.agents.beta.tools.dtmf import DtmfEvent
 from livekit.agents.beta.workflows.dtmf_inputs import (
     GetDtmfTask,
-    MultiDigitConfig,
-    SingleDigitConfig,
 )
 from livekit.agents.llm.tool_context import function_tool
+from livekit.agents.voice.events import RunContext
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -35,42 +33,35 @@ DTMF_AGENT_DISPATCH_NAME = os.getenv("DTMF_AGENT_DISPATCH_NAME", "my-telephony-a
 class DtmfAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions=(
-                "You are a voice assistant. First ask user to provide a phone number. After that, ask user to select an option from the list of options."
-            ),
+            instructions=("You are a voice assistant. First ask user to provide a phone number."),
         )
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask user to provide a phone number")
 
     @function_tool
-    async def ask_for_phone_number(self) -> str:
+    async def ask_for_phone_number(self, context: RunContext) -> str:
         """Ask user to provide a phone number."""
-        result = await GetDtmfTask(
-            input_config=MultiDigitConfig(
+        self.session.generate_reply(instructions="Ask user to provide a 10-digit phone number")
+        await context.wait_for_playout()
+
+        while True:
+            result = await GetDtmfTask(
                 name="phone number",
                 num_digits=10,
-                description="The phone number of the user which is 10 digits long.",
-            ),
-        )
+                chat_ctx=self.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
+                ask_for_confirmation=True,
+            )
+
+            if result is not None:
+                break
+
+            self.session.generate_reply(
+                instructions="Tell user the provided phone number is invalid. Please try again."
+            )
+            await context.wait_for_playout()
 
         return f"User's phone number is {result}"
-
-    @function_tool
-    async def ask_for_options(self, options: list[str]) -> str:
-        """Ask user to select an option from the list of options."""
-        choices = {
-            DtmfEvent.ONE: "Check credit card balance",
-            DtmfEvent.TWO: "Check recent transactions",
-            DtmfEvent.THREE: "Connect to a live agent",
-        }
-
-        result = await GetDtmfTask(
-            input_config=SingleDigitConfig(choices=choices),
-            interrupt_on_dtmf_sent=True,
-        )
-
-        return f"User want to {choices[result[0]]}"
 
 
 def prewarm(proc: JobProcess) -> None:

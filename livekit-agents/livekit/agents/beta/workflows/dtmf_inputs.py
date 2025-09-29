@@ -1,117 +1,57 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 from livekit import rtc
-from livekit.agents.beta.tools.dtmf import DtmfEvent, format_dtmf
-from livekit.agents.job import get_job_context
-from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import function_tool
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.aio.debounce import debounced
 
+from ... import function_tool
+from ...job import get_job_context
+from ...llm.chat_context import ChatContext
+from ...types import NOT_GIVEN, NotGivenOr
+from ...utils.aio.debounce import debounced
 from ...voice.agent import AgentTask
+from ..tools.dtmf import DtmfEvent, format_dtmf
 
 logger = logging.getLogger("dtmf-inputs")
 
 
-SINGLE_DIGIT_INSTRUCTIONS = """
-You are a voice assistant that can collect DTMF inputs from the user on a phone call.
+class GetDtmfTask(AgentTask[str | None]):
+    """A task to collect DTMF inputs from the user.
 
-You need to prompt user to provide a single digit input for a list of choices.
+    Return a string of DTMF inputs if collected successfully, otherwise None.
+    """
 
-For example, press 1 for x, press 2 for y, press 3 for z, etc.
-
-Below are the choices:
-
-<choices>
-{choices}
-</choices>
-
-Any message from DTMF are wrapped in <dtmf_inputs> and </dtmf_inputs> tags.
-
-You need to wait for the user to provide the number inputs. User can also provide input via voice (without any tags). If so, ask user to confirm the input.
-
-Once user has confirmed the DTMF inputs, call `confirm_dtmf_inputs` with the inputs.
-If user decides to change / re-enter the DTMF inputs, wait for it and re-confirm until user is satisfied.
-"""
-
-MULTI_DIGIT_INSTRUCTIONS = """
-You are a voice assistant that can collect DTMF inputs from the user.
-Wait for the user to provide {name} with {num_digits} digits. The can be described as follows:
-
-<description>
-{description}
-</description>
-
-Any message from DTMF are wrapped in <dtmf_inputs> and </dtmf_inputs> tags.
-
-User can also provide input via voice (without any tags). If so, ask user to confirm the input.
-
-Once user has confirmed the DTMF inputs, call `confirm_dtmf_inputs` with the inputs.
-If user decides to change / re-enter the DTMF inputs, wait for it and re-confirm until user is satisfied.
-"""
-
-
-@dataclass
-class SingleDigitConfig:
-    choices: dict[DtmfEvent, str]
-
-    def validate(self, inputs: list[DtmfEvent]) -> bool:
-        return len(inputs) == 1 and inputs[0] in self.choices.keys()
-
-    def stop_reached(self, inputs: list[DtmfEvent]) -> bool:
-        return len(inputs) >= 1
-
-    def format_instructions(self) -> str:
-        choices_str = "\n".join(
-            [
-                "\n".join(
-                    [
-                        "<choice>",
-                        f"<value>{k.value}</value>",
-                        f"<description>{v}</description>",
-                        "</choice>",
-                    ]
-                )
-                for k, v in self.choices.items()
-            ]
-        )
-        return SINGLE_DIGIT_INSTRUCTIONS.format(choices=choices_str)
-
-
-@dataclass
-class MultiDigitConfig:
-    name: str
-    num_digits: int
-    description: str
-
-    def validate(self, inputs: list[DtmfEvent]) -> bool:
-        return len(inputs) == self.num_digits
-
-    def stop_reached(self, inputs: list[DtmfEvent]) -> bool:
-        return len(inputs) >= self.num_digits
-
-    def format_instructions(self) -> str:
-        return MULTI_DIGIT_INSTRUCTIONS.format(
-            name=self.name,
-            num_digits=self.num_digits,
-            description=self.description,
-        )
-
-
-class GetDtmfTask(AgentTask[str]):
     def __init__(
         self,
-        input_config: SingleDigitConfig | MultiDigitConfig,
+        name: str,
+        num_digits: int,
+        *,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         input_timeout: float = 5.0,
+        ask_for_confirmation: bool = False,
         interrupt_on_dtmf_sent: bool = False,
     ) -> None:
+        if num_digits <= 0:
+            raise ValueError("num_digits must be greater than 0")
+
+        @function_tool
+        async def confirm_dtmf_inputs(inputs: list[DtmfEvent]) -> None:
+            self.complete(format_dtmf(inputs))
+
+        instructions = (
+            "You are a single step in a broader system, responsible solely for collecting DTMF inputs from the user. "
+            f'Wait for the user to provide "{name}" which is a {num_digits}-digit DTMF inputs. '
+        )
+        tools = []
+
+        if ask_for_confirmation:
+            instructions += "Once user has confirmed the DTMF inputs, call `confirm_dtmf_inputs` with the inputs."
+            tools.append(confirm_dtmf_inputs)
+
         super().__init__(
-            instructions=input_config.format_instructions(),
+            instructions=instructions,
             chat_ctx=chat_ctx,
+            tools=tools,
         )
 
         @debounced(delay=input_timeout)
@@ -122,34 +62,31 @@ class GetDtmfTask(AgentTask[str]):
             dmtf_str = format_dtmf(self._curr_dtmf_inputs)
             logger.info(f"Generating DTMF reply, current inputs: {dmtf_str}")
 
+            # if input not fully received (i.e. timeout), return None
+            if len(self._curr_dtmf_inputs) != num_digits:
+                return self.complete(None)
+
+            # if not asking for confirmation, return the DTMF inputs
+            if not ask_for_confirmation:
+                return self.complete(dmtf_str)
+
             instructions = (
-                (
-                    "<dtmf_inputs>\n"
-                    "User has provided the following valid DTMF inputs: "
-                    f"{dmtf_str}. Please confirm it with the user.\n"
-                    "</dtmf_inputs>"
-                )
-                if input_config.validate(self._curr_dtmf_inputs)
-                else (
-                    "<dtmf_inputs>\n"
-                    "User has provided the following invalid DTMF inputs:"
-                    f"{dmtf_str}. Please inform the user that the inputs are invalid and ask them to provide the correct inputs.\n"
-                    "</dtmf_inputs>"
-                )
+                "<dtmf_inputs>\n"
+                "User has provided the following valid DTMF inputs: "
+                f"{dmtf_str}. Please confirm it with the user. "
+                "Once you are sure, call `confirm_dtmf_inputs` with the inputs.\n"
+                "</dtmf_inputs>"
             )
             logger.info(f"Generating DTMF reply, instructions: {instructions}")
 
-            handle = self.session.generate_reply(instructions=instructions)
             self._curr_dtmf_inputs = []
-            await handle
+            await self.session.generate_reply(instructions=instructions)
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
-            logger.info(
-                f"DTMF input received. Current inputs: {format_dtmf(self._curr_dtmf_inputs)}"
-            )
+            logger.info(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
 
-            if input_config.stop_reached(self._curr_dtmf_inputs):
+            if len(self._curr_dtmf_inputs) == num_digits:
                 self._generate_dtmf_reply()
             else:
                 self._generate_dtmf_reply.schedule()
@@ -157,10 +94,6 @@ class GetDtmfTask(AgentTask[str]):
         self._curr_dtmf_inputs: list[DtmfEvent] = []
         self._generate_dtmf_reply = _generate_dtmf_reply
         self._on_sip_dtmf_received = _on_sip_dtmf_received
-
-    @function_tool
-    async def confirm_dtmf_inputs(self, inputs: list[DtmfEvent]) -> None:
-        self.complete(format_dtmf(inputs))
 
     async def on_enter(self) -> None:
         ctx = get_job_context()
