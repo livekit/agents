@@ -1,3 +1,17 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import asyncio
@@ -108,7 +122,6 @@ class SpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        # Build configuration for WebSocket connection
         config = self._stt._client.build_config(
             model_name=self._stt._params.model_name,
             domain=self._stt._params.domain,
@@ -126,7 +139,6 @@ class SpeechStream(stt.SpeechStream):
             )
             return ws
         except asyncio.TimeoutError as e:
-            logger.error("RTZR STT WebSocket connection timeout")
             raise APITimeoutError("WebSocket connection timeout") from e
         except RTZRStatusError as e:
             logger.error("RTZR API status error: %s", e)
@@ -170,6 +182,7 @@ class SpeechStream(stt.SpeechStream):
                     self._ws = None
             break
 
+    @utils.log_exceptions(logger=logger)
     async def _send_audio_task(self) -> None:
         assert self._ws
         # Bundle audio into appropriate chunks using AudioByteStream
@@ -178,113 +191,93 @@ class SpeechStream(stt.SpeechStream):
             num_channels=1,
             samples_per_channel=self._stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
         )
+        async for data in self._input_ch:
+            if isinstance(data, rtc.AudioFrame):
+                # Write audio frame data to the byte stream
+                frames = audio_bstream.write(data.data.tobytes())
+            elif isinstance(data, self._FlushSentinel):
+                # Flush any remaining audio data
+                frames = audio_bstream.flush()
+            else:
+                frames = []
 
-        try:
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    # Write audio frame data to the byte stream
-                    frames = audio_bstream.write(data.data.tobytes())
-                elif isinstance(data, self._FlushSentinel):
-                    # Flush any remaining audio data
-                    frames = audio_bstream.flush()
-                else:
-                    frames = []
+            for frame in frames:
+                await self._ws.send_bytes(frame.data.tobytes())
 
-                # Send each frame as binary data (like reference client)
-                for frame in frames:
-                    await self._ws.send_bytes(frame.data.tobytes())
+        await self._ws.send_str("EOS")
+        logger.info("Sent EOS to close audio stream")
 
-            await self._ws.send_str("EOS")
-            logger.debug("Sent EOS to close audio stream")
-
-        except Exception as e:
-            logger.error("Error in audio sending task: %s", e)
-            raise
-
+    @utils.log_exceptions(logger=logger)
     async def _recv_task(self) -> None:
         assert self._ws
         in_speech = False
-        try:
-            async for msg in self._ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        data = json.loads(msg.data)
-                    except json.JSONDecodeError:
-                        logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
-                        continue
+        async for msg in self._ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
+                    continue
 
-                    # Expected schema from reference: {"alternatives":[{"text": "..."}], "final": bool}
-                    if "alternatives" in data and data["alternatives"]:
-                        text = data["alternatives"][0].get("text", "")
-                        is_final = bool(data.get("final", False))
-                        if text:
-                            # Send START_OF_SPEECH if this is the first transcript in a sequence
-                            if not in_speech:
-                                in_speech = True
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                                )
-
-                            # Send transcript event
-                            event_type = (
-                                stt.SpeechEventType.FINAL_TRANSCRIPT
-                                if is_final
-                                else stt.SpeechEventType.INTERIM_TRANSCRIPT
-                            )
+                # Expected schema from reference: {"alternatives":[{"text": "..."}], "final": bool}
+                if "alternatives" in data and data["alternatives"]:
+                    text = data["alternatives"][0].get("text", "")
+                    is_final = bool(data.get("final", False))
+                    if text:
+                        # Send START_OF_SPEECH if this is the first transcript in a sequence
+                        if not in_speech:
+                            in_speech = True
                             self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=event_type,
-                                    alternatives=[
-                                        stt.SpeechData(
-                                            text=text, language=self._stt._params.language
-                                        )
-                                    ],
-                                )
-                            )
-                            logger.debug(
-                                "Sent %s transcript: %s", "FINAL" if is_final else "INTERIM", text
+                                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             )
 
-                            # Send END_OF_SPEECH after final transcript
-                            if is_final:
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                )
-                                in_speech = False
-
-                    # Handle error messages
-                    if "error" in data:
-                        error_msg = data["error"]
-                        logger.error("RTZR STT server error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Server error: {error_msg}",
-                            status_code=500,
-                            request_id=None,
-                            body=None,
+                        # Send transcript event
+                        event_type = (
+                            stt.SpeechEventType.FINAL_TRANSCRIPT
+                            if is_final
+                            else stt.SpeechEventType.INTERIM_TRANSCRIPT
                         )
-                    elif data.get("type") == "error" and "message" in data:
-                        error_msg = data["message"]
-                        logger.error("RTZR STT error message: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Server error: {error_msg}",
-                            status_code=500,
-                            request_id=None,
-                            body=None,
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=event_type,
+                                alternatives=[
+                                    stt.SpeechData(text=text, language=self._stt._params.language)
+                                ],
+                            )
                         )
 
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                    aiohttp.WSMsgType.CLOSED,
-                ):
-                    logger.debug("WebSocket connection closed")
-                    break
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("WebSocket error: %s", self._ws.exception())
-                    raise APIConnectionError("WebSocket error occurred")
-                else:
-                    # Ignore binary messages or other types
-                    logger.debug("Ignored WebSocket message type: %s", msg.type)
-        except Exception as e:
-            logger.error("Error in receive task: %s", e)
-            raise
+                        if is_final:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            )
+                            in_speech = False
+
+                # Handle error messages
+                if "error" in data:
+                    error_msg = data["error"]
+                    raise APIStatusError(
+                        message=f"Server error: {error_msg}",
+                        status_code=500,
+                        request_id=None,
+                        body=None,
+                    )
+                elif data.get("type") == "error" and "message" in data:
+                    error_msg = data["message"]
+                    raise APIStatusError(
+                        message=f"Server error: {error_msg}",
+                        status_code=500,
+                        request_id=None,
+                        body=None,
+                    )
+
+            elif msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.CLOSED,
+            ):
+                break
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                logger.error("WebSocket error: %s", self._ws.exception())
+                raise APIConnectionError("WebSocket error occurred")
+            else:
+                logger.debug("Ignored WebSocket message type: %s", msg.type)
