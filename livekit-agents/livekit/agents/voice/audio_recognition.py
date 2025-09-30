@@ -352,7 +352,7 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
-            self._hooks.on_interim_transcript(ev)
+            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence

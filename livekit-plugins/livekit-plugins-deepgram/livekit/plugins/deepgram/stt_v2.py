@@ -51,7 +51,7 @@ class STTOptions:
     keyterms: list[str]
     endpoint_url: str
     language: str = "en"
-    preflight_threshold: NotGivenOr[float] = NOT_GIVEN
+    eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN
     eot_threshold: NotGivenOr[float] = NOT_GIVEN
     eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN
     mip_opt_out: bool = False
@@ -65,7 +65,7 @@ class STTv2(stt.STT):
         model: V2Models | str = "flux-general-en",
         interim_results: bool = True,
         sample_rate: int = 16000,
-        preflight_threshold: NotGivenOr[float] = NOT_GIVEN,
+        eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -81,6 +81,7 @@ class STTv2(stt.STT):
             model: The Deepgram model to use for speech recognition. Defaults to "nova-3".
             interim_results: Whether to return interim (non-final) transcription results. Defaults to True.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
+            eager_eot_threshold: The threshold for eager end of turn to enable preemptive generation. Disabled by default. Set to 0.3-0.9 to enable preemptive generation.
             eot_threshold: The threshold for end of speech detection. Defaults to 0.5.
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
             keyterms: List of key terms to improve recognition accuracy. Defaults to None.
@@ -115,7 +116,7 @@ class STTv2(stt.STT):
             keyterms=keyterms if is_given(keyterms) else [],
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
-            preflight_threshold=preflight_threshold,
+            eager_eot_threshold=eager_eot_threshold,
             eot_threshold=eot_threshold,
             eot_timeout_ms=eot_timeout_ms,
             endpoint_url=base_url,
@@ -140,6 +141,14 @@ class STTv2(stt.STT):
             "V2 API does not support non-streaming recognize. Use with a StreamAdapter"
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Deepgram"
+
     def stream(
         self,
         *,
@@ -163,7 +172,7 @@ class STTv2(stt.STT):
         model: NotGivenOr[V2Models | str] = NOT_GIVEN,
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        preflight_threshold: NotGivenOr[float] = NOT_GIVEN,
+        eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -189,8 +198,8 @@ class STTv2(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
-        if is_given(preflight_threshold):
-            self._opts.preflight_threshold = preflight_threshold
+        if is_given(eager_eot_threshold):
+            self._opts.eager_eot_threshold = eager_eot_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -203,7 +212,7 @@ class STTv2(stt.STT):
                 mip_opt_out=mip_opt_out,
                 endpoint_url=endpoint_url,
                 tags=tags,
-                preflight_threshold=preflight_threshold,
+                eager_eot_threshold=eager_eot_threshold,
             )
 
 
@@ -248,7 +257,7 @@ class SpeechStreamv2(stt.SpeechStream):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
-        preflight_threshold: NotGivenOr[float] = NOT_GIVEN,
+        eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
@@ -268,8 +277,8 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
-        if is_given(preflight_threshold):
-            self._opts.preflight_threshold = preflight_threshold
+        if is_given(eager_eot_threshold):
+            self._opts.eager_eot_threshold = eager_eot_threshold
 
         self._reconnect_event.set()
 
@@ -390,8 +399,8 @@ class SpeechStreamv2(stt.SpeechStream):
             "mip_opt_out": self._opts.mip_opt_out,
         }
 
-        if self._opts.preflight_threshold:
-            live_config["preflight_threshold"] = self._opts.preflight_threshold
+        if self._opts.eager_eot_threshold:
+            live_config["eager_eot_threshold"] = self._opts.eager_eot_threshold
 
         if self._opts.eot_threshold:
             live_config["eot_threshold"] = self._opts.eot_threshold
@@ -428,6 +437,16 @@ class SpeechStreamv2(stt.SpeechStream):
         )
         self._event_ch.send_nowait(usage_event)
 
+    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
+        alts = _parse_transcription(self._opts.language, data)
+        if alts:
+            event = stt.SpeechEvent(
+                type=event_type,
+                request_id=self._request_id,
+                alternatives=alts,
+            )
+            self._event_ch.send_nowait(event)
+
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
 
@@ -445,36 +464,26 @@ class SpeechStreamv2(stt.SpeechStream):
                 start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 self._event_ch.send_nowait(start_event)
 
+                self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
+
             elif event_type == "Update":
                 if not self._speaking:
                     return
 
-                alts = _parse_transcription(self._opts.language, data)
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=alts,
-                )
-                self._event_ch.send_nowait(interim_event)
+                self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
 
-            elif event_type == "Preflight":
+            elif event_type == "EagerEndOfTurn":
                 # technically, a pause in speech is detected. for lifecycle purposes,
                 # we are assuming the user is still speaking and sending a preflight event to
                 # start preemptive synthesis.
                 if not self._speaking:
                     return
 
-                alts = _parse_transcription(self._opts.language, data)
-                preflight_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=alts,
-                )
-                self._event_ch.send_nowait(preflight_event)
+                self._send_transcript_event(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, data)
 
-            elif event_type == "SpeechResumed":
-                # currently we are not using STT to cause interrupts
-                pass
+            elif event_type == "TurnResumed":
+                # sending interim transcript will abort eager end of turn
+                self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
 
             elif event_type == "EndOfTurn":
                 if not self._speaking:
@@ -482,13 +491,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 self._speaking = False
 
-                alts = _parse_transcription(self._opts.language, data)
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=alts,
-                )
-                self._event_ch.send_nowait(final_event)
+                self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
 
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
@@ -500,8 +503,10 @@ class SpeechStreamv2(stt.SpeechStream):
 
 
 def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:
-    transcript = data["transcript"]
-    words = data["words"]
+    transcript = data.get("transcript")
+    words = data.get("words")
+    if not words:
+        return []
     confidence = sum(word["confidence"] for word in words) / len(words) if words else 0
 
     sd = stt.SpeechData(
