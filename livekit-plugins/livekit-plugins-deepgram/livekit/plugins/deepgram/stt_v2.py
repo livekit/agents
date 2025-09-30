@@ -514,7 +514,7 @@ def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.Speech
         start_time=data["audio_window_start"] if data["audio_window_start"] else 0,
         end_time=data["audio_window_end"] if data["audio_window_end"] else 0,
         confidence=confidence,
-        text=transcript,
+        text=transcript or "",
     )
     return [sd]
 
