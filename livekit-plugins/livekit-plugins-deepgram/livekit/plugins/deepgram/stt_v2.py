@@ -72,7 +72,7 @@ class STTv2(stt.STT):
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        base_url: str = "wss://api.preview.deepgram.com/v2/listen",
+        base_url: str = "wss://api.deepgram.com/v2/listen",
         mip_opt_out: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
