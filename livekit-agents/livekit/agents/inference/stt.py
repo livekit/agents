@@ -67,21 +67,14 @@ class AssemblyaiOptions(TypedDict, total=False):
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
-_LanguageAsModels = Literal[
-    "lang/multi",
-    "lang/en",
-    "lang/de",
-    "lang/es",
-    "lang/fr",
-    "lang/ja",
-    "lang/pt",
-    "lang/zh",
-    "lang/hi",
-    # other languages not listed here are also supported
+
+
+STTModels = Union[
+    DeepgramModels,
+    CartesiaModels,
+    AssemblyaiModels,
+    Literal["auto"],  # automatically select a provider based on the language
 ]
-
-
-STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels, _LanguageAsModels]
 STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
@@ -220,17 +213,6 @@ class STT(stt.STT):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
-        if is_given(model) and model.startswith("lang/"):
-            if is_given(language):
-                logger.warning(
-                    "language is provided via both argument and model, using the one from the argument",
-                    extra={"language": language, "model": model},
-                )
-            else:
-                language = model[len("lang/") :].strip()
-
-            model = NOT_GIVEN
-
         self._opts = STTOptions(
             model=model,
             language=language,
@@ -244,6 +226,23 @@ class STT(stt.STT):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @classmethod
+    def parse_model(cls, model: str) -> STT:
+        """Create a STT instance from a model string
+
+        Args:
+            model (str): STT model to use, in "provider/model[:language]" format
+
+        Returns:
+            STT: STT instance
+        """
+
+        language: NotGivenOr[str] = NOT_GIVEN
+        if (idx := model.rfind(":")) != -1:
+            language = model[idx + 1 :]
+            model = model[:idx]
+        return cls(model, language=language)
 
     @property
     def model(self) -> str:
@@ -455,7 +454,7 @@ class SpeechStream(stt.SpeechStream):
             },
         }
 
-        if self._opts.model:
+        if self._opts.model and self._opts.model != "auto":
             params["model"] = self._opts.model
 
         if self._opts.language:

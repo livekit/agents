@@ -61,13 +61,13 @@ class Agent:
         self._turn_detection = turn_detection
 
         if isinstance(stt, str):
-            stt = inference.STT(model=stt)
+            stt = inference.STT.parse_model(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM(model=llm)
+            llm = inference.LLM.parse_model(llm)
 
         if isinstance(tts, str):
-            tts = inference.TTS(model=tts)
+            tts = inference.TTS.parse_model(tts)
 
         self._stt = stt
         self._llm = llm
