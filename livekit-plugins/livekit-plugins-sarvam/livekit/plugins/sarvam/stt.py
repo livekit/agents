@@ -20,6 +20,7 @@ This module provides an STT implementation that uses the Sarvam.ai API.
 from __future__ import annotations
 
 import asyncio
+import enum
 import json
 import os
 import weakref
@@ -54,6 +55,16 @@ SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-transla
 SarvamSTTModels = Literal["saarika:v2.5", "saarika:v2.0", "saaras:v2.5"]
 
 
+class ConnectionState(enum.Enum):
+    """WebSocket connection states."""
+
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+    FAILED = "failed"
+
+
 @dataclass
 class SarvamSTTOptions:
     """Options for the Sarvam.ai STT service.
@@ -63,12 +74,14 @@ class SarvamSTTOptions:
         model: The Sarvam STT model to use
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
+        prompt: Optional prompt for STT translate (saaras models only)
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
     model: SarvamSTTModels | str = "saarika:v2.5"
     base_url: str | None = None
     streaming_url: str | None = None
+    prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -80,9 +93,13 @@ class SarvamSTTOptions:
                 self.streaming_url = streaming_url
 
 
-def _get_option_value(default_value: str, override_value: NotGivenOr[str]) -> str | NotGiven:
+def _get_option_value(
+    default_value: str, override_value: NotGivenOr[str]
+) -> str | NotGiven:
     """Helper to get option value with NOT_GIVEN handling."""
-    return default_value if isinstance(override_value, type(NOT_GIVEN)) else override_value
+    return (
+        default_value if isinstance(override_value, type(NOT_GIVEN)) else override_value
+    )
 
 
 def _get_urls_for_model(model: str) -> tuple[str, str]:
@@ -100,7 +117,11 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
         return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
 
 
-def _calculate_audio_duration(buffer: AudioBuffer) -> float:
+def _calculate_audio_duration(
+    buffer: AudioBuffer,
+) -> (
+    float
+):  # TODO: Copied from livekit/agents/utils/audio.py, check if it can be reused
     """Calculate audio duration from buffer."""
     try:
         if isinstance(buffer, list):
@@ -119,13 +140,16 @@ def _calculate_audio_duration(buffer: AudioBuffer) -> float:
     return 0.0
 
 
-def _build_websocket_url(base_url: str, language: str, model: str) -> str:
+def _build_websocket_url(
+    base_url: str, language: str, model: str, prompt: str | None = None
+) -> str:
     """Build WebSocket URL with parameters."""
     params = {
         "language-code": language,
         "model": model,
         "vad_signals": "true",
     }
+
     return f"{base_url}?{urlencode(params)}"
 
 
@@ -141,16 +165,18 @@ class STT(stt.STT):
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
+        prompt: Optional prompt for STT translate (saaras models only)
     """
 
     def __init__(
         self,
         *,
-        language: str,
+        language: str = "en-IN",
         model: SarvamSTTModels | str = "saarika:v2.5",
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        prompt: str | None = None,
     ) -> None:
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
@@ -165,6 +191,7 @@ class STT(stt.STT):
             language=language,
             model=model,
             base_url=base_url,
+            prompt=prompt,
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
@@ -297,20 +324,25 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         opts_language = _get_option_value(self._opts.language, language)
         opts_model = _get_option_value(self._opts.model, model)
+        opts_prompt = _get_option_value(self._opts.prompt or "", prompt)
 
         if not isinstance(opts_language, str):
             opts_language = self._opts.language
         if not isinstance(opts_model, str):
             opts_model = self._opts.model
+        if not isinstance(opts_prompt, str) and opts_prompt is not None:
+            opts_prompt = self._opts.prompt
 
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
             language=opts_language,
             model=opts_model,
+            prompt=opts_prompt,
         )
 
         # Create a fresh session for this stream to avoid conflicts
@@ -360,260 +392,617 @@ class SpeechStream(stt.SpeechStream):
         self._logger = logger.getChild(self.__class__.__name__)
         self._reconnect_event = asyncio.Event()
 
+        # Connection state management
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._connection_lock = asyncio.Lock()
+        self._session_id = id(self)
+
         # Add flush mechanism
         self._ws: aiohttp.ClientWebSocketResponse | None = (
             None  # Store WebSocket reference for flush
         )
         self._should_flush = False  # Flag to trigger flush
 
+        # Task management for cleanup
+        self._audio_task: asyncio.Task | None = None
+        self._message_task: asyncio.Task | None = None
+
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
-        await super().aclose()
-        if not self._session.closed:
-            await self._session.close()
+        self._logger.debug(
+            "Starting stream cleanup", extra={"session_id": self._session_id}
+        )
 
-    def update_options(self, *, language: str, model: str) -> None:
+        async with self._connection_lock:
+            self._connection_state = ConnectionState.DISCONNECTED
+
+        # Cancel running tasks first
+        tasks_to_cancel = []
+        if self._audio_task and not self._audio_task.done():
+            tasks_to_cancel.append(self._audio_task)
+        if self._message_task and not self._message_task.done():
+            tasks_to_cancel.append(self._message_task)
+
+        if tasks_to_cancel:
+            try:
+                await utils.aio.cancel_and_wait(*tasks_to_cancel)
+            except Exception as e:
+                self._logger.warning(
+                    f"Error cancelling tasks: {e}",
+                    extra={"session_id": self._session_id},
+                )
+
+        # Close WebSocket
+        try:
+            if self._ws and not self._ws.closed:
+                await self._ws.close()
+                self._logger.debug(
+                    "WebSocket closed", extra={"session_id": self._session_id}
+                )
+        except Exception as e:
+            self._logger.warning(
+                f"Error closing WebSocket: {e}", extra={"session_id": self._session_id}
+            )
+        finally:
+            self._ws = None
+
+        # Call parent cleanup
+        try:
+            await super().aclose()
+        except Exception as e:
+            self._logger.warning(
+                f"Error in parent cleanup: {e}", extra={"session_id": self._session_id}
+            )
+
+        # Close session last
+        try:
+            if self._session and not self._session.closed:
+                await self._session.close()
+                self._logger.debug(
+                    "HTTP session closed", extra={"session_id": self._session_id}
+                )
+        except Exception as e:
+            self._logger.warning(
+                f"Error closing session: {e}", extra={"session_id": self._session_id}
+            )
+        finally:
+            # Clear reference to help with garbage collection
+            pass  # Session reference will be cleared when object is destroyed
+
+    def update_options(
+        self, *, language: str, model: str, prompt: str | None = None
+    ) -> None:
         """Update streaming options."""
+        if not language or not language.strip():
+            raise ValueError("Language cannot be empty")
+        if not model or not model.strip():
+            raise ValueError("Model cannot be empty")
+
         self._opts.language = language
         self._opts.model = model
+        if prompt is not None:
+            self._opts.prompt = prompt
+        self._logger.info(
+            "Options updated, triggering reconnection",
+            extra={
+                "session_id": self._session_id,
+                "language": language,
+                "model": model,
+                "prompt": prompt,
+            },
+        )
         self._reconnect_event.set()
+
+    async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send initial configuration message with prompt for saaras models."""
+        try:
+            config_message = {"prompt": self._opts.prompt, "type": "config"}
+            await ws.send_str(json.dumps(config_message))
+            self._logger.debug(
+                "Sent initial config for saaras model",
+                extra={"session_id": self._session_id, "prompt": self._opts.prompt},
+            )
+        except Exception as e:
+            self._logger.error(
+                f"Failed to send initial configuration: {e}",
+                extra={"session_id": self._session_id},
+                exc_info=True,
+            )
+            raise APIConnectionError(f"Failed to send initial config: {e}") from e
 
     async def _run(self) -> None:
         """Main streaming loop with WebSocket connection."""
-        while True:
+        num_retries = 0
+        max_retries = getattr(self._conn_options, "max_retry_count", 3)
+
+        while num_retries <= max_retries:
             try:
-                # Check if session is still valid
-                if self._session.closed:
-                    self._logger.error("Session is closed, cannot establish WebSocket connection")
-                    raise APIConnectionError("Session is closed")
+                await self._run_connection()
+                break  # Success, exit retry loop
 
-                # Build WebSocket URL with parameters
-                if self._opts.streaming_url is None:
-                    raise ValueError("streaming_url cannot be None")
-                ws_url = _build_websocket_url(
-                    self._opts.streaming_url,
-                    self._opts.language,
-                    self._opts.model,
+            except (
+                aiohttp.ClientConnectorError,
+                asyncio.TimeoutError,
+            ) as e:  # TODO: Check if retry should happen for every Exception type
+                if num_retries == max_retries:
+                    async with self._connection_lock:
+                        self._connection_state = ConnectionState.FAILED
+                    raise APIConnectionError(
+                        f"Failed to connect to STT WebSocket after {max_retries} attempts"
+                    ) from e
+
+                # Exponential backoff with jitter, max 30 seconds
+                retry_interval = min(2**num_retries + (num_retries * 0.1), 30)
+                async with self._connection_lock:
+                    self._connection_state = ConnectionState.RECONNECTING
+
+                self._logger.warning(
+                    f"Connection failed, retrying in {retry_interval:.1f}s",
+                    extra={
+                        "session_id": self._session_id,
+                        "attempt": num_retries + 1,
+                        "max_retries": max_retries + 1,
+                        "error": str(e),
+                    },
                 )
+                await asyncio.sleep(retry_interval)
+                num_retries += 1
 
-                # Connect to WebSocket with proper authentication
-                headers = {"api-subscription-key": self._api_key}
-
-                self._logger.info(f"Connecting to WebSocket: {ws_url}")
-
-                ws = await asyncio.wait_for(
-                    self._session.ws_connect(ws_url, headers=headers),
-                    self._conn_options.timeout,
+            except Exception as e:
+                async with self._connection_lock:
+                    self._connection_state = ConnectionState.FAILED
+                self._logger.error(
+                    f"Unrecoverable error in WebSocket connection: {e}",
+                    extra={"session_id": self._session_id},
+                    exc_info=True,
                 )
+                raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
-                self._ws = ws  # Store WebSocket reference for flush
-                self._logger.info("Connected to Sarvam streaming")
+    async def _run_connection(self) -> None:
+        """Run a single WebSocket connection attempt."""
+        # Check if session is still valid
+        if self._session.closed:
+            raise APIConnectionError(
+                "Session is closed, cannot establish WebSocket connection"
+            )
 
-                # Create tasks for audio processing and message handling
-                audio_task = asyncio.create_task(self._process_audio(ws))
-                message_task = asyncio.create_task(self._process_messages(ws))
+        async with self._connection_lock:
+            self._connection_state = ConnectionState.CONNECTING
 
-                # Wait for both tasks to complete
-                done, pending = await asyncio.wait(
-                    [audio_task, message_task],
-                    return_when=asyncio.FIRST_COMPLETED,
+        # Build WebSocket URL with parameters
+        if self._opts.streaming_url is None:
+            raise ValueError("streaming_url cannot be None")
+        ws_url = _build_websocket_url(
+            self._opts.streaming_url,
+            self._opts.language,
+            self._opts.model,
+            self._opts.prompt,
+        )
+
+        # Connect to WebSocket with proper authentication
+        headers = {"api-subscription-key": self._api_key}
+
+        self._logger.info(
+            "Connecting to STT WebSocket",
+            extra={"session_id": self._session_id, "url": ws_url},
+        )
+
+        ws = await asyncio.wait_for(
+            self._session.ws_connect(ws_url, headers=headers),
+            self._conn_options.timeout,
+        )
+
+        # Store WebSocket reference for cleanup - ensure it's always cleaned up
+        self._ws = ws
+
+        async with self._connection_lock:
+            self._connection_state = ConnectionState.CONNECTED
+
+        self._logger.info(
+            "WebSocket connected successfully", extra={"session_id": self._session_id}
+        )
+
+        # Send initial configuration message for saaras models (STT translate)
+        if self._opts.model.startswith("saaras") and self._opts.prompt:
+            await self._send_initial_config(ws)
+
+        # Create tasks for audio processing and message handling
+        self._audio_task = asyncio.create_task(self._process_audio(ws))
+        self._message_task = asyncio.create_task(self._process_messages(ws))
+
+        # Wait for both tasks to complete or reconnection event
+        tasks = [self._audio_task, self._message_task]
+        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+        try:
+            done, pending = await asyncio.wait(
+                tasks + [reconnect_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Check if reconnection was requested
+            if reconnect_task in done:
+                self._logger.info(
+                    "Reconnection requested, closing current connection",
+                    extra={"session_id": self._session_id},
                 )
+                self._reconnect_event.clear()
+                return
 
-                # Cancel remaining tasks
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+            # Cancel remaining tasks using LiveKit's utility
+            if pending:
+                await utils.aio.cancel_and_wait(*pending)
 
-                # Check for exceptions
-                for task in done:
+            # Check for exceptions in completed tasks
+            for task in done:
+                if task != reconnect_task:
                     exc = task.exception()
                     if exc is not None:
                         if isinstance(exc, BaseException):
                             raise exc
                         else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
+                            raise RuntimeError(
+                                f"Task failed with non-BaseException: {exc}"
+                            )
 
-            except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-                self._logger.error(f"Failed to connect to Sarvam: {e}")
-                raise APIConnectionError("failed to connect to Sarvam") from e
+        finally:
+            # Clean up tasks
+            all_tasks = tasks + [reconnect_task]
+            await utils.aio.cancel_and_wait(*all_tasks)
+
+            # Close WebSocket
+            try:
+                if ws and not ws.closed:
+                    await ws.close()
             except Exception as e:
-                self._logger.error(f"WebSocket connection error: {e}")
-                await asyncio.sleep(1)  # Wait before retrying
-                continue
+                self._logger.warning(
+                    f"Error closing WebSocket: {e}",
+                    extra={"session_id": self._session_id},
+                )
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Process audio frames and send them in chunks (exactly like HTML version)."""
+        """Process audio frames and send them in chunks."""
         import base64
-
         import numpy as np
 
         # Audio buffering for chunked sending
         audio_buffer: list[np.int16] = []
         chunk_size = 16 * 50  # 500ms of audio at 16kHz
+        chunks_sent = 0
+
+        self._logger.debug(
+            "Starting audio processing",
+            extra={"session_id": self._session_id, "chunk_size": chunk_size},
+        )
 
         try:
-            self._logger.info("Starting to listen for audio frames...")
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
-                    # Convert audio frame to Int16 data
-                    audio_data = frame.data.tobytes()
+                    try:
+                        # Convert audio frame to Int16 data
+                        audio_data = frame.data.tobytes()
+                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                        audio_buffer.extend(audio_array)
 
-                    # Convert to Int16 array
-                    audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                    audio_buffer.extend(audio_array)
+                        # Check if we have enough data for a chunk
+                        while len(audio_buffer) >= chunk_size:
+                            # Convert to Int16Array
+                            chunk_data = np.array(
+                                audio_buffer[:chunk_size], dtype=np.int16
+                            )
 
-                    # Check if we have enough data for a chunk
-                    while len(audio_buffer) >= chunk_size:
-                        # Convert to Int16Array
-                        chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
+                            # Convert to base64
+                            base64_audio = base64.b64encode(
+                                chunk_data.tobytes()
+                            ).decode("utf-8")
 
-                        # Convert to base64
-                        base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
-
-                        # Send audio in the format
-                        audio_message = {
-                            "audio": {
-                                "data": base64_audio,
-                                "encoding": "audio/wav",
-                                "sample_rate": 16000,
+                            # Send audio in the required format
+                            audio_message = {
+                                "audio": {
+                                    "data": base64_audio,
+                                    "encoding": "audio/wav",
+                                    "sample_rate": 16000,
+                                }
                             }
-                        }
 
-                        await ws.send_str(json.dumps(audio_message))
+                            await ws.send_str(json.dumps(audio_message))
+                            chunks_sent += 1
 
-                        # Remove sent data from buffer
-                        audio_buffer = audio_buffer[chunk_size:]
+                            # Remove sent data from buffer
+                            audio_buffer = audio_buffer[chunk_size:]
+
+                            # Log progress periodically
+                            if chunks_sent % 100 == 0:
+                                self._logger.debug(
+                                    f"Sent {chunks_sent} audio chunks",
+                                    extra={"session_id": self._session_id},
+                                )
+
+                    except Exception as e:
+                        self._logger.error(
+                            f"Error processing audio frame: {e}",
+                            extra={"session_id": self._session_id},
+                            exc_info=True,
+                        )
+                        raise
 
                 elif isinstance(frame, self._FlushSentinel):
-                    # LiveKit VAD FlushSentinel - use as fallback
-                    self._logger.info("LiveKit VAD FlushSentinel received - sending end-of-stream")
+                    # LiveKit VAD FlushSentinel - handles stream termination
+                    self._logger.debug(
+                        "Received FlushSentinel, sending end of stream",
+                        extra={"session_id": self._session_id},
+                    )
                     await ws.send_str(self._END_OF_STREAM_MSG)
-                    self._logger.info("End-of-stream signal sent")
                     break
 
                 # Check if Sarvam VAD triggered flush
                 if self._should_flush:
-                    self._logger.info("Sarvam VAD flush triggered - sending end-of-stream")
-                    await ws.send_str(self._END_OF_STREAM_MSG)
+                    self._logger.debug(
+                        "VAD triggered flush, sending flush message",
+                        extra={"session_id": self._session_id},
+                    )
+                    flush_message = {"type": "flush"}
+                    await ws.send_str(json.dumps(flush_message))
                     self._should_flush = False  # Reset flag
-                    self._logger.info("End-of-stream sent for Sarvam VAD flush")
+
         except Exception as e:
-            self._logger.error(f"Error in audio processing: {e}")
+            self._logger.error(
+                f"Error in audio processing: {e}",
+                extra={"session_id": self._session_id, "chunks_sent": chunks_sent},
+                exc_info=True,
+            )
             raise
+        finally:
+            self._logger.debug(
+                f"Audio processing completed, sent {chunks_sent} chunks",
+                extra={"session_id": self._session_id},
+            )
 
     @utils.log_exceptions(logger=logger)
     async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process incoming messages from the WebSocket."""
-        self._logger.info("Starting to listen for messages...")
+        self._logger.info(
+            "Starting message processing",
+            extra={"session_id": self._session_id, "ws_closed": ws.closed},
+        )
 
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
-                        self._logger.debug(f"Parsed message: {data}")
                         await self._handle_message(data)
                     except json.JSONDecodeError as e:
-                        self._logger.error(f"Failed to parse message: {e}")
-                        self._logger.error(f"Raw message: {msg.data}")
+                        self._logger.warning(
+                            "Invalid JSON received from WebSocket",
+                            extra={
+                                "session_id": self._session_id,
+                                "raw_data": msg.data,
+                                "error": str(e),
+                            },
+                        )
+                        continue  # Skip malformed message
                     except Exception as e:
-                        self._logger.error(f"Error handling message: {e}")
+                        self._logger.error(
+                            "Error processing WebSocket message",
+                            extra={"session_id": self._session_id, "error": str(e)},
+                            exc_info=True,
+                        )
+                        # Re-raise unexpected errors as they might indicate serious issues
+                        raise APIStatusError(f"Message processing error: {e}") from e
+
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     error_msg = f"WebSocket error: {ws.exception()}"
-                    self._logger.error(error_msg)
-                    if ws.exception():
-                        self._logger.error(f"Exception type: {type(ws.exception()).__name__}")
-                        self._logger.error(f"Exception details: {str(ws.exception())}")
-                    break
+                    self._logger.error(
+                        error_msg, extra={"session_id": self._session_id}
+                    )
+                    raise APIConnectionError(error_msg)
+
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    self._logger.info(f"WebSocket closed: {msg.type}")
+                    self._logger.info(
+                        f"WebSocket closed: {msg.type}",
+                        extra={"session_id": self._session_id},
+                    )
                     break
+
                 else:
-                    self._logger.debug(f"Unknown message type: {msg.type}")
+                    self._logger.debug(
+                        f"Unknown WebSocket message type: {msg.type}",
+                        extra={"session_id": self._session_id},
+                    )
+
         except Exception as e:
-            self._logger.error(f"Error in message processing: {e}")
+            self._logger.error(
+                f"Error in message processing loop: {e}",
+                extra={"session_id": self._session_id},
+                exc_info=True,
+            )
             raise
 
     async def _handle_message(self, data: dict) -> None:
         """Handle different types of messages from Sarvam streaming API."""
-        msg_type = data.get("type")
-        self._logger.debug(f"Handling message type: {msg_type}")
-
-        if msg_type == "data":
-            # Transcription result
-            transcript_data = data.get("data", {})
-            transcript_text = transcript_data.get("transcript", "")
-            language = transcript_data.get("language_code", self._opts.language)
-
-            self._logger.info(f"Received transcription: '{transcript_text}'")
-            if transcript_text:
-                # Create speech data
-                metrics = transcript_data.get("metrics", {})
-                request_data = {
-                    "original_id": transcript_data.get("request_id", ""),
-                    "processing_latency": metrics.get("processing_latency", 0.0),
-                }
-                usage_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    request_id=json.dumps(request_data),
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=metrics.get("audio_duration", 0.0),
-                    ),
+        try:
+            msg_type = data.get("type")
+            if not msg_type:
+                self._logger.warning(
+                    "Received message without type field",
+                    extra={"session_id": self._session_id, "data": data},
                 )
-                self._event_ch.send_nowait(usage_event)
+                return
 
-                speech_data = stt.SpeechData(
-                    language=language,
-                    text=transcript_text,
-                    confidence=transcript_data.get("confidence", 1.0),
+            if msg_type == "data":
+                await self._handle_transcript_data(data)
+            elif msg_type == "events":
+                await self._handle_events(data)
+            elif msg_type == "error":
+                await self._handle_error_message(data)
+            else:
+                self._logger.debug(
+                    f"Unknown message type: {msg_type}",
+                    extra={"session_id": self._session_id, "data": data},
                 )
 
-                # Create final transcript event
-                speech_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[speech_data],
-                )
-                self._event_ch.send_nowait(speech_event)
-                self._logger.debug("Sent final transcript event")
+        except KeyError as e:
+            self._logger.warning(
+                f"Missing required field in message: {e}",
+                extra={"session_id": self._session_id, "data": data},
+            )
+        except Exception as e:
+            self._logger.error(
+                f"Unexpected error handling message: {e}",
+                extra={"session_id": self._session_id, "data": data},
+                exc_info=True,
+            )
+            raise APIStatusError(f"Message processing error: {e}") from e
 
-        elif msg_type == "events":
-            # VAD events
-            event_data = data.get("data", {})
-            signal_type = event_data.get("signal_type")
+    async def _handle_transcript_data(self, data: dict) -> None:
+        """Handle transcription result messages."""
+        transcript_data = data.get("data", {})
+        transcript_text = transcript_data.get("transcript", "")
+        language = transcript_data.get("language_code", "")
+        request_id = transcript_data.get("request_id", "")
 
-            self._logger.debug(f"Received VAD event: {signal_type}")
+        if not transcript_text:
+            self._logger.debug(
+                "Received empty transcript", extra={"session_id": self._session_id}
+            )
+            return
 
+        try:
+            # Create usage event with proper metrics extraction
+            metrics = transcript_data.get("metrics", {})
+            request_data = {
+                "original_id": request_id,
+                "processing_latency": metrics.get("processing_latency", 0.0),
+            }
+            usage_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                request_id=json.dumps(request_data),
+                recognition_usage=stt.RecognitionUsage(
+                    audio_duration=metrics.get("audio_duration", 0.0),
+                ),
+            )
+            self._event_ch.send_nowait(usage_event)
+
+            # Create speech data
+            speech_data = stt.SpeechData(
+                language=language,
+                text=transcript_text,
+            )
+
+            # Create final transcript event with request_id
+            speech_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
+                alternatives=[speech_data],
+            )
+            self._event_ch.send_nowait(speech_event)
+
+            self._logger.debug(
+                "Transcript processed successfully",
+                extra={
+                    "session_id": self._session_id,
+                    "text_length": len(transcript_text),
+                    "language": language,
+                    "request_id": request_id,
+                    "confidence": speech_data.confidence,
+                },
+            )
+
+        except Exception as e:
+            self._logger.error(
+                f"Error processing transcript data: {e}",
+                extra={
+                    "session_id": self._session_id,
+                    "transcript_data": transcript_data,
+                },
+                exc_info=True,
+            )
+            raise
+
+    async def _handle_events(self, data: dict) -> None:
+        """Handle VAD (Voice Activity Detection) events."""
+        event_data = data.get("data", {})
+        signal_type = event_data.get("signal_type")
+
+        if not signal_type:
+            self._logger.warning(
+                "VAD event missing signal_type",
+                extra={"session_id": self._session_id, "event_data": event_data},
+            )
+            return
+
+        self._logger.debug(
+            f"Processing VAD event: {signal_type}",
+            extra={"session_id": self._session_id, "signal_type": signal_type},
+        )
+
+        try:
             if signal_type == "START_SPEECH":
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH
+                    )
                     self._event_ch.send_nowait(start_event)
-                    self._logger.debug("Sent start of speech event")
+                    self._logger.debug(
+                        "Speech started", extra={"session_id": self._session_id}
+                    )
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
                     end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     self._event_ch.send_nowait(end_event)
-                    self._logger.debug("Sent end of speech event")
 
                     # Set flag to trigger flush when Sarvam detects end of speech
-                    self._logger.info("Sarvam detected end of speech - setting flush flag")
                     self._should_flush = True
+                    self._logger.debug(
+                        "Speech ended, flush triggered",
+                        extra={"session_id": self._session_id},
+                    )
+            else:
+                self._logger.debug(
+                    f"Unknown VAD signal type: {signal_type}",
+                    extra={"session_id": self._session_id},
+                )
 
-        elif msg_type == "error":
-            error_msg = data.get("error", "Unknown error")
-            self._logger.error(f"Sarvam streaming error: {error_msg}")
-            raise APIStatusError(f"Sarvam streaming error: {error_msg}")
+        except Exception as e:
+            self._logger.error(
+                f"Error processing VAD event: {e}",
+                extra={"session_id": self._session_id, "event_data": event_data},
+                exc_info=True,
+            )
+            raise
 
+    async def _handle_error_message(self, data: dict) -> None:
+        """Handle error messages from the API."""
+        error_info = data.get("error", "Unknown error")
+        error_code = data.get("code", "unknown")
+
+        self._logger.error(
+            f"API error received: {error_info}",
+            extra={
+                "session_id": self._session_id,
+                "error_code": error_code,
+                "error_info": error_info,
+            },
+        )
+
+        # Determine if error is recoverable based on error code/type
+        recoverable_codes = ["rate_limit", "temporary_unavailable", "timeout"]
+        recoverable_keywords = ["rate limit", "temporary", "timeout", "connection"]
+
+        is_recoverable = error_code in recoverable_codes or any(
+            keyword in str(error_info).lower() for keyword in recoverable_keywords
+        )
+
+        if is_recoverable:
+            raise APIConnectionError(f"Recoverable API error: {error_info}")
         else:
-            self._logger.debug(f"Received unknown message type: {msg_type}")
-            self._logger.debug(f"Message data: {data}")
+            raise APIStatusError(f"API error: {error_info}")
