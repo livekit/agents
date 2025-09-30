@@ -1,3 +1,3 @@
-from .recorder_io import RecorderIO
+from .recorder_io import RecorderIO, RecorderAudioInput, RecorderAudioOutput
 
-__all__ = ["RecorderIO"]
+__all__ = ["RecorderIO", "RecorderAudioInput", "RecorderAudioOutput"]

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import asyncio
 import contextlib
 import queue
+from pathlib import Path
 import threading
 from collections.abc import AsyncIterator
 from typing import Any, Callable
@@ -11,10 +13,13 @@ import av
 import numpy as np
 
 from livekit import rtc
-from livekit.agents.voice.agent_session import AgentSession
 
 from ...log import logger
 from .. import io
+
+
+if TYPE_CHECKING:
+    from ..agent_session import AgentSession
 
 # the recorder currently assume the input is a continous uninterrupted audio stream
 
@@ -41,8 +46,9 @@ class RecorderIO:
         self._loop = loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
+        self._output_path: Path | None = None
 
-    async def start(self, *, output_path: str) -> None:
+    async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
             if self._started:
                 return
@@ -53,12 +59,12 @@ class RecorderIO:
                     "must be called before starting the recorder."
                 )
 
-            self._output_path = output_path
+            self._output_path = Path(output_path)
             self._started = True
             self._close_fut = self._loop.create_future()
             self._forward_atask = asyncio.create_task(self._forward_task())
 
-            thread = threading.Thread(target=self._encode_thread, daemon=True)
+            thread = threading.Thread(target=self._encode_thread, daemon=True, name="recorder_io_encode_thread")
             thread.start()
 
     async def aclose(self) -> None:
@@ -80,6 +86,10 @@ class RecorderIO:
             recording_io=self, audio_output=audio_output, write_fnc=self._write_cb
         )
         return self._out_record
+
+    @property
+    def output_path(self) -> Path | None:
+        return self._output_path
 
     @property
     def recording(self) -> bool:
@@ -110,6 +120,8 @@ class RecorderIO:
     def _encode_thread(self) -> None:
         GROW_FACTOR = 1.5
         INV_INT16 = 1.0 / 32768.0
+
+        self._output_path.parent.mkdir(parents=True, exist_ok=True)
 
         container = av.open(self._output_path, mode="w", format="ogg")
         stream: av.AudioStream = container.add_stream(
@@ -206,8 +218,10 @@ class RecorderIO:
                         len_right = len_left
 
                 max_len = max(len_left, len_right)
-                stereo_slice = stereo_buf[:, :max_len]
+                if max_len <= 0:
+                    continue
 
+                stereo_slice = stereo_buf[:, :max_len]
                 av_frame = av.AudioFrame.from_ndarray(stereo_slice, format="fltp", layout="stereo")
                 av_frame.sample_rate = self._sample_rate
 
@@ -263,6 +277,10 @@ class RecorderAudioOutput(io.AudioOutput):
         self.__acc_frames: list[rtc.AudioFrame] = []
 
     @property
+    def recorder_io(self) -> RecorderIO:
+        return self.__recording_io
+
+    @property
     def has_pending_data(self) -> bool:
         return len(self.__acc_frames) > 0
 
@@ -287,9 +305,9 @@ class RecorderAudioOutput(io.AudioOutput):
         for frame in self.__acc_frames:
             if frame.duration + acc_dur > playback_position:
                 duration_needed = playback_position - acc_dur
-                samples_needed = int(duration_needed * frame.sample_rate) * frame.num_channels
+                samples_needed = int(duration_needed * frame.sample_rate)#  * frame.num_channels
                 truncated_frame = rtc.AudioFrame(
-                    data=frame.data[:samples_needed],
+                    data=frame.data[:samples_needed * frame.num_channels],
                     num_channels=frame.num_channels,
                     samples_per_channel=samples_needed,
                     sample_rate=frame.sample_rate,
