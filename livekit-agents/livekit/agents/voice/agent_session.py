@@ -38,6 +38,7 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
+    AgentEvent,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -51,6 +52,8 @@ from .events import (
 )
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
+from .recorder_io import RecorderIO
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -66,7 +69,7 @@ class SessionConnectOptions:
 
 
 @dataclass
-class VoiceOptions:
+class AgentSessionOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
@@ -174,7 +177,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             turn_detection (TurnDetectionMode, optional): Strategy for deciding
-                when the user has finished speaking.
+                when the user has finifshed speaking.
 
                 * ``"stt"`` – rely on speech-to-text end-of-utterance cues
                 * ``"vad"`` – rely on Voice Activity Detection start/stop cues
@@ -252,7 +255,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
-        self._opts = VoiceOptions(
+        self._opts = AgentSessionOptions(
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
@@ -296,6 +299,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         # this is not exposed, if users want access to it, they can create their own RoomIO
         self._room_io: room_io.RoomIO | None = None
+        self._recorder_io: RecorderIO | None = None
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -319,6 +323,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+
+        self._recorded_events: list[AgentEvent] = []
+
+    def emit(self, event: EventTypes, arg: AgentEvent) -> None:
+        self._recorded_events.append(arg)
+        super().emit(event, arg)
 
     @property
     def userdata(self) -> Userdata_T:
@@ -348,7 +358,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._output
 
     @property
-    def options(self) -> VoiceOptions:
+    def options(self) -> AgentSessionOptions:
         return self._opts
 
     @property
@@ -395,6 +405,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        record: bool = True,
     ) -> None:
         """Start the voice agent.
 
@@ -410,14 +421,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return
 
+            self._recorded_events = []
+            self._room_io = None
+            self._recorder_io = None
+
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
-            current_span.set_attribute(
-                trace_types.ATTR_SESSION_OPTIONS,
-                json.dumps({k: v for k, v in asdict(self._opts).items() if is_given(v)}),
-            )
 
             self._agent = agent
             self._update_agent_state("initializing")
@@ -470,9 +481,41 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
 
+            if self.input.audio and self.output.audio:
+                if record:
+                    self._recorder_io = RecorderIO(agent_session=self)
+                    self.input.audio = self._recorder_io.record_input(self.input.audio)
+                    self.output.audio = self._recorder_io.record_output(self.output.audio)
+
+                if c.enabled:
+                    if c.record:
+                        tasks.append(
+                            asyncio.create_task(
+                                self._recorder_io.start(
+                                    output_path=c.session_directory / "audio.ogg"
+                                )
+                            )
+                        )
+                else:
+                    tasks.append(
+                        asyncio.create_task(
+                            self._recorder_io.start(output_path=c.session_directory / "audio.ogg")
+                        )
+                    )
+
             # session can be restarted, register the callbacks only once
             try:
                 job_ctx = get_job_context()
+
+                if record:
+                    if job_ctx._primary_agent_session is None:
+                        job_ctx._primary_agent_session = self
+                    else:
+                        raise RuntimeError(
+                            "Only one `AgentSession` can be the primary at a time. "
+                            "If you want to ignore primary designation, use session.start(record=False)."
+                        )
+
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
                 current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
                 current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
@@ -630,7 +673,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._room_io:
                 await self._room_io.aclose()
-                self._room_io = None
+
+            if self._recorder_io:
+                await self._recorder_io.aclose()
 
             self._started = False
             if self._session_span:

@@ -21,6 +21,7 @@ import functools
 import inspect
 import logging
 import multiprocessing as mp
+from typing import TYPE_CHECKING
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -39,6 +40,11 @@ from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
+
+
+if TYPE_CHECKING:
+    from .voice.agent_session import AgentSession
+    from .voice.report import SessionReport
 
 
 def get_job_context() -> JobContext:
@@ -129,6 +135,8 @@ class JobContext:
         self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
 
+        self._primary_agent_session: AgentSession | None = None
+
         self._connected = False
         self._lock = asyncio.Lock()
 
@@ -160,6 +168,31 @@ class JobContext:
     @property
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
+
+    def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
+        from .voice.report import SessionReport
+
+        session = session or self._primary_agent_session
+
+        if not session:
+            raise RuntimeError("Cannot prepare report, no AgentSession was found")
+
+        recorder_io = session._recorder_io
+
+        if recorder_io and recorder_io.recording:
+            raise RuntimeError(
+                "Cannot create the AgentSession report, the RecorderIO is still recording"
+            )
+
+        return SessionReport(
+            job_id=self.job.id,
+            room_id=self.job.room.sid,
+            room=self.job.room.name,
+            options=session.options,
+            audio_recording_path=recorder_io.output_path,
+            events=session._recorded_events,
+            chat_history=session.history.copy(),
+        )
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:

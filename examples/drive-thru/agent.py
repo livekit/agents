@@ -30,6 +30,7 @@ from livekit.agents import (
     ToolError,
     cli,
     function_tool,
+    ChatContext,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -398,8 +399,18 @@ async def new_userdata() -> Userdata:
 server = AgentServer()
 
 
-@server.realtime_session()
-async def drive_thru_agent(ctx: JobContext):
+async def on_session_end(ctx: JobContext) -> None:
+    import json
+
+    report = ctx.make_session_report()
+    report_json = json.dumps(report.to_cloud_data(), indent=2)
+
+    print(report_json)
+
+
+
+@server.realtime_session(on_session_end=on_session_end)
+async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
@@ -418,13 +429,6 @@ async def drive_thru_agent(ctx: JobContext):
             mip_opt_out=True,
         ),
         llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        # tts=elevenlabs.TTS(
-        #     model="eleven_turbo_v2_5",
-        #     voice_id="21m00Tcm4TlvDq8ikWAM",
-        #     voice_settings=elevenlabs.VoiceSettings(
-        #         speed=1.15, stability=0.5, similarity_boost=0.75
-        #     ),
-        # ),
         tts=cartesia.TTS(voice="f786b574-daa5-4673-aa0c-cbe3e8534c02", speed="fast"),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),

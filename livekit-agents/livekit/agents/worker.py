@@ -310,6 +310,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # currently only one rtc_session
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
+        self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
 
         # worker cb
         self._prewarm_fnc: Callable[[JobProcess], Any] | None = None
@@ -325,14 +326,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        request_cb: Callable[[JobRequest], Any] | None = None,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
     ]:
         """
         Decorator for registering the RTC session entrypoint.
         Usage:
-            @server.rtc_session(agent_name="survey_agent")
+            @server.realtime_session(agent_name="survey_agent")
             async def my_agent(job_ctx: JobContext):
                 ...
         """
@@ -343,7 +345,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         def decorator(func: Callable[[JobContext], Awaitable[None]]):
             self._entrypoint_fnc = func
-            self._request_fnc = request_cb
+            self._request_fnc = on_request
+            self._session_end_fnc = on_session_end
             self._agent_name = agent_name
             self._server_type = type
             return func
@@ -455,6 +458,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._prewarm_fnc,
                 job_entrypoint_fnc=self._entrypoint_fnc,
+                session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
                 job_executor_type=self._job_executor_type,
@@ -596,6 +600,58 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self.emit("worker_started")
 
         await self._close_future
+
+    def update_options(
+        self,
+        *,
+        ws_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        max_retry: NotGivenOr[int] = NOT_GIVEN,
+        job_executor_type: NotGivenOr[JobExecutorType] = NOT_GIVEN,
+        load_threshold: NotGivenOr[float] = NOT_GIVEN,
+        job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
+        job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[float] = NOT_GIVEN,
+        num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
+        shutdown_process_timeout: float = 10.0,
+        initialize_process_timeout: float = 10.0,
+    ) -> None:
+        if not self._closed:
+            raise RuntimeError("cannot update options after starting the server")
+
+        if is_given(ws_url):
+            self._ws_url = ws_url
+
+        if is_given(api_key):
+            self._api_key = api_key
+
+        if is_given(api_secret):
+            self._api_secret = api_secret
+
+        if is_given(max_retry):
+            self._max_retry = max_retry
+
+        if is_given(job_executor_type):
+            self._job_executor_type = job_executor_type
+
+        if is_given(load_threshold):
+            self._load_threshold = load_threshold
+
+        if is_given(job_memory_warn_mb):
+            self._job_memory_warn_mb = job_memory_warn_mb
+
+        if is_given(job_memory_limit_mb):
+            self._job_memory_limit_mb = job_memory_limit_mb
+
+        if is_given(drain_timeout):
+            self._drain_timeout = drain_timeout
+
+        if is_given(num_idle_processes):
+            self._num_idle_processes = num_idle_processes
+
+        if is_given(shutdown_process_timeout):
+            self._shutdown_process_timeout = shutdown_process_timeout
 
     @property
     def id(self) -> str:

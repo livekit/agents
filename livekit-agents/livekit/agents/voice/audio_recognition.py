@@ -27,11 +27,13 @@ MIN_LANGUAGE_DETECTION_LENGTH = 5
 @dataclass
 class _EndOfTurnInfo:
     new_transcript: str
-    transcription_delay: float
-    end_of_utterance_delay: float
     transcript_confidence: float
-    last_speaking_time: float
-    _user_turn_span: trace.Span | None = None
+
+    # metrics report
+    started_speaking_at: float | None
+    stopped_speaking_at: float | None
+    transcription_delay: float | None
+    end_of_turn_delay: float | None
 
 
 @dataclass
@@ -88,11 +90,14 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection_mode
         self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
-        self._sample_rate: int | None = None
 
+        self._sample_rate: int | None = None
         self._speaking = False
-        self._last_speaking_time: float = 0
-        self._last_final_transcript_time: float = 0
+
+        self._last_final_transcript_time: float | None = None
+        self._last_speaking_time: float | None = None
+        self._speech_start_time: float | None = None
+
         self._final_transcript_received = asyncio.Event()
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
@@ -309,22 +314,28 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(ev)
 
             self._speaking = True
-            self._last_speaking_time = time.time() - ev.speech_duration
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
-            self._last_speaking_time = time.time() - ev.silence_duration
+
+            # for metrics, get the "earliest" signal of speech as possible
+            if ev.raw_accumulated_speech > 0.0:
+                self._last_speaking_time = time.time()
+
+                if self._speech_start_time is None:
+                    self._speech_start_time = time.time()
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._speaking = False
+            self._speech_end_time = time.time()
+
             # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
-            self._last_speaking_time = time.time() - ev.silence_duration
+            self._speaking = False
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -346,7 +357,11 @@ class AudioRecognition:
         )
 
         @utils.log_exceptions(logger=logger)
-        async def _bounce_eou_task(last_speaking_time: float) -> None:
+        async def _bounce_eou_task(
+            last_speaking_time: float | None = None,
+            last_final_transcript_time: float | None = None,
+            speech_start_time: float | None = None,
+        ) -> None:
             endpointing_delay = self._min_endpointing_delay
             user_turn_span = self._ensure_user_turn_span()
             if turn_detector is not None:
@@ -391,7 +406,10 @@ class AudioRecognition:
                             }
                         )
 
-            extra_sleep = last_speaking_time + endpointing_delay - time.time()
+            extra_sleep = endpointing_delay
+            if last_speaking_time:
+                extra_sleep += last_speaking_time - time.time()
+
             await asyncio.sleep(max(extra_sleep, 0))
 
             confidence_avg = (
@@ -400,20 +418,31 @@ class AudioRecognition:
                 else 0
             )
 
-            if last_speaking_time <= 0:
-                transcription_delay = 0.0
-                end_of_utterance_delay = 0.0
-            else:
-                transcription_delay = max(self._last_final_transcript_time - last_speaking_time, 0)
-                end_of_utterance_delay = time.time() - last_speaking_time
+            started_speaking_at = None
+            stopped_speaking_at = None
+            transcription_delay = None
+            end_of_turn_delay = None
+
+            # sometimes, we can't calculate the metrics because VAD was unreliable.
+            # in this case, we just ignore the calculation, it's better than providing likely wrong values
+            if (
+                last_final_transcript_time is not None
+                and last_speaking_time is not None
+                and speech_start_time is not None
+            ):
+                started_speaking_at = speech_start_time
+                stopped_speaking_at = last_speaking_time
+                transcription_delay = max(last_final_transcript_time - last_speaking_time, 0)
+                end_of_turn_delay = time.time() - last_speaking_time
 
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
-                    transcription_delay=transcription_delay,
-                    end_of_utterance_delay=end_of_utterance_delay,
                     transcript_confidence=confidence_avg,
-                    last_speaking_time=last_speaking_time,
+                    transcription_delay=transcription_delay,
+                    end_of_turn_delay=end_of_turn_delay,
+                    started_speaking_at=started_speaking_at,
+                    stopped_speaking_at=stopped_speaking_at,
                 )
             )
             if committed:
@@ -422,7 +451,7 @@ class AudioRecognition:
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
                         trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay,
-                        trace_types.ATTR_END_OF_UTTERANCE_DELAY: end_of_utterance_delay,
+                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay,
                     }
                 )
                 user_turn_span.end()
@@ -431,6 +460,9 @@ class AudioRecognition:
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
+                self._last_speaking_time = None
+                self._last_final_transcript_time = None
+                self._speech_start_time = None
 
             self._user_turn_committed = False
 
@@ -439,7 +471,13 @@ class AudioRecognition:
             self._end_of_turn_task.cancel()
 
         # copy the last_speaking_time before awaiting (the value can change)
-        self._end_of_turn_task = asyncio.create_task(_bounce_eou_task(self._last_speaking_time))
+        self._end_of_turn_task = asyncio.create_task(
+            _bounce_eou_task(
+                self._last_speaking_time,
+                self._last_final_transcript_time,
+                self._speech_start_time,
+            )
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _stt_task(
