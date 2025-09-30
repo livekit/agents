@@ -42,9 +42,6 @@ class DtmfAgent(Agent):
     @function_tool
     async def ask_for_phone_number(self, context: RunContext) -> str:
         """Ask user to provide a phone number."""
-        self.session.generate_reply(instructions="Ask user to provide a 10-digit phone number")
-        await context.wait_for_playout()
-
         while True:
             result = await GetDtmfTask(
                 name="phone number",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from livekit import rtc
+from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 
 from ... import function_tool
 from ...job import get_job_context
@@ -93,25 +94,56 @@ class GetDtmfTask(AgentTask[str | None]):
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
-            logger.debug(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
+            logger.info(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
+            self._run_dtmf_reply_generation()
 
-            if len(self._curr_dtmf_inputs) == num_digits:
-                self._generate_dtmf_reply()
-            else:
-                self._generate_dtmf_reply.schedule()
+        def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+            if ev.new_state == "speaking":
+                # clear any pending DTMF reply generation
+                logger.debug("User is speaking, cancelling DTMF reply generation")
+                self._generate_dtmf_reply.cancel()
+            elif len(self._curr_dtmf_inputs) != 0:
+                # resume any previously cancelled DTMF reply generation after user is back to non-speaking
+                logger.debug("User is back to non-speaking, resuming DTMF reply generation")
+                self._run_dtmf_reply_generation()
 
+        def _on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
+            if ev.new_state in ["speaking", "thinking"]:
+                # clear any pending DTMF reply generation
+                logger.debug("Agent is speaking, cancelling DTMF reply generation")
+                self._generate_dtmf_reply.cancel()
+            elif len(self._curr_dtmf_inputs) != 0:
+                # resume any previously cancelled DTMF reply generation after user is back to non-speaking
+                logger.debug("Agent is back to non-speaking, resuming DTMF reply generation")
+                self._run_dtmf_reply_generation()
+
+        self._name = name
+        self._num_digits = num_digits
         self._curr_dtmf_inputs: list[DtmfEvent] = []
         self._generate_dtmf_reply = _generate_dtmf_reply
         self._on_sip_dtmf_received = _on_sip_dtmf_received
+        self._on_user_state_changed = _on_user_state_changed
+        self._on_agent_state_changed = _on_agent_state_changed
+
+    def _run_dtmf_reply_generation(self) -> None:
+        logger.debug("Running DTMF reply generation")
+        if len(self._curr_dtmf_inputs) == self._num_digits:
+            self._generate_dtmf_reply()
+        else:
+            self._generate_dtmf_reply.schedule()
 
     async def on_enter(self) -> None:
         ctx = get_job_context()
 
         ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
+        self.session.on("agent_state_changed", self._on_user_state_changed)
+        self.session.on("agent_state_changed", self._on_agent_state_changed)
         self.session.generate_reply()
 
     async def on_exit(self) -> None:
         ctx = get_job_context()
 
         ctx.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+        self.session.off("agent_state_changed", self._on_user_state_changed)
+        self.session.off("agent_state_changed", self._on_agent_state_changed)
         self._generate_dtmf_reply.cancel()
