@@ -1644,8 +1644,6 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at = time.time()
         assistant_metrics: llm.MetricsReport = {}
 
-        print(llm_gen_data.ttft)
-
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
 
