@@ -303,7 +303,7 @@ class LLM(llm.LLM):
         )
 
     @classmethod
-    def parse_model(cls, model: str) -> LLM:
+    def from_model_string(cls, model: str) -> LLM:
         """Create a LLM instance from a model string"""
         return cls(model)
 

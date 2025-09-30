@@ -228,7 +228,7 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @classmethod
-    def parse_model(cls, model: str) -> STT:
+    def from_model_string(cls, model: str) -> STT:
         """Create a STT instance from a model string
 
         Args:

@@ -253,7 +253,7 @@ class TTS(tts.TTS):
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @classmethod
-    def parse_model(cls, model: str) -> TTS:
+    def from_model_string(cls, model: str) -> TTS:
         """Create a TTS instance from a model string
 
         Args:
