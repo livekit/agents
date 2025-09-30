@@ -1,25 +1,30 @@
 import logging
-from dotenv import load_dotenv
 from dataclasses import dataclass
+
+from dotenv import load_dotenv
+
 from livekit.agents import (
     Agent,
-    AgentTask,
     AgentSession,
+    AgentTask,
     JobContext,
     JobProcess,
     WorkerOptions,
-    cli
+    cli,
 )
-from livekit.agents.beta.workflows import Question, GetEmailTask, TaskOrchestrator
+from livekit.agents.beta.workflows import GetEmailTask, Question, TaskOrchestrator
 from livekit.plugins import cartesia, deepgram, openai, silero
+
 
 @dataclass
 class CollectedInformation:
+    # TODO: perhaps can be organized better
     first_name: str | None = None
     last_name: str | None = None
     email: str | None = None
     birthday: str | None = None
-    question_answer: dict | None = None 
+    question_answer: dict | None = None
+
 
 class SurveyAgent(Agent):
     def __init__(self) -> None:
@@ -31,23 +36,35 @@ class SurveyAgent(Agent):
 
     async def on_enter(self) -> AgentTask:
         await self.session.generate_reply(
-            instructions="Greet the candidate for the Software Engineer interview."
+            instructions="Welcome the candidate for the Software Engineer interview."
         )
-        # add questiontasks into task stack TaskOrchestrator
-        email = await GetEmailTask()
-        yoe_q = Question(instructions="Ask the user how many years of experience they have.", return_type="str")
-        yoe = await yoe_q
+        yoe_q = Question(instructions="Ask the candidate how many years of experience they have.")
+        commute_q = Question(
+            instructions="Ask the candidate if they are able to commute to the office."
+        )
+        equipment_q = Question(
+            instructions="Ask the candidate if they have a working computer to use."
+        )
+
+        task_bank = [equipment_q, commute_q, yoe_q, GetEmailTask()]
+        task_orchestrator = TaskOrchestrator(
+            llm=openai.LLM(model="gpt-4o-mini"), task_stack=task_bank
+        )
+        results = await task_orchestrator
+
+        # TODO: transfer the results to the userdata
+
 
 logger = logging.getLogger("SurveyAgent")
 
 load_dotenv(".env.local")
 
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+
 async def entrypoint(ctx: JobContext):
-
-
     session = AgentSession[CollectedInformation](
         userdata=CollectedInformation(),
         llm=openai.LLM(model="gpt-4o-mini"),
@@ -57,7 +74,6 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-   
     # add shutdown callback of conversation summary
     # ctx.add_shutdown_callback(...)
 
