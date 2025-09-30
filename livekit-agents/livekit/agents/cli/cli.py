@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import asyncio
 import datetime
 import enum
@@ -189,6 +190,7 @@ class ConsoleAudioOutput(io.AudioOutput):
 
 class AgentsConsole:
     _instance: AgentsConsole | None = None
+    _console_directory = "console-recordings"
 
     @classmethod
     def get_instance(cls) -> AgentsConsole:
@@ -240,9 +242,14 @@ class AgentsConsole:
         self._io_acquired_event = threading.Event()
 
         self._enabled = False
+        self._record = False
 
         self._text_mode_log_filter = TextModeLogFilter()
         self._log_handler = RichLoggingHandler(self)
+
+        self._session_directory = pathlib.Path(
+            self._console_directory, f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}"
+        )
 
     def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
         with self._lock:
@@ -272,6 +279,18 @@ class AgentsConsole:
     @enabled.setter
     def enabled(self, val: bool) -> None:
         self._enabled = val
+
+    @property
+    def record(self) -> bool:
+        return self._record
+
+    @record.setter
+    def record(self, val: bool) -> None:
+        self._record = val
+
+    @property
+    def session_directory(self) -> pathlib.Path:
+        return self._session_directory
 
     @property
     def io_acquired(self) -> bool:
@@ -704,7 +723,7 @@ class RichLoggingHandler(logging.Handler):
         self.c = agents_console
 
         # used to avoid rendering two same time
-        self._last_time: Optional[Text] = None
+        self._last_time: Text | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
         message = self.format(record)
@@ -836,7 +855,7 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
 
 class TextModeLogFilter(logging.Filter):
     # We don't want to remove the DEBUG logs from the agents codebase since they're useful. But we now have duplicate content when using
-    # the text mode, so we logging.Filer
+    # the text mode, so we use logging.Filter
     _patterns = [
         re.compile(r"\bexecuting tool\b", re.IGNORECASE),
         re.compile(r"\btools execution completed\b", re.IGNORECASE),
@@ -939,7 +958,7 @@ def live_status(
         _render(), console=console, refresh_per_second=refresh_per_second, transient=transient
     ) as live:
 
-        def update(new_text: Optional[str | Text] = None) -> None:
+        def update(new_text: str | Text | None = None) -> None:
             nonlocal msg
             if new_text is not None:
                 msg = new_text if isinstance(new_text, Text) else Text(str(new_text))
@@ -1125,14 +1144,19 @@ def _run_console(
     input_device: str | None,
     output_device: str | None,
     mode: ConsoleMode,
+    record: bool,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
+    c.record = record
 
     _configure_logger(c, logging.DEBUG)
-
     c.print("Starting console mode 🚀", tag="Agents")
+
+    if c.record:
+        c.print(f"Session recording will be saved to {c.session_directory}", tag="Recording", tag_style=Style.parse("black on red"))
+
     c.print(" ")
     # c.print(
     #     "Searching for package file structure from directories with [blue]__init__.py[/blue] files"
@@ -1260,16 +1284,17 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
             loop.close()  # close can only be called from the main thread
             return  # noqa: B012
 
-        try:
-            tasks = asyncio.all_tasks(loop)
-            for task in tasks:
-                task.cancel()
+        with contextlib.suppress(_ExitCli):
+            try:
+                tasks = asyncio.all_tasks(loop)
+                for task in tasks:
+                    task.cancel()
 
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
-        finally:
-            loop.close()
+                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            finally:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+                loop.close()
 
 
 class LogLevel(str, enum.Enum):
@@ -1309,6 +1334,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             bool,
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
+        record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = None,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
@@ -1328,6 +1354,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             input_device=input_device,
             output_device=output_device,
             mode="text" if text else "audio",
+            record=record,
         )
 
     @app.command()

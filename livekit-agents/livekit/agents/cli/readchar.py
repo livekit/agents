@@ -166,8 +166,11 @@ def _posix_readchar() -> str:
     old_settings = termios.tcgetattr(fd)
     term = termios.tcgetattr(fd)
     try:
-        # Disable canonical input, echo, and break handling
-        term[3] &= ~(termios.ICANON | termios.ECHO | termios.IGNBRK | termios.BRKINT)
+        # Disable canonical input & echo (local flags)
+        term[3] &= ~(termios.ICANON | termios.ECHO)
+        term[3] |= termios.ISIG
+        # Disable break handling (input flags)
+        term[0] &= ~(termios.IGNBRK | termios.BRKINT)
         termios.tcsetattr(fd, termios.TCSAFLUSH, term)
 
         ch = sys.stdin.read(1)
