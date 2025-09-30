@@ -82,7 +82,7 @@ class STTv2(stt.STT):
             interim_results: Whether to return interim (non-final) transcription results. Defaults to True.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             eager_eot_threshold: The threshold for eager end of turn to enable preemptive generation. Disabled by default. Set to 0.3-0.9 to enable preemptive generation.
-            eot_threshold: The threshold for end of speech detection. Defaults to 0.5.
+            eot_threshold: The threshold for end of speech detection. Defaults to 0.7.
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
             keyterms: List of key terms to improve recognition accuracy. Defaults to None.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
