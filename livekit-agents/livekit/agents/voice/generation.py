@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import asyncio
 import functools
 import inspect
@@ -30,8 +31,10 @@ from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
+from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
+
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -51,6 +54,7 @@ class _LLMGenerationData:
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    ttft: float | None = None
 
 
 def perform_llm_inference(
@@ -87,6 +91,7 @@ async def _llm_inference_task(
     model_settings: ModelSettings,
     data: _LLMGenerationData,
 ) -> bool:
+    start_time = time.perf_counter()
     current_span = trace.get_current_span()
     data.started_fut.set_result(None)
 
@@ -122,6 +127,9 @@ async def _llm_inference_task(
     # forward llm stream to output channels
     try:
         async for chunk in llm_node:
+            if data.ttft is None:
+                data.ttft = time.perf_counter() - start_time
+
             # io.LLMNode can either return a string or a ChatChunk
             if isinstance(chunk, str):
                 data.generated_text += chunk
@@ -170,6 +178,7 @@ async def _llm_inference_task(
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
     timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
+    ttfb: float | None = None
 
 
 def perform_tts_inference(
@@ -200,23 +209,44 @@ async def _tts_inference_task(
     model_settings: ModelSettings,
     data: _TTSGenerationData,
 ) -> bool:
+    start_time: float | None = None
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
-    tts_node = node(input, model_settings)
-    if asyncio.iscoroutine(tts_node):
-        tts_node = await tts_node
+    input_tee = itertools.tee(input, 2)
 
-    if isinstance(tts_node, AsyncIterable):
-        timed_text_ch = aio.Chan[io.TimedString]()
-        timed_texts_fut.set_result(timed_text_ch)
+    async def _get_start_time() -> None:
+        nonlocal start_time
+        await input_tee[0].__anext__()
+        start_time = time.perf_counter()
 
-        async for audio_frame in tts_node:
-            for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                timed_text_ch.send_nowait(text)
+    _start_time_task = asyncio.create_task(_get_start_time())
 
-            audio_ch.send_nowait(audio_frame)
-        return True
+    try:
+        tts_node = node(input_tee[1], model_settings)
+        if asyncio.iscoroutine(tts_node):
+            tts_node = await tts_node
 
-    timed_texts_fut.set_result(None)
+        if isinstance(tts_node, AsyncIterable):
+            timed_text_ch = aio.Chan[io.TimedString]()
+            timed_texts_fut.set_result(timed_text_ch)
+
+            async for audio_frame in tts_node:
+                if data.ttfb is None:
+                    if start_time is None:
+                        start_time = 0
+
+                    data.ttfb = time.perf_counter() - start_time
+
+                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                    timed_text_ch.send_nowait(text)
+
+                audio_ch.send_nowait(audio_frame)
+            return True
+
+        timed_texts_fut.set_result(None)
+    finally:
+        await aio.gracefully_cancel(_start_time_task)
+        await input_tee.aclose()
+
     return False
 
 

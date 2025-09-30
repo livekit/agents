@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import socket
 from dataclasses import dataclass
-from typing import Any, Callable, cast
+from typing import Any, Callable, cast, Awaitable
 
 from opentelemetry import trace
 
@@ -40,6 +40,7 @@ from .proto import (
 class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     mp_cch: socket.socket
     log_cch: socket.socket
     user_arguments: Any | None = None
@@ -51,6 +52,7 @@ def proc_main(args: ProcStartArgs) -> None:
     job_proc = _JobProc(
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,
+        args.session_end_fnc,
         JobExecutorType.PROCESS,
         args.user_arguments,
     )
@@ -63,6 +65,11 @@ def proc_main(args: ProcStartArgs) -> None:
         return  # initialization failed, exit (initialize will send an error to the worker)
 
     client.run()
+
+    import threading
+
+    for t in threading.enumerate():
+        print(t.name, t.native_id)
 
 
 class _InfClient(InferenceExecutor):
@@ -107,6 +114,7 @@ class _JobProc:
         self,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Any],
+        session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
@@ -114,6 +122,7 @@ class _JobProc:
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
+        self._session_end_fnc = session_end_fnc
         self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -164,7 +173,6 @@ class _JobProc:
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
         await self._exit_proc_flag.wait()
-
         await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
@@ -234,7 +242,7 @@ class _JobProc:
             if not self._ctx_connect_called and not self._ctx_shutdown_called:
                 logger.warning(
                     "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
-                    "This may indicate that job_ctx.connect() was not called. "
+                    "This might mean that job_ctx.connect() was never invoked, or that no AgentSession with an active RoomIO has been started."
                 )
 
         warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
@@ -258,14 +266,23 @@ class _JobProc:
         job_entry_task.add_done_callback(log_exception)
 
         shutdown_info = await self._shutdown_fut
+
+        try:
+            if (session := self._job_ctx._primary_agent_session):
+                await session.aclose()
+        finally:
+            pass
+
+        if self._session_end_fnc:
+            try:
+                await self._session_end_fnc(self._job_ctx)
+            except Exception:
+                logger.exception("error while executing the on_session_end callback")
+
         logger.debug(
             "shutting down job task",
-            extra={
-                "reason": shutdown_info.reason,
-                "user_initiated": shutdown_info.user_initiated,
-            },
+            extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
         )
-
         await self._client.send(Exiting(reason=shutdown_info.reason))
         await self._room.disconnect()
 
@@ -290,6 +307,7 @@ class _JobProc:
 class ThreadStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
@@ -305,6 +323,7 @@ def thread_main(
         job_proc = _JobProc(
             args.initialize_process_fnc,
             args.job_entrypoint_fnc,
+            args.session_end_fnc,
             JobExecutorType.THREAD,
             args.user_arguments,
         )
