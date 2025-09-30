@@ -87,12 +87,15 @@ class GetDtmfTask(AgentTask[str | None]):
                 "Once you are sure, call `confirm_dtmf_inputs` with the inputs.\n"
                 "</dtmf_inputs>"
             )
-            logger.debug("Generating DTMF confirmation prompt")
 
-            self._curr_dtmf_inputs = []
             await self.session.generate_reply(instructions=instructions)
+            self._curr_dtmf_inputs = []
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
+            if self.received_full_digits():
+                # temporarily pause DTMF receive to prevent new DTMF inputs interrupts the reply generation
+                return
+
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
             logger.info(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
             self._run_dtmf_reply_generation()
@@ -100,21 +103,17 @@ class GetDtmfTask(AgentTask[str | None]):
         def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
             if ev.new_state == "speaking":
                 # clear any pending DTMF reply generation
-                logger.debug("User is speaking, cancelling DTMF reply generation")
                 self._generate_dtmf_reply.cancel()
             elif len(self._curr_dtmf_inputs) != 0:
                 # resume any previously cancelled DTMF reply generation after user is back to non-speaking
-                logger.debug("User is back to non-speaking, resuming DTMF reply generation")
                 self._run_dtmf_reply_generation()
 
         def _on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
             if ev.new_state in ["speaking", "thinking"]:
                 # clear any pending DTMF reply generation
-                logger.debug("Agent is speaking, cancelling DTMF reply generation")
                 self._generate_dtmf_reply.cancel()
             elif len(self._curr_dtmf_inputs) != 0:
-                # resume any previously cancelled DTMF reply generation after user is back to non-speaking
-                logger.debug("Agent is back to non-speaking, resuming DTMF reply generation")
+                # resume any previously cancelled DTMF reply generation after agent is back to non-speaking
                 self._run_dtmf_reply_generation()
 
         self._name = name
@@ -125,9 +124,11 @@ class GetDtmfTask(AgentTask[str | None]):
         self._on_user_state_changed = _on_user_state_changed
         self._on_agent_state_changed = _on_agent_state_changed
 
+    def received_full_digits(self) -> bool:
+        return len(self._curr_dtmf_inputs) >= self._num_digits
+
     def _run_dtmf_reply_generation(self) -> None:
-        logger.debug("Running DTMF reply generation")
-        if len(self._curr_dtmf_inputs) == self._num_digits:
+        if self.received_full_digits():
             self._generate_dtmf_reply()
         else:
             self._generate_dtmf_reply.schedule()
