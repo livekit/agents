@@ -106,7 +106,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
-    provider: str
+    provider: str | None
     base_url: str
     api_key: str
     api_secret: str
@@ -213,7 +213,7 @@ class LLM(llm.LLM):
             tool_choice
             if is_given(tool_choice)
             else self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
-        )
+        )  # type: ignore
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):
@@ -227,7 +227,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
 
