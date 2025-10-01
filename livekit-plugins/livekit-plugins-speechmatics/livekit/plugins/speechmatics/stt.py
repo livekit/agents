@@ -267,12 +267,12 @@ class STT(stt.STT):
                 else config.punctuation_overrides
             )
             # Extract max_speakers from speaker_diarization_config if present
-            if not is_given(max_speakers) and hasattr(config, "speaker_diarization_config"):
-                if (
-                    config.speaker_diarization_config
-                    and "max_speakers" in config.speaker_diarization_config
-                ):
-                    max_speakers = config.speaker_diarization_config["max_speakers"]
+            if (
+                not is_given(max_speakers)
+                and (dz_cfg := config.speaker_diarization_config)
+                and dz_cfg.max_speakers is not None
+            ):
+                max_speakers = dz_cfg.max_speakers
 
         if is_given(audio_settings):
             logger.warning(
