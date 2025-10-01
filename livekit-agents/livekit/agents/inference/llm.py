@@ -3,24 +3,22 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Union, cast, overload
-from typing_extensions import TypedDict
+from typing import Any, Literal, Union, cast
 
 import httpx
 import openai
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageParam,
-    ChatCompletionToolChoiceOptionParam,
     ChatCompletionPredictionContentParam,
+    ChatCompletionToolChoiceOptionParam,
     ChatCompletionToolParam,
-    ChatCompletionStreamOptionsParam,
     completion_create_params,
 )
+from openai.types.chat.chat_completion_chunk import Choice
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from openai.types.shared_params import Metadata
-from typing import Optional, Iterable
-from openai.types.chat.chat_completion_chunk import Choice
+from typing_extensions import TypedDict
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
@@ -70,29 +68,29 @@ LLMModels = Union[OpenAIModels, GoogleModels, QwenModels, KimiModels, DeepSeekMo
 
 
 class ChatCompletionOptions(TypedDict, total=False):
-    frequency_penalty: Optional[float]
-    logit_bias: Optional[dict[str, int]]
-    logprobs: Optional[bool]
-    max_completion_tokens: Optional[int]
-    max_tokens: Optional[int]
-    metadata: Optional[Metadata]
-    modalities: Optional[list[Literal["text", "audio"]]]
-    n: Optional[int]
+    frequency_penalty: float | None
+    logit_bias: dict[str, int] | None
+    logprobs: bool | None
+    max_completion_tokens: int | None
+    max_tokens: int | None
+    metadata: Metadata | None
+    modalities: list[Literal["text", "audio"]] | None
+    n: int | None
     parallel_tool_calls: bool
-    prediction: Optional[ChatCompletionPredictionContentParam]
-    presence_penalty: Optional[float]
+    prediction: ChatCompletionPredictionContentParam | None
+    presence_penalty: float | None
     prompt_cache_key: str
-    reasoning_effort: Optional[ReasoningEffort]
+    reasoning_effort: ReasoningEffort | None
     safety_identifier: str
-    seed: Optional[int]
-    service_tier: Optional[Literal["auto", "default", "flex", "scale", "priority"]]
-    stop: Union[Optional[str], list[str], None]
-    store: Optional[bool]
-    temperature: Optional[float]
-    top_logprobs: Optional[int]
-    top_p: Optional[float]
+    seed: int | None
+    service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None
+    stop: str | None | list[str] | None
+    store: bool | None
+    temperature: float | None
+    top_logprobs: int | None
+    top_p: float | None
     user: str
-    verbosity: Optional[Literal["low", "medium", "high"]]
+    verbosity: Literal["low", "medium", "high"] | None
     web_search_options: completion_create_params.WebSearchOptions
 
     # livekit-typed arguments
