@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from typing import Callable, Optional
+
 from livekit import rtc
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 
@@ -9,14 +11,14 @@ from ... import function_tool
 from ...job import get_job_context
 from ...llm.chat_context import ChatContext
 from ...types import NOT_GIVEN, NotGivenOr
-from ...utils.aio.debounce import debounced
+from ...utils.aio.debounce import Debounced, debounced
 from ...voice.agent import AgentTask
 from ..tools.dtmf import DtmfEvent, format_dtmf
 
 logger = logging.getLogger("dtmf-inputs")
 
 
-class GetDtmfTask(AgentTask[str | None]):
+class GetDtmfTask(AgentTask[Optional[str]]):
     """A task to collect DTMF inputs from the user.
 
     Return a string of DTMF inputs if collected successfully, otherwise None.
@@ -43,6 +45,10 @@ class GetDtmfTask(AgentTask[str | None]):
         """
         if num_digits <= 0:
             raise ValueError("num_digits must be greater than 0")
+
+        self._name: str = name
+        self._num_digits: int = num_digits
+        self._curr_dtmf_inputs: list[DtmfEvent] = []
 
         @function_tool
         async def confirm_dtmf_inputs(inputs: list[DtmfEvent]) -> None:
@@ -77,11 +83,13 @@ class GetDtmfTask(AgentTask[str | None]):
 
             # if input not fully received (i.e. timeout), return None
             if len(self._curr_dtmf_inputs) != num_digits:
-                return self.complete(None)
+                self.complete(None)
+                return
 
             # if not asking for confirmation, return the DTMF inputs
             if not ask_for_confirmation:
-                return self.complete(dmtf_str)
+                self.complete(dmtf_str)
+                return
 
             instructions = (
                 "<dtmf_inputs>\n"
@@ -92,7 +100,7 @@ class GetDtmfTask(AgentTask[str | None]):
             )
 
             await self.session.generate_reply(instructions=instructions)
-            self._curr_dtmf_inputs = []
+            self._curr_dtmf_inputs.clear()
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
             if self.received_full_digits():
@@ -125,13 +133,14 @@ class GetDtmfTask(AgentTask[str | None]):
                 # resume any previously cancelled DTMF reply generation after agent is back to non-speaking
                 self._run_dtmf_reply_generation()
 
-        self._name = name
-        self._num_digits = num_digits
-        self._curr_dtmf_inputs: list[DtmfEvent] = []
-        self._generate_dtmf_reply = _generate_dtmf_reply
-        self._on_sip_dtmf_received = _on_sip_dtmf_received
-        self._on_user_state_changed = _on_user_state_changed
-        self._on_agent_state_changed = _on_agent_state_changed
+        self._generate_dtmf_reply: Debounced[None] = _generate_dtmf_reply
+        self._on_sip_dtmf_received: Callable[[rtc.SipDTMF], None] = _on_sip_dtmf_received
+        self._on_user_state_changed: Callable[[UserStateChangedEvent], None] = (
+            _on_user_state_changed
+        )
+        self._on_agent_state_changed: Callable[[AgentStateChangedEvent], None] = (
+            _on_agent_state_changed
+        )
 
     def received_full_digits(self) -> bool:
         return len(self._curr_dtmf_inputs) >= self._num_digits
