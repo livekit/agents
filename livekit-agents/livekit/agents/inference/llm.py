@@ -302,11 +302,6 @@ class LLM(llm.LLM):
             ),
         )
 
-    @classmethod
-    def from_model_string(cls, model: str) -> LLM:
-        """Create a LLM instance from a model string"""
-        return cls(model)
-
     @property
     def model(self) -> str:
         """Get the model name for this LLM instance."""

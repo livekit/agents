@@ -298,13 +298,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
-            stt = inference.STT.from_model_string(stt)
+            stt = inference.STT(model=stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.LLM(model=llm)
 
         if isinstance(tts, str):
-            tts = inference.TTS.from_model_string(tts)
+            tts = inference.TTS(model=tts)
 
         self._stt = stt or None
         self._vad = vad or None
