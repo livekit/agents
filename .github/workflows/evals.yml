@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   evals:
+    # don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     strategy:
       fail-fast: false

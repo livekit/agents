@@ -44,6 +44,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
+from .version import __version__
 
 BASE_URL = "https://api.gladia.io/v2/live"
 
@@ -145,6 +146,13 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         },
         "realtime_processing": {
             "words_accurate_timestamps": False,
+        },
+        "messages_config": {
+            "receive_partial_transcripts": opts.interim_results,
+            "receive_final_transcripts": True,
+        },
+        "custom_metadata": {
+            "livekit": __version__,
         },
     }
 
@@ -301,6 +309,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
+
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Gladia"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

@@ -12,6 +12,7 @@ from typing import Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
@@ -28,6 +29,11 @@ class SpeechEventType(str, Enum):
     if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""  # noqa: E501
     INTERIM_TRANSCRIPT = "interim_transcript"
     """interim transcript, useful for real-time transcription"""
+    PREFLIGHT_TRANSCRIPT = "preflight_transcript"
+    """preflight transcript, emitted when the STT is confident enough that a certain
+    portion of speech will not change. This is different from final transcript in that
+    the same transcript may still be updated; but it is stable enough to be used for
+    preemptive generation"""
     FINAL_TRANSCRIPT = "final_transcript"
     """final transcript, emitted when the STT is confident enough that a certain
     portion of speech will not change"""
@@ -45,6 +51,7 @@ class SpeechData:
     end_time: float = 0.0
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
+    is_primary_speaker: bool | None = None
 
 
 @dataclass
@@ -64,6 +71,7 @@ class SpeechEvent:
 class STTCapabilities:
     streaming: bool
     interim_results: bool
+    diarization: bool = False
 
 
 class STTError(BaseModel):
@@ -91,6 +99,30 @@ class STT(
     @property
     def label(self) -> str:
         return self._label
+
+    @property
+    def model(self) -> str:
+        """Get the model name/identifier for this STT instance.
+
+        Returns:
+            The model name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their model information.
+        """
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """Get the provider name/identifier for this STT instance.
+
+        Returns:
+            The provider name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their provider information.
+        """
+        return "unknown"
 
     @property
     def capabilities(self) -> STTCapabilities:
@@ -126,6 +158,10 @@ class STT(
                     label=self._label,
                     audio_duration=calculate_audio_duration(buffer),
                     streamed=False,
+                    metadata=Metadata(
+                        model_name=self.model,
+                        model_provider=self.provider,
+                    ),
                 )
                 self.emit("metrics_collected", stt_metrics)
                 return event
@@ -306,6 +342,9 @@ class RecognizeStream(ABC):
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
+                    metadata=Metadata(
+                        model_name=self._stt.model, model_provider=self._stt.provider
+                    ),
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)

@@ -68,6 +68,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         # stt=deepgram.STT(),
         # llm=openai.LLM(model="gpt-4o-mini"),
         # tts=cartesia.TTS(),
+        resume_false_interruption=False,
     )
 
     await launch_avatar(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
