@@ -45,7 +45,6 @@ from .models import V2Models
 
 @dataclass
 class STTOptions:
-    interim_results: bool
     model: V2Models | str
     sample_rate: int
     keyterms: list[str]
@@ -63,7 +62,6 @@ class STTv2(stt.STT):
         self,
         *,
         model: V2Models | str = "flux-general-en",
-        interim_results: bool = True,
         sample_rate: int = 16000,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -78,8 +76,7 @@ class STTv2(stt.STT):
         """Create a new instance of Deepgram STT.
 
         Args:
-            model: The Deepgram model to use for speech recognition. Defaults to "nova-3".
-            interim_results: Whether to return interim (non-final) transcription results. Defaults to True.
+            model: The Deepgram model to use for speech recognition. Defaults to "flux-general-en".
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             eager_eot_threshold: The threshold for eager end of turn to enable preemptive generation. Disabled by default. Set to 0.3-0.9 to enable preemptive generation.
             eot_threshold: The threshold for end of speech detection. Defaults to 0.7.
@@ -89,7 +86,6 @@ class STTv2(stt.STT):
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
-            numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
 
         Raises:
@@ -100,9 +96,7 @@ class STTv2(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
@@ -110,7 +104,6 @@ class STTv2(stt.STT):
         self._api_key = deepgram_api_key
 
         self._opts = STTOptions(
-            interim_results=interim_results,
             model=model,
             sample_rate=sample_rate,
             keyterms=keyterms if is_given(keyterms) else [],
@@ -170,7 +163,6 @@ class STTv2(stt.STT):
         self,
         *,
         model: NotGivenOr[V2Models | str] = NOT_GIVEN,
-        interim_results: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -182,8 +174,6 @@ class STTv2(stt.STT):
     ) -> None:
         if is_given(model):
             self._opts.model = model
-        if is_given(interim_results):
-            self._opts.interim_results = interim_results
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
         if is_given(eot_threshold):
@@ -204,7 +194,6 @@ class STTv2(stt.STT):
         for stream in self._streams:
             stream.update_options(
                 model=model,
-                interim_results=interim_results,
                 sample_rate=sample_rate,
                 eot_threshold=eot_threshold,
                 eot_timeout_ms=eot_timeout_ms,
@@ -249,7 +238,6 @@ class SpeechStreamv2(stt.SpeechStream):
         self,
         *,
         model: NotGivenOr[V2Models | str] = NOT_GIVEN,
-        interim_results: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -261,8 +249,6 @@ class SpeechStreamv2(stt.SpeechStream):
     ) -> None:
         if is_given(model):
             self._opts.model = model
-        if is_given(interim_results):
-            self._opts.interim_results = interim_results
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
         if is_given(eot_threshold):
