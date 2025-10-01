@@ -258,7 +258,7 @@ class LLMStream(llm.LLMStream):
         tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
-        provider_fmt: str = "openai", # used internally for chat_ctx format
+        provider_fmt: str = "openai",  # used internally for chat_ctx format
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
