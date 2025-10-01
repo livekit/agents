@@ -1311,8 +1311,8 @@ class AgentActivity(RecognitionHooks):
 
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
-            end_of_utterance_delay=info.end_of_turn_delay,
-            transcription_delay=info.transcription_delay,
+            end_of_utterance_delay=info.end_of_turn_delay or 0.0,
+            transcription_delay=info.transcription_delay or 0.0,
             on_user_turn_completed_delay=on_user_turn_completed_delay,
             speech_id=speech_handle.id,
         )

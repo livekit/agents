@@ -479,33 +479,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     input_options=room_input_options,
                     output_options=room_output_options,
                 )
-                tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
-
-            if self.input.audio and self.output.audio:
-                if record:
-                    self._recorder_io = RecorderIO(agent_session=self)
-                    self.input.audio = self._recorder_io.record_input(self.input.audio)
-                    self.output.audio = self._recorder_io.record_output(self.output.audio)
-
-                if c.enabled:
-                    if c.record:
-                        tasks.append(
-                            asyncio.create_task(
-                                self._recorder_io.start(
-                                    output_path=c.session_directory / "audio.ogg"
-                                )
-                            )
-                        )
-                else:
-                    tasks.append(
-                        asyncio.create_task(
-                            self._recorder_io.start(output_path=c.session_directory / "audio.ogg")
-                        )
-                    )
+                await self._room_io.start()
 
             # session can be restarted, register the callbacks only once
             try:
                 job_ctx = get_job_context()
+
+                if self.input.audio and self.output.audio:
+                    if record:
+                        self._recorder_io = RecorderIO(agent_session=self)
+                        self.input.audio = self._recorder_io.record_input(self.input.audio)
+                        self.output.audio = self._recorder_io.record_output(self.output.audio)
+
+                        if (c.enabled and c.record) or not c.enabled:
+                            task = asyncio.create_task(
+                                self._recorder_io.start(output_path=job_ctx.session_directory / "audio.ogg")
+                            )
+                            tasks.append(task)
+
 
                 if record:
                     if job_ctx._primary_agent_session is None:

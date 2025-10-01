@@ -36,7 +36,9 @@ class SessionReport:
             "room_id": self.room_id,
             "room": self.room,
             "events": events_dict,
-            "audio_recording_path": str(self.audio_recording_path.absolute()),
+            "audio_recording_path": (
+                str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
+            ),
             "options": {
                 "allow_interruptions": self.options.allow_interruptions,
                 "discard_audio_if_uninterruptible": self.options.discard_audio_if_uninterruptible,
