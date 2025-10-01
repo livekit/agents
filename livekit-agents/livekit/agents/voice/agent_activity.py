@@ -1153,6 +1153,22 @@ class AgentActivity(RecognitionHooks):
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration
+
+        if self._turn_detection_mode == "stt":
+            if ev is not None:
+                # Called from VAD - store timing and defer state transition until STT confirms
+                self._pending_speech_end_time = speech_end_time
+                return
+            else:
+                # Called from STT - use stored VAD timing if available, otherwise current time
+                speech_end_time = getattr(self, "_pending_speech_end_time", None) or speech_end_time
+                self._pending_speech_end_time = None
+
+        # For non-STT modes, or STT confirmation, transition to listening
+        self._transition_to_listening(speech_end_time)
+
+    def _transition_to_listening(self, speech_end_time: float) -> None:
+        """Shared logic for transitioning user to listening state."""
         self._session._update_user_state(
             "listening",
             last_speaking_time=speech_end_time,
