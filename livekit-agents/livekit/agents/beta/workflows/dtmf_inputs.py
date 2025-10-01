@@ -102,19 +102,13 @@ class GetDtmfTask(AgentTask[str | None]):
 
         def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
             if ev.new_state == "speaking":
-                # clear any pending DTMF reply generation
-                self._generate_dtmf_reply.cancel()
-            elif len(self._curr_dtmf_inputs) != 0:
-                # resume any previously cancelled DTMF reply generation after user is back to non-speaking
-                self._run_dtmf_reply_generation()
+                # reset timer for any pending DTMF reply generation
+                self._generate_dtmf_reply.reset()
 
         def _on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
             if ev.new_state in ["speaking", "thinking"]:
-                # clear any pending DTMF reply generation
-                self._generate_dtmf_reply.cancel()
-            elif len(self._curr_dtmf_inputs) != 0:
-                # resume any previously cancelled DTMF reply generation after agent is back to non-speaking
-                self._run_dtmf_reply_generation()
+                # reset timer for any pending DTMF reply generation
+                self._generate_dtmf_reply.reset()
 
         self._name = name
         self._num_digits = num_digits

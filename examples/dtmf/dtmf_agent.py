@@ -72,9 +72,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm="azure/gpt-4.1-mini",
+        llm="openai/gpt-4.1-mini",
         stt="deepgram/nova-3",
-        tts="cartesia/sonic-2",
+        tts="elevenlabs/eleven_multilingual_v2",
         turn_detection=MultilingualModel(),
     )
 
