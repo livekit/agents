@@ -48,6 +48,7 @@ OpenAIModels = Literal[
     "openai/gpt-4.1-nano",
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
+    "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
