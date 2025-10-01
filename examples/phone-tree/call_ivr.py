@@ -35,7 +35,9 @@ async def call_ivr_system(phone_number: str) -> None:
         logger.error("SIP_OUTBOUND_TRUNK_ID is not set or invalid")
         return
 
-    logger.info(f"Dialing {phone_number} to room {ROOM_NAME}")
+    # Mask all but the last 4 digits of the phone number for the log
+    masked_number = f"{'*' * (len(phone_number) - 4)}{phone_number[-4:]}" if len(phone_number) > 4 else "****"
+    logger.info(f"Dialing {masked_number} to room {ROOM_NAME}")
 
     try:
         # Create SIP participant to initiate the call
