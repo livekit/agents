@@ -213,7 +213,7 @@ class LLM(llm.LLM):
             tool_choice
             if is_given(tool_choice)
             else self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
-        )
+        )  # type: ignore
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):
