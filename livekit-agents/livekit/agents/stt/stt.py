@@ -29,6 +29,11 @@ class SpeechEventType(str, Enum):
     if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""  # noqa: E501
     INTERIM_TRANSCRIPT = "interim_transcript"
     """interim transcript, useful for real-time transcription"""
+    PREFLIGHT_TRANSCRIPT = "preflight_transcript"
+    """preflight transcript, emitted when the STT is confident enough that a certain
+    portion of speech will not change. This is different from final transcript in that
+    the same transcript may still be updated; but it is stable enough to be used for
+    preemptive generation"""
     FINAL_TRANSCRIPT = "final_transcript"
     """final transcript, emitted when the STT is confident enough that a certain
     portion of speech will not change"""

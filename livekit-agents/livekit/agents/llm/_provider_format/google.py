@@ -34,7 +34,8 @@ def to_chat_ctx(
         elif msg.type == "function_call":
             role = "model"
         elif msg.type == "function_call_output":
-            role = "user"
+            # tool output shouldn't be mixed with other messages
+            role = "tool"
 
         # if the effective role changed, finalize the previous turn.
         if role != current_role:
@@ -75,6 +76,11 @@ def to_chat_ctx(
 
     if current_role is not None and parts:
         turns.append({"role": current_role, "parts": parts})
+
+    # convert role tool to user for gemini
+    for turn in turns:
+        if turn["role"] == "tool":
+            turn["role"] = "user"
 
     # Gemini requires the last message to end with user's turn before they can generate
     if inject_dummy_user_message and current_role != "user":
