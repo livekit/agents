@@ -213,7 +213,7 @@ class LLM(llm.LLM):
             tool_choice
             if is_given(tool_choice)
             else self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
-        )  # type: ignore
+        )
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):
@@ -227,7 +227,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format) # type: ignore
 
         extra.update(self._opts.extra_kwargs)
 
@@ -251,7 +251,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM | llm.LLM,
         *,
         model: LLMModels | str,
-        provider: str = "openai",
+        provider: str | None = None,
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
