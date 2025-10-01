@@ -32,12 +32,6 @@ class Debounced(Generic[T]):
             self._task.cancel()
             self._task = None
 
-    def reset(self) -> None:
-        is_active = self.is_running()
-        self.cancel()
-        if is_active:
-            self.schedule()
-
     def is_running(self) -> bool:
         return (
             self._task is not None

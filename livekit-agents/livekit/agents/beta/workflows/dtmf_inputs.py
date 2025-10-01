@@ -46,6 +46,9 @@ class GetDtmfTask(AgentTask[str | None]):
 
         @function_tool
         async def confirm_dtmf_inputs(inputs: list[DtmfEvent]) -> None:
+            """Confirm the DTMF inputs.
+
+            Called ONLY when user has explicitly confirmed the DTMF inputs is correct."""
             self.complete(format_dtmf(inputs))
 
         instructions = (
@@ -101,14 +104,26 @@ class GetDtmfTask(AgentTask[str | None]):
             self._run_dtmf_reply_generation()
 
         def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+            if self.received_full_digits():
+                return
+
             if ev.new_state == "speaking":
-                # reset timer for any pending DTMF reply generation
-                self._generate_dtmf_reply.reset()
+                # clear any pending DTMF reply generation
+                self._generate_dtmf_reply.cancel()
+            elif len(self._curr_dtmf_inputs) != 0:
+                # resume any previously cancelled DTMF reply generation after user is back to non-speaking
+                self._run_dtmf_reply_generation()
 
         def _on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
+            if self.received_full_digits():
+                return
+
             if ev.new_state in ["speaking", "thinking"]:
-                # reset timer for any pending DTMF reply generation
-                self._generate_dtmf_reply.reset()
+                # clear any pending DTMF reply generation
+                self._generate_dtmf_reply.cancel()
+            elif len(self._curr_dtmf_inputs) != 0:
+                # resume any previously cancelled DTMF reply generation after agent is back to non-speaking
+                self._run_dtmf_reply_generation()
 
         self._name = name
         self._num_digits = num_digits
