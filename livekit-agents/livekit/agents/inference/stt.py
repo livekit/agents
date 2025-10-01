@@ -34,7 +34,7 @@ CartesiaModels = Literal[
     "cartesia",
     "cartesia/ink-whisper",
 ]
-AssemblyaiModels = Literal[
+AssemblyAIModels = Literal[
     "assemblyai",
     "assemblyai/universal-streaming",
 ]
@@ -72,7 +72,7 @@ STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 STTModels = Union[
     DeepgramModels,
     CartesiaModels,
-    AssemblyaiModels,
+    AssemblyAIModels,
     Literal["auto"],  # automatically select a provider based on the language
 ]
 STTEncoding = Literal["pcm_s16le"]
@@ -128,7 +128,7 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
-        model: AssemblyaiModels,
+        model: AssemblyAIModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
