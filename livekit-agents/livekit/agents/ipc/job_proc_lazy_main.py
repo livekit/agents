@@ -286,6 +286,7 @@ class _JobProc:
         await self._client.send(Exiting(reason=shutdown_info.reason))
         await self._room.disconnect()
 
+
         try:
             shutdown_tasks = []
             for callback in self._job_ctx._shutdown_callbacks:
@@ -299,6 +300,7 @@ class _JobProc:
         except Exception:
             logger.exception("error while shutting down the job")
 
+        self._job_ctx._cleanup()
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 

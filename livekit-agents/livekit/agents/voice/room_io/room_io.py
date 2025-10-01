@@ -192,9 +192,11 @@ class RoomIO:
                 sample_rate=self._output_options.audio_sample_rate,
                 num_channels=self._output_options.audio_num_channels,
                 track_publish_options=self._output_options.audio_publish_options,
-                track_name=self._output_options.audio_track_name
-                if utils.is_given(self._output_options.audio_track_name)
-                else "roomio_audio",
+                track_name=(
+                    self._output_options.audio_track_name
+                    if utils.is_given(self._output_options.audio_track_name)
+                    else "roomio_audio"
+                ),
             )
 
         if self._output_options.transcription_enabled or not utils.is_given(
@@ -249,7 +251,6 @@ class RoomIO:
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
-        self._agent_session._room_io = self
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)

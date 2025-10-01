@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import tempfile
 import contextvars
 import functools
 import inspect
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
+from pathlib import Path
 from typing import Any, Callable, cast
 
 from opentelemetry import trace
@@ -137,8 +139,20 @@ class JobContext:
 
         self._primary_agent_session: AgentSession | None = None
 
+        self._tempdir = tempfile.TemporaryDirectory()
+
+        from .cli import AgentsConsole
+        c = AgentsConsole.get_instance()
+        if c.enabled:
+            self._session_directory = c.session_directory
+        else:
+            self._session_directory = self._tempdir.name
+
         self._connected = False
         self._lock = asyncio.Lock()
+
+    def _cleanup(self) -> None:
+        self._tempdir.cleanup()
 
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
@@ -164,6 +178,10 @@ class JobContext:
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
+
+    @property
+    def session_directory(self) -> Path:
+        return Path(self._session_directory)
 
     @property
     def inference_executor(self) -> InferenceExecutor:
