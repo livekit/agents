@@ -250,17 +250,19 @@ class LLMStream(llm.LLMStream):
         llm: LLM | llm.LLM,
         *,
         model: LLMModels | str,
-        provider: str,
+        provider: str = "openai",
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
+        provider_fmt: str = "openai", # used internally for chat_ctx format
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
+        self._provider_fmt = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm
@@ -277,7 +279,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai")
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             fnc_ctx = (
                 to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
                 if self._tools
