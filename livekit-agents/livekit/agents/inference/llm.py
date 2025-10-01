@@ -227,7 +227,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format) # type: ignore
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
 
