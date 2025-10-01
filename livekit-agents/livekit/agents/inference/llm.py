@@ -3,18 +3,22 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict, Union, cast, overload
+from typing import Any, Literal, Union, cast
 
 import httpx
 import openai
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageParam,
+    ChatCompletionPredictionContentParam,
     ChatCompletionToolChoiceOptionParam,
     ChatCompletionToolParam,
     completion_create_params,
 )
 from openai.types.chat.chat_completion_chunk import Choice
+from openai.types.shared.reasoning_effort import ReasoningEffort
+from openai.types.shared_params import Metadata
+from typing_extensions import TypedDict
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
@@ -35,15 +39,16 @@ from ._utils import create_access_token
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
-OpenaiModels = Literal[
-    "azure/gpt-5",
-    "azure/gpt-5-mini",
-    "azure/gpt-5-nano",
-    "azure/gpt-4.1",
-    "azure/gpt-4.1-mini",
-    "azure/gpt-4.1-nano",
-    "azure/gpt-4o",
-    "azure/gpt-4o-mini",
+OpenAIModels = Literal[
+    "openai/gpt-5",
+    "openai/gpt-5-mini",
+    "openai/gpt-5-nano",
+    "openai/gpt-4.1",
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4.1-nano",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
@@ -54,208 +59,80 @@ GoogleModels = Literal[
     "google/gemini-2.0-flash-lite",
 ]
 
-CerebrasModels = Literal["cerebras/qwen-3-32b"]
+QwenModels = Literal["qwen/qwen3-235b-a22b-instruct"]
 
-GroqModels = Literal["groq/gpt-oss-120b"]
+KimiModels = Literal["moonshotai/kimi-k2-instruct"]
 
-BasetenModels = Literal[
-    "baseten/qwen-3-235b",
-    "baseten/deepseek-v3",
-    "baseten/kimi-k2",
-    "baseten/gpt-oss-120b",
-]
+DeepSeekModels = Literal["deepseek-ai/deepseek-v3"]
+
+LLMModels = Union[OpenAIModels, GoogleModels, QwenModels, KimiModels, DeepSeekModels]
 
 
-class OpenaiOptions(TypedDict, total=False):
-    top_p: float
-    reasoning_effort: Literal["minimal", "low", "medium", "high"]
+class ChatCompletionOptions(TypedDict, total=False):
+    frequency_penalty: float | None
+    logit_bias: dict[str, int] | None
+    logprobs: bool | None
+    max_completion_tokens: int | None
+    max_tokens: int | None
+    metadata: Metadata | None
+    modalities: list[Literal["text", "audio"]] | None
+    n: int | None
+    parallel_tool_calls: bool
+    prediction: ChatCompletionPredictionContentParam | None
+    presence_penalty: float | None
+    prompt_cache_key: str
+    reasoning_effort: ReasoningEffort | None
+    safety_identifier: str
+    seed: int | None
+    service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None
+    stop: str | None | list[str] | None
+    store: bool | None
+    temperature: float | None
+    top_logprobs: int | None
+    top_p: float | None
+    user: str
+    verbosity: Literal["low", "medium", "high"] | None
+    web_search_options: completion_create_params.WebSearchOptions
+
+    # livekit-typed arguments
+    tool_choice: ToolChoice
+    # TODO(theomonnomn): support repsonse format
+    # response_format: completion_create_params.ResponseFormat
 
 
-class GoogleOptions(TypedDict, total=False):
-    top_p: float
-
-
-class CerebrasOptions(TypedDict, total=False):
-    top_p: float
-
-
-class GroqOptions(TypedDict, total=False):
-    top_p: float
-
-
-class BasetenOptions(TypedDict, total=False):
-    top_p: float
-
-
-LLMModels = Union[OpenaiModels, CerebrasModels, GroqModels, BasetenModels, GoogleModels]
-
-Verbosity = Literal["low", "medium", "high"]
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
-    temperature: NotGivenOr[float]
-    parallel_tool_calls: NotGivenOr[bool]
-    tool_choice: NotGivenOr[ToolChoice]
-    max_completion_tokens: NotGivenOr[int]
+    provider: str | None
     base_url: str
     api_key: str
     api_secret: str
-    verbosity: NotGivenOr[Verbosity]
-    extra_kwargs: dict[str, Any]
+    extra_kwargs: ChatCompletionOptions | dict[str, Any]
 
 
 class LLM(llm.LLM):
-    @overload
-    def __init__(
-        self,
-        model: OpenaiModels,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: GoogleModels,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: CerebrasModels,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[CerebrasOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: GroqModels,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[GroqOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: BasetenModels,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[BasetenOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
     def __init__(
         self,
         model: LLMModels | str,
         *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    def __init__(
-        self,
-        model: LLMModels | str,
-        *,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[
-            dict[str, Any]
-            | OpenaiOptions
-            | CerebrasOptions
-            | GroqOptions
-            | BasetenOptions
-            | GoogleOptions
-        ] = NOT_GIVEN,
+        provider: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
 
         lk_base_url = (
-            base_url
-            if is_given(base_url)
-            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
+            base_url if base_url else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
         )
 
         lk_api_key = (
             api_key
-            if is_given(api_key)
+            if api_key
             else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
         if not lk_api_key:
@@ -265,7 +142,7 @@ class LLM(llm.LLM):
 
         lk_api_secret = (
             api_secret
-            if is_given(api_secret)
+            if api_secret
             else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
         )
         if not lk_api_secret:
@@ -275,32 +152,28 @@ class LLM(llm.LLM):
 
         self._opts = _LLMOptions(
             model=model,
-            temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
-            max_completion_tokens=max_completion_tokens,
+            provider=provider,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            verbosity=verbosity,
-            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            extra_kwargs=extra_kwargs or {},
         )
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
-            max_retries=max_retries if is_given(max_retries) else 0,
             http_client=httpx.AsyncClient(
-                timeout=timeout
-                if timeout
-                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
-                    max_connections=50,
-                    max_keepalive_connections=50,
-                    keepalive_expiry=120,
+                    max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
                 ),
             ),
         )
+
+    @classmethod
+    def from_model_string(cls, model: str) -> LLM:
+        """Create a LLM instance from a model string"""
+        return cls(model)
 
     @property
     def model(self) -> str:
@@ -309,7 +182,7 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     def chat(
         self,
@@ -328,22 +201,16 @@ class LLM(llm.LLM):
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
-        if is_given(self._opts.max_completion_tokens):
-            extra["max_completion_tokens"] = self._opts.max_completion_tokens
-
-        if is_given(self._opts.temperature):
-            extra["temperature"] = self._opts.temperature
-
-        if is_given(self._opts.verbosity):
-            extra["verbosity"] = self._opts.verbosity
-
         parallel_tool_calls = (
-            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
+            parallel_tool_calls
+            if is_given(parallel_tool_calls)
+            else self._opts.extra_kwargs.get("parallel_tool_calls", NOT_GIVEN)
         )
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        extra_tool_choice = self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
+        tool_choice = tool_choice if is_given(tool_choice) else extra_tool_choice  # type: ignore
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):
@@ -361,12 +228,11 @@ class LLM(llm.LLM):
 
         extra.update(self._opts.extra_kwargs)
 
-        # reset the access token to avoid expiration
         self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         return LLMStream(
             self,
             model=self._opts.model,
-            provider_fmt="openai",  # always sent in openai format
+            provider=self._opts.provider,
             strict_tool_schema=True,
             client=self._client,
             chat_ctx=chat_ctx,
@@ -382,16 +248,18 @@ class LLMStream(llm.LLMStream):
         llm: LLM | llm.LLM,
         *,
         model: LLMModels | str,
-        provider_fmt: str,
+        provider: str | None = None,
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
+        provider_fmt: str = "openai",  # used internally for chat_ctx format
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
+        self._provider = provider
         self._provider_fmt = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
@@ -428,6 +296,10 @@ class LLMStream(llm.LLMStream):
             if not self._tools:
                 # remove tool_choice from extra_kwargs if no tools are provided
                 self._extra_kwargs.pop("tool_choice", None)
+
+            if self._provider:
+                headers = self._extra_kwargs.setdefault("extra_headers", {})
+                headers["X-LiveKit-Inference-Provider"] = self._provider
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),

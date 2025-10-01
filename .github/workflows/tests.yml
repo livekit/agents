@@ -77,18 +77,11 @@ jobs:
         plugin:
           [
             cartesia,
-            aws,
-            azure,
             deepgram,
             elevenlabs,
-            google,
             groq,
             openai,
-            rime,
-            speechify,
-            hume,
             inworld,
-            soniox,
           ]
 
     runs-on: ubuntu-latest
