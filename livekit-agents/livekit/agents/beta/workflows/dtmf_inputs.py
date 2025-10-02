@@ -1,22 +1,35 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from typing import Callable
 
 from livekit import rtc
+from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 
 from ... import function_tool
 from ...job import get_job_context
 from ...llm.chat_context import ChatContext
 from ...types import NOT_GIVEN, NotGivenOr
-from ...utils.aio.debounce import debounced
+from ...utils import is_given
+from ...utils.aio.debounce import Debounced, debounced
 from ...voice.agent import AgentTask
 from ..tools.dtmf import DtmfEvent, format_dtmf
 
 logger = logging.getLogger("dtmf-inputs")
 
 
-class GetDtmfTask(AgentTask[str | None]):
+@dataclass
+class GetDtmfResult:
+    user_input: str
+
+    @classmethod
+    def from_dtmf_inputs(cls, dtmf_inputs: list[DtmfEvent]) -> GetDtmfResult:
+        return cls(user_input=format_dtmf(dtmf_inputs))
+
+
+class GetDtmfTask(AgentTask[GetDtmfResult]):
     """A task to collect DTMF inputs from the user.
 
     Return a string of DTMF inputs if collected successfully, otherwise None.
@@ -24,64 +37,65 @@ class GetDtmfTask(AgentTask[str | None]):
 
     def __init__(
         self,
-        name: str,
-        num_digits: int,
         *,
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
-        input_timeout: float = 5.0,
+        num_digits: int,
         ask_for_confirmation: bool = False,
-        interrupt_on_complete_input: bool = False,
+        dtmf_input_timeout: float = 5.0,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        extra_instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Args:
-            name: The name of the input to collect.
             num_digits: The number of digits to collect.
             chat_ctx: The chat context to use.
-            input_timeout: The per-digit timeout.
+            dtmf_input_timeout: The per-digit timeout.
             ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
-            interrupt_on_complete_input: Whether to interrupt any active speech on full digits been collected.
+            extra_instructions: Extra instructions to add to the task.
         """
         if num_digits <= 0:
             raise ValueError("num_digits must be greater than 0")
+
+        self._num_digits: int = num_digits
+        self._curr_dtmf_inputs: list[DtmfEvent] = []
 
         @function_tool
         async def confirm_dtmf_inputs(inputs: list[DtmfEvent]) -> None:
             """Confirm the DTMF inputs.
 
             Called ONLY when user has explicitly confirmed the DTMF inputs is correct."""
-            self.complete(format_dtmf(inputs))
+            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
-        instructions = (
-            "You are a single step in a broader system, responsible solely for collecting DTMF inputs from the user. "
-            f'Wait for the user to provide "{name}" which is a {num_digits}-digit DTMF inputs. '
-        )
-        tools = []
+        instructions = "You are a single step in a broader system, responsible solely for collecting DTMF inputs from the user. "
 
         if ask_for_confirmation:
             instructions += "Once user has confirmed the DTMF inputs, call `confirm_dtmf_inputs` with the inputs."
-            tools.append(confirm_dtmf_inputs)
+
+        if is_given(extra_instructions):
+            instructions += f"\n{extra_instructions}"
 
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=[confirm_dtmf_inputs] if ask_for_confirmation else None,
         )
 
-        @debounced(delay=input_timeout)
+        @debounced(delay=dtmf_input_timeout)
         async def _generate_dtmf_reply() -> None:
-            if interrupt_on_complete_input:
-                self.session.interrupt()
+            self.session.interrupt()
 
             dmtf_str = format_dtmf(self._curr_dtmf_inputs)
             logger.debug(f"Generating DTMF reply, current inputs: {dmtf_str}")
 
             # if input not fully received (i.e. timeout), return None
             if len(self._curr_dtmf_inputs) != num_digits:
-                return self.complete(None)
+                error_msg = f"DTMF inputs not fully received. Expect {num_digits} digits, got {len(self._curr_dtmf_inputs)}"
+                self.complete(ToolError(error_msg))
+                return
 
             # if not asking for confirmation, return the DTMF inputs
             if not ask_for_confirmation:
-                return self.complete(dmtf_str)
+                self.complete(GetDtmfResult.from_dtmf_inputs(self._curr_dtmf_inputs))
+                return
 
             instructions = (
                 "<dtmf_inputs>\n"
@@ -92,7 +106,7 @@ class GetDtmfTask(AgentTask[str | None]):
             )
 
             await self.session.generate_reply(instructions=instructions)
-            self._curr_dtmf_inputs = []
+            self._curr_dtmf_inputs.clear()
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
             if self.received_full_digits():
@@ -125,13 +139,14 @@ class GetDtmfTask(AgentTask[str | None]):
                 # resume any previously cancelled DTMF reply generation after agent is back to non-speaking
                 self._run_dtmf_reply_generation()
 
-        self._name = name
-        self._num_digits = num_digits
-        self._curr_dtmf_inputs: list[DtmfEvent] = []
-        self._generate_dtmf_reply = _generate_dtmf_reply
-        self._on_sip_dtmf_received = _on_sip_dtmf_received
-        self._on_user_state_changed = _on_user_state_changed
-        self._on_agent_state_changed = _on_agent_state_changed
+        self._generate_dtmf_reply: Debounced[None] = _generate_dtmf_reply
+        self._on_sip_dtmf_received: Callable[[rtc.SipDTMF], None] = _on_sip_dtmf_received
+        self._on_user_state_changed: Callable[[UserStateChangedEvent], None] = (
+            _on_user_state_changed
+        )
+        self._on_agent_state_changed: Callable[[AgentStateChangedEvent], None] = (
+            _on_agent_state_changed
+        )
 
     def received_full_digits(self) -> bool:
         return len(self._curr_dtmf_inputs) >= self._num_digits

@@ -17,7 +17,7 @@ from livekit.agents import (
 from livekit.agents.beta.workflows.dtmf_inputs import (
     GetDtmfTask,
 )
-from livekit.agents.llm.tool_context import function_tool
+from livekit.agents.llm.tool_context import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -43,22 +43,23 @@ class DtmfAgent(Agent):
     async def ask_for_phone_number(self, context: RunContext) -> str:
         """Ask user to provide a phone number."""
         while True:
-            result = await GetDtmfTask(
-                name="phone number",
-                num_digits=10,
-                chat_ctx=self.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
-                ask_for_confirmation=True,
-            )
+            try:
+                result = await GetDtmfTask(
+                    num_digits=10,
+                    chat_ctx=self.chat_ctx.copy(
+                        exclude_instructions=True, exclude_function_call=True
+                    ),
+                    ask_for_confirmation=True,
+                    extra_instructions="Ask user to provide a phone number in the format of +1234567890",
+                )
+            except ToolError as e:
+                self.session.generate_reply(instructions=e.message, allow_interruptions=False)
+                await context.wait_for_playout()
+                continue
 
-            if result is not None:
-                break
+            break
 
-            self.session.generate_reply(
-                instructions="Tell user the provided phone number is invalid. Please try again."
-            )
-            await context.wait_for_playout()
-
-        return f"User's phone number is {result}"
+        return f"User's phone number is {result.user_input}"
 
 
 def prewarm(proc: JobProcess) -> None:
