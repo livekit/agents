@@ -26,13 +26,12 @@ class GetDtmfTask(AgentTask[Optional[str]]):
 
     def __init__(
         self,
-        name: str,
-        num_digits: int,
         *,
+        num_digits: int,
+        extra_instructions: str.
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
-        input_timeout: float = 5.0,
         ask_for_confirmation: bool = False,
-        interrupt_on_complete_input: bool = False,
+        dtmf_input_timeout: float = 5.0,
     ) -> None:
         """
         Args:
