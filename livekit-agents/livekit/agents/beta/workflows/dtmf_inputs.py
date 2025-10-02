@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import logging
-
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Callable
 
 from livekit import rtc
+from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 
 from ... import function_tool
 from ...job import get_job_context
 from ...llm.chat_context import ChatContext
 from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import is_given
 from ...utils.aio.debounce import Debounced, debounced
 from ...voice.agent import AgentTask
 from ..tools.dtmf import DtmfEvent, format_dtmf
@@ -18,7 +20,16 @@ from ..tools.dtmf import DtmfEvent, format_dtmf
 logger = logging.getLogger("dtmf-inputs")
 
 
-class GetDtmfTask(AgentTask[Optional[str]]):
+@dataclass
+class GetDtmfResult:
+    user_input: str
+
+    @classmethod
+    def from_dtmf_inputs(cls, dtmf_inputs: list[DtmfEvent]) -> GetDtmfResult:
+        return cls(user_input=format_dtmf(dtmf_inputs))
+
+
+class GetDtmfTask(AgentTask[GetDtmfResult]):
     """A task to collect DTMF inputs from the user.
 
     Return a string of DTMF inputs if collected successfully, otherwise None.
@@ -28,24 +39,22 @@ class GetDtmfTask(AgentTask[Optional[str]]):
         self,
         *,
         num_digits: int,
-        extra_instructions: str.
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         ask_for_confirmation: bool = False,
         dtmf_input_timeout: float = 5.0,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        extra_instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Args:
-            name: The name of the input to collect.
             num_digits: The number of digits to collect.
             chat_ctx: The chat context to use.
-            input_timeout: The per-digit timeout.
+            dtmf_input_timeout: The per-digit timeout.
             ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
-            interrupt_on_complete_input: Whether to interrupt any active speech on full digits been collected.
+            extra_instructions: Extra instructions to add to the task.
         """
         if num_digits <= 0:
             raise ValueError("num_digits must be greater than 0")
 
-        self._name: str = name
         self._num_digits: int = num_digits
         self._curr_dtmf_inputs: list[DtmfEvent] = []
 
@@ -54,12 +63,13 @@ class GetDtmfTask(AgentTask[Optional[str]]):
             """Confirm the DTMF inputs.
 
             Called ONLY when user has explicitly confirmed the DTMF inputs is correct."""
-            self.complete(format_dtmf(inputs))
+            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
-        instructions = (
-            "You are a single step in a broader system, responsible solely for collecting DTMF inputs from the user. "
-            f'Wait for the user to provide "{name}" which is a {num_digits}-digit DTMF inputs. '
-        )
+        instructions = "You are a single step in a broader system, responsible solely for collecting DTMF inputs from the user. "
+
+        if is_given(extra_instructions):
+            instructions += extra_instructions
+
         tools = []
 
         if ask_for_confirmation:
@@ -72,22 +82,22 @@ class GetDtmfTask(AgentTask[Optional[str]]):
             tools=tools,
         )
 
-        @debounced(delay=input_timeout)
+        @debounced(delay=dtmf_input_timeout)
         async def _generate_dtmf_reply() -> None:
-            if interrupt_on_complete_input:
-                self.session.interrupt()
+            self.session.interrupt()
 
             dmtf_str = format_dtmf(self._curr_dtmf_inputs)
             logger.debug(f"Generating DTMF reply, current inputs: {dmtf_str}")
 
             # if input not fully received (i.e. timeout), return None
             if len(self._curr_dtmf_inputs) != num_digits:
-                self.complete(None)
+                error_msg = f"DTMF inputs not fully received. Expect {num_digits} digits, got {len(self._curr_dtmf_inputs)}"
+                self.complete(ToolError(error_msg))
                 return
 
             # if not asking for confirmation, return the DTMF inputs
             if not ask_for_confirmation:
-                self.complete(dmtf_str)
+                self.complete(GetDtmfResult.from_dtmf_inputs(self._curr_dtmf_inputs))
                 return
 
             instructions = (
