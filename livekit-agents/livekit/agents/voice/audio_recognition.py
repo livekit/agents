@@ -334,22 +334,23 @@ class AudioRecognition:
                 # and using that timestamp for _last_speaking_time
                 self._last_speaking_time = time.time()
 
-            if transcript_changed and (self._vad_base_turn_detection or self._user_turn_committed):
-                self._hooks.on_preemptive_generation(
-                    _PreemptiveGenerationInfo(
-                        new_transcript=self._audio_transcript,
-                        transcript_confidence=(
-                            sum(self._final_transcript_confidence)
-                            / len(self._final_transcript_confidence)
-                            if self._final_transcript_confidence
-                            else 0
-                        ),
+            if self._vad_base_turn_detection or self._user_turn_committed:
+                if transcript_changed:
+                    self._hooks.on_preemptive_generation(
+                        _PreemptiveGenerationInfo(
+                            new_transcript=self._audio_transcript,
+                            transcript_confidence=(
+                                sum(self._final_transcript_confidence)
+                                / len(self._final_transcript_confidence)
+                                if self._final_transcript_confidence
+                                else 0
+                            ),
+                        )
                     )
-                )
 
-            if not self._speaking:
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+                if not self._speaking:
+                    chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                    self._run_eou_detection(chat_ctx)
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
