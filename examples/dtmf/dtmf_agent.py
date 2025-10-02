@@ -53,7 +53,7 @@ class DtmfAgent(Agent):
                     extra_instructions="Ask user to provide a phone number in the format of +1234567890",
                 )
             except ToolError as e:
-                self.session.generate_reply(instructions=e.message)
+                self.session.generate_reply(instructions=e.message, allow_interruptions=False)
                 await context.wait_for_playout()
                 continue
 
