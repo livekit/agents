@@ -33,12 +33,7 @@ class Debounced(Generic[T]):
             self._task = None
 
     def is_running(self) -> bool:
-        return (
-            self._task is not None
-            and not self._task.done()
-            and not self._task.cancelled()
-            and not self._task.cancelling()
-        )
+        return self._task is not None and not self._task.done() and not self._task.cancelled()
 
     def __call__(self) -> asyncio.Task[T]:
         return self.run()

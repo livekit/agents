@@ -44,10 +44,10 @@ class DtmfAgent(Agent):
         """Ask user to provide a phone number."""
         while True:
             result = await GetDtmfTask(
-                name="phone number",
                 num_digits=10,
                 chat_ctx=self.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
                 ask_for_confirmation=True,
+                extra_instructions="Ask user to provide a phone number in the format of +1234567890",
             )
 
             if result is not None:

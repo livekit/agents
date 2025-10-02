@@ -67,19 +67,16 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         instructions = "You are a single step in a broader system, responsible solely for collecting DTMF inputs from the user. "
 
-        if is_given(extra_instructions):
-            instructions += extra_instructions
-
-        tools = []
-
         if ask_for_confirmation:
             instructions += "Once user has confirmed the DTMF inputs, call `confirm_dtmf_inputs` with the inputs."
-            tools.append(confirm_dtmf_inputs)
+
+        if is_given(extra_instructions):
+            instructions += f"\n{extra_instructions}"
 
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=[confirm_dtmf_inputs] if ask_for_confirmation else None,
         )
 
         @debounced(delay=dtmf_input_timeout)
