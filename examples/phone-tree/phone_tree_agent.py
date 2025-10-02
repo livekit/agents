@@ -16,7 +16,6 @@ from livekit.agents import (
 )
 from livekit.agents.beta.tools.dtmf import send_dtmf_events
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("phone-tree-agent")
 
@@ -27,10 +26,13 @@ PHONE_TREE_AGENT_DISPATCH_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "my
 
 
 class PhoneTreeAgent(Agent):
-    def __init__(self) -> None:
+    def __init__(self, goal: str) -> None:
         super().__init__(
             instructions=(
-                "You are a voice assistant that can help users navigate a phone tree IVR system by pressing numbers on the phone"
+                "You are a voice assistant that can help users navigate a phone tree IVR system by pressing numbers on the phone. "
+                "You have access to a tool to send a sequence of dtmf number inputs. Prefer using the tool to send number input over using your own voice. "
+                f"You are connected to a automatic IVR system and your goal is {goal}. "
+                "Listen to the IVR instructions and follow them carefully to navigate to the correct place to enter the account number. "
             ),
             tools=[send_dtmf_events],
         )
@@ -47,10 +49,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm="openai/gpt-4.1-mini",
+        llm="google/gemini-2.5-pro",
         stt="deepgram/nova-3",
         tts="elevenlabs/eleven_multilingual_v2",
-        turn_detection=MultilingualModel(),
     )
 
     usage_collector = metrics.UsageCollector()
@@ -67,7 +68,12 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=PhoneTreeAgent(),
+        agent=PhoneTreeAgent(
+            goal=(
+                # "record your 6-digits account number to LiveKit"
+                "ask about 1) current order status in sales section and 2) warranty covers in billing section"
+            )
+        ),
         room=ctx.room,
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
