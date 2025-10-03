@@ -12,18 +12,34 @@ PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     buckets=[0.1, 0.5, 1, 2, 5, 10],
 )
 
+# Use 'livesum' mode to aggregate active jobs across all processes
+# This sums the values from processes that are still running
 RUNNING_JOB_GAUGE = prometheus_client.Gauge(
-    "lk_agents_active_job_count", "Active jobs", ["nodename"]
+    "lk_agents_active_job_count",
+    "Active jobs",
+    ["nodename"],
+    multiprocess_mode="livesum",
 )
 
+# Use 'max' mode for child process count since we want the total across all processes
 CHILD_PROC_GAUGE = prometheus_client.Gauge(
-    "lk_agents_child_process_count", "Total number of child processes", ["nodename"]
+    "lk_agents_child_process_count",
+    "Total number of child processes",
+    ["nodename"],
+    multiprocess_mode="max",
 )
 
 
-CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set_function(
-    lambda: len(psutil.Process(os.getpid()).children(recursive=True))
-)
+# Note: set_function() is not supported in multiprocess mode.
+# We need to update this metric explicitly.
+def _update_child_proc_count() -> None:
+    """Update child process count metric. Must be called periodically in the main process."""
+    try:
+        count = len(psutil.Process(os.getpid()).children(recursive=True))
+        CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set(count)
+    except Exception:
+        # Process might not exist anymore or access denied
+        pass
 
 
 def job_started() -> None:
