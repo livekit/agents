@@ -8,6 +8,7 @@ from typing import Any
 def _finish_fut(fut: asyncio.Future[Any]) -> None:
     if fut.cancelled():
         return
+
     fut.set_result(None)
 
 
@@ -56,7 +57,7 @@ class Sleep:
         self._handler = loop.call_later(self._delay, _finish_fut, self._fut)
 
         try:
-            await self._fut
+            await asyncio.shield(self._fut)
         finally:
             self._handler.cancel()
 

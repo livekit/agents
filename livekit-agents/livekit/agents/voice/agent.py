@@ -18,7 +18,7 @@ from ..llm import (
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -40,6 +40,7 @@ class Agent:
         self,
         *,
         instructions: str,
+        id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
@@ -55,6 +56,11 @@ class Agent:
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
+        if type(self) is Agent:
+            self._id = "default_agent"
+        else:
+            self._id = id or misc.camel_to_snake_case(type(self).__name__)
+
         self._instructions = instructions
         self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
@@ -86,12 +92,12 @@ class Agent:
         self._activity: AgentActivity | None = None
 
     @property
+    def id(self) -> str:
+        return self._id
+
+    @property
     def label(self) -> str:
-        """
-        Returns:
-            str: The label of the agent.
-        """
-        return f"{type(self).__module__}.{type(self).__name__}"
+        return self.id
 
     @property
     def instructions(self) -> str:
