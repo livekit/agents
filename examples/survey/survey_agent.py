@@ -12,7 +12,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.agents.beta.workflows import GetEmailTask, Question, TaskOrchestrator
+from livekit.agents.beta.workflows import GetEmailTask, Question, Task, TaskOrchestrator
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 
@@ -38,15 +38,23 @@ class SurveyAgent(Agent):
         await self.session.generate_reply(
             instructions="Welcome the candidate for the Software Engineer interview."
         )
-        yoe_q = Question(instructions="Ask the candidate how many years of experience they have.")
-        commute_q = Question(
-            instructions="Ask the candidate if they are able to commute to the office."
-        )
-        equipment_q = Question(
-            instructions="Ask the candidate if they have a working computer to use."
-        )
+        task_bank = [
+            Task(
+                lambda: Question(
+                    instructions="Ask the candidate how many years of experience they have."
+                ),
+                description="Collects years of experience",
+            ),
+            Task(
+                lambda: Question(
+                    instructions="Ask the candidate if they are able to commute to the office."
+                ),
+                description="Asks about commute flexibility",
+            ),
+            Task(lambda: GetEmailTask(), description="Collects email"),
+        ]
+        # TODO will add more complex open ended questions
 
-        task_bank = [equipment_q, commute_q, yoe_q, GetEmailTask()]
         task_orchestrator = TaskOrchestrator(
             llm=openai.LLM(model="gpt-4o-mini"), task_stack=task_bank
         )
