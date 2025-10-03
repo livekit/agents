@@ -174,20 +174,11 @@ class _TTSGenerationData:
 
 
 def perform_tts_inference(
-    *,
-    node: io.TTSNode,
-    input: AsyncIterable[str],
-    model_settings: ModelSettings,
-    text_transforms: Sequence[TextTransforms] | None,
+    *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
     timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
-
-    if text_transforms:
-        from .transcription.filters import apply_text_transforms
-
-        input = apply_text_transforms(input, text_transforms)
 
     tts_task = asyncio.create_task(_tts_inference_task(node, input, model_settings, data))
 
@@ -277,6 +268,7 @@ def perform_audio_forwarding(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
+    print(f"🚀 PERFORM: Starting audio forwarding, output_type={type(audio_output).__name__}")
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
     task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
     return task, out
@@ -288,10 +280,13 @@ async def _audio_forwarding_task(
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
 ) -> None:
+    print(f"🔄 FORWARDING: Started, output_id={id(audio_output)}")
+    print(f"🔄 FORWARDING: Task started, output_type={type(audio_output).__name__}")
     resampler: rtc.AudioResampler | None = None
     try:
         audio_output.resume()
         async for frame in tts_output:
+            print(f"📨 FORWARDING: Got frame {len(frame.data)} bytes, calling capture_frame")
             out.audio.append(frame)
 
             if (
