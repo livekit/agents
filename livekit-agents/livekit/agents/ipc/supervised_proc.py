@@ -285,6 +285,7 @@ class SupervisedProc(ABC):
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ and self._pid:
             try:
                 from prometheus_client import multiprocess
+
                 multiprocess.mark_process_dead(self._pid)  # type: ignore[no-untyped-call]
                 logger.debug(
                     "marked process as dead for prometheus multiprocess mode",
