@@ -20,7 +20,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import Any, Literal, TypedDict
 
 import aiohttp
 
@@ -73,7 +73,7 @@ class AudioFormat(str, Enum):
     pcm = "pcm"
 
 
-ModelVersion: TypeAlias = Literal["1", "2"]
+ModelVersion = Literal["1", "2"]
 
 
 DEFAULT_HEADERS = {
