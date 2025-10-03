@@ -19,7 +19,7 @@ from livekit.agents.beta.workflows.dtmf_inputs import (
 )
 from livekit.agents.llm.tool_context import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
-from livekit.plugins import silero
+from livekit.plugins import deepgram, elevenlabs, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("dtmf-agent")
@@ -50,7 +50,7 @@ class DtmfAgent(Agent):
                         exclude_instructions=True, exclude_function_call=True
                     ),
                     ask_for_confirmation=True,
-                    extra_instructions="Ask user to provide a phone number in the format of +1234567890",
+                    extra_instructions="Ask user to provide a phone number in the format of 123 456 7890",
                 )
             except ToolError as e:
                 self.session.generate_reply(instructions=e.message, allow_interruptions=False)
@@ -73,9 +73,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm="openai/gpt-4.1-mini",
-        stt="deepgram/nova-3",
-        tts="elevenlabs/eleven_multilingual_v2",
+        llm=openai.LLM(model="gpt-4.1-mini"),
+        stt=deepgram.STT(model="nova-3"),
+        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
         turn_detection=MultilingualModel(),
     )
 
