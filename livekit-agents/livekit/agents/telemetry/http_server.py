@@ -21,7 +21,7 @@ async def metrics(_request: aiohttp.web_request.Request) -> web.Response:
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
             # Create a new registry for this request to collect metrics from all processes
             registry = CollectorRegistry(auto_describe=True)
-            multiprocess.MultiProcessCollector(registry)
+            multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
             return generate_latest(registry)
         else:
             # Use default global registry if multiprocess mode is not enabled
