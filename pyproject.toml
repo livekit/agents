@@ -13,6 +13,7 @@ livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
+livekit-plugins-coquitts = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
