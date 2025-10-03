@@ -219,7 +219,7 @@ class AudioRecognition:
             return
 
         async def _commit_user_turn() -> None:
-            if time.time() - self._last_final_transcript_time > 0.5:
+            if self._last_final_transcript_time and time.time() - self._last_final_transcript_time > 0.5:
                 # if the last final transcript is received more than 0.5s ago
                 # append a silence frame to the stt to flush the buffer
 

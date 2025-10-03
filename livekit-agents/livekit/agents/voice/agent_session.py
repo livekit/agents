@@ -24,7 +24,6 @@ from livekit import rtc
 
 from .. import cli, llm, stt, tts, utils, vad
 from .. import inference, llm, stt, tts, utils, vad
-from ..cli import AgentsConsole
 from ..job import get_job_context
 from ..llm import ChatContext, AgentHandoff
 from ..log import logger

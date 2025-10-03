@@ -118,7 +118,12 @@ class ConsoleAudioInput(io.AudioInput):
 
 class ConsoleAudioOutput(io.AudioOutput):
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__(label="Console", next_in_chain=None, sample_rate=SAMPLE_RATE)
+        super().__init__(
+            label="Console",
+            next_in_chain=None,
+            sample_rate=SAMPLE_RATE,
+            capabilities=io.AudioOutputCapabilities(pause=False),  # TODO(theomonnom): support pause
+        )
         self._loop = loop
 
         self._capturing = False
@@ -1155,7 +1160,11 @@ def _run_console(
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
-        c.print(f"Session recording will be saved to {c.session_directory}", tag="Recording", tag_style=Style.parse("black on red"))
+        c.print(
+            f"Session recording will be saved to {c.session_directory}",
+            tag="Recording",
+            tag_style=Style.parse("black on red"),
+        )
 
     c.print(" ")
     # c.print(
