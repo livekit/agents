@@ -49,7 +49,7 @@ from .models import (
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
-API_VERSION = "2024-06-10"
+API_VERSION = "2025-04-16"
 
 
 @dataclass
