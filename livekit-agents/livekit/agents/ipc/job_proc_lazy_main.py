@@ -12,6 +12,7 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import socket
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, cast, Awaitable
 
@@ -268,10 +269,27 @@ class _JobProc:
         shutdown_info = await self._shutdown_fut
 
         try:
-            if (session := self._job_ctx._primary_agent_session):
+            if session := self._job_ctx._primary_agent_session:
                 await session.aclose()
-        finally:
-            pass
+
+            from ..cli import AgentsConsole
+
+            c = AgentsConsole.get_instance()
+            if c.enabled and c.record and session:
+                report = self._job_ctx.make_session_report(session)
+                report_json = json.dumps(report.to_cloud_data(), indent=2)
+
+                import aiofiles
+                import aiofiles.os
+
+                await aiofiles.os.makedirs(self._job_ctx.session_directory, exist_ok=True)
+                async with aiofiles.open(
+                    self._job_ctx.session_directory / "session_report.json", mode="w"
+                ) as f:
+                    await f.write(report_json)
+
+        except Exception:
+            logger.exception("failed to save session report")
 
         if self._session_end_fnc:
             try:
@@ -285,7 +303,6 @@ class _JobProc:
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
         await self._room.disconnect()
-
 
         try:
             shutdown_tasks = []
