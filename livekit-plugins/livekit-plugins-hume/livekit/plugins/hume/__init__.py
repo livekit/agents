@@ -34,6 +34,7 @@ from .version import __version__
 __all__ = [
     "TTS",
     "AudioFormat",
+    "ModelVersion",
     "VoiceById",
     "VoiceByName",
     "VoiceProvider",

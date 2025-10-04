@@ -61,9 +61,9 @@ class _TurnDetector(Protocol):
 
 
 class RecognitionHooks(Protocol):
-    def on_start_of_speech(self, ev: vad.VADEvent) -> None: ...
+    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
-    def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
+    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
@@ -103,10 +103,13 @@ class AudioRecognition:
         self._speaking = False
         self._last_speaking_time: float = 0
         self._last_final_transcript_time: float = 0
+        # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        # used for STTs that support preflight mode, so it could start preemptive generation earlier
+        self._audio_preflight_transcript = ""
         self._last_language: str | None = None
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
@@ -191,6 +194,7 @@ class AudioRecognition:
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._user_turn_committed = False
 
@@ -317,7 +321,9 @@ class AudioRecognition:
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
             self._final_transcript_confidence.append(confidence)
+            transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
+            self._audio_preflight_transcript = ""
             self._final_transcript_received.set()
 
             if not self._vad or self._last_speaking_time == 0:
@@ -329,32 +335,85 @@ class AudioRecognition:
                 self._last_speaking_time = time.time()
 
             if self._vad_base_turn_detection or self._user_turn_committed:
-                self._hooks.on_preemptive_generation(
-                    _PreemptiveGenerationInfo(
-                        new_transcript=self._audio_transcript,
-                        transcript_confidence=(
-                            sum(self._final_transcript_confidence)
-                            / len(self._final_transcript_confidence)
-                            if self._final_transcript_confidence
-                            else 0
-                        ),
+                if transcript_changed:
+                    self._hooks.on_preemptive_generation(
+                        _PreemptiveGenerationInfo(
+                            new_transcript=self._audio_transcript,
+                            transcript_confidence=(
+                                sum(self._final_transcript_confidence)
+                                / len(self._final_transcript_confidence)
+                                if self._final_transcript_confidence
+                                else 0
+                            ),
+                        )
                     )
-                )
 
                 if not self._speaking:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(chat_ctx)
+
+        elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
+            self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
+            transcript = ev.alternatives[0].text
+            language = ev.alternatives[0].language
+            confidence = ev.alternatives[0].confidence
+
+            if not self._last_language or (
+                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
+            ):
+                self._last_language = language
+
+            if not transcript:
+                return
+
+            logger.debug(
+                "received user preflight transcript",
+                extra={"user_transcript": transcript, "language": self._last_language},
+            )
+
+            # still need to increment it as it's used for turn detection,
+            self._last_final_transcript_time = time.time()
+            # preflight transcript includes all pre-committed transcripts (including final transcript from the previous STT run)
+            self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
+            self._audio_interim_transcript = transcript
+
+            if not self._vad or self._last_speaking_time == 0:
+                # vad disabled, use stt timestamp
+                self._last_speaking_time = time.time()
+
+            if self._turn_detection_mode != "manual" or self._user_turn_committed:
+                confidence_vals = list(self._final_transcript_confidence) + [confidence]
+                self._hooks.on_preemptive_generation(
+                    _PreemptiveGenerationInfo(
+                        new_transcript=self._audio_preflight_transcript,
+                        transcript_confidence=sum(confidence_vals) / len(confidence_vals),
+                    )
+                )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+            with trace.use_span(self._ensure_user_turn_span()):
+                self._hooks.on_end_of_speech(None)
+
+            self._speaking = False
             self._user_turn_committed = True
-            if not self._speaking:
-                # start response after vad fires END_OF_SPEECH to avoid vad interruption
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+            self._last_speaking_time = time.time()
+
+            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+            self._run_eou_detection(chat_ctx)
+
+        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
+            with trace.use_span(self._ensure_user_turn_span()):
+                self._hooks.on_start_of_speech(None)
+
+            self._speaking = True
+            self._last_speaking_time = time.time()
+
+            if self._end_of_turn_task is not None:
+                self._end_of_turn_task.cancel()
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
