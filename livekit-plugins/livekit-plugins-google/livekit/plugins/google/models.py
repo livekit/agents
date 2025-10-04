@@ -10,6 +10,7 @@ SpeechModels = Literal[
     "medical_conversation",
     "chirp",
     "chirp_2",
+    "chirp_3",
     "latest_long",
     "latest_short",
 ]
