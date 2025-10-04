@@ -669,6 +669,8 @@ class RealtimeSessionBeta(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._realtime_model._opts.conn_options.timeout,
             )
+        except aiohttp.ClientError as e:
+            raise APIConnectionError("OpenAI Realtime API client connection error") from e
         except asyncio.TimeoutError as e:
             raise APIConnectionError(
                 message="OpenAI Realtime API connection timed out",
