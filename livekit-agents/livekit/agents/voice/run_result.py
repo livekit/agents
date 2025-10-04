@@ -880,13 +880,18 @@ class ChatMessageAssert:
         )
 
         arguments: str | None = None
+        extra_kwargs = {}
+        excluded_models_temperature = ["gpt-5"]  # Add model names here to exclude temperature
+
+        if not any(excluded_model in llm_v.model for excluded_model in excluded_models_temperature):
+            extra_kwargs["temperature"] = 0.0
 
         # TODO(theomonnom): LLMStream should provide utilities to make function calling easier.
         async for chunk in llm_v.chat(
             chat_ctx=chat_ctx,
             tools=[check_intent],
             tool_choice={"type": "function", "function": {"name": "check_intent"}},
-            extra_kwargs={"temperature": 0.0},
+            extra_kwargs=extra_kwargs,
         ):
             if not chunk.delta:
                 continue
