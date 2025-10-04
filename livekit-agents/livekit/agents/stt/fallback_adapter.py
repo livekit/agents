@@ -100,7 +100,7 @@ class FallbackAdapter(
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     async def _try_recognize(
         self,

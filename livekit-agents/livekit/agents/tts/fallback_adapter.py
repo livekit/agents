@@ -112,7 +112,7 @@ class FallbackAdapter(
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS

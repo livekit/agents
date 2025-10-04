@@ -82,7 +82,7 @@ class FallbackAdapter(
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     def chat(
         self,

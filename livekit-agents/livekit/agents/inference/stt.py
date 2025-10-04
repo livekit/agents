@@ -250,7 +250,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

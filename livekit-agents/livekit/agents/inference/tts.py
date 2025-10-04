@@ -274,7 +274,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
