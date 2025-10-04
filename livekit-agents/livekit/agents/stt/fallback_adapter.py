@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import dataclasses
 import time
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from livekit import rtc
 
@@ -88,6 +89,18 @@ class FallbackAdapter(
             )
             for _ in self._stt_instances
         ]
+
+        for stt_instance in self._stt_instances:
+            stt_instance.on("metrics_collected", self._on_metrics_collected)
+        self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
+
+    @property
+    def model(self) -> str:
+        return "FallbackAdapter"
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
 
     async def _try_recognize(
         self,
@@ -245,6 +258,12 @@ class FallbackAdapter(
 
             if stt_status.recovering_stream_task is not None:
                 await aio.cancel_and_wait(stt_status.recovering_stream_task)
+
+        for stt in self._stt_instances:
+            stt.off("metrics_collected", self._on_metrics_collected)
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
 
 
 class FallbackRecognizeStream(RecognizeStream):
@@ -412,3 +431,6 @@ class FallbackRecognizeStream(RecognizeStream):
 
             stt_status.recovering_stream_task = task = asyncio.create_task(_recover_stt_task())
             task.add_done_callback(lambda _: self._recovering_streams.remove(stream))
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
+        return
