@@ -483,9 +483,10 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._event_ch.send_nowait(end_event)
 
         elif data["type"] == "Error":
+            logger.warning(f"deepgram sent an error", extra={"data": data})
             desc = data.get("description") or "unknown error from deepgram"
-            status_code = data.get("code") or -1
-            raise APIStatusError(message=desc, status_code=status_code)
+            code = -1
+            raise APIStatusError(message=desc, status_code=code)
 
 
 def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:
