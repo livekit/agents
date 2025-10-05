@@ -485,7 +485,7 @@ class SpeechStreamv2(stt.SpeechStream):
         elif data["type"] == "Error":
             desc = data.get("description") or "unknown error from deepgram"
             status_code = data.get("code") or -1
-            raise APIStatusError(message=desc, status_code=status_code)
+            raise APIStatusError(message=desc, status_code=int(status_code))
 
 
 def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:
