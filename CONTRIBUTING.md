@@ -46,6 +46,10 @@ If you can't contribute code, you can still help us greatly by helping out commu
 may have questions about the framework and how to use it. Join the `#agents` channel on
 [our Slack](https://livekit.io/join-slack).
 
+## Development flow
+
+Look at the `examples/` directory to get a sense of all the different features and how to use them. You can create your own examples in `examples/dev/` and use it for your development loop.
+
 ## Typechecking, linting and formatting
 
 The CI validates this but to do checks locally see the following example commmands:
