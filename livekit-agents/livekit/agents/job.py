@@ -158,8 +158,10 @@ class JobContext:
     def api(self) -> api.LiveKitAPI:
         """Returns an LiveKitAPI for making API calls to LiveKit.
 
-        This property requires LIVEKIT_API_KEY and LIVEKIT_API_SECRET to be set in the environment.
-        If they are passed in WorkerOptions, it would not be able to satisfy this API.
+        Credentials are sourced from environment variables if not provided explicitly.
+        When starting via the worker, values passed in `WorkerOptions` are exported to
+        LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
+        usable inside job entrypoints.
         """
         return api.LiveKitAPI(session=http_context.http_session())
 
