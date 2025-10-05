@@ -54,10 +54,8 @@ class SurveyAgent(Agent):
             Task(lambda: GetEmailTask(), description="Collects email"),
         ]
         # TODO will add more complex open ended questions
-
-        task_orchestrator = TaskOrchestrator(
-            llm=openai.LLM(model="gpt-4o-mini"), task_stack=task_bank
-        )
+        # may not need llm for taskorchestrator, maybe make a custom await impl
+        task_orchestrator = TaskOrchestrator(llm=openai.LLM(model="gpt-4o"), task_stack=task_bank)
         results = await task_orchestrator
 
         # TODO: transfer the results to the userdata
@@ -75,7 +73,7 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     session = AgentSession[CollectedInformation](
         userdata=CollectedInformation(),
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(model="gpt-4o"),  # maybe use a better model by default?
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=cartesia.TTS(),
         vad=ctx.proc.userdata["vad"],
