@@ -823,6 +823,9 @@ class RealtimeSession(llm.RealtimeSession):
                 frequency_penalty=self._opts.frequency_penalty
                 if is_given(self._opts.frequency_penalty)
                 else None,
+                thinking_config=self._opts.thinking_config
+                if is_given(self._opts.thinking_config)
+                else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
             if is_given(self._opts.instructions)
@@ -849,8 +852,6 @@ class RealtimeSession(llm.RealtimeSession):
             conf.realtime_input_config = self._opts.realtime_input_config
         if is_given(self._opts.context_window_compression):
             conf.context_window_compression = self._opts.context_window_compression
-        if is_given(self._opts.thinking_config):
-            conf.thinking_config = self._opts.thinking_config
 
         return conf
 
