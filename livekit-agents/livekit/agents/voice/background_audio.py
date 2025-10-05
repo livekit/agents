@@ -13,7 +13,7 @@ import numpy as np
 
 from livekit import rtc
 
-from ..cli import cli
+from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, log_exceptions
@@ -246,10 +246,14 @@ class BackgroundAudioPlayer:
             self._agent_session = agent_session or None
             self._track_publish_options = track_publish_options or None
 
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
-                logger.warning(
-                    "Background audio is not supported in console mode. Audio will not be played."
-                )
+            try:
+                job_ctx = get_job_context()
+                if job_ctx.is_fake_job():
+                    logger.warning(
+                        "Background audio is not supported in console mode. Audio will not be played."
+                    )
+            except RuntimeError:
+                pass
 
             await self._publish_track()
 

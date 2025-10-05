@@ -100,6 +100,7 @@ class StartJobRequest:
         channel.write_string(b, self.running_job.url)
         channel.write_string(b, self.running_job.token)
         channel.write_string(b, self.running_job.worker_id)
+        channel.write_bool(b, self.running_job.fake_job)
 
     def read(self, b: io.BytesIO) -> None:
         job = agent.Job()
@@ -114,6 +115,7 @@ class StartJobRequest:
             url=channel.read_string(b),
             token=channel.read_string(b),
             worker_id=channel.read_string(b),
+            fake_job=channel.read_bool(b),
         )
 
 
