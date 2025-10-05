@@ -240,9 +240,7 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True
-            ),
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
         )
 
         if is_given(transcription_config):
@@ -374,18 +372,20 @@ class STT(stt.STT):
         Creates a transcription config object based on the service parameters. Aligns
         with the Speechmatics RT API transcription config.
         """
-        transcription_config = TranscriptionConfig(
-            language=self._stt_options.language,
-            domain=self._stt_options.domain,
-            output_locale=self._stt_options.output_locale,
-            operating_point=self._stt_options.operating_point,
-            diarization="speaker" if self._stt_options.enable_diarization else None,
-            enable_partials=self._stt_options.enable_partials,
-            max_delay=self._stt_options.max_delay,
-        )
+        # Build base config
+        config_kwargs: dict[str, Any] = {
+            "language": self._stt_options.language,
+            "domain": self._stt_options.domain,
+            "output_locale": self._stt_options.output_locale,
+            "operating_point": self._stt_options.operating_point,
+            "diarization": "speaker" if self._stt_options.enable_diarization else None,
+            "enable_partials": self._stt_options.enable_partials,
+            "max_delay": self._stt_options.max_delay,
+        }
 
+        # Add additional vocab if present
         if self._stt_options.additional_vocab:
-            transcription_config.additional_vocab = [
+            config_kwargs["additional_vocab"] = [
                 {
                     "content": e.content,
                     "sounds_like": e.sounds_like,
@@ -393,6 +393,7 @@ class STT(stt.STT):
                 for e in self._stt_options.additional_vocab
             ]
 
+        # Add speaker diarization config if enabled
         if self._stt_options.enable_diarization:
             dz_cfg: dict[str, Any] = {}
             if self._stt_options.diarization_sensitivity is not None:
@@ -406,19 +407,23 @@ class STT(stt.STT):
                     s.label: s.speaker_identifiers for s in self._stt_options.known_speakers
                 }
             if dz_cfg:
-                transcription_config.speaker_diarization_config = dz_cfg
+                config_kwargs["speaker_diarization_config"] = dz_cfg
+
+        # Add conversation config for end of utterance if needed
         if (
             self._stt_options.end_of_utterance_silence_trigger
             and self._stt_options.end_of_utterance_mode == EndOfUtteranceMode.FIXED
         ):
-            transcription_config.conversation_config = ConversationConfig(
+            config_kwargs["conversation_config"] = ConversationConfig(
                 end_of_utterance_silence_trigger=self._stt_options.end_of_utterance_silence_trigger,
             )
 
+        # Add punctuation overrides if present
         if self._stt_options.punctuation_overrides:
-            transcription_config.punctuation_overrides = self._stt_options.punctuation_overrides
+            config_kwargs["punctuation_overrides"] = self._stt_options.punctuation_overrides
 
-        self._transcription_config = transcription_config
+        # Create the transcription config with all parameters
+        self._transcription_config = TranscriptionConfig(**config_kwargs)
 
     def update_speakers(
         self,
