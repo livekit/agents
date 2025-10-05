@@ -106,6 +106,14 @@ class FallbackAdapter(
 
             t.on("metrics_collected", self._on_metrics_collected)
 
+    @property
+    def model(self) -> str:
+        return "FallbackAdapter"
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS
     ) -> FallbackChunkedStream:

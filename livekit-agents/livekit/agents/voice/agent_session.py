@@ -691,8 +691,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
 
-    def shutdown(self) -> None:
-        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
+    def shutdown(self, *, drain: bool = True) -> None:
+        self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
