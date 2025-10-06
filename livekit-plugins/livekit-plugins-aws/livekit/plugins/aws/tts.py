@@ -15,10 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
-import aioboto3  # type: ignore
-import botocore  # type: ignore
-import botocore.exceptions  # type: ignore
-from aiobotocore.config import AioConfig  # type: ignore
+import aioboto3
+import botocore
+import botocore.exceptions
+from aiobotocore.config import AioConfig
 
 from livekit.agents import (
     APIConnectionError,
@@ -102,7 +102,7 @@ class TTS(tts.TTS):
             voice=voice,
             speech_engine=speech_engine,
             text_type=text_type,
-            region=region or None,
+            region=region,
             language=language or None,
             sample_rate=sample_rate,
         )
