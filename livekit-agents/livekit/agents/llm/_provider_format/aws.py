@@ -33,6 +33,8 @@ def to_chat_ctx(
             role = "assistant"
         elif msg.type == "function_call_output":
             role = "user"
+        else:
+            raise ValueError(f"Unknown message type: {msg.type!r}")
 
         # if the effective role changed, finalize the previous turn.
         if role != current_role:
