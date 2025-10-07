@@ -43,7 +43,7 @@ dependencies = [
     "docstring_parser>=0.16",
     "eval-type-backport",
     "colorama>=0.4.6",
-    "av>=14.0.0",
+    "av>=14.0.0,<16",
     "numpy>=1.26.0",
     "pydantic>=2.0,<3",
     "nest-asyncio>=1.6.0",
