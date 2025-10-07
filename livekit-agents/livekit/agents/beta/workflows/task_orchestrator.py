@@ -1,32 +1,66 @@
 import json
-from typing import Annotated
+from collections.abc import Callable
+from typing import Annotated, Any, TypeAlias
 
 from pydantic import Field
 
 from ... import FunctionTool, llm
+from ...llm import ChatContext
 from ...llm.tool_context import ToolError, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
-from .task import Task
 
 
-class TaskOrchestrator(AgentTask):
+class Task:
+    def __init__(self, task_factory: Callable[[], AgentTask], *, id: str, description: str) -> None:
+        """Creates a Task instance which holds an AgentTask and its description.
+
+        Args:
+            task_factory (Callable[[],AgentTask]): Generator of AgentTask (ex. lambda: GetEmailTask())
+            id (str): The ID of the AgentTask, ex. "get_email_task"
+            description (str): A description of the AgentTask
+        """
+        self._task_factory = task_factory
+        self._id = id
+        self._description = description
+        self._task = None
+        self._saved_chat_ctx = ChatContext()
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def description(self) -> str:
+        return self._description
+
+    async def create_new_task(self) -> AgentTask:
+        if self._task:
+            self._saved_chat_ctx = self._task.chat_ctx
+        self._task = self._task_factory()
+        await self._task.update_chat_ctx(self._saved_chat_ctx)
+        return self._task
+
+
+ResultT: TypeAlias = dict[str, Any]
+
+
+class TaskOrchestrator(AgentTask[ResultT]):
     def __init__(
         self,
+        tasks: list[Task] | None = None,
         *,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        task_stack: list[Task] | None = None,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
     ):
         """Creates a TaskOrchestrator instance."""
         super().__init__(
-            instructions="""You are a task orchestrator managing a defined workflow. There is a stack of tasks, and if the user wants to regress to a previous question, call out_of_scope().
-            """,
+            instructions="*empty*",
             chat_ctx=chat_ctx,
-            llm=llm,
+            llm=None,
         )
-        self._task_stack = task_stack
-        self._task_order = task_stack[::-1]
+        self._task_stack = tasks
+        self._task_order = tasks[::-1]
+        # TODO restructure task id lookup for out_of_scope function
         self._task_ids = [id(task) for task in self._task_order]
         self._task_descriptions = [task.description for task in self._task_order]
         self._task_id_lookup = dict(zip(self._task_descriptions, self._task_ids))
@@ -41,23 +75,22 @@ class TaskOrchestrator(AgentTask):
         self._current_task = None
 
     @property
-    def task_stack(self) -> list:
+    def _task_stack(self) -> list:
         return self._task_stack
 
     @property
-    def visited_tasks(self) -> dict:
+    def _visited_tasks(self) -> dict:
         return self._visited_tasks
 
-    @task_stack.setter
-    def task_stack(self, task_stack: list) -> None:
+    @_task_stack.setter
+    def _task_stack(self, task_stack: list) -> None:
         self._task_stack = task_stack
-
-    def drain(self): ...  # or rename to aclose
 
     async def on_enter(self):
         while len(self._task_stack) > 0:
             self._current_task = self._task_stack.pop()
-            self._current_agent_task = self._current_task.task
+            self._current_agent_task = await self._current_task.create_new_task()
+            # TODO add function tools after task creation
             current_tools = self._current_agent_task.tools
             current_tools.append(self._out_of_scope_func)
             await self._current_agent_task.update_tools(current_tools)

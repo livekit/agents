@@ -1,6 +1,6 @@
-import os
 import csv
 import logging
+import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -11,11 +11,11 @@ from livekit.agents import (
     AgentTask,
     JobContext,
     JobProcess,
-    WorkerOptions,
     RunContext,
+    WorkerOptions,
     cli,
 )
-from livekit.agents.beta.workflows import GetEmailTask, Question, Task, TaskOrchestrator
+from livekit.agents.beta.workflows import GetEmailTask, Task, TaskOrchestrator
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -28,15 +28,16 @@ class CollectedInformation:
 
 
 def write_to_csv(filename: str, data):
-    if type(data) != dict:
+    if type(data) is not dict:
         data = data.asdict()
-    with open(filename, 'w', newline='') as csvfile:
+    with open(filename, "w", newline="") as csvfile:
         fieldnames = data.keys()
         csv_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         if not os.path.exists(filename):
             csv_writer.writeheader()
         csv_writer.writerow(data)
+
 
 class ExperienceTask(AgentTask[str]):
     def __init__(self) -> None:
@@ -53,12 +54,13 @@ class ExperienceTask(AgentTask[str]):
 
     @function_tool()
     async def record_experience(self, context: RunContext, experience_description: str) -> None:
-        """ Call to record the years of experience the candidate has and its descriptions.
-        
+        """Call to record the years of experience the candidate has and its descriptions.
+
         Args:
             experience_description (str): The years of experience the candidate has and a description
         """
         self.complete(experience_description)
+
 
 class CommuteTask(AgentTask[bool]):
     def __init__(self) -> None:
@@ -75,13 +77,12 @@ class CommuteTask(AgentTask[bool]):
 
     @function_tool()
     async def record_commute_flexibility(self, context: RunContext, can_commute: bool) -> None:
-        """ Call to record whether or not the candidate can commute to the office.
-        
+        """Call to record whether or not the candidate can commute to the office.
+
         Args:
             can_commute (bool): If the candidate can commute or not
         """
         self.complete(can_commute)
-
 
 
 class SurveyAgent(Agent):
@@ -96,13 +97,17 @@ class SurveyAgent(Agent):
         await self.session.generate_reply(
             instructions="Welcome the candidate for the Software Engineer interview."
         )
-        task_stack = [Task(lambda: ExperienceTask(), description="Collects years of experience"),
-                     Task(lambda:  CommuteTask(), description="Asks about commute"),
-                     Task(lambda: GetEmailTask(), description="Collects email")
-                     ]
+        tasks = [
+            Task(
+                lambda: ExperienceTask(),
+                id="experience_task",
+                description="Collects years of experience",
+            ),
+            Task(lambda: CommuteTask(), id="commute_task", description="Asks about commute"),
+            Task(lambda: GetEmailTask(), id="get_email_task", description="Collects email"),
+        ]
 
-        task_orchestrator = TaskOrchestrator(llm=openai.LLM(model="gpt-4o"), task_stack=task_stack)
-        results = await task_orchestrator
+        results = await TaskOrchestrator(tasks=tasks)
         write_to_csv(filename="results.csv", data=results)
 
 
@@ -118,7 +123,7 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     session = AgentSession[CollectedInformation](
         userdata=CollectedInformation(),
-        llm=openai.LLM(model="gpt-4o"),  
+        llm=openai.LLM(model="gpt-4o"),
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=cartesia.TTS(),
         vad=ctx.proc.userdata["vad"],
