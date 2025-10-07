@@ -15,7 +15,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.beta.tools.dtmf import send_dtmf_events
-from livekit.plugins import silero
+from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 logger = logging.getLogger("phone-tree-agent")
 
@@ -49,9 +49,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm="openai/gpt-4.1",
-        stt="deepgram/nova-3",
-        tts="elevenlabs/eleven_multilingual_v2",
+        llm=openai.LLM(model="gpt-4.1"),
+        stt=deepgram.STT(model="nova-3"),
+        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
     )
 
     usage_collector = metrics.UsageCollector()
