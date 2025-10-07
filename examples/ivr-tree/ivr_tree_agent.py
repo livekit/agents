@@ -49,7 +49,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        llm="google/gemini-2.5-pro",
+        llm="openai/gpt-4.1",
         stt="deepgram/nova-3",
         tts="elevenlabs/eleven_multilingual_v2",
     )
