@@ -31,6 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 realtime = [
     "aws-sdk-bedrock-runtime==0.0.2; python_version >= '3.12'",
+    "aws-sdk-signers==0.0.3; python_version >= '3.12'",
     "boto3>1.35.10",
 ]
 
