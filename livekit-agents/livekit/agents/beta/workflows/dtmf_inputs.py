@@ -138,7 +138,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                     ""
                 )
 
-                await self.session.generate_reply(instructions=instructions)
+                await self.session.generate_reply(user_input=instructions)
             finally:
                 self._dtmg_reply_running = False
                 self._curr_dtmf_inputs.clear()
