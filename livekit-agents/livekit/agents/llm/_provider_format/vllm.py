@@ -19,7 +19,7 @@ def to_chat_ctx(
         messages.append({"role": "user", "content": dummy_user_message})
     if len(messages) > 1 and messages[0]["role"] == "system" and messages[1]["role"] == "assistant":
         messages.insert(1, {"role": "user", "content": "Hello"})
-    collated = []
+    collated: list[dict] = []
     for msg in messages:
         if len(collated) > 0 and collated[-1]["role"] == msg["role"]:
             collated[-1]["content"] += " " + msg["content"]
