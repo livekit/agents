@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable
 
+import aiohttp
+
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
@@ -291,9 +293,18 @@ class JobContext:
             fut.set_result(api.DeleteRoomResponse())
             return fut
 
-        task = asyncio.create_task(
-            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
-        )
+        async def _delete_room() -> None:
+            try:
+                await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            except aiohttp.ServerDisconnectedError:
+                logger.warning("server disconnected while deleting room")
+            except api.TwirpError as e:
+                if e.code != api.TwirpErrorCode.NOT_FOUND:
+                    logger.warning(f"error while deleting room: {e}")
+            except Exception:
+                logger.exception("unknown error while deleting room")
+
+        task = asyncio.create_task(_delete_room())
         self._pending_tasks.append(task)
         task.add_done_callback(lambda _: self._pending_tasks.remove(task))
         return task
