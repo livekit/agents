@@ -385,10 +385,11 @@ class STT(stt.STT):
         )
 
         if self._stt_options.additional_vocab:
-            # Using dict format as per type annotation
-            transcription_config.additional_vocab = {
-                e.content: e.sounds_like for e in self._stt_options.additional_vocab
-            }
+            # API expects list of dicts, not dict format
+            transcription_config.additional_vocab = [  # type: ignore
+                {"content": e.content, "sounds_like": e.sounds_like}
+                for e in self._stt_options.additional_vocab
+            ]
 
         if self._stt_options.enable_diarization:
             # Create SpeakerDiarizationConfig with explicit parameters
