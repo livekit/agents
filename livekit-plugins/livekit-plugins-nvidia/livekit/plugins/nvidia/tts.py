@@ -209,7 +209,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await asyncio.gather(*tasks)
-            await asyncio.to_thread(synthesize_thread.join, timeout=5.0)
+            await asyncio.to_thread(synthesize_thread.join)
         finally:
             self._shutdown_event.set()
             output_emitter.end_segment()
