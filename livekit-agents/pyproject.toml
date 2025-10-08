@@ -27,6 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "click~=8.1",
+    "certifi>=2025.6.15",
     "livekit>=1.0.12,<2",
     "livekit-api>=1.0.5,<2",
     "livekit-protocol~=1.0",
@@ -42,7 +43,7 @@ dependencies = [
     "docstring_parser>=0.16",
     "eval-type-backport",
     "colorama>=0.4.6",
-    "av>=14.0.0",
+    "av>=14.0.0,<16",
     "numpy>=1.26.0",
     "pydantic>=2.0,<3",
     "nest-asyncio>=1.6.0",
@@ -50,51 +51,56 @@ dependencies = [
     "opentelemetry-sdk>=1.34.1",
     "opentelemetry-exporter-otlp>=1.34.1",
     "prometheus-client>=0.22",
+    "openai>=1.99.2",
 ]
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.10.0, <2; python_version >= '3.10'"]
 codecs = ["av>=12.0.0", "numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
-anam = ["livekit-plugins-anam>=1.2.8"]
-anthropic = ["livekit-plugins-anthropic>=1.2.8"]
-assemblyai = ["livekit-plugins-assemblyai>=1.2.8"]
-aws = ["livekit-plugins-aws>=1.2.8"]
-azure = ["livekit-plugins-azure>=1.2.8"]
-baseten = ["livekit-plugins-baseten>=1.2.8"]
-bey = ["livekit-plugins-bey>=1.2.8"]
-bithuman = ["livekit-plugins-bithuman>=1.2.8"]
-cartesia = ["livekit-plugins-cartesia>=1.2.8"]
-clova = ["livekit-plugins-clova>=1.2.8"]
-deepgram = ["livekit-plugins-deepgram>=1.2.8"]
-elevenlabs = ["livekit-plugins-elevenlabs>=1.2.8"]
-fal = ["livekit-plugins-fal>=1.2.8"]
-gladia = ["livekit-plugins-gladia>=1.2.8"]
-google = ["livekit-plugins-google>=1.2.8"]
-groq = ["livekit-plugins-groq>=1.2.8"]
-hedra = ["livekit-plugins-hedra>=1.2.8"]
-hume = ["livekit-plugins-hume>=1.2.8"]
-inworld = ["livekit-plugins-inworld>=1.2.8"]
-langchain = ["livekit-plugins-langchain>=1.2.8"]
-lmnt = ["livekit-plugins-lmnt>=1.2.8"]
-mistralai = ["livekit-plugins-mistralai>=1.2.8"]
-neuphonic = ["livekit-plugins-neuphonic>=1.2.8"]
-nltk = ["livekit-plugins-nltk>=1.2.8"]
-openai = ["livekit-plugins-openai>=1.2.8"]
-playai = ["livekit-plugins-playai>=1.2.8"]
-resemble = ["livekit-plugins-resemble>=1.2.8"]
-rime = ["livekit-plugins-rime>=1.2.8"]
-sarvam = ["livekit-plugins-sarvam>=1.2.8"]
-silero = ["livekit-plugins-silero>=1.2.8"]
-simli = ["livekit-plugins-simli>=1.2.8"]
-smallestai = ["livekit-plugins-smallestai>=1.2.8"]
-speechify = ["livekit-plugins-speechify>=1.2.8"]
-speechmatics = ["livekit-plugins-speechmatics>=1.2.8"]
-spitch = ["livekit-plugins-spitch>=1.2.8"]
-tavus = ["livekit-plugins-tavus>=1.2.8"]
-turn-detector = ["livekit-plugins-turn-detector>=1.2.8"]
-upliftai = ["livekit-plugins-upliftai>=1.2.8"]
-ultravox = ["livekit-plugins-ultravox>=1.2.8"]
+anam = ["livekit-plugins-anam>=1.2.14"]
+anthropic = ["livekit-plugins-anthropic>=1.2.14"]
+assemblyai = ["livekit-plugins-assemblyai>=1.2.14"]
+aws = ["livekit-plugins-aws>=1.2.14"]
+azure = ["livekit-plugins-azure>=1.2.14"]
+baseten = ["livekit-plugins-baseten>=1.2.14"]
+bey = ["livekit-plugins-bey>=1.2.14"]
+bithuman = ["livekit-plugins-bithuman>=1.2.14"]
+cartesia = ["livekit-plugins-cartesia>=1.2.14"]
+clova = ["livekit-plugins-clova>=1.2.14"]
+deepgram = ["livekit-plugins-deepgram>=1.2.14"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.2.14"]
+fal = ["livekit-plugins-fal>=1.2.14"]
+fireworksai = ["livekit-plugins-fireworksai>=1.2.14"]
+gladia = ["livekit-plugins-gladia>=1.2.14"]
+google = ["livekit-plugins-google>=1.2.14"]
+groq = ["livekit-plugins-groq>=1.2.14"]
+hedra = ["livekit-plugins-hedra>=1.2.14"]
+hume = ["livekit-plugins-hume>=1.2.14"]
+inworld = ["livekit-plugins-inworld>=1.2.14"]
+langchain = ["livekit-plugins-langchain>=1.2.14"]
+lmnt = ["livekit-plugins-lmnt>=1.2.14"]
+minimax = ["livekit-plugins-minimax>=1.2.14"]
+mistralai = ["livekit-plugins-mistralai>=1.2.14"]
+neuphonic = ["livekit-plugins-neuphonic>=1.2.14"]
+nltk = ["livekit-plugins-nltk>=1.2.14"]
+openai = ["livekit-plugins-openai>=1.2.14"]
+playai = ["livekit-plugins-playai>=1.2.14"]
+resemble = ["livekit-plugins-resemble>=1.2.14"]
+rime = ["livekit-plugins-rime>=1.2.14"]
+sarvam = ["livekit-plugins-sarvam>=1.2.14"]
+silero = ["livekit-plugins-silero>=1.2.14"]
+simli = ["livekit-plugins-simli>=1.2.14"]
+smallestai = ["livekit-plugins-smallestai>=1.2.14"]
+soniox = ["livekit-plugins-soniox>=1.2.14"]
+speechify = ["livekit-plugins-speechify>=1.2.14"]
+speechmatics = ["livekit-plugins-speechmatics>=1.2.14"]
+spitch = ["livekit-plugins-spitch>=1.2.14"]
+tavus = ["livekit-plugins-tavus>=1.2.14"]
+turn-detector = ["livekit-plugins-turn-detector>=1.2.14"]
+ultravox = ["livekit-plugins-ultravox>=1.2.14"]
+upliftai = ["livekit-plugins-upliftai>=1.2.14"]
+
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

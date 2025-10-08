@@ -446,7 +446,10 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
-        self.rotate_segment()
+        if enabled or not self._rotate_segment_atask or self._rotate_segment_atask.done():
+            # avoid calling rotate_segment twice when closing the session during agent speaking
+            # first time when speech interrupted, second time here when output detached
+            self.rotate_segment()
 
     def _on_attachment_changed(
         self,

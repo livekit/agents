@@ -50,6 +50,7 @@ class STTOptions:
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
+    keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -63,6 +64,7 @@ class STT(stt.STT):
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
+        keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
     ):
@@ -85,9 +87,18 @@ class STT(stt.STT):
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
+            keyterms_prompt=keyterms_prompt,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return "Universal-Streaming"
+
+    @property
+    def provider(self) -> str:
+        return "AssemblyAI"
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -300,6 +311,9 @@ class SpeechStream(stt.SpeechStream):
             "max_turn_silence": self._opts.max_turn_silence
             if is_given(self._opts.max_turn_silence)
             else None,
+            "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
+            if is_given(self._opts.keyterms_prompt)
+            else None,
         }
 
         headers = {
@@ -309,8 +323,12 @@ class SpeechStream(stt.SpeechStream):
         }
 
         ws_url = "wss://streaming.assemblyai.com/v3/ws"
-        filtered_config = {k: v for k, v in live_config.items() if v is not None}
-        url = f"{ws_url}?{urlencode(filtered_config).lower()}"
+        filtered_config = {
+            k: ("true" if v else "false") if isinstance(v, bool) else v
+            for k, v in live_config.items()
+            if v is not None
+        }
+        url = f"{ws_url}?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
 

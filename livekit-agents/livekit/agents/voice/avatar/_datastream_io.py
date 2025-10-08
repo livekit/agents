@@ -26,7 +26,6 @@ class DataStreamAudioOutput(AudioOutput):
     """  # noqa: E501
 
     _playback_finished_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
-    _playback_finished_rpc_registered: bool = False
 
     def __init__(
         self,
@@ -206,23 +205,28 @@ class DataStreamAudioOutput(AudioOutput):
     ) -> None:
         cls._playback_finished_handlers[caller_identity] = handler
 
-        if cls._playback_finished_rpc_registered:
+        if (
+            rpc_handler := room.local_participant._rpc_handlers.get(RPC_PLAYBACK_FINISHED)
+        ) and rpc_handler == cls._playback_finished_rpc_handler:
             return
 
-        def _handler(data: rtc.RpcInvocationData) -> str:
-            if data.caller_identity not in cls._playback_finished_handlers:
-                logger.warning(
-                    "playback finished event received from unexpected participant",
-                    extra={
-                        "caller_identity": data.caller_identity,
-                        "expected_identities": list(cls._playback_finished_handlers.keys()),
-                    },
-                )
-                return "reject"
-            return cls._playback_finished_handlers[data.caller_identity](data)
+        room.local_participant.register_rpc_method(
+            RPC_PLAYBACK_FINISHED, cls._playback_finished_rpc_handler
+        )
 
-        room.local_participant.register_rpc_method(RPC_PLAYBACK_FINISHED, _handler)
-        cls._playback_finished_rpc_registered = True
+    @classmethod
+    def _playback_finished_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
+        if handler := cls._playback_finished_handlers.get(data.caller_identity):
+            return handler(data)
+        else:
+            logger.warning(
+                "playback finished event received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identities": list(cls._playback_finished_handlers.keys()),
+                },
+            )
+            return "reject"
 
 
 class DataStreamAudioReceiver(AudioReceiver):
@@ -232,7 +236,6 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
-    _clear_buffer_rpc_registered: bool = False
     _clear_buffer_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
 
     def __init__(
@@ -432,20 +435,22 @@ class DataStreamAudioReceiver(AudioReceiver):
     ) -> None:
         cls._clear_buffer_handlers[caller_identity] = handler
 
-        if cls._clear_buffer_rpc_registered:
+        if (
+            rpc_handler := room.local_participant._rpc_handlers.get(RPC_CLEAR_BUFFER)
+        ) and rpc_handler == cls._clear_buffer_rpc_handler:
             return
 
-        def _handler(data: rtc.RpcInvocationData) -> str:
-            if data.caller_identity not in cls._clear_buffer_handlers:
-                logger.warning(
-                    "clear buffer event received from unexpected participant",
-                    extra={
-                        "caller_identity": data.caller_identity,
-                        "expected_identities": list(cls._clear_buffer_handlers.keys()),
-                    },
-                )
-                return "reject"
-            return cls._clear_buffer_handlers[data.caller_identity](data)
+        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, cls._clear_buffer_rpc_handler)
 
-        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handler)
-        cls._clear_buffer_rpc_registered = True
+    @classmethod
+    def _clear_buffer_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity not in cls._clear_buffer_handlers:
+            logger.warning(
+                "clear buffer event received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identities": list(cls._clear_buffer_handlers.keys()),
+                },
+            )
+            return "reject"
+        return cls._clear_buffer_handlers[data.caller_identity](data)

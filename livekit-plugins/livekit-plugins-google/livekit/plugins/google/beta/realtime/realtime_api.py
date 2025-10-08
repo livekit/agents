@@ -10,12 +10,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from google import genai
-from google.genai import types
+from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -76,6 +76,9 @@ class _RealtimeOptions:
     context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN
     api_version: NotGivenOr[str] = NOT_GIVEN
     gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN
+    tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
+    tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
+    thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
 
 
 @dataclass
@@ -136,10 +139,13 @@ class RealtimeModel(llm.RealtimeModel):
         proactivity: NotGivenOr[bool] = NOT_GIVEN,
         realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN,
         context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
+        tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+        tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
+        thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -174,6 +180,9 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
+            tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
+            tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
             _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
 
@@ -202,6 +211,7 @@ class RealtimeModel(llm.RealtimeModel):
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
+                manual_function_calls=False,
             )
         )
 
@@ -264,11 +274,24 @@ class RealtimeModel(llm.RealtimeModel):
             context_window_compression=context_window_compression,
             api_version=api_version,
             gemini_tools=_gemini_tools,
+            tool_behavior=tool_behavior,
             conn_options=conn_options,
             http_options=http_options,
+            thinking_config=thinking_config,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        if self._opts.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
 
     def session(self) -> RealtimeSession:
         sess = RealtimeSession(self)
@@ -280,6 +303,8 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+        tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the RealtimeModel.
@@ -295,10 +320,18 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(temperature):
             self._opts.temperature = temperature
 
+        if is_given(tool_behavior):
+            self._opts.tool_behavior = tool_behavior
+
+        if is_given(tool_response_scheduling):
+            self._opts.tool_response_scheduling = tool_response_scheduling
+
         for sess in self._sessions:
             sess.update_options(
                 voice=self._opts.voice,
                 temperature=self._opts.temperature,
+                tool_behavior=self._opts.tool_behavior,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
             )
 
     async def aclose(self) -> None:
@@ -332,7 +365,7 @@ class RealtimeSession(llm.RealtimeSession):
         if api_version:
             http_options.api_version = api_version
 
-        self._client = genai.Client(
+        self._client = GenAIClient(
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
             project=self._opts.project,
@@ -376,6 +409,8 @@ class RealtimeSession(llm.RealtimeSession):
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+        tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     ) -> None:
         should_restart = False
         if is_given(voice) and self._opts.voice != voice:
@@ -385,6 +420,20 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(temperature) and self._opts.temperature != temperature:
             self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
             should_restart = True
+
+        if is_given(tool_behavior) and self._opts.tool_behavior != tool_behavior:
+            self._opts.tool_behavior = tool_behavior
+            should_restart = True
+
+        if (
+            is_given(tool_response_scheduling)
+            and self._opts.tool_response_scheduling != tool_response_scheduling
+        ):
+            self._opts.tool_response_scheduling = tool_response_scheduling
+            # no need to restart
+
+        if is_given(tool_choice):
+            logger.warning("tool_choice is not supported by the Google Realtime API.")
 
         if should_restart:
             self._mark_restart_needed()
@@ -417,7 +466,11 @@ class RealtimeSession(llm.RealtimeSession):
             ).to_provider_format(format="google", inject_dummy_user_message=False)
             # we are not generating, and do not need to inject
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
-            tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
+            tool_results = get_tool_results_for_realtime(
+                append_ctx,
+                vertexai=self._opts.vertexai,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
+            )
             if turns:
                 self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=False))
             if tool_results:
@@ -429,7 +482,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
-            tools, use_parameters_json_schema=False
+            tools, use_parameters_json_schema=False, tool_behavior=self._opts.tool_behavior
         )
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
@@ -461,7 +514,12 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
-                    media_chunks=[types.Blob(data=nf.data.tobytes(), mime_type="audio/pcm")]
+                    media_chunks=[
+                        types.Blob(
+                            data=nf.data.tobytes(),
+                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                        )
+                    ]
                 )
                 self._send_client_event(realtime_input)
 
@@ -765,6 +823,9 @@ class RealtimeSession(llm.RealtimeSession):
                 frequency_penalty=self._opts.frequency_penalty
                 if is_given(self._opts.frequency_penalty)
                 else None,
+                thinking_config=self._opts.thinking_config
+                if is_given(self._opts.thinking_config)
+                else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
             if is_given(self._opts.instructions)
@@ -829,6 +890,7 @@ class RealtimeSession(llm.RealtimeSession):
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            response_id=self._current_generation.response_id,
         )
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -1018,7 +1080,7 @@ class RealtimeSession(llm.RealtimeSession):
             return token_details_map
 
         metrics = RealtimeModelMetrics(
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,
@@ -1042,6 +1104,9 @@ class RealtimeSession(llm.RealtimeSession):
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 **_token_details_map(usage_metadata.response_tokens_details),
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
         self.emit("metrics_collected", metrics)
