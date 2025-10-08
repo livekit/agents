@@ -4,18 +4,16 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from livekit import rtc
-from livekit.agents.llm.tool_context import ToolError
-from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
-
-from ... import function_tool
+from ... import function_tool, rtc
 from ...job import get_job_context
 from ...llm.chat_context import ChatContext
+from ...llm.tool_context import ToolError
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...utils.aio.debounce import Debounced, debounced
 from ...voice.agent import AgentTask
-from ..tools.dtmf import DtmfEvent, format_dtmf
+from ...voice.events import AgentStateChangedEvent, UserStateChangedEvent
+from ..workflows.utils import DtmfEvent, format_dtmf
 
 logger = logging.getLogger("dtmf-inputs")
 
