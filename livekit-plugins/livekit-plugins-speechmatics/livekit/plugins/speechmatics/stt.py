@@ -41,6 +41,7 @@ from speechmatics.rt import (
     ConversationConfig,
     OperatingPoint,
     ServerMessageType,
+    SpeakerDiarizationConfig,
     TranscriptionConfig,
 )
 
@@ -251,28 +252,24 @@ class STT(stt.STT):
             )
 
             config: TranscriptionConfig = transcription_config
-            if not is_given(language) and config.language:
-                language = config.language
-            if not is_given(output_locale) and config.output_locale:
+            language = language if is_given(language) else config.language
+            if not is_given(output_locale) and config.output_locale is not None:
                 output_locale = config.output_locale
-            if not is_given(domain) and config.domain:
+            if not is_given(domain) and config.domain is not None:
                 domain = config.domain
-            if config.operating_point:
-                operating_point = config.operating_point
-            if config.diarization == "speaker":
-                enable_diarization = True
-            if config.enable_partials:
-                enable_partials = config.enable_partials
-            if config.max_delay:
-                max_delay = config.max_delay
-            if not is_given(additional_vocab) and config.additional_vocab:
-                additional_vocab = config.additional_vocab  # type: ignore
-            if not is_given(punctuation_overrides) and config.punctuation_overrides:
+            enable_diarization = enable_diarization or config.diarization == "speaker"
+            if not is_given(additional_vocab) and config.additional_vocab is not None:
+                additional_vocab = [
+                    AdditionalVocabEntry(content=k, sounds_like=v)
+                    for k, v in config.additional_vocab.items()
+                ]
+            if not is_given(punctuation_overrides) and config.punctuation_overrides is not None:
                 punctuation_overrides = config.punctuation_overrides
             # Extract max_speakers from speaker_diarization_config if present
             if (
                 not is_given(max_speakers)
                 and (dz_cfg := config.speaker_diarization_config)
+                and hasattr(dz_cfg, "max_speakers")
                 and dz_cfg.max_speakers is not None
             ):
                 max_speakers = dz_cfg.max_speakers
@@ -283,10 +280,8 @@ class STT(stt.STT):
             )
 
             audio: AudioSettings = audio_settings
-            if audio.sample_rate:
-                sample_rate = audio.sample_rate
-            if audio.encoding:
-                audio_encoding = audio.encoding  # type: ignore
+            sample_rate = sample_rate or audio.sample_rate
+            audio_encoding = audio_encoding or AudioEncoding(audio.encoding)
 
         self._stt_options = STTOptions(
             operating_point=operating_point,
@@ -390,28 +385,20 @@ class STT(stt.STT):
         )
 
         if self._stt_options.additional_vocab:
-            transcription_config.additional_vocab = [  # type: ignore
-                {
-                    "content": e.content,
-                    "sounds_like": e.sounds_like,
-                }
-                for e in self._stt_options.additional_vocab
-            ]
+            # Using dict format as per type annotation
+            transcription_config.additional_vocab = {
+                e.content: e.sounds_like for e in self._stt_options.additional_vocab
+            }
 
         if self._stt_options.enable_diarization:
-            dz_cfg: dict[str, Any] = {}
-            if self._stt_options.diarization_sensitivity is not None:
-                dz_cfg["speaker_sensitivity"] = self._stt_options.diarization_sensitivity
-            if self._stt_options.max_speakers is not None:
-                dz_cfg["max_speakers"] = self._stt_options.max_speakers
-            if self._stt_options.prefer_current_speaker is not None:
-                dz_cfg["prefer_current_speaker"] = self._stt_options.prefer_current_speaker
-            if self._stt_options.known_speakers:
-                dz_cfg["speakers"] = {
-                    s.label: s.speaker_identifiers for s in self._stt_options.known_speakers
-                }
-            if dz_cfg:
-                transcription_config.speaker_diarization_config = dz_cfg  # type: ignore
+            # Create SpeakerDiarizationConfig with explicit parameters
+            transcription_config.speaker_diarization_config = SpeakerDiarizationConfig(
+                max_speakers=self._stt_options.max_speakers,
+                speaker_sensitivity=self._stt_options.diarization_sensitivity,
+                prefer_current_speaker=self._stt_options.prefer_current_speaker,
+                # TODO: speakers field is not supported by SpeakerDiarizationConfig yet
+                # speakers={s.label: s.speaker_identifiers for s in self._stt_options.known_speakers},
+            )
         if (
             self._stt_options.end_of_utterance_silence_trigger
             and self._stt_options.end_of_utterance_mode == EndOfUtteranceMode.FIXED
