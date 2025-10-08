@@ -138,8 +138,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                     ""
                 )
 
-                logger.info(f"Generating DTMF reply, instructions: {instructions}")
-
                 await self.session.generate_reply(instructions=instructions)
             finally:
                 self._dtmg_reply_running = False
