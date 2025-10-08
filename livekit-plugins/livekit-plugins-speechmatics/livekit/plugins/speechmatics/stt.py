@@ -34,7 +34,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from speechmatics.rt import (  # type: ignore
+from speechmatics.rt import (
     AsyncClient,
     AudioEncoding,
     AudioFormat,
@@ -240,7 +240,9 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, diarization=enable_diarization
+            ),
         )
 
         if is_given(transcription_config):
@@ -249,21 +251,24 @@ class STT(stt.STT):
             )
 
             config: TranscriptionConfig = transcription_config
-            language = language if is_given(language) else config.language
-            output_locale = output_locale if is_given(output_locale) else config.output_locale
-            domain = domain if is_given(domain) else config.domain
-            operating_point = operating_point or config.operating_point
-            enable_diarization = enable_diarization or config.diarization == "speaker"
-            enable_partials = enable_partials or config.enable_partials
-            max_delay = max_delay or config.max_delay
-            additional_vocab = (
-                additional_vocab if is_given(additional_vocab) else config.additional_vocab
-            )
-            punctuation_overrides = (
-                punctuation_overrides
-                if is_given(punctuation_overrides)
-                else config.punctuation_overrides
-            )
+            if not is_given(language) and config.language:
+                language = config.language
+            if not is_given(output_locale) and config.output_locale:
+                output_locale = config.output_locale
+            if not is_given(domain) and config.domain:
+                domain = config.domain
+            if config.operating_point:
+                operating_point = config.operating_point
+            if config.diarization == "speaker":
+                enable_diarization = True
+            if config.enable_partials:
+                enable_partials = config.enable_partials
+            if config.max_delay:
+                max_delay = config.max_delay
+            if not is_given(additional_vocab) and config.additional_vocab:
+                additional_vocab = config.additional_vocab  # type: ignore
+            if not is_given(punctuation_overrides) and config.punctuation_overrides:
+                punctuation_overrides = config.punctuation_overrides
             # Extract max_speakers from speaker_diarization_config if present
             if (
                 not is_given(max_speakers)
@@ -278,8 +283,10 @@ class STT(stt.STT):
             )
 
             audio: AudioSettings = audio_settings
-            sample_rate = sample_rate or audio.sample_rate
-            audio_encoding = audio_encoding or audio.encoding
+            if audio.sample_rate:
+                sample_rate = audio.sample_rate
+            if audio.encoding:
+                audio_encoding = audio.encoding  # type: ignore
 
         self._stt_options = STTOptions(
             operating_point=operating_point,
@@ -372,20 +379,18 @@ class STT(stt.STT):
         Creates a transcription config object based on the service parameters. Aligns
         with the Speechmatics RT API transcription config.
         """
-        # Build base config
-        config_kwargs: dict[str, Any] = {
-            "language": self._stt_options.language,
-            "domain": self._stt_options.domain,
-            "output_locale": self._stt_options.output_locale,
-            "operating_point": self._stt_options.operating_point,
-            "diarization": "speaker" if self._stt_options.enable_diarization else None,
-            "enable_partials": self._stt_options.enable_partials,
-            "max_delay": self._stt_options.max_delay,
-        }
+        transcription_config = TranscriptionConfig(
+            language=self._stt_options.language,
+            domain=self._stt_options.domain,
+            output_locale=self._stt_options.output_locale,
+            operating_point=self._stt_options.operating_point,
+            diarization="speaker" if self._stt_options.enable_diarization else None,
+            enable_partials=self._stt_options.enable_partials,
+            max_delay=self._stt_options.max_delay,
+        )
 
-        # Add additional vocab if present
         if self._stt_options.additional_vocab:
-            config_kwargs["additional_vocab"] = [
+            transcription_config.additional_vocab = [  # type: ignore
                 {
                     "content": e.content,
                     "sounds_like": e.sounds_like,
@@ -393,7 +398,6 @@ class STT(stt.STT):
                 for e in self._stt_options.additional_vocab
             ]
 
-        # Add speaker diarization config if enabled
         if self._stt_options.enable_diarization:
             dz_cfg: dict[str, Any] = {}
             if self._stt_options.diarization_sensitivity is not None:
@@ -407,23 +411,19 @@ class STT(stt.STT):
                     s.label: s.speaker_identifiers for s in self._stt_options.known_speakers
                 }
             if dz_cfg:
-                config_kwargs["speaker_diarization_config"] = dz_cfg
-
-        # Add conversation config for end of utterance if needed
+                transcription_config.speaker_diarization_config = dz_cfg  # type: ignore
         if (
             self._stt_options.end_of_utterance_silence_trigger
             and self._stt_options.end_of_utterance_mode == EndOfUtteranceMode.FIXED
         ):
-            config_kwargs["conversation_config"] = ConversationConfig(
+            transcription_config.conversation_config = ConversationConfig(
                 end_of_utterance_silence_trigger=self._stt_options.end_of_utterance_silence_trigger,
             )
 
-        # Add punctuation overrides if present
         if self._stt_options.punctuation_overrides:
-            config_kwargs["punctuation_overrides"] = self._stt_options.punctuation_overrides
+            transcription_config.punctuation_overrides = self._stt_options.punctuation_overrides
 
-        # Create the transcription config with all parameters
-        self._transcription_config = TranscriptionConfig(**config_kwargs)
+        self._transcription_config = transcription_config
 
     def update_speakers(
         self,
@@ -483,23 +483,23 @@ class SpeechStream(stt.RecognizeStream):
 
         opts = self._stt._stt_options
 
-        @self._client.on(ServerMessageType.RECOGNITION_STARTED)  # type: ignore
+        @self._client.on(ServerMessageType.RECOGNITION_STARTED)
         def _evt_on_recognition_started(message: dict[str, Any]) -> None:
             logger.debug("Recognition started", extra={"data": message})
 
         if opts.enable_partials:
 
-            @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)  # type: ignore
+            @self._client.on(ServerMessageType.ADD_PARTIAL_TRANSCRIPT)
             def _evt_on_partial_transcript(message: dict[str, Any]) -> None:
                 self._handle_transcript(message, is_final=False)
 
-        @self._client.on(ServerMessageType.ADD_TRANSCRIPT)  # type: ignore
+        @self._client.on(ServerMessageType.ADD_TRANSCRIPT)
         def _evt_on_final_transcript(message: dict[str, Any]) -> None:
             self._handle_transcript(message, is_final=True)
 
         if opts.end_of_utterance_mode == EndOfUtteranceMode.FIXED:
 
-            @self._client.on(ServerMessageType.END_OF_UTTERANCE)  # type: ignore
+            @self._client.on(ServerMessageType.END_OF_UTTERANCE)
             def _evt_on_end_of_utterance(message: dict[str, Any]) -> None:
                 self._handle_end_of_utterance()
 
