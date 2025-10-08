@@ -4,7 +4,9 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from ... import function_tool, rtc
+from livekit import rtc
+
+from ... import function_tool
 from ...job import get_job_context
 from ...llm.chat_context import ChatContext
 from ...llm.tool_context import ToolError
@@ -65,6 +67,11 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
             Called ONLY when user has explicitly mentioned the digits inputs is correct."""
             self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
+        @function_tool
+        async def record_inputs(inputs: list[DtmfEvent]) -> None:
+            """Record the digits inputs."""
+            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+
         instructions = (
             "You are a single step in a broader system, responsible solely for gathering digits input from the user. "
             "You will either receive a sequence of digits through dtmf events tagged by <dtmf_inputs>, or "
@@ -73,6 +80,8 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         if ask_for_confirmation:
             instructions += "Once user has confirmed the digits (by verbally spoken or entered manually), call `confirm_inputs` with the inputs."
+        else:
+            instructions += "If user provides the digits through voice and it is valid, call `record_inputs` with the inputs."
 
         if is_given(extra_instructions):
             instructions += f"\n{extra_instructions}"
@@ -80,7 +89,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            tools=[confirm_inputs] if ask_for_confirmation else None,
+            tools=[confirm_inputs] if ask_for_confirmation else [record_inputs],
         )
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
@@ -128,6 +137,8 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                     "Once you are sure, call `confirm_inputs` with the inputs."
                     ""
                 )
+
+                logger.info(f"Generating DTMF reply, instructions: {instructions}")
 
                 await self.session.generate_reply(instructions=instructions)
             finally:
