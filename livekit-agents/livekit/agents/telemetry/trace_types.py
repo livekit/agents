@@ -77,7 +77,3 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
-# Langfuse only allows searching/filtering/graphing over fields if they are prefixes with this key OR
-# which use a set of reserved keys like ATTR_GEN_AI and ATTR_LANGFUSE items above.
-# so e.g. ATTR_LANGFUSE_SEARCHABLE_PREFIX + "foo" will allow `foo` to be a filterable attribute in langfuse.
-ATTR_LANGFUSE_SEARCHABLE_PREFIX = "langfuse.trace.metadata."
