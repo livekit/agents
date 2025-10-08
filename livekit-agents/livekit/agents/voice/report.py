@@ -1,3 +1,6 @@
+
+from livekit.protocol import agent_pb
+
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -20,9 +23,10 @@ class SessionReport:
     audio_recording_path: Path | None
     events: list[AgentEvent]
     chat_history: ChatContext
+    enable_user_data_training: bool
     timestamp: float = field(default_factory=time.time)
 
-    def to_cloud_data(self) -> dict:
+    def to_dict(self) -> dict:
         events_dict: list[dict] = []
 
         for event in self.events:

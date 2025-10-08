@@ -218,7 +218,10 @@ class _JobProc:
 
         self._job_task.add_done_callback(_exit_proc_cb)
 
+    @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
+        self._job_ctx._on_setup()
+
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
@@ -268,28 +271,11 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
-        try:
-            if session := self._job_ctx._primary_agent_session:
-                await session.aclose()
+        # TODO(theomonnom): move this code? 
+        if session := self._job_ctx._primary_agent_session:
+            await session.aclose()
 
-            from ..cli import AgentsConsole
-
-            c = AgentsConsole.get_instance()
-            if c.enabled and c.record and session:
-                report = self._job_ctx.make_session_report(session)
-                report_json = json.dumps(report.to_cloud_data(), indent=2)
-
-                import aiofiles
-                import aiofiles.os
-
-                await aiofiles.os.makedirs(self._job_ctx.session_directory, exist_ok=True)
-                async with aiofiles.open(
-                    self._job_ctx.session_directory / "session_report.json", mode="w"
-                ) as f:
-                    await f.write(report_json)
-
-        except Exception:
-            logger.exception("failed to save session report")
+        await self._job_ctx._on_session_end()
 
         if self._session_end_fnc:
             try:
@@ -317,7 +303,7 @@ class _JobProc:
         except Exception:
             logger.exception("error while shutting down the job")
 
-        self._job_ctx._cleanup()
+        self._job_ctx._on_cleanup()
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 

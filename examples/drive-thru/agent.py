@@ -403,9 +403,7 @@ async def on_session_end(ctx: JobContext) -> None:
     import json
 
     report = ctx.make_session_report()
-    report_json = json.dumps(report.to_cloud_data(), indent=2)
-
-    print(report_json)
+    # report_json = json.dumps(report.to_dict(), indent=2)
 
 
 
