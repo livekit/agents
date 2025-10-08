@@ -95,6 +95,7 @@ class STT(
         super().__init__()
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._recognize_metrics_needed = True
 
     @property
     def label(self) -> str:
@@ -150,20 +151,21 @@ class STT(
                 event = await self._recognize_impl(
                     buffer, language=language, conn_options=conn_options
                 )
-                duration = time.perf_counter() - start_time
-                stt_metrics = STTMetrics(
-                    request_id=event.request_id,
-                    timestamp=time.time(),
-                    duration=duration,
-                    label=self._label,
-                    audio_duration=calculate_audio_duration(buffer),
-                    streamed=False,
-                    metadata=Metadata(
-                        model_name=self.model,
-                        model_provider=self.provider,
-                    ),
-                )
-                self.emit("metrics_collected", stt_metrics)
+                if self._recognize_metrics_needed:
+                    duration = time.perf_counter() - start_time
+                    stt_metrics = STTMetrics(
+                        request_id=event.request_id,
+                        timestamp=time.time(),
+                        duration=duration,
+                        label=self._label,
+                        audio_duration=calculate_audio_duration(buffer),
+                        streamed=False,
+                        metadata=Metadata(
+                            model_name=self.model,
+                            model_provider=self.provider,
+                        ),
+                    )
+                    self.emit("metrics_collected", stt_metrics)
                 return event
 
             except APIError as e:

@@ -27,13 +27,20 @@ class StreamAdapter(STT):
         self._vad = vad
         self._stt = stt
 
-        @self._stt.on("metrics_collected")
-        def _forward_metrics(*args: Any, **kwargs: Any) -> None:
-            self.emit("metrics_collected", *args, **kwargs)
+        # TODO(theomonnom): The segment_id needs to be populated!
+        self._stt.on("metrics_collected", self._on_metrics_collected)
 
     @property
     def wrapped_stt(self) -> STT:
         return self._stt
+
+    @property
+    def model(self) -> str:
+        return self._stt.model
+
+    @property
+    def provider(self) -> str:
+        return self._stt.provider
 
     async def _recognize_impl(
         self,
@@ -59,6 +66,12 @@ class StreamAdapter(STT):
             language=language,
             conn_options=conn_options,
         )
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
+
+    async def aclose(self) -> None:
+        self._stt.off("metrics_collected", self._on_metrics_collected)
 
 
 class StreamAdapterWrapper(RecognizeStream):

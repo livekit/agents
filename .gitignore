@@ -173,3 +173,7 @@ docs/
 
 # Database files
 *.db
+
+
+# Examples for development
+examples/dev/*
