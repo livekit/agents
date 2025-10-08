@@ -155,7 +155,16 @@ class FrontDeskAgent(Agent):
 server = AgentServer()
 
 
-@server.realtime_session()
+async def on_session_end(ctx: JobContext) -> None:
+    # import json
+
+    # report = ctx.make_session_report()
+    # report_json = json.dumps(report.to_cloud_data(), indent=2)
+
+    pass
+
+
+@server.realtime_session(on_session_end=on_session_end)
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 

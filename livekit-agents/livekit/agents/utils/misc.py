@@ -10,6 +10,10 @@ from typing_extensions import TypeGuard
 
 from ..types import NotGiven, NotGivenOr
 
+
+from urllib.parse import urlparse
+
+
 _T = TypeVar("_T")
 
 
@@ -33,3 +37,11 @@ def camel_to_snake_case(name: str) -> str:
     return re.sub(
         r"([a-z0-9])([A-Z])", r"\1_\2", re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
     ).lower()
+
+
+def is_cloud(url: str) -> bool:
+    hostname = urlparse(url).hostname
+    if hostname is None:
+        return False
+    return hostname.endswith(".livekit.cloud") or hostname.endswith(".livekit.run")
+

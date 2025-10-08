@@ -14,7 +14,11 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
+import datetime
 import asyncio
+import json
 import contextlib
 import tempfile
 import contextvars
@@ -37,9 +41,9 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .telemetry import trace_types, tracer
+from .telemetry import trace_types, tracer, _setup_cloud_tracer, _upload_session_report
 from .types import NotGivenOr
-from .utils import http_context, is_given, wait_for_participant
+from .utils import http_context, is_given, wait_for_participant, misc
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -142,6 +146,7 @@ class JobContext:
         self._tempdir = tempfile.TemporaryDirectory()
 
         from .cli import AgentsConsole
+
         c = AgentsConsole.get_instance()
         if c.enabled:
             self._session_directory = c.session_directory
@@ -151,7 +156,55 @@ class JobContext:
         self._connected = False
         self._lock = asyncio.Lock()
 
-    def _cleanup(self) -> None:
+    def _on_setup(self) -> None:
+        is_cloud = misc.is_cloud(self._info.url)
+
+        if is_cloud and not self.is_fake_job():#  and self.job.enable_recording:
+            cloud_hostname = urlparse(self._info.url).hostname
+            _setup_cloud_tracer(
+                room_id=self._info.job.room.sid,
+                job_id=self._info.job.id,
+                cloud_hostname=cloud_hostname,
+            )
+
+    async def _on_session_end(self) -> None:
+        from .cli import AgentsConsole
+
+        if not (session := self._primary_agent_session):
+            return
+
+        c = AgentsConsole.get_instance()
+        report = self.make_session_report(session)
+        if c.enabled and c.record:
+            try:
+                report_json = json.dumps(report.to_dict(), indent=2)
+
+                import aiofiles
+                import aiofiles.os
+
+                await aiofiles.os.makedirs(self._job_ctx.session_directory, exist_ok=True)
+                async with aiofiles.open(
+                    self._job_ctx.session_directory / "session_report.json", mode="w"
+                ) as f:
+                    await f.write(report_json)
+
+            except Exception:
+                logger.exception("failed to save session report")
+
+        try:
+            cloud_hostname = urlparse(self._info.url).hostname
+            await _upload_session_report(
+                room_id=self._info.job.room.sid,
+                job_id=self._info.job.id,
+                cloud_hostname=cloud_hostname,
+                report=report,
+                http_session=http_context.http_session(),
+            )
+        except Exception:
+            logger.exception("failed to upload the session report to LiveKit Cloud")
+
+
+    def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
 
     def _init_log_factory(self) -> None:
@@ -209,6 +262,7 @@ class JobContext:
             options=session.options,
             audio_recording_path=recorder_io.output_path,
             events=session._recorded_events,
+            enable_user_data_training=True, # TODO
             chat_history=session.history.copy(),
         )
 
@@ -643,9 +697,11 @@ async def run_job(
             )
 
     def _on_ctx_connect() -> None:
+        nonlocal ctx_connect_called
         ctx_connect_called = True
 
     def _on_ctx_shutdown(reason: str) -> None:
+        nonlocal ctx_shutdown_called
         ctx_shutdown_called = True
 
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -709,10 +765,7 @@ async def run_job(
     shutdown_info = await shutdown_fut
     logger.debug(
         "shutting down job task",
-        extra={
-            "reason": shutdown_info.reason,
-            "user_initiated": shutdown_info.user_initiated,
-        },
+        extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
     )
 
     await room.disconnect()
