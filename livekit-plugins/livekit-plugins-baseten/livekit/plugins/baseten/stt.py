@@ -122,6 +122,14 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Baseten"
+
+    @property
     def session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -353,9 +361,9 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        (asyncio.gather(*tasks), wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()

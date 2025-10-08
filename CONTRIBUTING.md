@@ -45,3 +45,65 @@ be approved:
 If you can't contribute code, you can still help us greatly by helping out community members who
 may have questions about the framework and how to use it. Join the `#agents` channel on
 [our Slack](https://livekit.io/join-slack).
+
+## Development flow
+
+Look at the `examples/` directory to get a sense of all the different features and how to use them. You can create your own examples in `examples/dev/` and use it for your development loop.
+
+## Typechecking, linting and formatting
+
+The CI validates this but to do checks locally see the following example commmands:
+
+### Typechecking
+
+```bash
+uv pip install pip && uv run mypy --install-types --non-interactive \
+    -p livekit.agents \
+    -p livekit.plugins.openai \
+    -p livekit.plugins.anthropic \
+    -p livekit.plugins.mistralai \
+    -p livekit.plugins.assemblyai \
+    -p livekit.plugins.aws \
+    -p livekit.plugins.azure \
+    -p livekit.plugins.bey \
+    -p livekit.plugins.bithuman \
+    -p livekit.plugins.cartesia \
+    -p livekit.plugins.clova \
+    -p livekit.plugins.deepgram \
+    -p livekit.plugins.elevenlabs \
+    -p livekit.plugins.fal \
+    -p livekit.plugins.gladia \
+    -p livekit.plugins.google \
+    -p livekit.plugins.groq \
+    -p livekit.plugins.hume \
+    -p livekit.plugins.minimal \
+    -p livekit.plugins.neuphonic \
+    -p livekit.plugins.nltk \
+    -p livekit.plugins.playai \
+    -p livekit.plugins.resemble \
+    -p livekit.plugins.rime \
+    -p livekit.plugins.silero \
+    -p livekit.plugins.speechify \
+    -p livekit.plugins.speechmatics \
+    -p livekit.plugins.tavus \
+    -p livekit.plugins.turn_detector \
+    -p livekit.plugins.hedra \
+    -p livekit.plugins.langchain \
+    -p livekit.plugins.baseten \
+    -p livekit.plugins.sarvam \
+    -p livekit.plugins.inworld \
+    -p livekit.plugins.simli \
+    -p livekit.plugins.anam
+```
+
+### Linting
+
+```bash
+uv run ruff check --output-format=github .
+```
+
+### Formating
+
+```bash
+uv run ruff format .
+```

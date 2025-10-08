@@ -148,6 +148,17 @@ class TTS(tts.TTS):
             location=gcp_location,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        if self._client.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:

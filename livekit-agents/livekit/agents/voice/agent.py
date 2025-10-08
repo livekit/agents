@@ -61,13 +61,13 @@ class Agent:
         self._turn_detection = turn_detection
 
         if isinstance(stt, str):
-            stt = inference.STT(model=stt)
+            stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM(model=llm)
+            llm = inference.LLM.from_model_string(llm)
 
         if isinstance(tts, str):
-            tts = inference.TTS(model=tts)
+            tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt
         self._llm = llm
@@ -324,10 +324,6 @@ class Agent:
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
         """
-        from .transcription.filters import filter_emoji, filter_markdown
-
-        text = filter_markdown(text)
-        text = filter_emoji(text)
         return Agent.default.tts_node(self, text, model_settings)
 
     def realtime_audio_output_node(

@@ -63,10 +63,7 @@ class InworldOptions(TypedDict, total=False):
 
 TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
-TTSEncoding = Literal[
-    "pcm_s16le",
-    # "pcm_mulaw",
-]
+TTSEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -75,7 +72,7 @@ DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 @dataclass
 class _TTSOptions:
-    model: NotGivenOr[TTSModels | str]
+    model: TTSModels | str
     voice: NotGivenOr[str]
     language: NotGivenOr[str]
     encoding: TTSEncoding
@@ -158,7 +155,7 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -174,7 +171,7 @@ class TTS(tts.TTS):
 
     def __init__(
         self,
-        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,  # TODO: add a default model
+        model: TTSModels | str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -191,7 +188,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str, optional): TTS model to use, in "provider/model[:voice_id]" format
+            model (TTSModels | str): TTS model to use, in "provider/model" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -212,13 +209,13 @@ class TTS(tts.TTS):
         lk_base_url = (
             base_url
             if is_given(base_url)
-            else os.environ.get("LIVEKIT_GATEWAY_URL", DEFAULT_BASE_URL)
+            else os.environ.get("LIVEKIT_INFERENCE_URL", DEFAULT_BASE_URL)
         )
 
         lk_api_key = (
             api_key
             if is_given(api_key)
-            else os.getenv("LIVEKIT_GATEWAY_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+            else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
         if not lk_api_key:
             raise ValueError(
@@ -228,23 +225,12 @@ class TTS(tts.TTS):
         lk_api_secret = (
             api_secret
             if is_given(api_secret)
-            else os.getenv("LIVEKIT_GATEWAY_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+            else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
         )
         if not lk_api_secret:
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
-
-        # read voice id from the model if provided: "provider/model:voice_id"
-        if is_given(model) and (idx := model.rfind(":")) != -1:
-            if is_given(voice) and voice != model[idx + 1 :]:
-                logger.warning(
-                    "`voice` is provided via both argument and model, using the one from the argument",
-                    extra={"voice": voice, "model": model},
-                )
-            else:
-                voice = model[idx + 1 :]
-            model = model[:idx]
 
         self._opts = _TTSOptions(
             model=model,
@@ -265,6 +251,30 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    @classmethod
+    def from_model_string(cls, model: str) -> TTS:
+        """Create a TTS instance from a model string
+
+        Args:
+            model (str): TTS model to use, in "provider/model[:voice_id]" format
+
+        Returns:
+            TTS: TTS instance
+        """
+        voice: NotGivenOr[str] = NOT_GIVEN
+        if (idx := model.rfind(":")) != -1:
+            voice = model[idx + 1 :]
+            model = model[:idx]
+        return cls(model, voice=voice)
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

@@ -172,6 +172,14 @@ class EOUModelBase(ABC):
             with open(config_fname) as f:
                 self._languages = json.load(f)
 
+    @property
+    def model(self) -> str:
+        return self._model_type
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
+
     @abstractmethod
     def _inference_method(self) -> str: ...
 
