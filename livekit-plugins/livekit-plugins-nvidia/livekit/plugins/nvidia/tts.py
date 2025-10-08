@@ -26,6 +26,7 @@ class TTSOptions:
     function_id: str
     server: str
     sample_rate: int
+    use_ssl: bool
     language_code: str
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
 
@@ -38,6 +39,7 @@ class TTS(tts.TTS):
         voice: str = "Magpie-Multilingual.EN-US.Sofia",
         function_id: str = "877104f7-e885-42b9-8de8-f6e4c6303969",
         language_code: str = "en-US",
+        use_ssl: bool = True,
         api_key: str | None = None,
     ):
         super().__init__(
@@ -60,6 +62,7 @@ class TTS(tts.TTS):
             function_id=function_id,
             server=server,
             sample_rate=16000,
+            use_ssl=use_ssl,
             language_code=language_code,
             word_tokenizer=tokenize.blingfire.SentenceTokenizer(),
         )
@@ -69,7 +72,7 @@ class TTS(tts.TTS):
         if not self._tts_service:
             auth = riva.client.Auth(
                 uri=self._opts.server,
-                use_ssl=True,
+                use_ssl=self._opts.use_ssl,
                 metadata_args=[
                     ["authorization", f"Bearer {self.nvidia_api_key}"],
                     ["function-id", self._opts.function_id],

@@ -28,6 +28,7 @@ class STTOptions:
     punctuate: bool
     language_code: str
     sample_rate: int
+    use_ssl: bool
     server: str
 
 
@@ -41,6 +42,7 @@ class STT(stt.STT):
         language_code: str = "en-US",
         sample_rate: int = 16000,
         server: str = "grpc.nvcf.nvidia.com:443",
+        use_ssl: bool = True,
         api_key: NotGivenOr[str] = NOT_GIVEN,
     ):
         super().__init__(
@@ -72,6 +74,7 @@ class STT(stt.STT):
             language_code=language_code,
             sample_rate=sample_rate,
             server=server,
+            use_ssl=use_ssl,
         )
 
     def _recognize_impl(
@@ -109,7 +112,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._auth = riva.client.Auth(
             uri=stt._opts.server,
-            use_ssl=True,
+            use_ssl=stt._opts.use_ssl,
             metadata_args=[
                 ["authorization", f"Bearer {stt.nvidia_api_key}"],
                 ["function-id", stt._opts.function_id],
