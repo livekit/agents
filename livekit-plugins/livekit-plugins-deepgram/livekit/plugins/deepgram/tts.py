@@ -129,7 +129,7 @@ class TTS(tts.TTS):
             # Send CloseStream message to ensure Deepgram processes all remaining audio
             # before closing the connection, as per Deepgram's API requirements
             await ws.send_str(SynthesizeStream._CLOSE_MSG)
-            
+
             # Wait briefly for any final messages from Deepgram
             await asyncio.sleep(0.1)
         except Exception as e:
