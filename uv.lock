@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9.0"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'darwin'",
@@ -1714,6 +1714,7 @@ wheels = [
 name = "livekit-agents"
 source = { editable = "livekit-agents" }
 dependencies = [
+    { name = "aiofiles" },
     { name = "aiohttp" },
     { name = "av" },
     { name = "colorama" },
@@ -1883,6 +1884,7 @@ upliftai = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiofiles", specifier = ">=24" },
     { name = "aiohttp", specifier = "~=3.10" },
     { name = "av", specifier = ">=14.0.0" },
     { name = "av", marker = "extra == 'codecs'", specifier = ">=12.0.0" },
@@ -1934,7 +1936,7 @@ requires-dist = [
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
-    { name = "livekit-protocol", specifier = "~=1.0" },
+    { name = "livekit-protocol", specifier = ">=1.0.8" },
     { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.10.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -2590,15 +2592,15 @@ requires-dist = [
 
 [[package]]
 name = "livekit-protocol"
-version = "1.0.4"
+version = "1.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/75/ab0439ba2ce999e6212b32250ff8f0c93b56b0b3e95859c92052784b9d66/livekit_protocol-1.0.4.tar.gz", hash = "sha256:370477f7af376bbeb59ae3b26a052c1b93375abf1a69eb71c50b78bf73c70194", size = 56503, upload-time = "2025-06-20T06:45:51.744Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/48/b1/289729f058eb04014584a8f21c48fbd5907b125db71d69a236195c69da62/livekit_protocol-1.0.8.tar.gz", hash = "sha256:735e9b8825ccfebdcfa6db8d1a007b12db6bc1558304be803b672a504207c814", size = 60831, upload-time = "2025-10-08T22:18:35.505Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/eb/88bc73fa434cb9cba85c7011bc40289205eb45784931226c9357f130796b/livekit_protocol-1.0.4-py3-none-any.whl", hash = "sha256:8359b3c7a3ebe1aa89c15db9e0128c3e2e95f3a49796941b04acf0b44310c4a0", size = 66823, upload-time = "2025-06-20T06:45:49.396Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/de/9f8474c33689ced5e7b0bd20a9f34419e876628ce9e6fab66368759b6853/livekit_protocol-1.0.8-py3-none-any.whl", hash = "sha256:77fb929589728949d2b4bc50874e260f1fc1a6dcf0f1e6f37095c8ffdc246556", size = 72495, upload-time = "2025-10-08T22:18:34.162Z" },
 ]
 
 [[package]]
