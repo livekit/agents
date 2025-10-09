@@ -146,7 +146,9 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         speech_data = stt.SpeechData(language="multi", text="zz")
 
-        return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[speech_data])
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[speech_data]
+        )
 
     # STT method.
     def on_start(self, participant_id: str, room_id: str):

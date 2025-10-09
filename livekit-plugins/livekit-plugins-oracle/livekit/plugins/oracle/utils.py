@@ -47,11 +47,15 @@ def get_config_and_signer(
 
     # API_KEY
     if authentication_type == AuthenticationType.API_KEY:
-        config = oci.config.from_file(authentication_configuration_file_spec, authentication_profile_name)
+        config = oci.config.from_file(
+            authentication_configuration_file_spec, authentication_profile_name
+        )
 
     # SECURITY_TOKEN
     elif authentication_type == AuthenticationType.SECURITY_TOKEN:
-        config = oci.config.from_file(authentication_configuration_file_spec, authentication_profile_name)
+        config = oci.config.from_file(
+            authentication_configuration_file_spec, authentication_profile_name
+        )
         with open(config["security_token_file"]) as f:
             token = f.readline()
         private_key = oci.signer.load_private_key_from_file(config["key_file"])

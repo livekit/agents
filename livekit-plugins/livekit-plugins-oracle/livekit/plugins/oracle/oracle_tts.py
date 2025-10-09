@@ -73,7 +73,9 @@ class OracleTTS:
         self._parameters.base_url = base_url
         self._parameters.compartment_id = compartment_id
         self._parameters.authentication_type = authentication_type
-        self._parameters.authentication_configuration_file_spec = authentication_configuration_file_spec
+        self._parameters.authentication_configuration_file_spec = (
+            authentication_configuration_file_spec
+        )
         self._parameters.authentication_profile_name = authentication_profile_name
         self._parameters.voice = voice
         self._parameters.sample_rate = sample_rate
@@ -109,22 +111,35 @@ class OracleTTS:
             raise ValueError("The compartment_id parameter must not be an empty string.")
 
         if not isinstance(self._parameters.authentication_type, AuthenticationType):
-            raise TypeError("The authentication_type parameter must be one of the AuthenticationType enum members.")
+            raise TypeError(
+                "The authentication_type parameter must be one of the AuthenticationType enum members."
+            )
 
-        if self._parameters.authentication_type in {AuthenticationType.API_KEY, AuthenticationType.SECURITY_TOKEN}:
+        if self._parameters.authentication_type in {
+            AuthenticationType.API_KEY,
+            AuthenticationType.SECURITY_TOKEN,
+        }:
             if not isinstance(self._parameters.authentication_configuration_file_spec, str):
-                raise TypeError("The authentication_configuration_file_spec parameter must be a string.")
+                raise TypeError(
+                    "The authentication_configuration_file_spec parameter must be a string."
+                )
             self._parameters.authentication_configuration_file_spec = (
                 self._parameters.authentication_configuration_file_spec.strip()
             )
             if len(self._parameters.authentication_configuration_file_spec) == 0:
-                raise ValueError("The authentication_configuration_file_spec parameter must not be an empty string.")
+                raise ValueError(
+                    "The authentication_configuration_file_spec parameter must not be an empty string."
+                )
 
             if not isinstance(self._parameters.authentication_profile_name, str):
                 raise TypeError("The authentication_profile_name parameter must be a string.")
-            self._parameters.authentication_profile_name = self._parameters.authentication_profile_name.strip()
+            self._parameters.authentication_profile_name = (
+                self._parameters.authentication_profile_name.strip()
+            )
             if len(self._parameters.authentication_profile_name) == 0:
-                raise ValueError("The authentication_profile_name parameter must not be an empty string.")
+                raise ValueError(
+                    "The authentication_profile_name parameter must not be an empty string."
+                )
 
         if not isinstance(self._parameters.voice, str):
             raise TypeError("The voice parameter must be a string.")
@@ -160,7 +175,9 @@ class OracleTTS:
                             model_name="TTS_2_NATURAL", voice_id=self._parameters.voice
                         ),
                         speech_settings=TtsOracleSpeechSettings(
-                            text_type="TEXT", sample_rate_in_hz=self._parameters.sample_rate, output_format="PCM"
+                            text_type="TEXT",
+                            sample_rate_in_hz=self._parameters.sample_rate,
+                            output_format="PCM",
                         ),
                     ),
                 ),

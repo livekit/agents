@@ -135,7 +135,12 @@ class LLM(llm.LLM):
         tool_choice=None,
         extra_kwargs=None,
     ) -> LLMStream:
-        return LLMStream(oracle_llm_livekit_plugin=self, chat_ctx=chat_ctx, conn_options=conn_options, tools=tools)
+        return LLMStream(
+            oracle_llm_livekit_plugin=self,
+            chat_ctx=chat_ctx,
+            conn_options=conn_options,
+            tools=tools,
+        )
 
 
 class LLMStream(llm.LLMStream):
@@ -144,9 +149,16 @@ class LLMStream(llm.LLMStream):
     """
 
     def __init__(
-        self, *, oracle_llm_livekit_plugin: LLM, chat_ctx: llm.ChatContext, conn_options: None, tools: None
+        self,
+        *,
+        oracle_llm_livekit_plugin: LLM,
+        chat_ctx: llm.ChatContext,
+        conn_options: None,
+        tools: None,
     ) -> None:
-        super().__init__(oracle_llm_livekit_plugin, chat_ctx=chat_ctx, tools=None, conn_options=conn_options)
+        super().__init__(
+            oracle_llm_livekit_plugin, chat_ctx=chat_ctx, tools=None, conn_options=conn_options
+        )
 
         self._oracle_llm_livekit_plugin = oracle_llm_livekit_plugin
 
@@ -167,7 +179,9 @@ class LLMStream(llm.LLMStream):
             elif chat_message.type == "function_call_output":
                 call_id = chat_message.call_id
 
-                tool_call = self._oracle_llm_livekit_plugin._call_id_to_tool_call_dictionary.get(call_id)
+                tool_call = self._oracle_llm_livekit_plugin._call_id_to_tool_call_dictionary.get(
+                    call_id
+                )
 
                 if tool_call is not None:
                     try:
@@ -176,22 +190,31 @@ class LLMStream(llm.LLMStream):
                     except Exception:
                         message = chat_message.output
 
-                    oracle_llm_content = OracleLLMContent(tool_call, CONTENT_TYPE_STRING, Role.ASSISTANT)
-                    oracle_llm_content_list.append(oracle_llm_content)
-
                     oracle_llm_content = OracleLLMContent(
-                        "The function result of " + tool_call + " is: " + message, CONTENT_TYPE_STRING, Role.SYSTEM
+                        tool_call, CONTENT_TYPE_STRING, Role.ASSISTANT
                     )
                     oracle_llm_content_list.append(oracle_llm_content)
 
-        logger.debug("Before running content thru LLM. Content list count: " + str(len(oracle_llm_content_list)))
+                    oracle_llm_content = OracleLLMContent(
+                        "The function result of " + tool_call + " is: " + message,
+                        CONTENT_TYPE_STRING,
+                        Role.SYSTEM,
+                    )
+                    oracle_llm_content_list.append(oracle_llm_content)
+
+        logger.debug(
+            "Before running content thru LLM. Content list count: "
+            + str(len(oracle_llm_content_list))
+        )
 
         response_messages = self._oracle_llm_livekit_plugin._oracle_llm.run(
             oracle_llm_content_list=oracle_llm_content_list, tools=self._tools
         )
 
         logger.debug(
-            "After running content thru LLM. Response message list count: " + str(len(response_messages)) + "."
+            "After running content thru LLM. Response message list count: "
+            + str(len(response_messages))
+            + "."
         )
 
         for response_message in response_messages:
@@ -200,11 +223,15 @@ class LLMStream(llm.LLMStream):
 
                 logger.debug("External tool call needs to be made: " + tool_call)
 
-                function_name, function_parameters = LLMStream.get_name_and_arguments_from_tool_call(tool_call)
+                function_name, function_parameters = (
+                    LLMStream.get_name_and_arguments_from_tool_call(tool_call)
+                )
 
                 tool = None
                 for temp_tool in self._tools:
-                    if temp_tool.name == function_name and len(temp_tool.parameters) == len(function_parameters):
+                    if temp_tool.name == function_name and len(temp_tool.parameters) == len(
+                        function_parameters
+                    ):
                         tool = temp_tool
 
                 if tool is None:
@@ -234,7 +261,9 @@ class LLMStream(llm.LLMStream):
 
                 call_id = utils.shortuuid()
 
-                self._oracle_llm_livekit_plugin._call_id_to_tool_call_dictionary[call_id] = tool_call
+                self._oracle_llm_livekit_plugin._call_id_to_tool_call_dictionary[call_id] = (
+                    tool_call
+                )
 
                 function_tool_call = llm.FunctionToolCall(
                     name=function_name, arguments=function_parameters_text, call_id=call_id
@@ -255,7 +284,9 @@ class LLMStream(llm.LLMStream):
 
                 chat_chunk = llm.ChatChunk(
                     id=utils.shortuuid(),
-                    delta=llm.ChoiceDelta(content=response_message, role=Role.ASSISTANT.name.lower()),
+                    delta=llm.ChoiceDelta(
+                        content=response_message, role=Role.ASSISTANT.name.lower()
+                    ),
                 )
 
                 self._event_ch.send_nowait(chat_chunk)
@@ -292,7 +323,9 @@ class LLMStream(llm.LLMStream):
                             parameter_description = parameter_name
                         parameter_type = property_value["type"]
 
-                        parameter = OracleValue(parameter_name, parameter_description, parameter_type)
+                        parameter = OracleValue(
+                            parameter_name, parameter_description, parameter_type
+                        )
                         parameters.append(parameter)
 
                     tool = OracleTool(function_name, function_description, parameters)
@@ -307,7 +340,9 @@ class LLMStream(llm.LLMStream):
     def get_name_and_arguments_from_tool_call(tool_call):
         tool_call = tool_call[len(TOOL_CALL_PREFIX) :].strip()
 
-        function_name, function_parameters = LLMStream.parse_function_call(tool_call, TOOL_CALL_DESCRIPTION)
+        function_name, function_parameters = LLMStream.parse_function_call(
+            tool_call, TOOL_CALL_DESCRIPTION
+        )
 
         return function_name, function_parameters
 

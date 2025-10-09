@@ -94,14 +94,22 @@ class TTS(tts.TTS):
                 raise ValueError("The audio_cache_file_path parameter must not be an empty string.")
 
             if not isinstance(audio_cache_maximum_utterance_length, int):
-                raise TypeError("The audio_cache_maximum_utterance_length parameter must be an integer.")
+                raise TypeError(
+                    "The audio_cache_maximum_utterance_length parameter must be an integer."
+                )
             if audio_cache_maximum_utterance_length <= 0:
-                raise ValueError("The audio_cache_maximum_utterance_length parameter must be greater than 0.")
+                raise ValueError(
+                    "The audio_cache_maximum_utterance_length parameter must be greater than 0."
+                )
 
             if not isinstance(audio_cache_maximum_number_of_utterances, int):
-                raise TypeError("The audio_cache_maximum_number_of_utterances parameter must be an integer.")
+                raise TypeError(
+                    "The audio_cache_maximum_number_of_utterances parameter must be an integer."
+                )
             if audio_cache_maximum_number_of_utterances <= 0:
-                raise ValueError("The audio_cache_maximum_number_of_utterances parameter must be greater than 0.")
+                raise ValueError(
+                    "The audio_cache_maximum_number_of_utterances parameter must be greater than 0."
+                )
 
         if audio_cache_file_path is None:
             self._audio_cache = None
@@ -124,7 +132,9 @@ class ChunkedStream(tts.ChunkedStream):
     The TTS chunked stream class. This derives from livekit.agents.tts.ChunkedStream.
     """
 
-    def __init__(self, *, tts: tts.TTS, text: str, conn_options: DEFAULT_API_CONNECT_OPTIONS) -> None:
+    def __init__(
+        self, *, tts: tts.TTS, text: str, conn_options: DEFAULT_API_CONNECT_OPTIONS
+    ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
 
         self._oracle_tts_livekit_plugin = tts
@@ -148,7 +158,9 @@ class ChunkedStream(tts.ChunkedStream):
         if audio_bytes is None:
             logger.debug("Before getting TTS audio bytes.")
 
-            audio_bytes = await self._oracle_tts_livekit_plugin._oracle_tts.synthesize_speech(text=self._input_text)
+            audio_bytes = await self._oracle_tts_livekit_plugin._oracle_tts.synthesize_speech(
+                text=self._input_text
+            )
 
             logger.debug("After getting TTS audio bytes.")
 
@@ -170,7 +182,8 @@ class ChunkedStream(tts.ChunkedStream):
             if (
                 not audio_bytes_from_cache
                 and self._oracle_tts_livekit_plugin._audio_cache is not None
-                and len(self._input_text) <= self._oracle_tts_livekit_plugin._audio_cache_maximum_utterance_length
+                and len(self._input_text)
+                <= self._oracle_tts_livekit_plugin._audio_cache_maximum_utterance_length
             ):
                 self._oracle_tts_livekit_plugin._audio_cache.set_audio_bytes(
                     text=self._input_text,

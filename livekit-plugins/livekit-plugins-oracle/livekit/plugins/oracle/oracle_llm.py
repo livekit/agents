@@ -113,7 +113,9 @@ class OracleLLM:
 
         self._parameters.base_url = base_url
         self._parameters.authentication_type = authentication_type
-        self._parameters.authentication_configuration_file_spec = authentication_configuration_file_spec
+        self._parameters.authentication_configuration_file_spec = (
+            authentication_configuration_file_spec
+        )
         self._parameters.authentication_profile_name = authentication_profile_name
         self._parameters.back_end = back_end
 
@@ -153,22 +155,35 @@ class OracleLLM:
             raise ValueError("The base_url parameter must be a valid URL.")
 
         if not isinstance(self._parameters.authentication_type, AuthenticationType):
-            raise TypeError("The authentication_type parameter must be one of the AuthenticationType enum members.")
+            raise TypeError(
+                "The authentication_type parameter must be one of the AuthenticationType enum members."
+            )
 
-        if self._parameters.authentication_type in {AuthenticationType.API_KEY, AuthenticationType.SECURITY_TOKEN}:
+        if self._parameters.authentication_type in {
+            AuthenticationType.API_KEY,
+            AuthenticationType.SECURITY_TOKEN,
+        }:
             if not isinstance(self._parameters.authentication_configuration_file_spec, str):
-                raise TypeError("The authentication_configuration_file_spec parameter must be a string.")
+                raise TypeError(
+                    "The authentication_configuration_file_spec parameter must be a string."
+                )
             self._parameters.authentication_configuration_file_spec = (
                 self._parameters.authentication_configuration_file_spec.strip()
             )
             if len(self._parameters.authentication_configuration_file_spec) == 0:
-                raise ValueError("The authentication_configuration_file_spec parameter must not be an empty string.")
+                raise ValueError(
+                    "The authentication_configuration_file_spec parameter must not be an empty string."
+                )
 
             if not isinstance(self._parameters.authentication_profile_name, str):
                 raise TypeError("The authentication_profile_name parameter must be a string.")
-            self._parameters.authentication_profile_name = self._parameters.authentication_profile_name.strip()
+            self._parameters.authentication_profile_name = (
+                self._parameters.authentication_profile_name.strip()
+            )
             if len(self._parameters.authentication_profile_name) == 0:
-                raise ValueError("The authentication_profile_name parameter must not be an empty string.")
+                raise ValueError(
+                    "The authentication_profile_name parameter must not be an empty string."
+                )
 
         if not isinstance(self._parameters.back_end, BackEnd):
             raise TypeError("The back_end parameter must be one of the BackEnd enum members.")
@@ -202,7 +217,9 @@ class OracleLLM:
 
             if self._parameters.model_id is None:
                 if self._parameters.model_name is None:
-                    raise TypeError("Either the model_id or the model_name parameter must not be None.")
+                    raise TypeError(
+                        "Either the model_id or the model_name parameter must not be None."
+                    )
             elif self._parameters.model_name is not None:
                 raise TypeError("Either the model_id or the model_name parameter must be None.")
 
@@ -210,13 +227,17 @@ class OracleLLM:
                 if not isinstance(self._parameters.maximum_number_of_tokens, int):
                     raise TypeError("The maximum_number_of_tokens parameter must be an integer.")
                 if self._parameters.maximum_number_of_tokens <= 0:
-                    raise ValueError("The maximum_number_of_tokens parameter must be greater than 0.")
+                    raise ValueError(
+                        "The maximum_number_of_tokens parameter must be greater than 0."
+                    )
 
             if self._parameters.temperature is not None:
                 if not isinstance(self._parameters.temperature, float):
                     raise TypeError("The temperature parameter must be a float.")
                 if self._parameters.temperature < 0:
-                    raise ValueError("The maximum_number_of_tokens parameter must be greater than or equal to 0.")
+                    raise ValueError(
+                        "The maximum_number_of_tokens parameter must be greater than or equal to 0."
+                    )
 
             if self._parameters.top_p is not None:
                 if not isinstance(self._parameters.top_p, float):
@@ -234,13 +255,17 @@ class OracleLLM:
                 if not isinstance(self._parameters.frequency_penalty, float):
                     raise TypeError("The frequency_penalty parameter must be a float.")
                 if self._parameters.frequency_penalty < 0:
-                    raise ValueError("The frequency_penalty parameter must be greater than or equal to 0.")
+                    raise ValueError(
+                        "The frequency_penalty parameter must be greater than or equal to 0."
+                    )
 
             if self._parameters.presence_penalty is not None:
                 if not isinstance(self._parameters.presence_penalty, float):
                     raise TypeError("The presence_penalty parameter must be a float.")
                 if self._parameters.presence_penalty < 0:
-                    raise ValueError("The presence_penalty parameter must be greater than or equal to 0.")
+                    raise ValueError(
+                        "The presence_penalty parameter must be greater than or equal to 0."
+                    )
 
             if self._parameters.seed is not None:  # noqa: SIM102
                 if not isinstance(self._parameters.seed, int):
@@ -263,15 +288,21 @@ class OracleLLM:
         signer = configAndSigner["signer"]
 
         if signer is None:
-            self._generative_ai_inference_client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                config=config, service_endpoint=self._parameters.base_url, retry_strategy=oci.retry.NoneRetryStrategy()
+            self._generative_ai_inference_client = (
+                oci.generative_ai_inference.GenerativeAiInferenceClient(
+                    config=config,
+                    service_endpoint=self._parameters.base_url,
+                    retry_strategy=oci.retry.NoneRetryStrategy(),
+                )
             )
         else:
-            self._generative_ai_inference_client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                config=config,
-                service_endpoint=self._parameters.base_url,
-                retry_strategy=oci.retry.NoneRetryStrategy(),
-                signer=signer,
+            self._generative_ai_inference_client = (
+                oci.generative_ai_inference.GenerativeAiInferenceClient(
+                    config=config,
+                    service_endpoint=self._parameters.base_url,
+                    retry_strategy=oci.retry.NoneRetryStrategy(),
+                    signer=signer,
+                )
             )
 
         logger.debug("Initialized for GenAI LLM.")
@@ -286,15 +317,21 @@ class OracleLLM:
         signer = configAndSigner["signer"]
 
         if signer is None:
-            self._generative_ai_agent_runtime_client = oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
-                config=config, service_endpoint=self._parameters.base_url, retry_strategy=oci.retry.NoneRetryStrategy()
+            self._generative_ai_agent_runtime_client = (
+                oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
+                    config=config,
+                    service_endpoint=self._parameters.base_url,
+                    retry_strategy=oci.retry.NoneRetryStrategy(),
+                )
             )
         else:
-            self._generative_ai_agent_runtime_client = oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
-                config=config,
-                service_endpoint=self._parameters.base_url,
-                retry_strategy=oci.retry.NoneRetryStrategy(),
-                signer=signer,
+            self._generative_ai_agent_runtime_client = (
+                oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
+                    config=config,
+                    service_endpoint=self._parameters.base_url,
+                    retry_strategy=oci.retry.NoneRetryStrategy(),
+                    signer=signer,
+                )
             )
 
         id = str(uuid.uuid4())
@@ -304,26 +341,37 @@ class OracleLLM:
         )
 
         response = self._generative_ai_agent_runtime_client.create_session(
-            agent_endpoint_id=self._parameters.agent_endpoint_id, create_session_details=session_details
+            agent_endpoint_id=self._parameters.agent_endpoint_id,
+            create_session_details=session_details,
         )
         self._session_id = response.data.id
 
         logger.debug("Initialized for GenAI Agent.")
 
     def run(
-        self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None
+        self,
+        *,
+        oracle_llm_content_list: list[OracleLLMContent] = None,
+        tools: list[OracleTool] = None,
     ) -> list[str]:
         if self._parameters.back_end == BackEnd.GEN_AI_LLM:
-            response_messages = self.run_for_llm(oracle_llm_content_list=oracle_llm_content_list, tools=tools)
+            response_messages = self.run_for_llm(
+                oracle_llm_content_list=oracle_llm_content_list, tools=tools
+            )
         else:  # if self._parameters.back_end == BackEnd.GEN_AI_AGENT:
-            response_messages = self.run_for_agent(oracle_llm_content_list=oracle_llm_content_list, tools=tools)
+            response_messages = self.run_for_agent(
+                oracle_llm_content_list=oracle_llm_content_list, tools=tools
+            )
 
         self._number_of_runs += 1
 
         return response_messages
 
     def run_for_llm(
-        self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None
+        self,
+        *,
+        oracle_llm_content_list: list[OracleLLMContent] = None,
+        tools: list[OracleTool] = None,
     ) -> list[str]:
         if oracle_llm_content_list is None:
             oracle_llm_content_list = []
@@ -387,7 +435,9 @@ class OracleLLM:
             chat_request.seed = self._parameters.seed
 
         serving_mode = oci.generative_ai_inference.models.OnDemandServingMode(
-            model_id=self._parameters.model_name if self._parameters.model_id is None else self._parameters.model_id
+            model_id=self._parameters.model_name
+            if self._parameters.model_id is None
+            else self._parameters.model_id
         )
 
         chat_details = oci.generative_ai_inference.models.ChatDetails()
@@ -430,7 +480,10 @@ class OracleLLM:
         return response_messages
 
     def run_for_agent(
-        self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None
+        self,
+        *,
+        oracle_llm_content_list: list[OracleLLMContent] = None,
+        tools: list[OracleTool] = None,
     ) -> list[str]:
         if oracle_llm_content_list is None:
             oracle_llm_content_list = []
@@ -471,8 +524,15 @@ class OracleLLM:
 
         response_messages = [response_message]
 
-        if TOOL_CALL_PREFIX in response_message and response_message.find(TOOL_CALL_PREFIX, 1) != -1:
-            raise Exception("Unexpectedly received a response message with an embedded " + TOOL_CALL_DESCRIPTION + ".")
+        if (
+            TOOL_CALL_PREFIX in response_message
+            and response_message.find(TOOL_CALL_PREFIX, 1) != -1
+        ):
+            raise Exception(
+                "Unexpectedly received a response message with an embedded "
+                + TOOL_CALL_DESCRIPTION
+                + "."
+            )
 
         return response_messages
 
@@ -501,7 +561,9 @@ class OracleLLM:
             + ' function_name(parameters)"\n'
         )
         tool_descriptions += "Do not combine function calls and text responses in the same output: either only function calls or only text responses.\n"
-        tool_descriptions += "For any string parameters, be sure to enclose each of them in double quotes."
+        tool_descriptions += (
+            "For any string parameters, be sure to enclose each of them in double quotes."
+        )
 
         if self._output_tool_descriptions:
             self._output_tool_descriptions = False

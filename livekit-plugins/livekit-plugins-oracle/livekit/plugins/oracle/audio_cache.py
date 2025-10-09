@@ -34,7 +34,9 @@ class AudioCache:
     The audio cache class.
     """
 
-    def __init__(self, *, audio_cache_file_path: str, audio_cache_maximum_number_of_utterances: int):
+    def __init__(
+        self, *, audio_cache_file_path: str, audio_cache_maximum_number_of_utterances: int
+    ):
         self._audio_cache_file_path = audio_cache_file_path
         self._audio_cache_maximum_number_of_utterances = audio_cache_maximum_number_of_utterances
 
@@ -50,7 +52,9 @@ class AudioCache:
         else:
             self._index_dictionary = {}
 
-    def get_audio_bytes(self, *, text: str, voice: str, audio_rate: int, audio_channels: int, audio_bits: int):
+    def get_audio_bytes(
+        self, *, text: str, voice: str, audio_rate: int, audio_channels: int, audio_bits: int
+    ):
         """
         Get the audio bytes for the specified text, voice, audio rate, audio channels, and audio bits.
 
@@ -66,7 +70,11 @@ class AudioCache:
         """
 
         key = AudioCache.form_key(
-            text=text, voice=voice, audio_rate=audio_rate, audio_channels=audio_channels, audio_bits=audio_bits
+            text=text,
+            voice=voice,
+            audio_rate=audio_rate,
+            audio_channels=audio_channels,
+            audio_bits=audio_bits,
         )
 
         if key in self._index_dictionary:
@@ -93,7 +101,14 @@ class AudioCache:
         return audio_bytes
 
     def set_audio_bytes(
-        self, *, text: str, voice: str, audio_rate: int, audio_channels: int, audio_bits: int, audio_bytes: bytes
+        self,
+        *,
+        text: str,
+        voice: str,
+        audio_rate: int,
+        audio_channels: int,
+        audio_bits: int,
+        audio_bytes: bytes,
     ):
         """
         Set the audio bytes for the specified text, voice, audio rate, audio channels, audio bits, and audio bytes.
@@ -111,7 +126,11 @@ class AudioCache:
         """
 
         key = AudioCache.form_key(
-            text=text, voice=voice, audio_rate=audio_rate, audio_channels=audio_channels, audio_bits=audio_bits
+            text=text,
+            voice=voice,
+            audio_rate=audio_rate,
+            audio_channels=audio_channels,
+            audio_bits=audio_bits,
         )
 
         if key in self._index_dictionary:
@@ -156,7 +175,8 @@ class AudioCache:
             for key, dictionary in self._index_dictionary:
                 if (
                     oldest_dictionary is None
-                    or dictionary["last_accessed_milliseconds"] < oldest_dictionary["last_accessed_milliseconds"]
+                    or dictionary["last_accessed_milliseconds"]
+                    < oldest_dictionary["last_accessed_milliseconds"]
                 ):
                     oldest_key = key
                     oldest_dictionary = dictionary
@@ -186,5 +206,15 @@ class AudioCache:
         (nothing)
         """
 
-        key = voice + "\t" + str(audio_rate) + "\t" + str(audio_channels) + "\t" + str(audio_bits) + "\t" + text
+        key = (
+            voice
+            + "\t"
+            + str(audio_rate)
+            + "\t"
+            + str(audio_channels)
+            + "\t"
+            + str(audio_bits)
+            + "\t"
+            + text
+        )
         return key

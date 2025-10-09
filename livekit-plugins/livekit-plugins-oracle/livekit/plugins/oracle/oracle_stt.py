@@ -91,13 +91,17 @@ class OracleSTT(RealtimeSpeechClientListener):
         self._parameters.base_url = base_url
         self._parameters.compartment_id = compartment_id
         self._parameters.authentication_type = authentication_type
-        self._parameters.authentication_configuration_file_spec = authentication_configuration_file_spec
+        self._parameters.authentication_configuration_file_spec = (
+            authentication_configuration_file_spec
+        )
         self._parameters.authentication_profile_name = authentication_profile_name
         self._parameters.sample_rate = sample_rate
         self._parameters.language_code = language_code
         self._parameters.model_domain = model_domain
         self._parameters.is_ack_enabled = is_ack_enabled
-        self._parameters.partial_silence_threshold_milliseconds = partial_silence_threshold_milliseconds
+        self._parameters.partial_silence_threshold_milliseconds = (
+            partial_silence_threshold_milliseconds
+        )
         self._parameters.final_silence_threshold_milliseconds = final_silence_threshold_milliseconds
         self._parameters.stabilize_partial_results = stabilize_partial_results
         self._parameters.punctuation = punctuation
@@ -134,22 +138,35 @@ class OracleSTT(RealtimeSpeechClientListener):
             raise ValueError("The compartment_id parameter must not be an empty string.")
 
         if not isinstance(self._parameters.authentication_type, AuthenticationType):
-            raise TypeError("The authentication_type parameter must be one of the AuthenticationType enum members.")
+            raise TypeError(
+                "The authentication_type parameter must be one of the AuthenticationType enum members."
+            )
 
-        if self._parameters.authentication_type in {AuthenticationType.API_KEY, AuthenticationType.SECURITY_TOKEN}:
+        if self._parameters.authentication_type in {
+            AuthenticationType.API_KEY,
+            AuthenticationType.SECURITY_TOKEN,
+        }:
             if not isinstance(self._parameters.authentication_configuration_file_spec, str):
-                raise TypeError("The authentication_configuration_file_spec parameter must be a string.")
+                raise TypeError(
+                    "The authentication_configuration_file_spec parameter must be a string."
+                )
             self._parameters.authentication_configuration_file_spec = (
                 self._parameters.authentication_configuration_file_spec.strip()
             )
             if len(self._parameters.authentication_configuration_file_spec) == 0:
-                raise ValueError("The authentication_configuration_file_spec parameter must not be an empty string.")
+                raise ValueError(
+                    "The authentication_configuration_file_spec parameter must not be an empty string."
+                )
 
             if not isinstance(self._parameters.authentication_profile_name, str):
                 raise TypeError("The authentication_profile_name parameter must be a string.")
-            self._parameters.authentication_profile_name = self._parameters.authentication_profile_name.strip()
+            self._parameters.authentication_profile_name = (
+                self._parameters.authentication_profile_name.strip()
+            )
             if len(self._parameters.authentication_profile_name) == 0:
-                raise ValueError("The authentication_profile_name parameter must not be an empty string.")
+                raise ValueError(
+                    "The authentication_profile_name parameter must not be an empty string."
+                )
 
         if not isinstance(self._parameters.sample_rate, int):
             raise TypeError("The sample_rate parameter must be an integer.")
@@ -172,18 +189,26 @@ class OracleSTT(RealtimeSpeechClientListener):
             raise TypeError("The is_ack_enabled parameter must be a boolean.")
 
         if not isinstance(self._parameters.final_silence_threshold_milliseconds, int):
-            raise TypeError("The final_silence_threshold_milliseconds parameter must be an integer.")
+            raise TypeError(
+                "The final_silence_threshold_milliseconds parameter must be an integer."
+            )
         if self._parameters.final_silence_threshold_milliseconds <= 0:
-            raise ValueError("The final_silence_threshold_milliseconds parameter must be greater than 0.")
+            raise ValueError(
+                "The final_silence_threshold_milliseconds parameter must be greater than 0."
+            )
 
         if not isinstance(self._parameters.return_partial_results, bool):
             raise TypeError("The return_partial_results parameter must be a boolean.")
 
         if self._parameters.return_partial_results:
             if not isinstance(self._parameters.partial_silence_threshold_milliseconds, int):
-                raise TypeError("The partial_silence_threshold_milliseconds parameter must be an integer.")
+                raise TypeError(
+                    "The partial_silence_threshold_milliseconds parameter must be an integer."
+                )
             if self._parameters.partial_silence_threshold_milliseconds <= 0:
-                raise ValueError("The partial_silence_threshold_milliseconds parameter must be greater than 0.")
+                raise ValueError(
+                    "The partial_silence_threshold_milliseconds parameter must be greater than 0."
+                )
         else:
             self._parameters.partial_silence_threshold_milliseconds = (
                 self._parameters.final_silence_threshold_milliseconds
@@ -191,9 +216,13 @@ class OracleSTT(RealtimeSpeechClientListener):
 
         if not isinstance(self._parameters.stabilize_partial_results, str):
             raise TypeError("The stabilize_partial_results parameter must be a string.")
-        self._parameters.stabilize_partial_results = self._parameters.stabilize_partial_results.strip().upper()
+        self._parameters.stabilize_partial_results = (
+            self._parameters.stabilize_partial_results.strip().upper()
+        )
         if self._parameters.stabilize_partial_results not in {"NONE", "LOW", "MEDIUM", "HIGH"}:
-            raise ValueError("The stabilize_partial_results parameter must be 'NONE', 'LOW', 'MEDIUM', or 'HIGH'.")
+            raise ValueError(
+                "The stabilize_partial_results parameter must be 'NONE', 'LOW', 'MEDIUM', or 'HIGH'."
+            )
 
         if not isinstance(self._parameters.punctuation, str):
             raise TypeError("The punctuation parameter must be a string.")
@@ -233,8 +262,12 @@ class OracleSTT(RealtimeSpeechClientListener):
         real_time_parameters.language_code = self._parameters.language_code
         real_time_parameters.model_domain = self._parameters.model_domain
         real_time_parameters.is_ack_enabled = self._parameters.is_ack_enabled
-        real_time_parameters.partial_silence_threshold_in_ms = self._parameters.partial_silence_threshold_milliseconds
-        real_time_parameters.final_silence_threshold_in_ms = self._parameters.final_silence_threshold_milliseconds
+        real_time_parameters.partial_silence_threshold_in_ms = (
+            self._parameters.partial_silence_threshold_milliseconds
+        )
+        real_time_parameters.final_silence_threshold_in_ms = (
+            self._parameters.final_silence_threshold_milliseconds
+        )
         real_time_parameters.stabilize_partial_results = self._parameters.stabilize_partial_results
         real_time_parameters.punctuation = self._parameters.punctuation
         if self._parameters.customizations is not None:
