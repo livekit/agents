@@ -19,7 +19,6 @@ This module provides utilities used throughout the Oracle LiveKit plug-in code.
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
-
 from __future__ import annotations
 
 from enum import Enum

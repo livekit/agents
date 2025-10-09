@@ -20,7 +20,6 @@ it it completely indpendent of LiveKit and could be used in other environments b
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
-
 from __future__ import annotations
 
 import uuid

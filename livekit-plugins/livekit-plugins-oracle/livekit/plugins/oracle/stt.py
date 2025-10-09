@@ -19,7 +19,6 @@ This module is the Oracle LiveKit STT plug-in.
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
-
 from __future__ import annotations
 
 import asyncio
