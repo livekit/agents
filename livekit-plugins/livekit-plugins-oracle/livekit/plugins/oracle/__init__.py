@@ -29,15 +29,7 @@ from .tts import TTS
 from .utils import AuthenticationType
 from .version import __version__
 
-__all__ = [
-    "STT",
-    "LLM",
-    "TTS",
-    "AuthenticationType",
-    "BackEnd",
-    "Role",
-    "__version__"
-]
+__all__ = ["STT", "LLM", "TTS", "AuthenticationType", "BackEnd", "Role", "__version__"]
 
 
 class OraclePlugin(Plugin):

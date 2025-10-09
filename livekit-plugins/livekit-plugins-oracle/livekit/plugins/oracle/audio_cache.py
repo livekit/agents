@@ -44,22 +44,13 @@ class AudioCache:
         self._index_file_spec = os.path.join(self._audio_cache_file_path, INDEX_FILE_NAME)
 
         if os.path.exists(self._index_file_spec):
-            with open(self._index_file_spec, encoding='utf-8') as file:
+            with open(self._index_file_spec, encoding="utf-8") as file:
                 index_json_text = file.read()
             self._index_dictionary = json.loads(index_json_text)
         else:
             self._index_dictionary = {}
 
-
-    def get_audio_bytes(
-        self,
-        *,
-        text: str,
-        voice: str,
-        audio_rate: int,
-        audio_channels: int,
-        audio_bits: int
-        ):
+    def get_audio_bytes(self, *, text: str, voice: str, audio_rate: int, audio_channels: int, audio_bits: int):
         """
         Get the audio bytes for the specified text, voice, audio rate, audio channels, and audio bits.
 
@@ -75,12 +66,8 @@ class AudioCache:
         """
 
         key = AudioCache.form_key(
-            text = text,
-            voice = voice,
-            audio_rate = audio_rate,
-            audio_channels = audio_channels,
-            audio_bits = audio_bits
-            )
+            text=text, voice=voice, audio_rate=audio_rate, audio_channels=audio_channels, audio_bits=audio_bits
+        )
 
         if key in self._index_dictionary:
             dictionary = self._index_dictionary[key]
@@ -89,7 +76,7 @@ class AudioCache:
             if os.path.exists(audio_bytes_file_spec):
                 write_index_dictionary = True
                 dictionary["last_accessed_milliseconds"] = int(time.time() * 1000)
-                with open(audio_bytes_file_spec, 'rb') as file:
+                with open(audio_bytes_file_spec, "rb") as file:
                     audio_bytes = file.read()
             else:
                 del self._index_dictionary[key]
@@ -100,22 +87,14 @@ class AudioCache:
             audio_bytes = None
 
         if write_index_dictionary:
-            with open(self._index_file_spec, 'w', encoding='utf-8') as file:
-                json.dump(self._index_dictionary, file, indent = 4)
+            with open(self._index_file_spec, "w", encoding="utf-8") as file:
+                json.dump(self._index_dictionary, file, indent=4)
 
         return audio_bytes
 
-
     def set_audio_bytes(
-        self,
-        *,
-        text: str,
-        voice: str,
-        audio_rate: int,
-        audio_channels: int,
-        audio_bits: int,
-        audio_bytes: bytes
-        ):
+        self, *, text: str, voice: str, audio_rate: int, audio_channels: int, audio_bits: int, audio_bytes: bytes
+    ):
         """
         Set the audio bytes for the specified text, voice, audio rate, audio channels, audio bits, and audio bytes.
 
@@ -132,12 +111,8 @@ class AudioCache:
         """
 
         key = AudioCache.form_key(
-            text = text,
-            voice = voice,
-            audio_rate = audio_rate,
-            audio_channels = audio_channels,
-            audio_bits = audio_bits
-            )
+            text=text, voice=voice, audio_rate=audio_rate, audio_channels=audio_channels, audio_bits=audio_bits
+        )
 
         if key in self._index_dictionary:
             dictionary = self._index_dictionary[key]
@@ -154,15 +129,14 @@ class AudioCache:
 
         audio_bytes_file_spec = os.path.join(self._audio_cache_file_path, audio_bytes_file_name)
 
-        with open(audio_bytes_file_spec, 'wb') as file:
+        with open(audio_bytes_file_spec, "wb") as file:
             file.write(audio_bytes)
 
         if write_index_dictionary:
-            with open(self._index_file_spec, 'w', encoding='utf-8') as file:
-                json.dump(self._index_dictionary, file, indent = 4)
+            with open(self._index_file_spec, "w", encoding="utf-8") as file:
+                json.dump(self._index_dictionary, file, indent=4)
 
         self.clean_up_old_utterances()
-
 
     def clean_up_old_utterances(self):
         """
@@ -180,7 +154,10 @@ class AudioCache:
             oldest_key = None
             oldest_dictionary = None
             for key, dictionary in self._index_dictionary:
-                if oldest_dictionary is None or dictionary["last_accessed_milliseconds"] < oldest_dictionary["last_accessed_milliseconds"]:
+                if (
+                    oldest_dictionary is None
+                    or dictionary["last_accessed_milliseconds"] < oldest_dictionary["last_accessed_milliseconds"]
+                ):
                     oldest_key = key
                     oldest_dictionary = dictionary
 
@@ -190,19 +167,11 @@ class AudioCache:
                 os.remove(audio_bytes_file_spec)
             del self._index_dictionary[oldest_key]
 
-        with open(self._index_file_spec, 'w', encoding='utf-8') as file:
-            json.dump(self._index_dictionary, file, indent = 4)
-
+        with open(self._index_file_spec, "w", encoding="utf-8") as file:
+            json.dump(self._index_dictionary, file, indent=4)
 
     @staticmethod
-    def form_key(
-        *,
-        text: str,
-        voice: str,
-        audio_rate: int,
-        audio_channels: int,
-        audio_bits: int
-        ):
+    def form_key(*, text: str, voice: str, audio_rate: int, audio_channels: int, audio_bits: int):
         """
         Form the key for the specified text, voice, audio rate, audio channels, and audio bits.
 

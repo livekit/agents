@@ -20,6 +20,7 @@ it it completely indpendent of LiveKit and could be used in other environments b
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
+
 from __future__ import annotations
 
 import uuid
@@ -36,17 +37,22 @@ from .utils import AuthenticationType, get_config_and_signer
 
 class BackEnd(Enum):
     """Back-ends as enumerator."""
+
     GEN_AI_LLM = "GEN_AI_LLM"
     GEN_AI_AGENT = "GEN_AI_AGENT"
 
+
 CONTENT_TYPE_STRING = "string"
+
 
 class Role(Enum):
     """Roles as enumerator."""
+
     USER = "USER"
     SYSTEM = "SYSTEM"
     ASSISTANT = "ASSISTANT"
     DEVELOPER = "DEVELOPER"
+
 
 TOOL_CALL_PREFIX = "TOOL-CALL:"
 TOOL_CALL_DESCRIPTION = "tool-call"
@@ -60,18 +66,16 @@ class OracleLLM:
     def __init__(
         self,
         *,
-
-        base_url: str, # must be specified
+        base_url: str,  # must be specified
         authentication_type: AuthenticationType = AuthenticationType.SECURITY_TOKEN,
         authentication_configuration_file_spec: str = "~/.oci/config",
         authentication_profile_name: str = "DEFAULT",
         back_end: BackEnd = BackEnd.GEN_AI_LLM,
-
         # these apply only if back_end == BackEnd.GEN_AI_LLM
-        compartment_id: str | None = None, # must be specified
-        model_type: str = "GENERIC", # must be "GENERIC" or "COHERE"
-        model_id: str | None = None, # must be specified or model_name must be specified
-        model_name: str | None = None, # must be specified or model_id must be specified
+        compartment_id: str | None = None,  # must be specified
+        model_type: str = "GENERIC",  # must be "GENERIC" or "COHERE"
+        model_id: str | None = None,  # must be specified or model_name must be specified
+        model_name: str | None = None,  # must be specified or model_id must be specified
         maximum_number_of_tokens: int | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
@@ -79,11 +83,9 @@ class OracleLLM:
         frequency_penalty: float | None = None,
         presence_penalty: float | None = None,
         seed: int | None = None,
-
         # these apply only if back_end == BackEnd.GEN_AI_AGENT
-        agent_endpoint_id: str | None = None # must be specified
-
-        ) -> None:
+        agent_endpoint_id: str | None = None,  # must be specified
+    ) -> None:
         """
         Create a new instance of the OracleLLM class to access Oracle's GenAI service. This has no LiveKit dependencies.
 
@@ -137,11 +139,10 @@ class OracleLLM:
 
         if self._parameters.back_end == BackEnd.GEN_AI_LLM:
             self.initialize_for_llm()
-        else: # if self._parameters.back_end == BackEnd.GEN_AI_AGENT:
+        else:  # if self._parameters.back_end == BackEnd.GEN_AI_AGENT:
             self.initialize_for_agent()
 
         logger.debug("Initialized OracleLLM.")
-
 
     def validate_parameters(self):
         if not isinstance(self._parameters.base_url, str):
@@ -157,7 +158,9 @@ class OracleLLM:
         if self._parameters.authentication_type in {AuthenticationType.API_KEY, AuthenticationType.SECURITY_TOKEN}:
             if not isinstance(self._parameters.authentication_configuration_file_spec, str):
                 raise TypeError("The authentication_configuration_file_spec parameter must be a string.")
-            self._parameters.authentication_configuration_file_spec = self._parameters.authentication_configuration_file_spec.strip()
+            self._parameters.authentication_configuration_file_spec = (
+                self._parameters.authentication_configuration_file_spec.strip()
+            )
             if len(self._parameters.authentication_configuration_file_spec) == 0:
                 raise ValueError("The authentication_configuration_file_spec parameter must not be an empty string.")
 
@@ -171,7 +174,6 @@ class OracleLLM:
             raise TypeError("The back_end parameter must be one of the BackEnd enum members.")
 
         if self._parameters.back_end == BackEnd.GEN_AI_LLM:
-
             if not isinstance(self._parameters.compartment_id, str):
                 raise TypeError("The compartment_id parameter must be a string.")
             self._parameters.compartment_id = self._parameters.compartment_id.strip()
@@ -240,96 +242,89 @@ class OracleLLM:
                 if self._parameters.presence_penalty < 0:
                     raise ValueError("The presence_penalty parameter must be greater than or equal to 0.")
 
-            if self._parameters.seed is not None: # noqa: SIM102
+            if self._parameters.seed is not None:  # noqa: SIM102
                 if not isinstance(self._parameters.seed, int):
                     raise TypeError("The seed parameter must be an integer.")
 
         elif self._parameters.back_end == BackEnd.GEN_AI_AGENT:
-
             if not isinstance(self._parameters.agent_endpoint_id, str):
                 raise TypeError("The agent_endpoint_id parameter must be a string.")
             self._parameters.agent_endpoint_id = self._parameters.agent_endpoint_id.strip()
             if len(self._parameters.agent_endpoint_id) == 0:
                 raise ValueError("The agent_endpoint_id parameter must not be an empty string.")
 
-
     def initialize_for_llm(self):
         configAndSigner = get_config_and_signer(
-            authentication_type = self._parameters.authentication_type,
-            authentication_configuration_file_spec = self._parameters.authentication_configuration_file_spec,
-            authentication_profile_name = self._parameters.authentication_profile_name
+            authentication_type=self._parameters.authentication_type,
+            authentication_configuration_file_spec=self._parameters.authentication_configuration_file_spec,
+            authentication_profile_name=self._parameters.authentication_profile_name,
         )
         config = configAndSigner["config"]
         signer = configAndSigner["signer"]
 
         if signer is None:
             self._generative_ai_inference_client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                config = config,
-                service_endpoint = self._parameters.base_url,
-                retry_strategy = oci.retry.NoneRetryStrategy()
-                )
+                config=config, service_endpoint=self._parameters.base_url, retry_strategy=oci.retry.NoneRetryStrategy()
+            )
         else:
             self._generative_ai_inference_client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                config = config,
-                service_endpoint = self._parameters.base_url,
-                retry_strategy = oci.retry.NoneRetryStrategy(),
-                signer = signer
-                )
+                config=config,
+                service_endpoint=self._parameters.base_url,
+                retry_strategy=oci.retry.NoneRetryStrategy(),
+                signer=signer,
+            )
 
         logger.debug("Initialized for GenAI LLM.")
 
-
     def initialize_for_agent(self):
         configAndSigner = get_config_and_signer(
-            authentication_type = self._parameters.authentication_type,
-            authentication_configuration_file_spec = self._parameters.authentication_configuration_file_spec,
-            authentication_profile_name = self._parameters.authentication_profile_name
+            authentication_type=self._parameters.authentication_type,
+            authentication_configuration_file_spec=self._parameters.authentication_configuration_file_spec,
+            authentication_profile_name=self._parameters.authentication_profile_name,
         )
         config = configAndSigner["config"]
         signer = configAndSigner["signer"]
 
         if signer is None:
             self._generative_ai_agent_runtime_client = oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
-                config = config,
-                service_endpoint = self._parameters.base_url,
-                retry_strategy = oci.retry.NoneRetryStrategy()
-                )
+                config=config, service_endpoint=self._parameters.base_url, retry_strategy=oci.retry.NoneRetryStrategy()
+            )
         else:
             self._generative_ai_agent_runtime_client = oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
-                config = config,
-                service_endpoint = self._parameters.base_url,
-                retry_strategy = oci.retry.NoneRetryStrategy(),
-                signer = signer
-                )
+                config=config,
+                service_endpoint=self._parameters.base_url,
+                retry_strategy=oci.retry.NoneRetryStrategy(),
+                signer=signer,
+            )
 
         id = str(uuid.uuid4())
 
         session_details = oci.generative_ai_agent_runtime.models.CreateSessionDetails(
-            display_name = "display_name_for_" + id,
-            description = "description_for_" + id
-            )
+            display_name="display_name_for_" + id, description="description_for_" + id
+        )
 
         response = self._generative_ai_agent_runtime_client.create_session(
-            agent_endpoint_id = self._parameters.agent_endpoint_id,
-            create_session_details = session_details
-            )
+            agent_endpoint_id=self._parameters.agent_endpoint_id, create_session_details=session_details
+        )
         self._session_id = response.data.id
 
         logger.debug("Initialized for GenAI Agent.")
 
-
-    def run(self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None) -> list[str]:
+    def run(
+        self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None
+    ) -> list[str]:
         if self._parameters.back_end == BackEnd.GEN_AI_LLM:
-            response_messages = self.run_for_llm(oracle_llm_content_list = oracle_llm_content_list, tools = tools)
-        else: # if self._parameters.back_end == BackEnd.GEN_AI_AGENT:
-            response_messages = self.run_for_agent(oracle_llm_content_list = oracle_llm_content_list, tools = tools)
+            response_messages = self.run_for_llm(oracle_llm_content_list=oracle_llm_content_list, tools=tools)
+        else:  # if self._parameters.back_end == BackEnd.GEN_AI_AGENT:
+            response_messages = self.run_for_agent(oracle_llm_content_list=oracle_llm_content_list, tools=tools)
 
         self._number_of_runs += 1
 
         return response_messages
 
-
-    def run_for_llm(self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None) -> list[str]:
+    def run_for_llm(
+        self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None
+    ) -> list[str]:
         if oracle_llm_content_list is None:
             oracle_llm_content_list = []
 
@@ -392,8 +387,8 @@ class OracleLLM:
             chat_request.seed = self._parameters.seed
 
         serving_mode = oci.generative_ai_inference.models.OnDemandServingMode(
-            model_id = self._parameters.model_name if self._parameters.model_id is None else self._parameters.model_id
-            )
+            model_id=self._parameters.model_name if self._parameters.model_id is None else self._parameters.model_id
+        )
 
         chat_details = oci.generative_ai_inference.models.ChatDetails()
         chat_details.serving_mode = serving_mode
@@ -434,8 +429,9 @@ class OracleLLM:
 
         return response_messages
 
-
-    def run_for_agent(self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None) -> list[str]:
+    def run_for_agent(
+        self, *, oracle_llm_content_list: list[OracleLLMContent] = None, tools: list[OracleTool] = None
+    ) -> list[str]:
         if oracle_llm_content_list is None:
             oracle_llm_content_list = []
 
@@ -458,17 +454,14 @@ class OracleLLM:
         logger.debug(user_message)
 
         chat_details = oci.generative_ai_agent_runtime.models.ChatDetails(
-            session_id = self._session_id,
-            user_message = user_message,
-            should_stream = False
-            )
+            session_id=self._session_id, user_message=user_message, should_stream=False
+        )
 
         logger.debug("Before calling GenAI agent.")
 
         response = self._generative_ai_agent_runtime_client.chat(
-            agent_endpoint_id = self._parameters.agent_endpoint_id,
-            chat_details = chat_details
-            )
+            agent_endpoint_id=self._parameters.agent_endpoint_id, chat_details=chat_details
+        )
 
         logger.debug("After calling GenAI agent.")
 
@@ -482,7 +475,6 @@ class OracleLLM:
             raise Exception("Unexpectedly received a response message with an embedded " + TOOL_CALL_DESCRIPTION + ".")
 
         return response_messages
-
 
     def get_tool_descriptions(self, tools):
         if tools is None or len(tools) == 0:
@@ -503,7 +495,11 @@ class OracleLLM:
 
             tool_descriptions += ") and the function description is: " + tool.description + "\n"
 
-        tool_descriptions += "\nAlways indicate when you want to call a function by writing: \"" + TOOL_CALL_PREFIX + " function_name(parameters)\"\n"
+        tool_descriptions += (
+            '\nAlways indicate when you want to call a function by writing: "'
+            + TOOL_CALL_PREFIX
+            + ' function_name(parameters)"\n'
+        )
         tool_descriptions += "Do not combine function calls and text responses in the same output: either only function calls or only text responses.\n"
         tool_descriptions += "For any string parameters, be sure to enclose each of them in double quotes."
 

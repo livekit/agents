@@ -19,6 +19,7 @@ This module is the Oracle LiveKit LLM plug-in.
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
+
 from __future__ import annotations
 
 import ast
@@ -51,18 +52,16 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-
-        base_url: str, # must be specified
+        base_url: str,  # must be specified
         authentication_type: AuthenticationType = AuthenticationType.SECURITY_TOKEN,
         authentication_configuration_file_spec: str = "~/.oci/config",
         authentication_profile_name: str = "DEFAULT",
         back_end: BackEnd = BackEnd.GEN_AI_LLM,
-
         # these apply only if back_end == BackEnd.GEN_AI_LLM
-        compartment_id: str | None = None, # must be specified
-        model_type: str = "GENERIC", # must be "GENERIC" or "COHERE"
-        model_id: str | None = None, # must be specified or model_name must be specified
-        model_name: str | None = None, # must be specified or model_id must be specified
+        compartment_id: str | None = None,  # must be specified
+        model_type: str = "GENERIC",  # must be "GENERIC" or "COHERE"
+        model_id: str | None = None,  # must be specified or model_name must be specified
+        model_name: str | None = None,  # must be specified or model_id must be specified
         maximum_number_of_tokens: int | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
@@ -70,11 +69,9 @@ class LLM(llm.LLM):
         frequency_penalty: float | None = None,
         presence_penalty: float | None = None,
         seed: int | None = None,
-
         # these apply only if back_end == BackEnd.GEN_AI_AGENT
-        agent_endpoint_id: str | None = None # must be specified
-
-        ) -> None:
+        agent_endpoint_id: str | None = None,  # must be specified
+    ) -> None:
         """
         Create a new instance of the OracleLLM class to access Oracle's GenAI service. This has LiveKit dependencies.
 
@@ -101,26 +98,24 @@ class LLM(llm.LLM):
         super().__init__()
 
         self._oracle_llm = OracleLLM(
-            base_url = base_url,
-            authentication_type = authentication_type,
-            authentication_configuration_file_spec = authentication_configuration_file_spec,
-            authentication_profile_name = authentication_profile_name,
-            back_end = back_end,
-
-            compartment_id = compartment_id,
-            model_type = model_type,
-            model_id = model_id,
-            model_name = model_name,
-            maximum_number_of_tokens = maximum_number_of_tokens,
-            temperature = temperature,
-            top_p = top_p,
-            top_k = top_k,
-            frequency_penalty = frequency_penalty,
-            presence_penalty = presence_penalty,
-            seed = seed,
-
-            agent_endpoint_id = agent_endpoint_id
-            )
+            base_url=base_url,
+            authentication_type=authentication_type,
+            authentication_configuration_file_spec=authentication_configuration_file_spec,
+            authentication_profile_name=authentication_profile_name,
+            back_end=back_end,
+            compartment_id=compartment_id,
+            model_type=model_type,
+            model_id=model_id,
+            model_name=model_name,
+            maximum_number_of_tokens=maximum_number_of_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            seed=seed,
+            agent_endpoint_id=agent_endpoint_id,
+        )
 
         #
         #  currently this is never cleaned up because it appears that the past tool calls may
@@ -131,17 +126,16 @@ class LLM(llm.LLM):
 
         logger.debug("Initialized LLM.")
 
-
     def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        tools = None,
-        tool_choice = None,
-        extra_kwargs = None
-        ) -> LLMStream:
-        return LLMStream(oracle_llm_livekit_plugin = self, chat_ctx = chat_ctx, conn_options = conn_options, tools = tools)
+        tools=None,
+        tool_choice=None,
+        extra_kwargs=None,
+    ) -> LLMStream:
+        return LLMStream(oracle_llm_livekit_plugin=self, chat_ctx=chat_ctx, conn_options=conn_options, tools=tools)
 
 
 class LLMStream(llm.LLMStream):
@@ -150,21 +144,15 @@ class LLMStream(llm.LLMStream):
     """
 
     def __init__(
-        self,
-        *,
-        oracle_llm_livekit_plugin: LLM,
-        chat_ctx: llm.ChatContext,
-        conn_options: None,
-        tools: None
-        ) -> None:
-        super().__init__(oracle_llm_livekit_plugin, chat_ctx = chat_ctx, tools = None, conn_options = conn_options)
+        self, *, oracle_llm_livekit_plugin: LLM, chat_ctx: llm.ChatContext, conn_options: None, tools: None
+    ) -> None:
+        super().__init__(oracle_llm_livekit_plugin, chat_ctx=chat_ctx, tools=None, conn_options=conn_options)
 
         self._oracle_llm_livekit_plugin = oracle_llm_livekit_plugin
 
         self._tools = LLMStream.convert_tools(tools)
 
         logger.debug("Converted tools.")
-
 
     async def _run(self) -> None:
         oracle_llm_content_list = []
@@ -191,14 +179,20 @@ class LLMStream(llm.LLMStream):
                     oracle_llm_content = OracleLLMContent(tool_call, CONTENT_TYPE_STRING, Role.ASSISTANT)
                     oracle_llm_content_list.append(oracle_llm_content)
 
-                    oracle_llm_content = OracleLLMContent("The function result of " + tool_call + " is: " + message, CONTENT_TYPE_STRING, Role.SYSTEM)
+                    oracle_llm_content = OracleLLMContent(
+                        "The function result of " + tool_call + " is: " + message, CONTENT_TYPE_STRING, Role.SYSTEM
+                    )
                     oracle_llm_content_list.append(oracle_llm_content)
 
         logger.debug("Before running content thru LLM. Content list count: " + str(len(oracle_llm_content_list)))
 
-        response_messages = self._oracle_llm_livekit_plugin._oracle_llm.run(oracle_llm_content_list = oracle_llm_content_list, tools = self._tools)
+        response_messages = self._oracle_llm_livekit_plugin._oracle_llm.run(
+            oracle_llm_content_list=oracle_llm_content_list, tools=self._tools
+        )
 
-        logger.debug("After running content thru LLM. Response message list count: " + str(len(response_messages)) + ".")
+        logger.debug(
+            "After running content thru LLM. Response message list count: " + str(len(response_messages)) + "."
+        )
 
         for response_message in response_messages:
             if response_message.startswith(TOOL_CALL_PREFIX):
@@ -214,20 +208,28 @@ class LLMStream(llm.LLMStream):
                         tool = temp_tool
 
                 if tool is None:
-                    raise Exception("Unknown function name: " + function_name + " in " + TOOL_CALL_DESCRIPTION + " response message: " + tool_call + ".")
+                    raise Exception(
+                        "Unknown function name: "
+                        + function_name
+                        + " in "
+                        + TOOL_CALL_DESCRIPTION
+                        + " response message: "
+                        + tool_call
+                        + "."
+                    )
 
                 function_parameters_text = "{"
                 for i in range(len(function_parameters)):
                     parameter = tool.parameters[i]
                     if i > 0:
                         function_parameters_text += ","
-                    function_parameters_text += "\"" + parameter.name + "\":"
+                    function_parameters_text += '"' + parameter.name + '":'
                     is_string_parameter = parameter.type in {"string", "str"}
                     if is_string_parameter:
-                        function_parameters_text += "\""
+                        function_parameters_text += '"'
                     function_parameters_text += str(function_parameters[i])
                     if is_string_parameter:
-                        function_parameters_text += "\""
+                        function_parameters_text += '"'
                 function_parameters_text += "}"
 
                 call_id = utils.shortuuid()
@@ -235,22 +237,14 @@ class LLMStream(llm.LLMStream):
                 self._oracle_llm_livekit_plugin._call_id_to_tool_call_dictionary[call_id] = tool_call
 
                 function_tool_call = llm.FunctionToolCall(
-                     name = function_name,
-                     arguments = function_parameters_text,
-                     call_id = call_id
-                    )
+                    name=function_name, arguments=function_parameters_text, call_id=call_id
+                )
 
                 choice_delta = llm.ChoiceDelta(
-                    role = Role.ASSISTANT.name.lower(),
-                    content = None,
-                    tool_calls = [function_tool_call]
-                    )
+                    role=Role.ASSISTANT.name.lower(), content=None, tool_calls=[function_tool_call]
+                )
 
-                chat_chunk = llm.ChatChunk(
-                    id = utils.shortuuid(),
-                    delta = choice_delta,
-                    usage = None
-                    )
+                chat_chunk = llm.ChatChunk(id=utils.shortuuid(), delta=choice_delta, usage=None)
 
                 self._event_ch.send_nowait(chat_chunk)
 
@@ -260,14 +254,13 @@ class LLMStream(llm.LLMStream):
                 logger.debug("LLM response message: " + response_message)
 
                 chat_chunk = llm.ChatChunk(
-                    id = utils.shortuuid(),
-                    delta = llm.ChoiceDelta(content = response_message, role = Role.ASSISTANT.name.lower()),
-                    )
+                    id=utils.shortuuid(),
+                    delta=llm.ChoiceDelta(content=response_message, role=Role.ASSISTANT.name.lower()),
+                )
 
                 self._event_ch.send_nowait(chat_chunk)
 
                 logger.debug("Added response message to event channel: " + response_message)
-
 
     @staticmethod
     def convert_tools(livekit_tools):
@@ -310,19 +303,17 @@ class LLMStream(llm.LLMStream):
 
         return tools
 
-
     @staticmethod
     def get_name_and_arguments_from_tool_call(tool_call):
-        tool_call = tool_call[len(TOOL_CALL_PREFIX):].strip()
+        tool_call = tool_call[len(TOOL_CALL_PREFIX) :].strip()
 
         function_name, function_parameters = LLMStream.parse_function_call(tool_call, TOOL_CALL_DESCRIPTION)
 
         return function_name, function_parameters
 
-
     @staticmethod
     def parse_function_call(code_string, description):
-        expression = ast.parse(code_string, mode = "eval").body
+        expression = ast.parse(code_string, mode="eval").body
 
         if not isinstance(expression, ast.Call):
             raise Exception("Invalid " + description + ": " + code_string + ".")

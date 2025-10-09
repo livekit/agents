@@ -19,6 +19,7 @@ This module is the Oracle LiveKit TTS plug-in.
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
+
 from __future__ import annotations
 
 from livekit.agents import tts, utils
@@ -42,16 +43,16 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        base_url: str, # must be specified
-        compartment_id: str, # must be specified
+        base_url: str,  # must be specified
+        compartment_id: str,  # must be specified
         authentication_type: AuthenticationType = AuthenticationType.SECURITY_TOKEN,
         authentication_configuration_file_spec: str = "~/.oci/config",
         authentication_profile_name: str = "DEFAULT",
         voice: str = "Victoria",
         audio_cache_file_path: str | None = None,
         audio_cache_maximum_utterance_length: int = 100,
-        audio_cache_maximum_number_of_utterances: int = 100
-        ) -> None:
+        audio_cache_maximum_number_of_utterances: int = 100,
+    ) -> None:
         """
         Create a new instance of the TTS class to access Oracle's TTS service. This has LiveKit dependencies.
 
@@ -67,22 +68,25 @@ class TTS(tts.TTS):
             audio_cache_maximum_number_of_utterances: Audio cache maximum number of utterances. Type is int. Default is 100.
         """
 
-        capabilities = tts.TTSCapabilities(streaming = False)
+        capabilities = tts.TTSCapabilities(streaming=False)
 
-        super().__init__(capabilities = capabilities, sample_rate = REQUIRED_LIVE_KIT_AUDIO_RATE, num_channels = REQUIRED_LIVE_KIT_AUDIO_CHANNELS)
+        super().__init__(
+            capabilities=capabilities,
+            sample_rate=REQUIRED_LIVE_KIT_AUDIO_RATE,
+            num_channels=REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
+        )
 
         self._oracle_tts = OracleTTS(
-            base_url = base_url,
-            compartment_id = compartment_id,
-            authentication_type = authentication_type,
-            authentication_configuration_file_spec = authentication_configuration_file_spec,
-            authentication_profile_name = authentication_profile_name,
-            voice = voice,
-            sample_rate = REQUIRED_LIVE_KIT_AUDIO_RATE
-            )
+            base_url=base_url,
+            compartment_id=compartment_id,
+            authentication_type=authentication_type,
+            authentication_configuration_file_spec=authentication_configuration_file_spec,
+            authentication_profile_name=authentication_profile_name,
+            voice=voice,
+            sample_rate=REQUIRED_LIVE_KIT_AUDIO_RATE,
+        )
 
         if audio_cache_file_path is not None:
-
             if not isinstance(audio_cache_file_path, str):
                 raise TypeError("The audio_cache_file_path parameter must be a string.")
             audio_cache_file_path = audio_cache_file_path.strip()
@@ -102,15 +106,17 @@ class TTS(tts.TTS):
         if audio_cache_file_path is None:
             self._audio_cache = None
         else:
-            self._audio_cache = AudioCache(audio_cache_file_path = audio_cache_file_path, audio_cache_maximum_number_of_utterances = audio_cache_maximum_number_of_utterances)
+            self._audio_cache = AudioCache(
+                audio_cache_file_path=audio_cache_file_path,
+                audio_cache_maximum_number_of_utterances=audio_cache_maximum_number_of_utterances,
+            )
             self._voice = voice
             self._audio_cache_maximum_utterance_length = audio_cache_maximum_utterance_length
 
         logger.debug("Initialized TTS.")
 
-
     def synthesize(self, text: str, *, conn_options: DEFAULT_API_CONNECT_OPTIONS) -> ChunkedStream:
-        return ChunkedStream(tts = self, text = text, conn_options = conn_options)
+        return ChunkedStream(tts=self, text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -119,10 +125,9 @@ class ChunkedStream(tts.ChunkedStream):
     """
 
     def __init__(self, *, tts: tts.TTS, text: str, conn_options: DEFAULT_API_CONNECT_OPTIONS) -> None:
-        super().__init__(tts = tts, input_text = text, conn_options = conn_options)
+        super().__init__(tts=tts, input_text=text, conn_options=conn_options)
 
         self._oracle_tts_livekit_plugin = tts
-
 
     async def _run(self, audio_emitter: tts.AudioEmitter) -> None:
         logger.debug("Received text from LiveKit for TTS: " + self._input_text)
@@ -131,18 +136,19 @@ class ChunkedStream(tts.ChunkedStream):
             audio_bytes = None
         else:
             audio_bytes = self._oracle_tts_livekit_plugin._audio_cache.get_audio_bytes(
-                text = self._input_text,
-                voice = self._oracle_tts_livekit_plugin._voice,
-                audio_rate = REQUIRED_LIVE_KIT_AUDIO_RATE,
-                audio_channels = REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
-                audio_bits = REQUIRED_LIVE_KIT_AUDIO_BITS)
+                text=self._input_text,
+                voice=self._oracle_tts_livekit_plugin._voice,
+                audio_rate=REQUIRED_LIVE_KIT_AUDIO_RATE,
+                audio_channels=REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
+                audio_bits=REQUIRED_LIVE_KIT_AUDIO_BITS,
+            )
 
             logger.debug("TTS is" + (" not" if audio_bytes is None else "") + " cached.")
 
         if audio_bytes is None:
             logger.debug("Before getting TTS audio bytes.")
 
-            audio_bytes = await self._oracle_tts_livekit_plugin._oracle_tts.synthesize_speech(text = self._input_text)
+            audio_bytes = await self._oracle_tts_livekit_plugin._oracle_tts.synthesize_speech(text=self._input_text)
 
             logger.debug("After getting TTS audio bytes.")
 
@@ -152,21 +158,25 @@ class ChunkedStream(tts.ChunkedStream):
 
         if audio_bytes is not None:
             audio_emitter.initialize(
-                request_id = utils.shortuuid(),
-                sample_rate = REQUIRED_LIVE_KIT_AUDIO_RATE,
-                num_channels = REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
-                mime_type = "audio/pcm",
+                request_id=utils.shortuuid(),
+                sample_rate=REQUIRED_LIVE_KIT_AUDIO_RATE,
+                num_channels=REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
+                mime_type="audio/pcm",
             )
 
             audio_emitter.push(audio_bytes)
             audio_emitter.flush()
 
-            if not audio_bytes_from_cache and self._oracle_tts_livekit_plugin._audio_cache is not None and \
-                len(self._input_text) <= self._oracle_tts_livekit_plugin._audio_cache_maximum_utterance_length:
+            if (
+                not audio_bytes_from_cache
+                and self._oracle_tts_livekit_plugin._audio_cache is not None
+                and len(self._input_text) <= self._oracle_tts_livekit_plugin._audio_cache_maximum_utterance_length
+            ):
                 self._oracle_tts_livekit_plugin._audio_cache.set_audio_bytes(
-                    text = self._input_text,
-                    voice = self._oracle_tts_livekit_plugin._voice,
-                    audio_rate = REQUIRED_LIVE_KIT_AUDIO_RATE,
-                    audio_channels = REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
-                    audio_bits = REQUIRED_LIVE_KIT_AUDIO_BITS,
-                    audio_bytes = audio_bytes)
+                    text=self._input_text,
+                    voice=self._oracle_tts_livekit_plugin._voice,
+                    audio_rate=REQUIRED_LIVE_KIT_AUDIO_RATE,
+                    audio_channels=REQUIRED_LIVE_KIT_AUDIO_CHANNELS,
+                    audio_bits=REQUIRED_LIVE_KIT_AUDIO_BITS,
+                    audio_bytes=audio_bytes,
+                )

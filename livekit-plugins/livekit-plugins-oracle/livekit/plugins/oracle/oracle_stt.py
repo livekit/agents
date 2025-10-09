@@ -20,6 +20,7 @@ it it completely indpendent of LiveKit and could be used in other environments b
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,8 +48,8 @@ class OracleSTT(RealtimeSpeechClientListener):
     def __init__(
         self,
         *,
-        base_url: str, # must be specified
-        compartment_id: str, # must be specified
+        base_url: str,  # must be specified
+        compartment_id: str,  # must be specified
         authentication_type: AuthenticationType = AuthenticationType.SECURITY_TOKEN,
         authentication_configuration_file_spec: str = "~/.oci/config",
         authentication_profile_name: str = "DEFAULT",
@@ -62,8 +63,8 @@ class OracleSTT(RealtimeSpeechClientListener):
         punctuation: str = "NONE",
         customizations: list[dict] | None = None,
         should_ignore_invalid_customizations: bool = False,
-        return_partial_results: bool = False
-        ) -> None:
+        return_partial_results: bool = False,
+    ) -> None:
         """
         Create a new instance of the OracleSTT class to access Oracle's RTS service. This has no LiveKit dependencies.
 
@@ -118,7 +119,6 @@ class OracleSTT(RealtimeSpeechClientListener):
 
         logger.debug("Initialized OracleSTT.")
 
-
     def validate_parameters(self):
         if not isinstance(self._parameters.base_url, str):
             raise TypeError("The base_url parameter must be a string.")
@@ -139,7 +139,9 @@ class OracleSTT(RealtimeSpeechClientListener):
         if self._parameters.authentication_type in {AuthenticationType.API_KEY, AuthenticationType.SECURITY_TOKEN}:
             if not isinstance(self._parameters.authentication_configuration_file_spec, str):
                 raise TypeError("The authentication_configuration_file_spec parameter must be a string.")
-            self._parameters.authentication_configuration_file_spec = self._parameters.authentication_configuration_file_spec.strip()
+            self._parameters.authentication_configuration_file_spec = (
+                self._parameters.authentication_configuration_file_spec.strip()
+            )
             if len(self._parameters.authentication_configuration_file_spec) == 0:
                 raise ValueError("The authentication_configuration_file_spec parameter must not be an empty string.")
 
@@ -183,7 +185,9 @@ class OracleSTT(RealtimeSpeechClientListener):
             if self._parameters.partial_silence_threshold_milliseconds <= 0:
                 raise ValueError("The partial_silence_threshold_milliseconds parameter must be greater than 0.")
         else:
-            self._parameters.partial_silence_threshold_milliseconds = self._parameters.final_silence_threshold_milliseconds
+            self._parameters.partial_silence_threshold_milliseconds = (
+                self._parameters.final_silence_threshold_milliseconds
+            )
 
         if not isinstance(self._parameters.stabilize_partial_results, str):
             raise TypeError("The stabilize_partial_results parameter must be a string.")
@@ -197,29 +201,28 @@ class OracleSTT(RealtimeSpeechClientListener):
         if self._parameters.punctuation not in {"NONE", "SPOKEN", "AUTO"}:
             raise ValueError("The punctuation parameter must be 'NONE', 'SPOKEN', or 'AUTO'.")
 
-        if self._parameters.customizations is not None and \
-            (not isinstance(self._parameters.customizations, list) or not all(isinstance(item, dict) for item in self._parameters.customizations)):
+        if self._parameters.customizations is not None and (
+            not isinstance(self._parameters.customizations, list)
+            or not all(isinstance(item, dict) for item in self._parameters.customizations)
+        ):
             raise TypeError("The customizations parameter must be None or a list of dictionaries.")
 
         if not isinstance(self._parameters.should_ignore_invalid_customizations, bool):
             raise TypeError("The should_ignore_invalid_customizations parameter must be a boolean.")
 
-
     def add_audio_bytes(self, audio_bytes: bytes) -> None:
         self._audio_bytes_queue.put_nowait(audio_bytes)
 
-
     def get_speech_result_queue(self) -> asyncio.Queue:
         return self._speech_result_queue
-
 
     def real_time_speech_client_open(self) -> None:
         self.real_time_speech_client_close()
 
         configAndSigner = get_config_and_signer(
-            authentication_type = self._parameters.authentication_type,
-            authentication_configuration_file_spec = self._parameters.authentication_configuration_file_spec,
-            authentication_profile_name = self._parameters.authentication_profile_name
+            authentication_type=self._parameters.authentication_type,
+            authentication_configuration_file_spec=self._parameters.authentication_configuration_file_spec,
+            authentication_profile_name=self._parameters.authentication_profile_name,
         )
         config = configAndSigner["config"]
         signer = configAndSigner["signer"]
@@ -236,17 +239,24 @@ class OracleSTT(RealtimeSpeechClientListener):
         real_time_parameters.punctuation = self._parameters.punctuation
         if self._parameters.customizations is not None:
             real_time_parameters.customizations = self._parameters._customizations
-            real_time_parameters.should_ignore_invalid_customizations = self._parameters.should_ignore_invalid_customizations
+            real_time_parameters.should_ignore_invalid_customizations = (
+                self._parameters.should_ignore_invalid_customizations
+            )
 
         real_time_speech_client_listener = self
 
         compartment_id = self._parameters.compartment_id
 
-        self._real_time_speech_client = RealtimeSpeechClient(config, real_time_parameters, real_time_speech_client_listener,
-            self._parameters.base_url, signer, compartment_id)
+        self._real_time_speech_client = RealtimeSpeechClient(
+            config,
+            real_time_parameters,
+            real_time_speech_client_listener,
+            self._parameters.base_url,
+            signer,
+            compartment_id,
+        )
 
         asyncio.create_task(self.connect_background_task())
-
 
     def real_time_speech_client_close(self) -> None:
         if self._real_time_speech_client is not None:
@@ -254,20 +264,21 @@ class OracleSTT(RealtimeSpeechClientListener):
             self._real_time_speech_client = None
         self._connected = False
 
-
     async def connect_background_task(self) -> None:
         await self._real_time_speech_client.connect()
 
-
     async def add_audio_bytes_background_task(self) -> None:
         while True:
-            if self._real_time_speech_client is not None and not self._real_time_speech_client.close_flag and self._connected:
+            if (
+                self._real_time_speech_client is not None
+                and not self._real_time_speech_client.close_flag
+                and self._connected
+            ):
                 logger.trace("Adding audio frame data to RTS SDK.")
                 audio_bytes = await self._audio_bytes_queue.get()
                 await self._real_time_speech_client.send_data(audio_bytes)
             else:
-                await asyncio.sleep(.010)
-
+                await asyncio.sleep(0.010)
 
     # RealtimeSpeechClient method.
     def on_network_event(self, message):
@@ -275,29 +286,24 @@ class OracleSTT(RealtimeSpeechClientListener):
         self.real_time_speech_client_open()
         return super_result
 
-
     # RealtimeSpeechClient method.
     def on_error(self, error: RealtimeMessageError):
         super_result = super().on_error(error)
         self.real_time_speech_client_open()
         return super_result
 
-
     # RealtimeSpeechClient method.
     def on_connect(self):
         return super().on_connect()
-
 
     # RealtimeSpeechClient method.
     def on_connect_message(self, connectmessage: RealtimeMessageConnect):
         self._connected = True
         return super().on_connect_message(connectmessage)
 
-
     # RealtimeSpeechClient method.
     def on_ack_message(self, ackmessage: RealtimeMessageAckAudio):
         return super().on_ack_message(ackmessage)
-
 
     # RealtimeSpeechClient method.
     def on_result(self, result: RealtimeMessageResult):
@@ -317,7 +323,6 @@ class OracleSTT(RealtimeSpeechClientListener):
             self._speech_result_queue.put_nowait(speech_result)
 
         return super_result
-
 
     # RealtimeSpeechClient method.
     def on_close(self, error_code: int, error_message: str):

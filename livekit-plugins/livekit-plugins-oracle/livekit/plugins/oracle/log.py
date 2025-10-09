@@ -20,12 +20,14 @@ TRACE_LEVEL = 5
 logging.addLevelName(TRACE_LEVEL, "TRACE")
 logging.TRACE = TRACE_LEVEL
 
+
 def trace(self, message, *args, **kwargs):
     if self.isEnabledFor(TRACE_LEVEL):
         self._log(TRACE_LEVEL, message, args, **kwargs)
 
+
 logging.Logger.trace = trace
 
-logging.basicConfig(level=TRACE_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=TRACE_LEVEL, format="%(asctime)s - %(levelname)s - %(message)s")
 
 logger = logging.getLogger("livekit.plugins.oracle")

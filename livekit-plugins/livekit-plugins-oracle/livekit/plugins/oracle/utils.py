@@ -19,6 +19,7 @@ This module provides utilities used throughout the Oracle LiveKit plug-in code.
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -28,6 +29,7 @@ import oci
 
 class AuthenticationType(Enum):
     """Authentication types as enumerator."""
+
     API_KEY = "API_KEY"
     SECURITY_TOKEN = "SECURITY_TOKEN"
     INSTANCE_PRINCIPAL = "INSTANCE_PRINCIPAL"
@@ -38,9 +40,8 @@ def get_config_and_signer(
     *,
     authentication_type: AuthenticationType = None,
     authentication_configuration_file_spec: str = None,
-    authentication_profile_name: str = None
-    ):
-
+    authentication_profile_name: str = None,
+):
     config = {}
     signer = None
 
@@ -54,7 +55,7 @@ def get_config_and_signer(
         with open(config["security_token_file"]) as f:
             token = f.readline()
         private_key = oci.signer.load_private_key_from_file(config["key_file"])
-        signer = oci.auth.signers.SecurityTokenSigner(token = token, private_key = private_key)
+        signer = oci.auth.signers.SecurityTokenSigner(token=token, private_key=private_key)
 
     # INSTANCE_PRINCIPAL
     elif authentication_type == AuthenticationType.INSTANCE_PRINCIPAL:
