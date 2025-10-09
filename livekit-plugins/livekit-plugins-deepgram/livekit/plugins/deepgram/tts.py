@@ -126,14 +126,19 @@ class TTS(tts.TTS):
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
-            # Send CloseStream message to ensure Deepgram processes all remaining audio
-            # before closing the connection, as per Deepgram's API requirements
+            # Send Flush and Close messages to ensure Deepgram processes all remaining audio
+            # and properly terminates the session, preventing lingering TTS sessions
+            await ws.send_str(SynthesizeStream._FLUSH_MSG)
             await ws.send_str(SynthesizeStream._CLOSE_MSG)
 
-            # Wait briefly for any final messages from Deepgram
-            await asyncio.sleep(0.1)
+            # Wait for server acknowledgment to prevent race conditions and ensure
+            # proper cleanup, avoiding 429 Too Many Requests errors from lingering sessions
+            try:
+                await asyncio.wait_for(ws.receive(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
         except Exception as e:
-            logger.warning(f"Error sending CloseStream message: {e}")
+            logger.warning(f"Error during WebSocket close sequence: {e}")
         finally:
             await ws.close()
 
@@ -230,7 +235,8 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
+    _FLUSH_MSG: str = json.dumps({"type": "Flush"})
+    _CLOSE_MSG: str = json.dumps({"type": "Close"})
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
