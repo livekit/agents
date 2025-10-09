@@ -33,7 +33,7 @@ async def entrypoint(ctx: JobContext):
             input_audio_transcription=None,  # we use Deepgram STT instead
         ),
         # To use Gemini Live API
-        # llm=google.beta.realtime.RealtimeModel(
+        # llm=google.realtime.RealtimeModel(
         #     realtime_input_config=types.RealtimeInputConfig(
         #         automatic_activity_detection=types.AutomaticActivityDetection(
         #             disabled=True,
