@@ -23,7 +23,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import audio as audio_utils, images, is_given
-from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
+from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
 from ..tools import _LLMTool
