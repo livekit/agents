@@ -13,12 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""This module wraps Oracle's TTS cloud service. While it is used by the Oracle LiveKit TTS plug-in,
+"""
+This module wraps Oracle's TTS cloud service. While it is used by the Oracle LiveKit TTS plug-in,
 it it completely indpendent of LiveKit and could be used in other environments besides LiveKit.
 
 Author: Keith Schnable (at Oracle Corporation)
 Date: 2025-08-12
 """
+
 from __future__ import annotations
 
 import asyncio
