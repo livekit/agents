@@ -142,7 +142,7 @@ def _setup_cloud_tracer(
         compression=otlp_compression,
     )
 
-    # tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+    tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
     logger_provider = LoggerProvider()
@@ -153,7 +153,7 @@ def _setup_cloud_tracer(
         headers=headers,
         compression=otlp_compression,
     )
-    # logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+    logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
