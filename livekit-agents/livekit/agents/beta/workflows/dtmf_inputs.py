@@ -62,14 +62,19 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         @function_tool
         async def confirm_inputs(inputs: list[DtmfEvent]) -> None:
-            """Confirm the digits inputs.
+            """Finalize the collected digit inputs after explicit user confirmation.
 
-            Called ONLY when user has explicitly mentioned the digits inputs is correct."""
+            Use this ONLY after the confirmation. You should confirm by verbally reading out the digits one by one and, once the
+            user confirms they are correct, call this tool with the inputs.
+
+            Do not use this tool to capture the initial digits."""
             self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
         @function_tool
         async def record_inputs(inputs: list[DtmfEvent]) -> None:
-            """Record the digits inputs."""
+            """Record the collected digit inputs without additional confirmation.
+
+            Call this tool as soon as a valid sequence of digits has been provided by the user (via DTMF or spoken)."""
             self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
         instructions = (
