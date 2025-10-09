@@ -46,7 +46,7 @@ class AudioCache:
         if os.path.exists(self._index_file_spec):
             with open(self._index_file_spec, encoding='utf-8') as file:
                 index_json_text = file.read()
-            self._index_dictionary = json.loads(index_json_text)            
+            self._index_dictionary = json.loads(index_json_text)
         else:
             self._index_dictionary = {}
 

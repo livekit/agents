@@ -30,7 +30,7 @@ from .log import logger
 from .oracle_tts import OracleTTS
 from .utils import AuthenticationType
 
-REQUIRED_LIVE_KIT_AUDIO_RATE = 24000  
+REQUIRED_LIVE_KIT_AUDIO_RATE = 24000
 REQUIRED_LIVE_KIT_AUDIO_CHANNELS = 1
 REQUIRED_LIVE_KIT_AUDIO_BITS = 16
 

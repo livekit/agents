@@ -171,7 +171,7 @@ class OracleTTS:
 
             return audio_bytes
 
-        return await asyncio.to_thread(sync_call) 
+        return await asyncio.to_thread(sync_call)
 
 
 @staticmethod
