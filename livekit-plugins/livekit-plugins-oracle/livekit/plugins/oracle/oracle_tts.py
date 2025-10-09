@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 
 import oci
 from oci.ai_speech import AIServiceSpeechClient
-from oci.ai_speech.models import (TtsOracleConfiguration, TtsOracleSpeechSettings, TtsOracleTts2NaturalModelDetails)
+from oci.ai_speech.models import TtsOracleConfiguration, TtsOracleSpeechSettings, TtsOracleTts2NaturalModelDetails
 
 from .log import logger
 from .utils import AuthenticationType, get_config_and_signer
