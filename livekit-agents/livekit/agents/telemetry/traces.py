@@ -28,6 +28,7 @@ from opentelemetry.sdk._logs import (
     LogRecordProcessor,
     LogData,
 )
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider, Span
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -39,6 +40,7 @@ from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExp
 from opentelemetry.exporter.otlp.proto.http import Compression
 
 from ..utils import misc
+from ..log import logger
 
 if TYPE_CHECKING:
     from ..voice.report import SessionReport
@@ -123,7 +125,15 @@ def _setup_cloud_tracer(
     headers = (("Authorization", f"Bearer {access_token.to_jwt()}"),)
     metadata = {"room_id": room_id, "job_id": job_id}
 
-    tracer_provider = TracerProvider()
+    resource = Resource.create(
+        {
+            SERVICE_NAME: "livekit-agents",
+            "room_id": room_id,
+            "job_id": job_id,
+        }
+    )
+
+    tracer_provider = TracerProvider(resource=resource)
     set_tracer_provider(tracer_provider)
 
     span_exporter = OTLPSpanExporter(
@@ -132,7 +142,7 @@ def _setup_cloud_tracer(
         compression=otlp_compression,
     )
 
-    tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+    # tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
     logger_provider = LoggerProvider()
@@ -143,7 +153,7 @@ def _setup_cloud_tracer(
         headers=headers,
         compression=otlp_compression,
     )
-    logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+    # logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
@@ -229,6 +239,7 @@ def _to_proto_chat_ctx(chat_ctx: ChatContext) -> agent_pb.agent_session.ChatCont
 
     return ctx_pb
 
+
 async def _upload_session_report(
     *,
     room_id: str,
@@ -252,29 +263,31 @@ async def _upload_session_report(
     chat_history_pb = _to_proto_chat_ctx(report.chat_history)
     chat_history_bytes = chat_history_pb.SerializeToString() if chat_history_pb is not None else b""
 
-    mp = aiohttp.MultipartWriter('form-data')
+    mp = aiohttp.MultipartWriter("form-data")
 
     part = mp.append(header_bytes)
-    part.set_content_disposition('form-data', name='header', filename='header.binpb')
-    part.headers['Content-Type'] = 'application/protobuf'
-    part.headers['Content-Length'] = str(len(header_bytes))
+    part.set_content_disposition("form-data", name="header", filename="header.binpb")
+    part.headers["Content-Type"] = "application/protobuf"
+    part.headers["Content-Length"] = str(len(header_bytes))
 
     if chat_history_bytes:
         part = mp.append(chat_history_bytes)
-        part.set_content_disposition('form-data', name='chat_history', filename='chat_history.binpb')
-        part.headers['Content-Type'] = 'application/protobuf'
-        part.headers['Content-Length'] = str(len(chat_history_bytes))
+        part.set_content_disposition(
+            "form-data", name="chat_history", filename="chat_history.binpb"
+        )
+        part.headers["Content-Type"] = "application/protobuf"
+        part.headers["Content-Length"] = str(len(chat_history_bytes))
 
     if report.audio_recording_path:
         try:
-            async with aiofiles.open(report.audio_recording_path, 'rb') as f:
+            async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()
         except Exception:
             audio_bytes = b""
         part = mp.append(audio_bytes)
-        part.set_content_disposition('form-data', name='audio', filename='recording.ogg')
-        part.headers['Content-Type'] = 'audio/ogg'
-        part.headers['Content-Length'] = str(len(audio_bytes))
+        part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
+        part.headers["Content-Type"] = "audio/ogg"
+        part.headers["Content-Length"] = str(len(audio_bytes))
 
     url = f"https://{cloud_hostname}/observability/recordings/v0"
     headers = {
@@ -284,3 +297,5 @@ async def _upload_session_report(
 
     async with http_session.post(url, data=mp, headers=headers) as resp:
         resp.raise_for_status()
+
+    logger.info("uploaded")
