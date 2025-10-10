@@ -26,6 +26,15 @@ class LatencyMetrics:
 
 
 @dataclass(frozen=True)
+class CloudAgentSummary:
+    total_agents: int
+    running: int
+    idle: int
+    paused: int
+    regions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class UsageSnapshot:
     llm_cost: float
     tts_cost: float
@@ -324,16 +333,16 @@ class MockLiveKitDashboard:
             a.name for a in self.list_cloud_agents(account_id, project_id) if a.status == "running"
         ]
 
-    def summarize_cloud_agents(self, account_id: str, project_id: str) -> dict[str, object]:
+    def summarize_cloud_agents(self, account_id: str, project_id: str) -> CloudAgentSummary:
         agents = self.list_cloud_agents(account_id, project_id)
         total_running = len([a for a in agents if a.status == "running"])
-        return {
-            "total_agents": len(agents),
-            "running": total_running,
-            "idle": len([a for a in agents if a.status == "idle"]),
-            "paused": len([a for a in agents if a.status == "paused"]),
-            "regions": sorted({a.region for a in agents}),
-        }
+        return CloudAgentSummary(
+            total_agents=len(agents),
+            running=total_running,
+            idle=len([a for a in agents if a.status == "idle"]),
+            paused=len([a for a in agents if a.status == "paused"]),
+            regions=tuple(sorted({a.region for a in agents})),
+        )
 
     def find_agent(
         self, account_id: str, project_id: str, agent_name: str

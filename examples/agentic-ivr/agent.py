@@ -13,8 +13,10 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from mock_dashboard import (  # noqa: E402
     CloudAgentRecord,
-    LatencyMetrics,
     MockLiveKitDashboard,
+    PerformanceOverview,
+    TelephonyStats,
+    UsageSnapshot,
     format_currency,
     format_list,
 )
@@ -57,9 +59,9 @@ class SessionState:
     account_label: Optional[str] = None  # noqa: UP007
     project_id: Optional[str] = None  # noqa: UP007
     project_label: Optional[str] = None  # noqa: UP007
-    usage_cache: dict[str, dict[str, object]] = field(default_factory=dict)
-    telephony_cache: dict[str, dict[str, object]] = field(default_factory=dict)
-    performance_cache: dict[str, dict[str, object]] = field(default_factory=dict)
+    usage_cache: dict[str, UsageSnapshot] = field(default_factory=dict)
+    telephony_cache: dict[str, TelephonyStats] = field(default_factory=dict)
+    performance_cache: dict[str, PerformanceOverview] = field(default_factory=dict)
     audit_log: list[str] = field(default_factory=list)
 
 
@@ -425,8 +427,8 @@ class CloudAgentsTask(BaseSubmenuTask):
         summary = self.dashboard.summarize_cloud_agents(self.account_id, self.project_id)
         running_names = self.dashboard.get_running_agent_names(self.account_id, self.project_id)
         message = (
-            f"{self.state.project_label} has {summary['total_agents']} deployed cloud agents. "
-            f"{summary['running']} are running, {summary['idle']} idle, and {summary['paused']} paused."
+            f"{self.state.project_label} has {summary.total_agents} deployed cloud agents. "
+            f"{summary.running} are running, {summary.idle} idle, and {summary.paused} paused."
         )
         if running_names:
             message += f" Running agents include {format_list(running_names)}."
@@ -491,7 +493,7 @@ class CloudAgentsTask(BaseSubmenuTask):
 
     async def _region_summary(self) -> None:
         summary = self.dashboard.summarize_cloud_agents(self.account_id, self.project_id)
-        regions = summary["regions"]
+        regions = summary.regions
         message = (
             f"Deployments span {len(regions)} regions: {format_list(regions)}. "
             "Latency-sensitive workloads are automatically pinned to the caller's nearest region."
@@ -543,7 +545,7 @@ class UsageBillingTask(BaseSubmenuTask):
                 self.complete(TaskOutcome.END_SESSION)
                 return
 
-    def _usage(self) -> dict[str, object]:
+    def _usage(self) -> UsageSnapshot:
         if cached := self.state.usage_cache.get(self.project_id):
             return cached
         snapshot = self.dashboard.get_usage_snapshot(self.account_id, self.project_id)
@@ -553,17 +555,17 @@ class UsageBillingTask(BaseSubmenuTask):
     async def _spend_breakdown(self) -> None:
         usage = self._usage()
         message = (
-            f"Since the start of billing cycle {usage['billing_cycle']}, "
-            f"LLM usage totals {format_currency(usage['llm_cost'])}, "
-            f"text-to-speech totals {format_currency(usage['tts_cost'])}, "
-            f"and speech-to-text totals {format_currency(usage['stt_cost'])}."
+            f"Since the start of billing cycle {usage.billing_cycle}, "
+            f"LLM usage totals {format_currency(usage.llm_cost)}, "
+            f"text-to-speech totals {format_currency(usage.tts_cost)}, "
+            f"and speech-to-text totals {format_currency(usage.stt_cost)}."
         )
         await self.speak(message)
         self.state.audit_log.append("usage:spend")
 
     async def _remaining_balance(self) -> None:
         usage = self._usage()
-        balance = format_currency(usage["balance_remaining"])
+        balance = format_currency(usage.balance_remaining)
         await self.speak(
             f"Your remaining pre-paid balance is {balance}. You can top up anytime from the LiveKit dashboard or upgrade your plan."
         )
@@ -571,13 +573,13 @@ class UsageBillingTask(BaseSubmenuTask):
 
     async def _burn_rate(self) -> None:
         usage = self._usage()
-        burn = format_currency(usage["burn_rate_per_day"])
-        llm = format_currency(usage["llm_cost"])
-        tts = format_currency(usage["tts_cost"])
-        stt = format_currency(usage["stt_cost"])
+        burn = format_currency(usage.burn_rate_per_day)
+        llm = format_currency(usage.llm_cost)
+        tts = format_currency(usage.tts_cost)
+        stt = format_currency(usage.stt_cost)
         advice = (
             "Consider the Scale plan"
-            if usage["balance_remaining"] < 1000
+            if usage.balance_remaining < 1000
             else "Current allotment looks healthy"
         )
         await self.speak(
@@ -635,7 +637,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
                 self.complete(TaskOutcome.END_SESSION)
                 return
 
-    def _telephony(self) -> dict[str, object]:
+    def _telephony(self) -> TelephonyStats:
         if cached := self.state.telephony_cache.get(self.project_id):
             return cached
         stats = self.dashboard.get_telephony_stats(self.account_id, self.project_id)
@@ -644,8 +646,8 @@ class TelephonyOpsTask(BaseSubmenuTask):
 
     async def _volume_summary(self) -> None:
         stats = self._telephony()
-        inbound = stats["inbound_calls"]
-        outbound = stats["outbound_calls"]
+        inbound = stats.inbound_calls
+        outbound = stats.outbound_calls
         await self.speak(
             f"Inbound calls this cycle total {inbound}, outbound calls {outbound}. LiveKit auto-scales telephony capacity based on daily peaks."
         )
@@ -653,8 +655,8 @@ class TelephonyOpsTask(BaseSubmenuTask):
 
     async def _queue_status(self) -> None:
         stats = self._telephony()
-        queued = stats["queued_calls"]
-        handle_time = format_seconds(stats["avg_handle_time_seconds"])
+        queued = stats.queued_calls
+        handle_time = format_seconds(stats.avg_handle_time_seconds)
         await self.speak(
             f"There are currently {queued} callers waiting. Average handle time sits at {handle_time}."
         )
@@ -662,15 +664,15 @@ class TelephonyOpsTask(BaseSubmenuTask):
 
     async def _sip_trunks(self) -> None:
         stats = self._telephony()
-        trunks = stats["sip_trunks"]
+        trunks = stats.sip_trunks
         await self.speak(
-            f"SIP trunk health shows {trunks['healthy']} healthy, {trunks['degraded']} degraded, and {trunks['offline']} offline connections."
+            f"SIP trunk health shows {trunks.healthy} healthy, {trunks.degraded} degraded, and {trunks.offline} offline connections."
         )
         self.state.audit_log.append("telephony:trunks")
 
     async def _voicemail(self) -> None:
         stats = self._telephony()
-        voicemails = stats["voicemail_count"]
+        voicemails = stats.voicemail_count
         await self.speak(
             f"You have {voicemails} new voicemail messages. Callback automation can be toggled in the dashboard if you need faster follow-ups."
         )
@@ -719,7 +721,7 @@ class PerformanceMetricsTask(BaseSubmenuTask):
                 self.complete(TaskOutcome.END_SESSION)
                 return
 
-    def _performance(self) -> dict[str, object]:
+    def _performance(self) -> PerformanceOverview:
         if cached := self.state.performance_cache.get(self.project_id):
             return cached
         metrics = self.dashboard.get_performance_metrics(self.account_id, self.project_id)
@@ -729,14 +731,11 @@ class PerformanceMetricsTask(BaseSubmenuTask):
     async def _latency_report(self, option: str) -> None:
         performance = self._performance()
         modality_map = {
-            "1": ("language model", performance["llm"]),
-            "2": ("text-to-speech", performance["tts"]),
-            "3": ("speech-to-text", performance["stt"]),
+            "1": ("language model", performance.llm),
+            "2": ("text-to-speech", performance.tts),
+            "3": ("speech-to-text", performance.stt),
         }
         label, metrics_obj = modality_map[option]
-        metrics_obj = metrics_obj  # type: ignore[assignment]
-        if not isinstance(metrics_obj, LatencyMetrics):
-            raise RuntimeError("unexpected latency metrics structure")
         await self.speak(
             f"Current {label} latency shows {MockLiveKitDashboard.format_latency(metrics_obj)}."
         )
@@ -744,7 +743,7 @@ class PerformanceMetricsTask(BaseSubmenuTask):
 
     async def _incident_history(self) -> None:
         performance = self._performance()
-        incidents = performance["last_incidents"]
+        incidents = performance.last_incidents
         if incidents:
             await self.speak("Recent incidents include " + format_list(incidents) + ".")
         else:
@@ -753,9 +752,9 @@ class PerformanceMetricsTask(BaseSubmenuTask):
 
     async def _comprehensive_summary(self) -> None:
         performance = self._performance()
-        llm = performance["llm"]
-        tts = performance["tts"]
-        stt = performance["stt"]
+        llm = performance.llm
+        tts = performance.tts
+        stt = performance.stt
         await self.speak(
             "Overall system health is steady. "
             f"LLM latency: {MockLiveKitDashboard.format_latency(llm)}. "
@@ -811,9 +810,9 @@ class SupportServicesTask(BaseSubmenuTask):
 
     async def _ticket_status(self) -> None:
         support = self.dashboard.get_support_overview(self.account_id, self.project_id)
-        tickets = support["open_tickets"]
+        tickets = support.open_tickets
         await self.speak(
-            f"You have {tickets} open tickets. SLA tier is {support['sla_tier']}. Last contact was {support['last_agent_contact']}."
+            f"You have {tickets} open tickets. SLA tier is {support.sla_tier}. Last contact was {support.last_agent_contact}."
         )
         self.state.audit_log.append("support:tickets")
 
@@ -822,7 +821,10 @@ class SupportServicesTask(BaseSubmenuTask):
         await self.speak(
             "A callback request has been logged. A LiveKit engineer will reach out using the preferred contact on file."
         )
-        support["pending_callbacks"] = support.get("pending_callbacks", 0) + 1
+        new_pending = support.pending_callbacks + 1
+        await self.speak(
+            f"Current pending callback requests, including this one, total {new_pending}."
+        )
         self.state.audit_log.append("support:callback")
 
     async def _documentation_links(self) -> None:
