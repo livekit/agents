@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import aioboto3  # type: ignore
-from botocore.config import Config  # type: ignore
+import aioboto3
+from aiobotocore.config import AioConfig
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import (
@@ -40,6 +40,18 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .utils import to_fnc_ctx
 
+if TYPE_CHECKING:
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        ConverseStreamOutputTypeDef,
+        ConverseStreamRequestTypeDef,
+        GuardrailStreamConfigurationTypeDef,
+        InferenceConfigurationTypeDef,
+        MessageUnionTypeDef,
+        SystemContentBlockTypeDef,
+        ToolConfigurationTypeDef,
+    )
+else:
+    MessageUnionTypeDef = dict
 DEFAULT_TEXT_MODEL = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 
@@ -50,6 +62,7 @@ class _LLMOptions:
     tool_choice: NotGivenOr[ToolChoice]
     max_output_tokens: NotGivenOr[int]
     top_p: NotGivenOr[float]
+    guardrail_config: NotGivenOr[GuardrailStreamConfigurationTypeDef]
     additional_request_fields: NotGivenOr[dict[str, Any]]
     cache_system: bool
     cache_tools: bool
@@ -59,7 +72,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: NotGivenOr[str] = DEFAULT_TEXT_MODEL,
+        model: str = DEFAULT_TEXT_MODEL,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         region: NotGivenOr[str] = "us-east-1",
@@ -67,6 +80,7 @@ class LLM(llm.LLM):
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        guardrail_config: NotGivenOr[GuardrailStreamConfigurationTypeDef] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         cache_system: bool = False,
         cache_tools: bool = False,
@@ -116,6 +130,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             max_output_tokens=max_output_tokens,
             top_p=top_p,
+            guardrail_config=guardrail_config,
             additional_request_fields=additional_request_fields,
             cache_system=cache_system,
             cache_tools=cache_tools,
@@ -140,13 +155,9 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        opts: dict[str, Any] = {}
-        extra_kwargs = extra_kwargs if is_given(extra_kwargs) else {}
+        opts: ConverseStreamRequestTypeDef = {"modelId": self._opts.model}
 
-        if is_given(self._opts.model):
-            opts["modelId"] = self._opts.model
-
-        def _get_tool_config() -> dict[str, Any] | None:
+        def _get_tool_config() -> ToolConfigurationTypeDef | None:
             nonlocal tool_choice
 
             if not tools:
@@ -156,7 +167,7 @@ class LLM(llm.LLM):
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 
-            tool_config: dict[str, Any] = {"tools": tools_list}
+            tool_config: ToolConfigurationTypeDef = {"tools": tools_list}
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -175,17 +186,31 @@ class LLM(llm.LLM):
         tool_config = _get_tool_config()
         if tool_config:
             opts["toolConfig"] = tool_config
+
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
-        opts["messages"] = messages
+        if is_given(self._opts.guardrail_config):
+            opts["guardrailConfig"] = self._opts.guardrail_config
+            # Selective guardrail: only guard the last user's message
+            for message in reversed(messages):
+                if message["role"] != "user":
+                    continue
+
+                message["content"] = [
+                    {"guardContent": {"text": block}} if "text" in block else block
+                    for block in message["content"]
+                ]
+                break
+        opts["messages"] = cast(list[MessageUnionTypeDef], messages)
+
         if extra_data.system_messages:
-            system_messages: list[dict[str, str | dict]] = [
+            system_messages: list[SystemContentBlockTypeDef] = [
                 {"text": content} for content in extra_data.system_messages
             ]
             if self._opts.cache_system:
                 system_messages.append({"cachePoint": {"type": "default"}})
             opts["system"] = system_messages
 
-        inference_config: dict[str, Any] = {}
+        inference_config: InferenceConfigurationTypeDef = {}
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
         temperature = temperature if is_given(temperature) else self._opts.temperature
@@ -204,7 +229,7 @@ class LLM(llm.LLM):
             tools=tools or [],
             session=self._session,
             conn_options=conn_options,
-            extra_kwargs=opts,
+            opts=opts,
         )
 
 
@@ -217,21 +242,21 @@ class LLMStream(llm.LLMStream):
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
         tools: list[FunctionTool | RawFunctionTool],
-        extra_kwargs: dict[str, Any],
+        opts: ConverseStreamRequestTypeDef,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._llm: LLM = llm
-        self._opts = extra_kwargs
+        self._opts = opts
         self._session = session
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
-        self._fnc_raw_arguments: str | None = None
+        self._fnc_arg_parts: list[str] | None = None
         self._text: str = ""
 
     async def _run(self) -> None:
         retryable = True
         try:
-            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+            config = AioConfig(user_agent_extra="x-client-framework:livekit-plugins-aws")
             async with self._session.client("bedrock-runtime", config=config) as client:
                 response = await client.converse_stream(**self._opts)
                 request_id = response["ResponseMetadata"]["RequestId"]
@@ -254,17 +279,24 @@ class LLMStream(llm.LLMStream):
                 retryable=retryable,
             ) from e
 
-    def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
-        if "contentBlockStart" in chunk:
-            tool_use = chunk["contentBlockStart"]["start"]["toolUse"]
+    def _parse_chunk(
+        self, request_id: str, chunk: ConverseStreamOutputTypeDef
+    ) -> llm.ChatChunk | None:
+        if "contentBlockStart" in chunk and "toolUse" in (
+            start_block := chunk["contentBlockStart"]["start"]
+        ):
+            tool_use = start_block["toolUse"]
             self._tool_call_id = tool_use["toolUseId"]
             self._fnc_name = tool_use["name"]
-            self._fnc_raw_arguments = ""
+            self._fnc_arg_parts = []
 
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]
             if "toolUse" in delta:
-                self._fnc_raw_arguments += delta["toolUse"]["input"]
+                if self._fnc_arg_parts is None:
+                    logger.warning("Received delta before block start")
+                    self._fnc_arg_parts = []
+                self._fnc_arg_parts.append(delta["toolUse"]["input"])
             elif "text" in delta:
                 return llm.ChatChunk(
                     id=request_id,
@@ -289,29 +321,28 @@ class LLMStream(llm.LLMStream):
                 ),
             )
         elif "contentBlockStop" in chunk:
-            if self._tool_call_id:
-                if self._tool_call_id is None:
-                    logger.warning("aws bedrock llm: no tool call id in the response")
-                    return None
-                if self._fnc_name is None:
-                    logger.warning("aws bedrock llm: no function name in the response")
-                    return None
-                if self._fnc_raw_arguments is None:
-                    logger.warning("aws bedrock llm: no function arguments in the response")
-                    return None
-                chat_chunk = llm.ChatChunk(
-                    id=request_id,
-                    delta=llm.ChoiceDelta(
-                        role="assistant",
-                        tool_calls=[
-                            FunctionToolCall(
-                                arguments=self._fnc_raw_arguments,
-                                name=self._fnc_name,
-                                call_id=self._tool_call_id,
-                            ),
-                        ],
-                    ),
-                )
-                self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-                return chat_chunk
+            if self._tool_call_id is None:
+                logger.warning("aws bedrock llm: no tool call id in the response")
+                return None
+            if self._fnc_name is None:
+                logger.warning("aws bedrock llm: no function name in the response")
+                return None
+            if self._fnc_arg_parts is None:
+                logger.warning("aws bedrock llm: no function arguments in the response")
+                return None
+            chat_chunk = llm.ChatChunk(
+                id=request_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    tool_calls=[
+                        FunctionToolCall(
+                            arguments="".join(self._fnc_arg_parts),
+                            name=self._fnc_name,
+                            call_id=self._tool_call_id,
+                        ),
+                    ],
+                ),
+            )
+            self._tool_call_id = self._fnc_name = self._fnc_arg_parts = None
+            return chat_chunk
         return None
