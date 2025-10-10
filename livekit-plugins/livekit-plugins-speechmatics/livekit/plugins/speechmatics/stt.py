@@ -41,7 +41,6 @@ from speechmatics.rt import (
     ConversationConfig,
     OperatingPoint,
     ServerMessageType,
-    SpeakerDiarizationConfig,
     TranscriptionConfig,
 )
 
@@ -392,14 +391,23 @@ class STT(stt.STT):
             ]
 
         if self._stt_options.enable_diarization:
-            # Create SpeakerDiarizationConfig with explicit parameters
-            transcription_config.speaker_diarization_config = SpeakerDiarizationConfig(
-                max_speakers=self._stt_options.max_speakers,
-                speaker_sensitivity=self._stt_options.diarization_sensitivity,
-                prefer_current_speaker=self._stt_options.prefer_current_speaker,
-                # TODO: speakers field is not supported by SpeakerDiarizationConfig yet
-                # speakers={s.label: s.speaker_identifiers for s in self._stt_options.known_speakers},
-            )
+            # Use dict for speaker diarization config to support all fields including speakers
+            dz_cfg: dict[str, Any] = {
+                "speaker_sensitivity": self._stt_options.diarization_sensitivity,
+                "prefer_current_speaker": self._stt_options.prefer_current_speaker,
+            }
+
+            # Add max_speakers if provided
+            if self._stt_options.max_speakers is not None:
+                dz_cfg["max_speakers"] = self._stt_options.max_speakers
+
+            # Add speakers mapping from known speakers
+            if self._stt_options.known_speakers:
+                dz_cfg["speakers"] = {
+                    s.label: s.speaker_identifiers for s in self._stt_options.known_speakers
+                }
+
+            transcription_config.speaker_diarization_config = dz_cfg  # type: ignore[assignment]
         if (
             self._stt_options.end_of_utterance_silence_trigger
             and self._stt_options.end_of_utterance_mode == EndOfUtteranceMode.FIXED
