@@ -10,6 +10,9 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from livekit.agents.voice.background_audio import AudioConfig, BackgroundAudioPlayer
+from livekit.agents.worker import AgentServer
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from mock_dashboard import (  # noqa: E402
     CloudAgentRecord,
@@ -29,7 +32,6 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RoomOutputOptions,
-    WorkerOptions,
     cli,
     metrics,
 )
@@ -44,7 +46,18 @@ load_dotenv()
 logger = logging.getLogger("agentic-ivr")
 
 
-AGENTIC_IVR_DISPATCH_NAME = os.getenv("AGENTIC_IVR_DISPATCH_NAME", "livekit-agentic-ivr")
+AGENTIC_IVR_DISPATCH_NAME = os.getenv("AGENTIC_IVR_DISPATCH_NAME", "my-telephony-agent")
+
+
+server = AgentServer()
+
+
+async def on_session_end(ctx: JobContext) -> None:
+    import json
+
+    report = ctx.make_session_report()
+    report_json = json.dumps(report.to_dict(), indent=2)
+    logger.info(f"Session report:\n{report_json}")
 
 
 class TaskOutcome(str, Enum):
@@ -838,7 +851,8 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
-async def entrypoint(ctx: JobContext) -> None:
+@server.realtime_session(agent_name=AGENTIC_IVR_DISPATCH_NAME, on_session_end=on_session_end)
+async def livekit_ivr_agent(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     dashboard = MockLiveKitDashboard()
@@ -851,6 +865,13 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
         turn_detection=MultilingualModel(),
         userdata=state,
+    )
+
+    background_audio = BackgroundAudioPlayer(
+        ambient_sound=AudioConfig(
+            str(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bg_noise.mp3")),
+            volume=1.0,
+        ),
     )
 
     usage_collector = metrics.UsageCollector()
@@ -871,13 +892,8 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
+    await background_audio.start(room=ctx.room, agent_session=session)
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            agent_name=AGENTIC_IVR_DISPATCH_NAME,
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
-        )
-    )
+    cli.run_app(server)
