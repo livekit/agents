@@ -37,8 +37,10 @@ class Task:
     async def create_new_task(self) -> AgentTask:
         if self._task:
             self._saved_chat_ctx = self._task.chat_ctx
+
         self._task = self._task_factory()
         await self._task.update_chat_ctx(self._saved_chat_ctx)
+
         return self._task
 
 
@@ -59,15 +61,13 @@ class TaskOrchestrator(AgentTask[ResultT]):
             llm=None,
         )
         self._task_stack = tasks
-        self._task_order = tasks[::-1]
-        # TODO restructure task id lookup for out_of_scope function
-        self._task_ids = [id(task) for task in self._task_order]
-        self._task_descriptions = [task.description for task in self._task_order]
-        self._task_id_lookup = dict(zip(self._task_descriptions, self._task_ids))
+        self._task_ids = [task.id for task in self._task_stack]
+        self._task_descriptions = [task.description for task in self._task_stack]
+        self._task_id_lookup = dict(zip(self._task_ids, self._task_descriptions))
         self._out_of_scope_func = self.construct_out_of_scope_tool(
             task_id_lookup=self._task_id_lookup
         )
-        self._out_of_scope_func.__doc__ = f"""Call to regress to another task according to what the user requested to modify, return the corresponding task id. The following are the IDs and their corresponding task description. {json.dumps(self._task_id_lookup)}"""
+        self._out_of_scope_func.__doc__ = f"""Call to regress to another task according to what the user requested to modify, return the corresponding task id. For example, if the user wants to change their email and there is a task with id "get_email_task" with a description of "Collect the user's email", return the id ("get_email_task"). The following are the IDs and their corresponding task description. {json.dumps(self._task_id_lookup)}"""
         self._visited_tasks = {}
         self._task_results = {}
 
@@ -75,42 +75,49 @@ class TaskOrchestrator(AgentTask[ResultT]):
         self._current_task = None
 
     @property
-    def _task_stack(self) -> list:
+    def task_stack(self) -> list:
         return self._task_stack
 
     @property
-    def _visited_tasks(self) -> dict:
+    def visited_tasks(self) -> dict:
         return self._visited_tasks
 
-    @_task_stack.setter
-    def _task_stack(self, task_stack: list) -> None:
+    @task_stack.setter
+    def task_stack(self, task_stack: list) -> None:
         self._task_stack = task_stack
 
     async def on_enter(self):
         while len(self._task_stack) > 0:
             self._current_task = self._task_stack.pop()
             self._current_agent_task = await self._current_task.create_new_task()
-            # TODO add function tools after task creation
+
+            if self._current_task.id in self._visited_tasks.keys():
+                chat_items = self._current_agent_task.chat_ctx.copy().items
+                chat_items.append(
+                    self.chat_ctx.items[-1]
+                )  # append last said message triggering the regression
+                self._current_agent_task._chat_ctx.items = chat_items
             current_tools = self._current_agent_task.tools
             current_tools.append(self._out_of_scope_func)
             await self._current_agent_task.update_tools(current_tools)
 
             result = await self._current_agent_task
+
             if result is not None:
                 self._task_results[self._current_task] = result
 
                 if self._current_task not in self._visited_tasks:
-                    self._visited_tasks[id(self._current_task)] = self._current_task
+                    self._visited_tasks[self._current_task.id] = self._current_task
 
         self.complete(self._task_results)
 
     def construct_out_of_scope_tool(self, *, task_id_lookup: dict) -> FunctionTool:
-        task_ids = task_id_lookup.values()
+        task_ids = task_id_lookup.keys()
 
         @function_tool
         async def out_of_scope(
             task_id: Annotated[
-                int,
+                str,
                 Field(
                     description="The ID of the task requested",
                     json_schema_extra={"enum": list(task_ids)},
