@@ -16,13 +16,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessageChunk,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel.protocol import PregelProtocol
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.llm.chat_context import ChatContext, ChatMessage, ImageContent
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -131,17 +136,41 @@ class LangGraphStream(llm.LLMStream):
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
         for item in self._chat_ctx.items:
             # only support chat messages, ignoring tool calls
-            if isinstance(item, ChatMessage):
-                content = item.text_content
-                if content:
-                    if item.role == "assistant":
-                        messages.append(AIMessage(content=content, id=item.id))
-                    elif item.role == "user":
-                        messages.append(HumanMessage(content=content, id=item.id))
-                    elif item.role in ["system", "developer"]:
-                        messages.append(SystemMessage(content=content, id=item.id))
+            if not isinstance(item, ChatMessage):
+                continue
+
+            content = _serialize_chat_message_content(item)
+            if content:
+                if item.role == "assistant":
+                    messages.append(AIMessage(content=content, id=item.id))
+                elif item.role == "user":
+                    messages.append(HumanMessage(content=content, id=item.id))
+                elif item.role in ["system", "developer"]:
+                    messages.append(SystemMessage(content=content, id=item.id))
 
         return {"messages": messages}
+
+
+def _serialize_chat_message_content(
+    item: ChatMessage,
+) -> str | list[str | dict[Any, Any]] | None:
+    """Serialize chat message content into LangChain compatible format."""
+    if not any(isinstance(c, ImageContent) for c in item.content):
+        return item.text_content
+
+    return [
+        (
+            {"type": "text", "text": c}
+            if isinstance(c, str)
+            else (
+                {"type": "image_url", "image_url": {"url": c.image}}
+                if isinstance(c, ImageContent)
+                else None
+            )
+        )
+        for c in item.content
+        if isinstance(c, (str, ImageContent))
+    ]
 
 
 def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
