@@ -90,9 +90,17 @@ class OracleTTS:
         config = configAndSigner["config"]
         signer = configAndSigner["signer"]
 
-        self._ai_service_speech_client = AIServiceSpeechClient(
-            config=config, signer=signer, service_endpoint=self._parameters.base_url
-        )
+        if signer is None:
+            self._ai_service_speech_client = AIServiceSpeechClient(
+                config = config,
+                service_endpoint = self._parameters.base_url
+                )
+        else:
+            self._ai_service_speech_client = AIServiceSpeechClient(
+                config = config,
+                service_endpoint = self._parameters.base_url,
+                signer = signer
+                )
 
         logger.debug("Initialized OracleTTS.")
 
