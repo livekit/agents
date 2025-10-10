@@ -244,9 +244,11 @@ class RecorderAudioInput(io.AudioInput):
 
         return frame
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None:
+        self.__audio_input.on_attached()
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None:
+        self.__audio_input.on_detached()
 
 
 class RecorderAudioOutput(io.AudioOutput):
