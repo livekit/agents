@@ -228,6 +228,11 @@ class WorkerOptions:
     """
     prometheus_port: NotGivenOr[int] = NOT_GIVEN
     """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
+    prometheus_multiproc_dir: str | None = None
+    """Directory for prometheus multiprocess mode to enable metrics collection from child job processes.
+    When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
+    When None (default), multiprocess mode is disabled and only main process metrics are collected.
+    Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
@@ -376,6 +381,17 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_server.app.add_routes([web.get("/worker", worker)])
 
         self._prometheus_server: telemetry.http_server.HttpServer | None = None
+        self._prometheus_multiproc_dir: str | None = None
+
+        # Setup prometheus multiprocess mode if explicitly configured
+        if opts.prometheus_multiproc_dir:
+            self._prometheus_multiproc_dir = opts.prometheus_multiproc_dir
+            # Set environment variable for prometheus multiprocess mode
+            os.environ["PROMETHEUS_MULTIPROC_DIR"] = self._prometheus_multiproc_dir
+        elif "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+            # Use existing environment variable if already set
+            self._prometheus_multiproc_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
+
         if is_given(self._opts.prometheus_port):
             self._prometheus_server = telemetry.http_server.HttpServer(
                 opts.host, self._opts.prometheus_port, loop=self._loop
@@ -398,6 +414,21 @@ class Worker(utils.EventEmitter[EventTypes]):
             "starting worker",
             extra={"version": __version__, "rtc-version": rtc.__version__},
         )
+
+        # Clean prometheus multiprocess directory to avoid stale metrics (only if it exists)
+        if self._prometheus_multiproc_dir and os.path.exists(self._prometheus_multiproc_dir):
+            logger.debug(
+                "cleaning prometheus multiprocess directory",
+                extra={"dir": self._prometheus_multiproc_dir},
+            )
+            # Remove all files in the directory but keep the directory itself
+            for filename in os.listdir(self._prometheus_multiproc_dir):
+                file_path = os.path.join(self._prometheus_multiproc_dir, filename)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    logger.warning(f"failed to remove {file_path}: {e}")
 
         if self._opts.multiprocessing_context == "forkserver":
             plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
@@ -448,6 +479,10 @@ class Worker(utils.EventEmitter[EventTypes]):
                     return self._opts.load_fnc(self)  # type: ignore
 
                 self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+
+                # Update child process count metric for prometheus multiprocess mode
+                if self._prometheus_multiproc_dir:
+                    telemetry.metrics._update_child_proc_count()
 
                 load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
                 default_num_idle_processes = _WorkerEnvOption.getvalue(
