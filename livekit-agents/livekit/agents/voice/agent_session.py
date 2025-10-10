@@ -682,6 +682,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             self._closing = True
+            self._cancel_user_away_timer()
 
             if self._activity is not None:
                 if not drain:
@@ -725,10 +726,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-            if self._room_io:
-                await self._room_io.aclose()
-                self._room_io = None
-
             self._started = False
             if self._session_span:
                 self._session_span.end()
@@ -736,12 +733,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
-            self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            # close room io after close event is emitted
+            if self._room_io:
+                await self._room_io.aclose()
+                self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
