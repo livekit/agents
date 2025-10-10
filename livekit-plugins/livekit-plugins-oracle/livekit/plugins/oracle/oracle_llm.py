@@ -321,7 +321,7 @@ class OracleLLM:
                 oci.generative_ai_agent_runtime.GenerativeAiAgentRuntimeClient(
                     config=config,
                     service_endpoint=self._parameters.base_url,
-                    retry_strategy=oci.retry.NoneRetryStrategy()
+                    retry_strategy=oci.retry.NoneRetryStrategy(),
                 )
             )
         else:
@@ -330,7 +330,7 @@ class OracleLLM:
                     config=config,
                     service_endpoint=self._parameters.base_url,
                     retry_strategy=oci.retry.NoneRetryStrategy(),
-                    signer=signer
+                    signer=signer,
                 )
             )
 
