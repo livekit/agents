@@ -243,8 +243,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
                 to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
-            preemptive_generation (bool): Whether to use preemptive generation.
-                Default ``False``.
             preemptive_generation (bool):
                 Whether to speculatively begin LLM and TTS requests before an end-of-turn is
                 detected. When True, the agent sends inference calls as soon as a user
