@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpenAI plugin for LiveKit Agents
+"""Doubao plugin for LiveKit Agents
 
-Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
+Support for ByteDance Doubao realtime dialogue, LLM, TTS, and STT APIs.
 
-Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras,
-Fireworks, Perplexity, Telnyx, xAI, Ollama, and DeepSeek.
-
-See https://docs.livekit.io/agents/integrations/openai/ and
-https://docs.livekit.io/agents/integrations/llm/ for more information.
+See https://docs.livekit.io/agents/integrations/llm/doubao/ for more information.
 """
 
 from .embeddings import EmbeddingData, create_embeddings
@@ -48,12 +44,12 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class OpenAIPlugin(Plugin):
+class DoubaoPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(OpenAIPlugin())
+Plugin.register_plugin(DoubaoPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
