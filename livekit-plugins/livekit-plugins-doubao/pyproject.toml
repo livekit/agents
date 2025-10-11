@@ -37,7 +37,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/openai/version.py"
+path = "livekit/plugins/doubao/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
