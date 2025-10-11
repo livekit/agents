@@ -1,17 +1,14 @@
 from __future__ import annotations
-
-import os
 from collections.abc import Awaitable
-from typing import Callable, Union
-
 from livekit.agents import llm
 from livekit.agents.llm.tool_context import (
+from openai.types.chat import ChatCompletionToolParam
+from typing import Callable, Union
+
     get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
 )
-from openai.types.chat import ChatCompletionToolParam
-
 AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 
 

@@ -1,35 +1,31 @@
-"""豆包 Realtime API 适配器"""
-
+            from copy import deepcopy
+from . import events, protocol
+from ..log import logger
 from __future__ import annotations
-
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
+from livekit import rtc
+from livekit.agents import APIConnectionError, APIError, llm, utils, get_job_context
+from livekit.agents.types import (
+from livekit.agents.utils import is_given
+from typing import Literal
+import aiohttp
 import asyncio
 import json
 import numpy as np
-import os
 import struct
 import time
 import uuid
 import weakref
-from collections import deque
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Literal, Optional
 
-import aiohttp
+"""豆包 Realtime API 适配器"""
 
-from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils, get_job_context
-from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
-
-from ..log import logger
-from . import events, protocol
-
 SAMPLE_RATE = 16000  # 豆包输入采样率 16kHz
 OUTPUT_SAMPLE_RATE = 24000  # 豆包输出采样率 24kHz
 NUM_CHANNELS = 1
@@ -47,9 +43,9 @@ class _RealtimeOptions:
     access_key: str
     resource_id: str
     app_key: str
-    asr_config: Optional[events.ASRConfig]
-    dialog_config: Optional[events.DialogConfig]
-    tts_config: Optional[events.TTSConfig]
+    asr_config: events.ASRConfig | None
+    dialog_config: events.DialogConfig | None
+    tts_config: events.TTSConfig | None
     max_session_duration: float | None
     conn_options: APIConnectOptions
 
@@ -220,9 +216,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._realtime_model: RealtimeModel = realtime_model
         self._session_id = str(uuid.uuid4())
         self._connect_id = str(uuid.uuid4())
-        self._dialog_id: Optional[str] = None
+        self._dialog_id: str | None = None
 
-        self._ws_conn: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
         self._msg_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
         self._input_resampler: rtc.AudioResampler | None = None
@@ -239,7 +235,7 @@ class RealtimeSession(llm.RealtimeSession):
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
 
-        self._current_generation: Optional[_ResponseGeneration] = None
+        self._current_generation: _ResponseGeneration | None = None
         self._current_assistant_message: list[str] = []  # 累积当前 assistant 的消息
         self._instructions: str | None = None
         self._is_user_initiated: bool = False  # 跟踪当前响应是否由用户发起
@@ -346,7 +342,6 @@ class RealtimeSession(llm.RealtimeSession):
         dialog_config = self._realtime_model._opts.dialog_config
         if self._instructions and dialog_config:
             # 创建一个副本并更新 system_role
-            from copy import deepcopy
             dialog_config = deepcopy(dialog_config)
             dialog_config.system_role = self._instructions
             logger.debug("Using custom instructions as system_role")
@@ -547,7 +542,7 @@ class RealtimeSession(llm.RealtimeSession):
                 payload_str = decoded["payload"].decode('utf-8') if decoded["payload"] else "{}"
                 try:
                     error_payload = json.loads(payload_str)
-                except:
+                except Exception:
                     error_payload = {"error": payload_str}
                 logger.error(f"Received error message: {error_payload}")
                 self._emit_error(
@@ -730,8 +725,8 @@ class RealtimeSession(llm.RealtimeSession):
             new_items = chat_ctx.items[old_len:]
 
             for item in new_items:
-                if getattr(item, "type", None) == "message" and getattr(item, "role", None) == "user":
-                    text = getattr(item, "text_content", None)
+                if item.type == "message" and item.role == "user":
+                    text = item.text_content
                     if text:
                         self._pending_user_queries.append(text)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 
 class DoubaoEventID(IntEnum):
@@ -50,17 +50,17 @@ class DoubaoEventID(IntEnum):
 @dataclass
 class LocationInfo:
     """位置信息"""
-    longitude: Optional[float] = None
-    latitude: Optional[float] = None
-    city: Optional[str] = None
-    country: Optional[str] = "中国"
-    province: Optional[str] = None
-    district: Optional[str] = None
-    town: Optional[str] = None
-    country_code: Optional[str] = "CN"
-    address: Optional[str] = None
+    longitude: float | None = None
+    latitude: float | None = None
+    city: str | None = None
+    country: str | None = "中国"
+    province: str | None = None
+    district: str | None = None
+    town: str | None = None
+    country_code: str | None = "CN"
+    address: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {}
         if self.longitude is not None:
             result["longitude"] = self.longitude
@@ -89,7 +89,7 @@ class ASRConfig:
     end_smooth_window_ms: int = 1500  # 判断用户停止说话的时间，默认1500ms
     enable_custom_vad: bool = False  # 是否开启自定义VAD参数
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "extra": {
                 "end_smooth_window_ms": self.end_smooth_window_ms,
@@ -101,24 +101,24 @@ class ASRConfig:
 @dataclass
 class DialogConfig:
     """对话配置"""
-    bot_name: Optional[str] = "豆包"  # 人设名称，最长20字符
-    system_role: Optional[str] = None  # 背景人设信息
-    speaking_style: Optional[str] = None  # 对话风格
-    dialog_id: Optional[str] = None  # 对话ID，用于上下文记忆
-    character_manifest: Optional[str] = None  # 角色描述（SC版本）
-    location: Optional[LocationInfo] = None  # 用户位置信息
+    bot_name: str | None = "豆包"  # 人设名称，最长20字符
+    system_role: str | None = None  # 背景人设信息
+    speaking_style: str | None = None  # 对话风格
+    dialog_id: str | None = None  # 对话ID，用于上下文记忆
+    character_manifest: str | None = None  # 角色描述（SC版本）
+    location: LocationInfo | None = None  # 用户位置信息
     strict_audit: bool = True  # 安全审核等级
-    audit_response: Optional[str] = None  # 命中审核后的回复话术
+    audit_response: str | None = None  # 命中审核后的回复话术
     enable_volc_websearch: bool = False  # 是否开启内置联网
     volc_websearch_type: str = "web_summary"  # 搜索类型: web_summary/web
-    volc_websearch_api_key: Optional[str] = None  # 搜索API密钥
+    volc_websearch_api_key: str | None = None  # 搜索API密钥
     volc_websearch_result_count: int = 10  # 搜索结果条数
-    volc_websearch_no_result_message: Optional[str] = None  # 无结果回复话术
-    input_mod: Optional[str] = None  # 输入模式: text/audio_file/麦克风（默认）
+    volc_websearch_no_result_message: str | None = None  # 无结果回复话术
+    input_mod: str | None = None  # 输入模式: text/audio_file/麦克风（默认）
     model: str = "O"  # 模型版本: O/SC
 
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
 
         if self.bot_name:
             result["bot_name"] = self.bot_name
@@ -133,7 +133,7 @@ class DialogConfig:
         if self.location:
             result["location"] = self.location.to_dict()
 
-        extra: Dict[str, Any] = {}
+        extra: dict[str, Any] = {}
         extra["strict_audit"] = self.strict_audit
         if self.audit_response:
             extra["audit_response"] = self.audit_response
@@ -161,8 +161,8 @@ class TTSConfig:
     sample_rate: int = 24000  # 采样率
     channel: int = 1  # 声道数
 
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "speaker": self.speaker,
         }
 
@@ -182,19 +182,19 @@ class TTSConfig:
 class StartConnectionEvent:
     """建立连接事件"""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {}
 
 
 @dataclass
 class StartSessionEvent:
     """启动会话事件"""
-    asr: Optional[ASRConfig] = None
-    dialog: Optional[DialogConfig] = None
-    tts: Optional[TTSConfig] = None
+    asr: ASRConfig | None = None
+    dialog: DialogConfig | None = None
+    tts: TTSConfig | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
 
         if self.asr:
             result["asr"] = self.asr.to_dict()
@@ -211,7 +211,7 @@ class SayHelloEvent:
     """打招呼事件"""
     content: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"content": self.content}
 
 
@@ -222,7 +222,7 @@ class ChatTTSTextEvent:
     content: str = ""
     end: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "start": self.start,
             "content": self.content,
@@ -235,7 +235,7 @@ class ChatTextQueryEvent:
     """文本query事件"""
     content: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"content": self.content}
 
 
@@ -244,7 +244,7 @@ class ChatRAGTextEvent:
     """外部RAG输入事件"""
     external_rag: str  # JSON数组字符串
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"external_rag": self.external_rag}
 
 
@@ -266,7 +266,7 @@ class TTSSentenceStartEvent:
 @dataclass
 class ASRResponseEvent:
     """ASR识别结果事件"""
-    results: List[Dict[str, Any]]  # [{"text": str, "is_interim": bool}]
+    results: list[dict[str, Any]]  # [{"text": str, "is_interim": bool}]
 
 
 @dataclass
@@ -278,7 +278,7 @@ class ChatResponseEvent:
 @dataclass
 class UsageResponseEvent:
     """用量信息事件"""
-    usage: Dict[str, int]  # input_text_tokens, input_audio_tokens, etc.
+    usage: dict[str, int]  # input_text_tokens, input_audio_tokens, etc.
 
 
 @dataclass

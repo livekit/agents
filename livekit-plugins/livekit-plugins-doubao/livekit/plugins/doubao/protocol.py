@@ -106,7 +106,7 @@ class Message:
     payload: bytes = b""
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "Message":
+    def from_bytes(cls, data: bytes) -> Message:
         if len(data) < 3:
             raise ValueError("data too short")
 

@@ -1,18 +1,21 @@
+            import gzip
+          from livekit.agents.vad import silero
+from .log import logger
 from __future__ import annotations
-
+from dataclasses import dataclass
+from livekit import rtc
+from livekit.agents import (
+from livekit.agents.stt import SpeechEventType, STTCapabilities
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import AudioBuffer, http_context, is_given
+from typing import Any
+import aiohttp
 import asyncio
 import json
 import struct
-import os
-import uuid
-from dataclasses import dataclass
 import time
-from typing import Any
+import uuid
 
-import aiohttp
-
-from livekit import rtc
-from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
@@ -20,13 +23,6 @@ from livekit.agents import (
     APITimeoutError,
     stt,
 )
-from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer, http_context, is_given
-
-from .log import logger
-
-
 # Defaults are intentionally conservative and overridable via env/args
 _DEFAULT_STT_ENDPOINT = os.environ.get(
     "DOUBAO_STT_ENDPOINT",
@@ -59,7 +55,7 @@ def _env_bool(name: str) -> bool | None:
     s = str(v).strip().lower()
     if s in ("1", "true", "yes", "on"):  # truthy
         return True
-    if s in ("0", "false", "no", "off"):  # falsy
+    if s in ("0", "false", "no", "of"):  # falsy
         return False
     return None
 
@@ -289,8 +285,8 @@ class STT(stt.STT):
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                code = getattr(ws, "close_code", None)
-                reason = getattr(ws, "close_message", None)
+                code = ws.close_code
+                reason = ws.close_message
                 raise APIStatusError(f"connection closed during handshake (code={code}, reason={reason})")
             if first.type == aiohttp.WSMsgType.BINARY:
                 fdata = first.data
@@ -378,8 +374,8 @@ class STT(stt.STT):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    code = getattr(ws, "close_code", None)
-                    reason = getattr(ws, "close_message", None)
+                    code = ws.close_code
+                    reason = ws.close_message
                     raise APIStatusError(f"connection closed (code={code}, reason={reason})")
                 if incoming.type != aiohttp.WSMsgType.BINARY:
                     continue
@@ -581,8 +577,6 @@ class STT(stt.STT):
             self._last_activity_time: float = time.monotonic()
 
         def _gzip(self, data: bytes) -> bytes:
-            import gzip
-
             return gzip.compress(data)
 
         def _header_bytes(self, message_type: int, flags: int, serialization: int, compression: int) -> bytes:
@@ -859,7 +853,7 @@ class STT(stt.STT):
                             # APIStatusError will be caught by _main_task and retried if retryable=True
                             # Just re-raise it to let the retry mechanism handle it
                             logger.warning(
-                                f"doubao stt error: code={e.status_code}, retryable={getattr(e, 'retryable', False)}",
+                                f"doubao stt error: code={e.status_code}, retryable={e.retryable}",
                                 exc_info=e
                             )
                             raise
@@ -1048,8 +1042,8 @@ class STT(stt.STT):
                                 await self._event_ch.send(ev)
                             break
                     elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
-                        code = getattr(self._ws, "close_code", None)
-                        reason = getattr(self._ws, "close_message", None)
+                        code = self._ws.close_code
+                        reason = self._ws.close_message
                         logger.warning(f"doubao stt connection closed by server (code={code}, reason={reason})")
                         break
 
@@ -1211,7 +1205,6 @@ class STT(stt.STT):
         """Convenience factory to build a Doubao STT wrapped with a VAD adapter.
 
         Example:
-          from livekit.agents.vad import silero
           vad = silero.VAD.load(min_silence_duration=0.75)
           stt = doubao.STT.with_vad_factory(vad, language_code="zh")
         """

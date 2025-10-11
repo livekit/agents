@@ -15,13 +15,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
-from urllib.parse import urlparse
 
 import httpx
-
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
@@ -45,17 +42,10 @@ from openai.types.chat.chat_completion_chunk import Choice
 
 from .log import logger
 from .models import (
-    CerebrasChatModels,
     ChatModels,
-    DeepSeekChatModels,
-    OctoChatModels,
-    PerplexityChatModels,
-    TelnyxChatModels,
-    TogetherChatModels,
-    XAIChatModels,
     _supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider, to_fnc_ctx
+from .utils import to_fnc_ctx
 
 
 
@@ -441,7 +431,6 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
-        retryable = True
 
         try:
             if self._api_mode == "response":
@@ -450,17 +439,17 @@ class LLMStream(llm.LLMStream):
                 await self._run_chat_api()
 
         except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable) from None
+            raise APITimeoutError(retryable=True) from None
         except openai.APIStatusError as e:
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-                retryable=retryable,
+                retryable=True,
             ) from None
         except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
+            raise APIConnectionError(retryable=True) from e
 
     async def _run_chat_api(self) -> None:
         """Run using standard Chat Completions API"""
@@ -624,14 +613,14 @@ class LLMStream(llm.LLMStream):
             self._oai_stream = stream = await self._client.responses.create(**request_params)
         except Exception as e:
             logger.error(
-                f"Response API call failed",
+                "Response API call failed",
                 extra={
                     "error": str(e),
                 }
             )
             raise
 
-        thinking = asyncio.Event()
+        # thinking = asyncio.Event()
         async with stream:
             async for chunk in stream:
                 # Response API 返回的是事件流（Event Stream）
@@ -671,7 +660,7 @@ class LLMStream(llm.LLMStream):
                             logger.debug(f"✅ Response completed, updated previous_response_id: {response.id}")
 
                         if hasattr(response, 'usage') and response.usage is not None:
-                            retryable = False
+                            # retryable = False
                             usage = response.usage
                             tokens_details = getattr(usage, 'input_tokens_details', None)
                             cached_tokens = getattr(tokens_details, 'cached_tokens', 0) if tokens_details else 0

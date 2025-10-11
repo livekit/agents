@@ -1,16 +1,17 @@
+from .log import logger
+from .protocol import EventType, Message, MsgType, MsgTypeFlagBits
 from __future__ import annotations
-
+from dataclasses import dataclass, replace
+from livekit.agents import (
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
+from typing import Any, Union
+import aiohttp
 import asyncio
 import json
-import os
 import uuid
 import weakref
-from dataclasses import dataclass, replace
-from typing import Any, Union
 
-import aiohttp
-
-from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
@@ -20,13 +21,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
-
-from .log import logger
-from .protocol import EventType, Message, MsgType, MsgTypeFlagBits
-
-
 # Use unidirectional stream endpoint to match official demo behavior
 _DEFAULT_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
 _DEFAULT_ENCODING = "wav"  # 'wav' | 'mp3' | 'pcm'
@@ -117,7 +111,7 @@ class TTS(tts.TTS):
         self._connection_lock = asyncio.Lock()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session or getattr(self._session, "closed", False):
+        if not self._session or self._session.closed:
             self._session = utils.http_context.http_session()
         return self._session
 
@@ -246,7 +240,7 @@ class ChunkedStream(tts.ChunkedStream):
                 max_msg_size=10 * 1024 * 1024,
             )
             try:
-                logid = getattr(getattr(ws, "_response", None), "headers", {}).get("x-tt-logid")
+                logid = getattr(ws._response, "headers", {}).get("x-tt-logid")
                 if logid:
                     logger.info(f"doubao ws connected, x-tt-logid={logid}")
             except Exception:
@@ -270,8 +264,8 @@ class ChunkedStream(tts.ChunkedStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    code = getattr(ws, "close_code", None)
-                    reason = getattr(ws, "close_message", None)
+                    code = ws.close_code
+                    reason = ws.close_message
                     raise APIStatusError(f"connection closed (code={code}, reason={reason})")
                 if incoming.type != aiohttp.WSMsgType.BINARY:
                     continue
@@ -372,7 +366,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 max_msg_size=10 * 1024 * 1024,
             )
             try:
-                logid = getattr(getattr(ws, "_response", None), "headers", {}).get("x-tt-logid")
+                logid = getattr(ws._response, "headers", {}).get("x-tt-logid")
                 if logid:
                     logger.info(f"doubao ws connected, x-tt-logid={logid}")
             except Exception:
@@ -398,8 +392,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    code = getattr(ws, "close_code", None)
-                    reason = getattr(ws, "close_message", None)
+                    code = ws.close_code
+                    reason = ws.close_message
                     raise APIStatusError(f"connection closed (code={code}, reason={reason})")
                 if incoming.type != aiohttp.WSMsgType.BINARY:
                     continue

@@ -1,13 +1,11 @@
-"""豆包 Realtime API 二进制协议编解码器"""
-
 from __future__ import annotations
-
+from enum import IntEnum
+from typing import
 import gzip
 import json
 import struct
-from enum import IntEnum
-from typing import Optional
 
+"""豆包 Realtime API 二进制协议编解码器"""
 
 class MessageType(IntEnum):
     """消息类型"""
@@ -49,9 +47,9 @@ class DoubaoProtocolCodec:
     def encode_message(
         message_type: MessageType,
         payload: bytes,
-        event_id: Optional[int] = None,
-        sequence: Optional[int] = None,
-        session_id: Optional[str] = None,
+        event_id: int | None = None,
+        sequence: int | None = None,
+        session_id: str | None = None,
         serialization: SerializationMethod = SerializationMethod.JSON,
         compression: CompressionMethod = CompressionMethod.GZIP,
     ) -> bytes:
@@ -209,7 +207,7 @@ class DoubaoProtocolCodec:
                     if session_id.isprintable():
                         result['session_id'] = session_id
                         offset += 4 + session_id_len
-                except:
+                except Exception:
                     pass
 
         # payload_size + payload（使用大端序）
@@ -238,7 +236,7 @@ class DoubaoProtocolCodec:
 def encode_client_event(
     event_id: int,
     payload: bytes,
-    session_id: Optional[str] = None,
+    session_id: str | None = None,
     is_audio: bool = False,
 ) -> bytes:
     """
@@ -296,7 +294,7 @@ def debug_binary_message(data: bytes, prefix: str = "") -> str:
     serialization = (byte2 >> 4) & 0x0F
     compression = byte2 & 0x0F
 
-    lines.append(f"  Header:")
+    lines.append("  Header:")
     lines.append(f"    Protocol version: {protocol_version}")
     lines.append(f"    Header size: {header_size}")
     lines.append(f"    Message type: {message_type} ({MessageType(message_type).name if message_type in MessageType._value2member_map_ else 'Unknown'})")
@@ -324,11 +322,11 @@ def debug_binary_message(data: bytes, prefix: str = "") -> str:
                 try:
                     payload_json = json.loads(payload.decode('utf-8'))
                     lines.append(f"  Payload (JSON): {json.dumps(payload_json, ensure_ascii=False, indent=2)}")
-                except:
+                except Exception:
                     try:
                         payload_text = payload.decode('utf-8')
                         lines.append(f"  Payload (text): {payload_text}")
-                    except:
+                    except Exception:
                         pass
 
         return "\n".join(lines)
@@ -357,7 +355,7 @@ def debug_binary_message(data: bytes, prefix: str = "") -> str:
                 if id_str.isprintable():
                     lines.append(f"  ID (session/connect): {id_str} (length={possible_id_len})")
                     offset += 4 + possible_id_len
-            except:
+            except Exception:
                 pass
 
     # 解析 payload（使用大端序）
@@ -375,12 +373,12 @@ def debug_binary_message(data: bytes, prefix: str = "") -> str:
                 try:
                     payload_json = json.loads(payload.decode('utf-8'))
                     lines.append(f"  Payload (JSON): {json.dumps(payload_json, ensure_ascii=False, indent=2)}")
-                except:
+                except Exception:
                     try:
                         # 尝试直接解码为文本
                         payload_text = payload.decode('utf-8')
                         lines.append(f"  Payload (text): {payload_text}")
-                    except:
+                    except Exception:
                         pass
         else:
             lines.append(f"  WARNING: Payload size mismatch! Expected {payload_size}, remaining {len(data) - offset}")
