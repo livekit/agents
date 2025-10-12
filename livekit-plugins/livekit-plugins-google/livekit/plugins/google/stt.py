@@ -618,17 +618,28 @@ def _streaming_recognize_response_to_speech_data(
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
+    final_result = None
     for result in resp.results:
         if len(result.alternatives) == 0:
             continue
-        text += result.alternatives[0].transcript
-        confidence += result.alternatives[0].confidence
+        else:
+            if result.is_final:
+                final_result = result
+                break
+            else:
+                text += result.alternatives[0].transcript
+                confidence += result.alternatives[0].confidence
 
-    confidence /= len(resp.results)
-    lg = resp.results[0].language_code
+    if final_result is not None:
+        text = final_result.alternatives[0].transcript
+        confidence = final_result.alternatives[0].confidence
+        lg = final_result.language_code
+    else:
+        confidence /= len(resp.results)
+        if confidence < min_confidence_threshold:
+            return None
+        lg = resp.results[0].language_code
 
-    if confidence < min_confidence_threshold:
-        return None
     if text == "":
         return None
 
