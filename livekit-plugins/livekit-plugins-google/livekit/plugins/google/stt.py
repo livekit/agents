@@ -632,6 +632,7 @@ def _streaming_recognize_response_to_speech_data(
 
     if final_result is not None:
         text = final_result.alternatives[0].transcript
+        confidence = final_result.alternatives[0].confidence
         lg = final_result.language_code
     else:
         confidence /= len(resp.results)
