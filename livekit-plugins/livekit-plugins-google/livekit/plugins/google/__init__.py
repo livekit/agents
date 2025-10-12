@@ -26,8 +26,6 @@ from .tools import _LLMTool
 from .tts import TTS
 from .version import __version__
 
-beta.realtime = realtime
-
 __all__ = ["STT", "TTS", "realtime", "SpeechStream", "__version__", "beta", "LLM", "_LLMTool"]
 from livekit.agents import Plugin
 
