@@ -16,14 +16,32 @@ logger.setLevel(logging.INFO)
 async def entrypoint(job: JobContext):
     logger.info("starting Typecast TTS example agent")
 
-    # Create TTS instance with a voice ID
-    # Replace with your actual voice ID from Typecast
-    VOICE_ID = "tc_62a8975e695ad26f7fb514d1"
-
-    tts = typecast.TTS(
-        voice=VOICE_ID,
-        language="eng",  # ISO 639-3 language code
-    )
+    # Example 0: List available voices (optional)
+    logger.info("Listing available Typecast voices...")
+    
+    # Create TTS instance with default voice
+    # You can also specify a voice ID: typecast.TTS(voice="tc_your_voice_id")
+    tts = typecast.TTS(language="eng")  # Uses DEFAULT_VOICE_ID
+    
+    try:
+        voices = await tts.list_voices()
+        logger.info(f"Found {len(voices)} available voices")
+        
+        # Display first 3 voices as examples
+        for i, voice in enumerate(voices[:3], 1):
+            logger.info(
+                f"  {i}. {voice.name} ({voice.id})"
+                f" - Emotions: {', '.join(voice.emotions[:3])}..."
+            )
+        
+        # You can filter by model
+        # voices_filtered = await tts.list_voices(model="ssfm-v21")
+    except Exception as e:
+        logger.warning(f"Could not list voices: {e}")
+    
+    # Optionally, select a specific voice from the list
+    # For this demo, we'll use the default voice
+    logger.info(f"Using default voice: {typecast.DEFAULT_VOICE_ID}")
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)
