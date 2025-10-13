@@ -30,6 +30,7 @@ livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
+livekit-plugins-doubao = { workspace = true }
 livekit-plugins-playai = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-rime = { workspace = true }
