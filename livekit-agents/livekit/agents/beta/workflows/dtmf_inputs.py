@@ -190,8 +190,9 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         self.session.on("agent_state_changed", self._on_user_state_changed)
         self.session.on("agent_state_changed", self._on_agent_state_changed)
-        self.session.input.set_audio_enabled(True)
-        self.session.generate_reply()
+
+        handle = self.session.generate_reply()
+        handle.add_done_callback(lambda _: self.session.input.set_audio_enabled(True))
 
     async def on_exit(self) -> None:
         ctx = get_job_context()
