@@ -18,6 +18,9 @@ from typing import Literal
 # Typecast TTS models
 TTSModels = Literal["ssfm-v21"]
 
+# Default voice ID (Olivia - supports multiple emotions)
+DEFAULT_VOICE_ID = "tc_62a8975e695ad26f7fb514d1"
+
 # Audio format options
 AudioFormat = Literal["wav", "mp3"]
 
@@ -43,6 +46,24 @@ TTSLanguages = Literal[
     "vie",  # Vietnamese
     "ind",  # Indonesian
 ]
+
+
+@dataclass
+class Voice:
+    """
+    Typecast voice model information.
+
+    Attributes:
+        id: Unique voice identifier (e.g., "tc_62a8975e695ad26f7fb514d1")
+        name: Human-readable voice name (e.g., "Olivia")
+        model: TTS model type (e.g., "ssfm-v21")
+        emotions: List of supported emotions (e.g., ["normal", "happy", "sad", "angry"])
+    """
+
+    id: str
+    name: str
+    model: str
+    emotions: list[str]
 
 
 @dataclass

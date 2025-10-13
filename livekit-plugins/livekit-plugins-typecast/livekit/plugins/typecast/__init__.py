@@ -21,17 +21,21 @@ See https://typecast.ai for more information.
 """
 
 from .models import (
+    DEFAULT_VOICE_ID,
     AudioFormat,
     OutputOptions,
     PromptOptions,
     TTSLanguages,
     TTSModels,
+    Voice,
 )
 from .tts import TTS
 from .version import __version__
 
 __all__ = [
     "TTS",
+    "Voice",
+    "DEFAULT_VOICE_ID",
     "TTSModels",
     "TTSLanguages",
     "AudioFormat",
