@@ -23,7 +23,6 @@ import asyncio
 import enum
 import json
 import os
-import weakref
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlencode
