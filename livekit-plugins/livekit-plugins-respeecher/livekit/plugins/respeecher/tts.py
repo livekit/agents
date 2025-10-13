@@ -119,7 +119,7 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = self._opts.base_url.replace("http", "ws")
         full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
         return await asyncio.wait_for(session.ws_connect(full_ws_url), timeout)
 
