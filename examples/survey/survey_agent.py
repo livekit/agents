@@ -18,7 +18,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask, Task, TaskOrchestrator
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, silero, cartesia
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 
 @dataclass
