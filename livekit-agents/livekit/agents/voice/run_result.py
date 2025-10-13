@@ -894,7 +894,7 @@ class ChatMessageAssert:
 
         arguments: str | None = None
         usage: llm.CompletionUsage | None = None
-          
+
         extra_kwargs = {}
         excluded_models_temperature = ["gpt-5"]  # Add model names here to exclude temperature
 
