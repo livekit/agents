@@ -32,7 +32,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import OutputOptions, PromptOptions, TTSLanguages, TTSModels
+from .models import DEFAULT_VOICE_ID, OutputOptions, PromptOptions, TTSLanguages, TTSModels, Voice
 
 API_BASE_URL = "https://api.typecast.ai/v1/text-to-speech"
 AUTHORIZATION_HEADER = "X-API-KEY"
@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         self,
         *,
         model: TTSModels | str = "ssfm-v21",
-        voice: str,
+        voice: str = DEFAULT_VOICE_ID,
         api_key: str | None = None,
         language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
@@ -72,7 +72,7 @@ class TTS(tts.TTS):
 
         Args:
             model: TTS model to use (default: "ssfm-v21")
-            voice: Voice ID for synthesis (required)
+            voice: Voice ID for synthesis (default: DEFAULT_VOICE_ID)
             api_key: Typecast API key. If not provided, will use TYPECAST_API_KEY environment variable
             language: Language code in ISO 639-3 format (e.g., "eng", "kor", "jpn")
             seed: Random seed for reproducible synthesis
@@ -120,6 +120,80 @@ class TTS(tts.TTS):
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
+
+    async def list_voices(self, *, model: TTSModels | str | None = None) -> list[Voice]:
+        """
+        List all available Typecast voices.
+
+        Args:
+            model: Optional model filter (e.g., "ssfm-v21"). If not provided, returns voices for all models.
+
+        Returns:
+            List of Voice objects containing id, name, model, and supported emotions.
+
+        Example:
+            ```python
+            tts = typecast.TTS()
+            voices = await tts.list_voices()
+            for voice in voices:
+                print(f"{voice.name} ({voice.id})")
+                print(f"  Emotions: {', '.join(voice.emotions)}")
+            ```
+        """
+        # Extract base URL from text-to-speech endpoint
+        base_url = self._opts.base_url.replace("/text-to-speech", "")
+        url = f"{base_url}/voices"
+
+        params = {}
+        if model:
+            params["model"] = model
+
+        try:
+            async with self._ensure_session().get(
+                url,
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    error_body = None
+                    try:
+                        error_body = await resp.json()
+                    except Exception:
+                        error_body = await resp.text()
+
+                    raise APIStatusError(
+                        message=resp.reason or "Failed to list voices",
+                        status_code=resp.status,
+                        request_id=None,
+                        body=error_body,
+                    )
+
+                data = await resp.json()
+
+                return [
+                    Voice(
+                        id=v["voice_id"],
+                        name=v["voice_name"],
+                        model=v["model"],
+                        emotions=v["emotions"],
+                    )
+                    for v in data
+                ]
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from None
+        except Exception as e:
+            if isinstance(e, (APIStatusError, APITimeoutError)):
+                raise
+            raise APIConnectionError() from e
 
     def update_options(
         self,
