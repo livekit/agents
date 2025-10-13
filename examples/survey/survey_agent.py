@@ -18,7 +18,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask, Task, TaskOrchestrator
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero, cartesia
 
 
 @dataclass
@@ -135,7 +135,7 @@ async def entrypoint(ctx: JobContext):
         userdata=Userdata(task_results={}),
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(),
+        tts=cartesia.TTS(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
