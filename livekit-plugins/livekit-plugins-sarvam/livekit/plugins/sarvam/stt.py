@@ -184,6 +184,7 @@ class STT(stt.STT):
 
         self._opts = SarvamSTTOptions(
             language=language,
+            api_key=self._api_key,
             model=model,
             base_url=base_url,
             prompt=prompt,
@@ -348,6 +349,7 @@ class STT(stt.STT):
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
             language=opts_language,
+            api_key=self._api_key if self._api_key else "",
             model=opts_model,
             prompt=final_prompt,
         )
