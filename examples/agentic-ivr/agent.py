@@ -80,7 +80,7 @@ class SessionState:
 def speak(agent: Agent, instructions: str, *, allow_interruptions: bool = False) -> None:
     logger.debug("prompt: %s", instructions)
     agent.session.generate_reply(
-        instructions=f"Say with exact the following message to user: <message>{instructions}</message>",
+        instructions=f"Agent Instructions - Say with exact the following message to user (no other words): <message>{instructions}</message>",
         allow_interruptions=allow_interruptions,
     )
 
@@ -134,7 +134,6 @@ async def run_menu(
             result = await GetDtmfTask(
                 num_digits=1,
                 ask_for_confirmation=False,
-                chat_ctx=agent.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
                 extra_instructions=build_menu_prompt(prompt, normalized_options),
             )
         except ToolError as exc:
@@ -184,10 +183,6 @@ class RootIVRAgent(Agent):
         self._state = state
 
     async def on_enter(self) -> None:
-        speak(
-            self,
-            "Thank you for calling LiveKit Cloud Support.",
-        )
         await self._ensure_account_binding()
         await self._main_menu_loop()
 
@@ -196,7 +191,7 @@ class RootIVRAgent(Agent):
             digits = await collect_digits(
                 self,
                 prompt=(
-                    "Please enter your six digit LiveKit account number now."
+                    "Thank you for calling LiveKit Cloud Support. Please enter your six digit LiveKit account number now."
                     " Say the digits clearly or use the keypad."
                 ),
                 num_digits=6,
@@ -216,10 +211,6 @@ class RootIVRAgent(Agent):
                 self._dashboard.get_account_label(candidate) or "your organization"
             )
             self._state.audit_log.append(f"account_verified:{candidate}")
-            speak(
-                self,
-                f"Thanks. I located the account for {self._state.account_label}.",
-            )
 
         while not self._state.project_id:
             digits = await collect_digits(
@@ -247,10 +238,6 @@ class RootIVRAgent(Agent):
                 continue
 
             self._apply_project(candidate)
-            speak(
-                self,
-                f"Great. We'll work with the project {self._state.project_label}.",
-            )
 
     async def _main_menu_loop(self) -> None:
         options = {
@@ -428,7 +415,6 @@ class CloudAgentsTask(BaseSubmenuTask):
             elif choice == "5":
                 await self._region_summary()
             elif choice == "9":
-                self.speak("Returning to the main menu.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
                 return
             elif choice == "0":
@@ -860,7 +846,7 @@ async def livekit_ivr_agent(ctx: JobContext) -> None:
 
     session: AgentSession[SessionState] = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4.1-mini"),
+        llm=openai.LLM(model="gpt-5-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
         turn_detection=MultilingualModel(),
