@@ -5,9 +5,10 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from livekit import rtc
+from livekit import api, rtc
 
 from ... import utils
+from ...job import get_job_context
 from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
@@ -16,7 +17,7 @@ from ...types import (
     TOPIC_CHAT,
     NotGivenOr,
 )
-from ..events import AgentStateChangedEvent, CloseReason, UserInputTranscribedEvent
+from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
@@ -82,6 +83,8 @@ class RoomInputOptions:
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
+    delete_room_on_close: bool = False
+    """Delete the room when the AgentSession is closed, default to False"""
 
 
 @dataclass
@@ -146,6 +149,7 @@ class RoomIO:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
         self._close_session_atask: asyncio.Task[None] | None = None
+        self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
@@ -249,6 +253,7 @@ class RoomIO:
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
+        self._agent_session.on("close", self._on_agent_session_close)
         self._agent_session._room_io = self
 
     async def aclose(self) -> None:
@@ -256,6 +261,7 @@ class RoomIO:
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
+        self._agent_session.off("close", self._on_agent_session_close)
 
         if self._text_stream_handler_registered:
             self._room.unregister_text_stream_handler(TOPIC_CHAT)
@@ -419,13 +425,13 @@ class RoomIO:
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
-
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
         if (
             self._input_options.close_on_disconnect
             and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
             and not self._close_session_atask
+            and not self._delete_room_task
         ):
             logger.info(
                 "closing agent session due to participant disconnect "
@@ -478,3 +484,15 @@ class RoomIO:
             self._update_state_atask.cancel()
 
         self._update_state_atask = asyncio.create_task(_set_state())
+
+    def _on_agent_session_close(self, ev: CloseEvent) -> None:
+        def _on_delete_room_task_done(task: asyncio.Future[api.DeleteRoomResponse]) -> None:
+            self._delete_room_task = None
+
+        if self._input_options.delete_room_on_close and self._delete_room_task is None:
+            job_ctx = get_job_context()
+            logger.info(
+                "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)"
+            )
+            self._delete_room_task = job_ctx.delete_room()
+            self._delete_room_task.add_done_callback(_on_delete_room_task_done)

@@ -14,16 +14,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
-from dataclasses import dataclass
-from typing import Any, Literal, cast
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
 
 import openai
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents import llm
+from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
@@ -35,28 +35,23 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from openai.types import ReasoningEffort
-from openai.types.chat import (
-    ChatCompletionChunk,
-    ChatCompletionMessageParam,
-    ChatCompletionToolChoiceOptionParam,
-    completion_create_params,
-)
-from openai.types.chat.chat_completion_chunk import Choice
+from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
-from .log import logger
 from .models import (
     CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
+    OpenRouterProviderPreferences,
+    OpenRouterWebPlugin,
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
     _supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider, to_fnc_ctx
+from .utils import AsyncAzureADTokenProvider
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -79,6 +74,9 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+    extra_body: NotGivenOr[dict[str, Any]]
+    extra_headers: NotGivenOr[dict[str, str]]
+    extra_query: NotGivenOr[dict[str, str]]
 
 
 class LLM(llm.LLM):
@@ -104,6 +102,9 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
@@ -133,6 +134,9 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            extra_body=extra_body,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
@@ -155,8 +159,11 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
 
     @staticmethod
     def with_azure(
@@ -351,6 +358,78 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+        )
+
+    @staticmethod
+    def with_openrouter(
+        *,
+        model: str = "auto",
+        api_key: str | None = None,
+        base_url: str = "https://openrouter.ai/api/v1",
+        client: openai.AsyncClient | None = None,
+        site_url: str | None = None,
+        app_name: str | None = None,
+        fallback_models: list[str] | None = None,
+        provider: OpenRouterProviderPreferences | None = None,
+        plugins: list[OpenRouterWebPlugin] | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of OpenRouter LLM.
+
+        ``api_key`` must be set to your OpenRouter API key, either using the argument or by setting
+        the ``OPENROUTER_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "OpenRouter API key is required, either as argument or set OPENROUTER_API_KEY environment variable"
+            )
+
+        # Set up analytics headers for OpenRouter
+        default_headers: dict[str, str] = {}
+        if site_url:
+            default_headers["HTTP-Referer"] = site_url
+        if app_name:
+            default_headers["X-Title"] = app_name
+
+        # Build OpenRouter-specific request body
+        or_body: dict[str, Any] = {}
+        if provider:
+            or_body["provider"] = provider
+        if fallback_models:
+            # Set fallback models for routing
+            or_body["models"] = [model, *fallback_models]
+        if plugins:
+            or_body["plugins"] = [
+                {k: v for k, v in asdict(p).items() if v is not None} for p in plugins
+            ]
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            client=client,
+            base_url=base_url,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_body=or_body,
+            extra_headers=default_headers,
+            timeout=timeout,
         )
 
     @staticmethod
@@ -710,6 +789,15 @@ class LLM(llm.LLM):
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
+        if is_given(self._opts.extra_body):
+            extra["extra_body"] = self._opts.extra_body
+
+        if is_given(self._opts.extra_headers):
+            extra["extra_headers"] = self._opts.extra_headers
+
+        if is_given(self._opts.extra_query):
+            extra["extra_query"] = self._opts.extra_query
+
         if is_given(self._opts.metadata):
             extra["metadata"] = self._opts.metadata
 
@@ -775,7 +863,7 @@ class LLM(llm.LLM):
         )
 
 
-class LLMStream(llm.LLMStream):
+class LLMStream(_LLMStream):
     def __init__(
         self,
         llm: LLM,
@@ -789,160 +877,14 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-        self._model = model
-        self._provider_fmt = provider_fmt
-        self._strict_tool_schema = strict_tool_schema
-        self._client = client
-        self._llm = llm
-        self._extra_kwargs = extra_kwargs
-
-    async def _run(self) -> None:
-        # current function call that we're waiting for full completion (args are streamed)
-        # (defined inside the _run method to make sure the state is reset for each run/attempt)
-        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
-        self._tool_call_id: str | None = None
-        self._fnc_name: str | None = None
-        self._fnc_raw_arguments: str | None = None
-        self._tool_index: int | None = None
-        retryable = True
-
-        try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
-            fnc_ctx = (
-                to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
-                if self._tools
-                else openai.NOT_GIVEN
-            )
-            if lk_oai_debug:
-                tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
-                logger.debug(
-                    "chat.completions.create",
-                    extra={
-                        "fnc_ctx": fnc_ctx,
-                        "tool_choice": tool_choice,
-                        "chat_ctx": chat_ctx,
-                    },
-                )
-            if not self._tools:
-                # remove tool_choice from extra_kwargs if no tools are provided
-                self._extra_kwargs.pop("tool_choice", None)
-
-            self._oai_stream = stream = await self._client.chat.completions.create(
-                messages=cast(list[ChatCompletionMessageParam], chat_ctx),
-                tools=fnc_ctx,
-                model=self._model,
-                stream_options={"include_usage": True},
-                stream=True,
-                timeout=httpx.Timeout(self._conn_options.timeout),
-                **self._extra_kwargs,
-            )
-
-            thinking = asyncio.Event()
-            async with stream:
-                async for chunk in stream:
-                    for choice in chunk.choices:
-                        chat_chunk = self._parse_choice(chunk.id, choice, thinking)
-                        if chat_chunk is not None:
-                            retryable = False
-                            self._event_ch.send_nowait(chat_chunk)
-
-                    if chunk.usage is not None:
-                        retryable = False
-                        tokens_details = chunk.usage.prompt_tokens_details
-                        cached_tokens = tokens_details.cached_tokens if tokens_details else 0
-                        chunk = llm.ChatChunk(
-                            id=chunk.id,
-                            usage=llm.CompletionUsage(
-                                completion_tokens=chunk.usage.completion_tokens,
-                                prompt_tokens=chunk.usage.prompt_tokens,
-                                prompt_cached_tokens=cached_tokens or 0,
-                                total_tokens=chunk.usage.total_tokens,
-                            ),
-                        )
-                        self._event_ch.send_nowait(chunk)
-
-        except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable) from None
-        except openai.APIStatusError as e:
-            raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-                retryable=retryable,
-            ) from None
-        except Exception as e:
-            raise APIConnectionError(retryable=retryable) from e
-
-    def _parse_choice(
-        self, id: str, choice: Choice, thinking: asyncio.Event
-    ) -> llm.ChatChunk | None:
-        delta = choice.delta
-
-        # https://github.com/livekit/agents/issues/688
-        # the delta can be None when using Azure OpenAI (content filtering)
-        if delta is None:
-            return None
-
-        if delta.tool_calls:
-            for tool in delta.tool_calls:
-                if not tool.function:
-                    continue
-
-                call_chunk = None
-                if self._tool_call_id and tool.id and tool.index != self._tool_index:
-                    call_chunk = llm.ChatChunk(
-                        id=id,
-                        delta=llm.ChoiceDelta(
-                            role="assistant",
-                            content=delta.content,
-                            tool_calls=[
-                                llm.FunctionToolCall(
-                                    arguments=self._fnc_raw_arguments or "",
-                                    name=self._fnc_name or "",
-                                    call_id=self._tool_call_id or "",
-                                )
-                            ],
-                        ),
-                    )
-                    self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-
-                if tool.function.name:
-                    self._tool_index = tool.index
-                    self._tool_call_id = tool.id
-                    self._fnc_name = tool.function.name
-                    self._fnc_raw_arguments = tool.function.arguments or ""
-                elif tool.function.arguments:
-                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
-
-                if call_chunk is not None:
-                    return call_chunk
-
-        if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
-            call_chunk = llm.ChatChunk(
-                id=id,
-                delta=llm.ChoiceDelta(
-                    role="assistant",
-                    content=delta.content,
-                    tool_calls=[
-                        llm.FunctionToolCall(
-                            arguments=self._fnc_raw_arguments or "",
-                            name=self._fnc_name or "",
-                            call_id=self._tool_call_id or "",
-                        )
-                    ],
-                ),
-            )
-            self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-            return call_chunk
-
-        delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
-
-        if not delta.content:
-            return None
-
-        return llm.ChatChunk(
-            id=id,
-            delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
+        super().__init__(
+            llm,
+            model=model,
+            provider_fmt=provider_fmt,
+            strict_tool_schema=strict_tool_schema,
+            client=client,
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+            extra_kwargs=extra_kwargs,
         )

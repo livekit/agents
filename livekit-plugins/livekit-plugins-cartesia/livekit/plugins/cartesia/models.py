@@ -10,7 +10,7 @@ TTSEncoding = Literal[
 
 TTSModels = Literal["sonic", "sonic-2", "sonic-lite", "sonic-preview", "sonic-turbo"]
 TTSLanguages = Literal["en", "es", "fr", "de", "pt", "zh", "ja"]
-TTSDefaultVoiceId = "794f9389-aac1-45b6-b726-9d9369183238"
+TTSDefaultVoiceId = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  # Katie - Friendly Fixer
 TTSVoiceSpeed = Literal["fastest", "fast", "normal", "slow", "slowest"]
 TTSVoiceEmotion = Literal[
     "anger:lowest",

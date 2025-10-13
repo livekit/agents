@@ -22,7 +22,7 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
-from livekit.agents.metrics.base import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -177,6 +177,7 @@ class RealtimeModel(llm.RealtimeModel):
                 user_transcription=True,
                 auto_tool_reply_generation=True,
                 audio_output=output_medium == "voice",
+                manual_function_calls=False,
             )
         )
 
@@ -208,6 +209,14 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session = http_session
         self._label = f"ultravox-{model}"
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model_id
+
+    @property
+    def provider(self) -> str:
+        return "Ultravox"
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""
@@ -965,7 +974,7 @@ class RealtimeSession(
             ttft=ttft,
             duration=duration,
             cancelled=interrupted,
-            label=self._realtime_model._label,
+            label=self._realtime_model.label,
             input_tokens=0,  # Ultravox doesn't provide token counts
             output_tokens=0,
             total_tokens=0,
@@ -981,6 +990,10 @@ class RealtimeSession(
                 text_tokens=0,
                 audio_tokens=0,
                 image_tokens=0,
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model,
+                model_provider=self._realtime_model.provider,
             ),
         )
 
