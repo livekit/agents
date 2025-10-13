@@ -4,7 +4,9 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from ... import function_tool, rtc
+from livekit import rtc
+
+from ... import function_tool
 from ...job import get_job_context
 from ...llm.chat_context import ChatContext
 from ...llm.tool_context import ToolError
@@ -60,9 +62,19 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         @function_tool
         async def confirm_inputs(inputs: list[DtmfEvent]) -> None:
-            """Confirm the digits inputs.
+            """Finalize the collected digit inputs after explicit user confirmation.
 
-            Called ONLY when user has explicitly mentioned the digits inputs is correct."""
+            Use this ONLY after the confirmation. You should confirm by verbally reading out the digits one by one and, once the
+            user confirms they are correct, call this tool with the inputs.
+
+            Do not use this tool to capture the initial digits."""
+            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+
+        @function_tool
+        async def record_inputs(inputs: list[DtmfEvent]) -> None:
+            """Record the collected digit inputs without additional confirmation.
+
+            Call this tool as soon as a valid sequence of digits has been provided by the user (via DTMF or spoken)."""
             self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
         instructions = (
@@ -73,6 +85,8 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         if ask_for_confirmation:
             instructions += "Once user has confirmed the digits (by verbally spoken or entered manually), call `confirm_inputs` with the inputs."
+        else:
+            instructions += "If user provides the digits through voice and it is valid, call `record_inputs` with the inputs."
 
         if is_given(extra_instructions):
             instructions += f"\n{extra_instructions}"
@@ -80,7 +94,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            tools=[confirm_inputs] if ask_for_confirmation else None,
+            tools=[confirm_inputs] if ask_for_confirmation else [record_inputs],
         )
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
@@ -129,7 +143,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                     ""
                 )
 
-                await self.session.generate_reply(instructions=instructions)
+                await self.session.generate_reply(user_input=instructions)
             finally:
                 self._dtmg_reply_running = False
                 self._curr_dtmf_inputs.clear()
