@@ -10,7 +10,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from livekit.agents.voice.background_audio import AudioConfig, BackgroundAudioPlayer
+from livekit.agents.voice.room_io.room_io import RoomInputOptions
 from livekit.agents.worker import AgentServer
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -29,7 +29,6 @@ from livekit.agents import (
     AgentSession,
     AgentTask,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RoomOutputOptions,
     cli,
@@ -78,10 +77,11 @@ class SessionState:
     audit_log: list[str] = field(default_factory=list)
 
 
-async def speak(agent: Agent, instructions: str, *, allow_interruptions: bool = False) -> None:
+def speak(agent: Agent, instructions: str, *, allow_interruptions: bool = False) -> None:
     logger.debug("prompt: %s", instructions)
-    await agent.session.generate_reply(
-        instructions=instructions, allow_interruptions=allow_interruptions
+    agent.session.generate_reply(
+        instructions=f"Say with exact the following message to user: <message>{instructions}</message>",
+        allow_interruptions=allow_interruptions,
     )
 
 
@@ -90,7 +90,7 @@ async def collect_digits(
     *,
     prompt: str,
     num_digits: int,
-    confirmation: bool = True,
+    confirmation: bool = False,
 ) -> str:
     while True:
         try:
@@ -105,10 +105,10 @@ async def collect_digits(
                 ),
             )
         except ToolError as exc:
-            await speak(agent, exc.message if hasattr(exc, "message") else str(exc))
+            speak(agent, exc.message if hasattr(exc, "message") else str(exc))
             continue
 
-        return result.user_input
+        return result.user_input.replace(" ", "")
 
 
 def build_menu_prompt(base_prompt: str, options: dict[str, str]) -> str:
@@ -138,7 +138,7 @@ async def run_menu(
                 extra_instructions=build_menu_prompt(prompt, normalized_options),
             )
         except ToolError as exc:
-            await speak(agent, exc.message if hasattr(exc, "message") else str(exc))
+            speak(agent, exc.message if hasattr(exc, "message") else str(exc))
             continue
 
         selection = result.user_input
@@ -146,7 +146,7 @@ async def run_menu(
             logger.debug("menu selection: %s -> %s", selection, normalized_options[selection])
             return selection
 
-        await speak(agent, invalid_message)
+        speak(agent, invalid_message)
 
 
 def format_seconds(seconds: int) -> str:
@@ -184,9 +184,9 @@ class RootIVRAgent(Agent):
         self._state = state
 
     async def on_enter(self) -> None:
-        await speak(
+        speak(
             self,
-            "Thank you for calling LiveKit Cloud Support. This automated system can review hosted agents, usage, telephony, and support status. Let's confirm your account to begin.",
+            "Thank you for calling LiveKit Cloud Support.",
         )
         await self._ensure_account_binding()
         await self._main_menu_loop()
@@ -200,12 +200,14 @@ class RootIVRAgent(Agent):
                     " Say the digits clearly or use the keypad."
                 ),
                 num_digits=6,
+                confirmation=False,
             )
             candidate = f"ACCT-{digits}"
+            logger.debug("account candidate: %s", candidate)
             if not self._dashboard.account_exists(candidate):
-                await speak(
+                speak(
                     self,
-                    "That account number was not found. Check the number on your LiveKit invoice and try again.",
+                    f"That account number {candidate} was not found. Check the number on your LiveKit invoice and try again.",
                 )
                 continue
 
@@ -214,7 +216,7 @@ class RootIVRAgent(Agent):
                 self._dashboard.get_account_label(candidate) or "your organization"
             )
             self._state.audit_log.append(f"account_verified:{candidate}")
-            await speak(
+            speak(
                 self,
                 f"Thanks. I located the account for {self._state.account_label}.",
             )
@@ -227,6 +229,7 @@ class RootIVRAgent(Agent):
                     " If you are unsure, check the LiveKit Cloud dashboard."
                 ),
                 num_digits=6,
+                confirmation=False,
             )
             candidate = f"PRJ-{digits}"
             if not self._dashboard.project_exists(self._state.account_id, candidate):
@@ -235,7 +238,7 @@ class RootIVRAgent(Agent):
                     f"{project_id[-6:]} for {self._dashboard.describe_project(self._state.account_id, project_id)}"
                     for project_id in available
                 ]
-                await speak(
+                speak(
                     self,
                     "I did not find that project. Available project codes are "
                     + format_list(names)
@@ -244,7 +247,7 @@ class RootIVRAgent(Agent):
                 continue
 
             self._apply_project(candidate)
-            await speak(
+            speak(
                 self,
                 f"Great. We'll work with the project {self._state.project_label}.",
             )
@@ -260,6 +263,14 @@ class RootIVRAgent(Agent):
             "7": "End this call",
         }
 
+        choice_to_task: dict[str, type[SubmenuTaskType]] = {
+            "1": CloudAgentsTask,
+            "2": UsageBillingTask,
+            "3": TelephonyOpsTask,
+            "4": PerformanceMetricsTask,
+            "5": SupportServicesTask,
+        }
+
         while True:
             prompt = (
                 f"Main menu for {self._state.project_label}. "
@@ -267,37 +278,23 @@ class RootIVRAgent(Agent):
             )
             choice = await run_menu(self, prompt=prompt, options=options)
 
-            if choice == "1":
-                outcome = await CloudAgentsTask(state=self._state, dashboard=self._dashboard)
-                if await self._handle_task_outcome(outcome):
+            match choice:
+                case "1" | "2" | "3" | "4" | "5":
+                    task = choice_to_task[choice](state=self._state, dashboard=self._dashboard)
+                    outcome = await task
+                    if await self._should_exit_menu_loop(outcome):
+                        return
+                case "6":
+                    await self._switch_project()
+                case "7":
+                    await self._farewell()
                     return
-            elif choice == "2":
-                outcome = await UsageBillingTask(state=self._state, dashboard=self._dashboard)
-                if await self._handle_task_outcome(outcome):
-                    return
-            elif choice == "3":
-                outcome = await TelephonyOpsTask(state=self._state, dashboard=self._dashboard)
-                if await self._handle_task_outcome(outcome):
-                    return
-            elif choice == "4":
-                outcome = await PerformanceMetricsTask(state=self._state, dashboard=self._dashboard)
-                if await self._handle_task_outcome(outcome):
-                    return
-            elif choice == "5":
-                outcome = await SupportServicesTask(state=self._state, dashboard=self._dashboard)
-                if await self._handle_task_outcome(outcome):
-                    return
-            elif choice == "6":
-                await self._switch_project()
-            elif choice == "7":
-                await self._farewell()
-                return
 
-    async def _handle_task_outcome(self, outcome: TaskOutcome) -> bool:
+    async def _should_exit_menu_loop(self, outcome: TaskOutcome) -> bool:
         if outcome == TaskOutcome.RETURN_TO_ROOT:
             return False
         if outcome == TaskOutcome.TRANSFER_SUPPORT:
-            await speak(
+            speak(
                 self,
                 "I'll alert a LiveKit specialist and send them your session transcript. Please hold while we connect you.",
             )
@@ -319,6 +316,7 @@ class RootIVRAgent(Agent):
             mapping[digit] = project_id
             label = self._dashboard.describe_project(self._state.account_id, project_id)
             options[digit] = f"Switch to {label}"
+
         options["9"] = "Cancel and stay on current project"
 
         prompt = "Select a project to manage. Each option references its primary label."
@@ -326,12 +324,12 @@ class RootIVRAgent(Agent):
         selection = await run_menu(self, prompt=prompt, options=options)
 
         if selection == "9":
-            await speak(self, "No changes made. Remaining on the current project.")
+            speak(self, "No changes made. Remaining on the current project.")
             return
 
         project_id = mapping[selection]
         self._apply_project(project_id)
-        await speak(
+        speak(
             self,
             f"Switched to {self._state.project_label}. Returning to the main menu.",
         )
@@ -349,11 +347,12 @@ class RootIVRAgent(Agent):
         self._state.audit_log.append(f"project_selected:{project_id}")
 
     async def _farewell(self) -> None:
-        await speak(
+        speak(
             self,
-            "Thank you for using LiveKit's automated support. A summary of this session will be available in your dashboard. Goodbye!",
+            "Thank you for using LiveKit's automated support. Goodbye!",
             allow_interruptions=False,
         )
+        self.session.shutdown()
 
 
 class BaseSubmenuTask(AgentTask[TaskOutcome]):
@@ -386,8 +385,8 @@ class BaseSubmenuTask(AgentTask[TaskOutcome]):
             raise RuntimeError("project not set")
         return self.state.project_id
 
-    async def speak(self, message: str) -> None:
-        await speak(self, message)
+    def speak(self, message: str) -> None:
+        speak(self, message)
 
 
 class CloudAgentsTask(BaseSubmenuTask):
@@ -395,7 +394,7 @@ class CloudAgentsTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="cloud agent operations")
 
     async def on_enter(self) -> None:
-        await self.speak(
+        self.speak(
             f"Cloud agent menu for {self.state.project_label}. Press nine to return to the main menu or zero to end the call."
         )
         await self._loop()
@@ -429,7 +428,7 @@ class CloudAgentsTask(BaseSubmenuTask):
             elif choice == "5":
                 await self._region_summary()
             elif choice == "9":
-                await self.speak("Returning to the main menu.")
+                self.speak("Returning to the main menu.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
                 return
             elif choice == "0":
@@ -449,18 +448,18 @@ class CloudAgentsTask(BaseSubmenuTask):
         sessions = self.dashboard.aggregate_agent_sessions(self.account_id, self.project_id)
         message += f" Combined active sessions total {sessions}."
 
-        await self.speak(message)
+        self.speak(message)
         self.state.audit_log.append("cloud_agents:summary")
 
     async def _list_agents(self) -> None:
         agents = self.dashboard.list_cloud_agents(self.account_id, self.project_id)
-        await self.speak(format_agents(agents))
+        self.speak(format_agents(agents))
         self.state.audit_log.append("cloud_agents:list")
 
     async def _active_sessions(self) -> None:
         sessions = self.dashboard.aggregate_agent_sessions(self.account_id, self.project_id)
         uptime = self.dashboard.aggregate_uptime_hours(self.account_id, self.project_id)
-        await self.speak(
+        self.speak(
             f"Across all agents there are {sessions} active sessions with a cumulative uptime of {uptime} hours."
         )
         self.state.audit_log.append("cloud_agents:sessions")
@@ -468,7 +467,7 @@ class CloudAgentsTask(BaseSubmenuTask):
     async def _agent_detail(self) -> None:
         agents = self.dashboard.list_cloud_agents(self.account_id, self.project_id)
         if not agents:
-            await self.speak("There are no agents to inspect right now.")
+            self.speak("There are no agents to inspect right now.")
             return
 
         menu: dict[str, str] = {}
@@ -489,7 +488,7 @@ class CloudAgentsTask(BaseSubmenuTask):
         )
 
         if choice == "9":
-            await self.speak("Back to the previous options.")
+            self.speak("Back to the previous options.")
             return
         if choice == "0":
             self.complete(TaskOutcome.END_SESSION)
@@ -501,7 +500,7 @@ class CloudAgentsTask(BaseSubmenuTask):
             f"Status is {agent.status} with {agent.active_sessions} live sessions and {agent.uptime_hours} uptime hours."
             " Alerts will trigger if uptime exceeds service level targets."
         )
-        await self.speak(message)
+        self.speak(message)
         self.state.audit_log.append(f"cloud_agents:detail:{agent.name}")
 
     async def _region_summary(self) -> None:
@@ -511,7 +510,7 @@ class CloudAgentsTask(BaseSubmenuTask):
             f"Deployments span {len(regions)} regions: {format_list(regions)}. "
             "Latency-sensitive workloads are automatically pinned to the caller's nearest region."
         )
-        await self.speak(message)
+        self.speak(message)
         self.state.audit_log.append("cloud_agents:regions")
 
 
@@ -520,7 +519,7 @@ class UsageBillingTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="usage and billing")
 
     async def on_enter(self) -> None:
-        await self.speak(
+        self.speak(
             f"Usage and billing for {self.state.project_label}. Press nine to return to the main menu or zero to end."
         )
         await self._loop()
@@ -551,7 +550,7 @@ class UsageBillingTask(BaseSubmenuTask):
             elif choice == "4":
                 await self._email_summary()
             elif choice == "9":
-                await self.speak("Returning to the main menu.")
+                self.speak("Returning to the main menu.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
                 return
             elif choice == "0":
@@ -573,13 +572,13 @@ class UsageBillingTask(BaseSubmenuTask):
             f"text-to-speech totals {format_currency(usage.tts_cost)}, "
             f"and speech-to-text totals {format_currency(usage.stt_cost)}."
         )
-        await self.speak(message)
+        self.speak(message)
         self.state.audit_log.append("usage:spend")
 
     async def _remaining_balance(self) -> None:
         usage = self._usage()
         balance = format_currency(usage.balance_remaining)
-        await self.speak(
+        self.speak(
             f"Your remaining pre-paid balance is {balance}. You can top up anytime from the LiveKit dashboard or upgrade your plan."
         )
         self.state.audit_log.append("usage:balance")
@@ -595,15 +594,13 @@ class UsageBillingTask(BaseSubmenuTask):
             if usage.balance_remaining < 1000
             else "Current allotment looks healthy"
         )
-        await self.speak(
+        self.speak(
             f"Daily burn rate is {burn}. Current cycle spend is {llm} on language, {tts} on voice output, and {stt} on transcription. {advice}."
         )
         self.state.audit_log.append("usage:burn")
 
     async def _email_summary(self) -> None:
-        await self.speak(
-            "I've queued a usage summary to be emailed to the billing contacts on file."
-        )
+        self.speak("I've queued a usage summary to be emailed to the billing contacts on file.")
         self.state.audit_log.append("usage:email")
 
 
@@ -612,7 +609,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="telephony operations")
 
     async def on_enter(self) -> None:
-        await self.speak(
+        self.speak(
             f"Telephony overview for {self.state.project_label}. Press nine to return or zero to end the call."
         )
         await self._loop()
@@ -643,7 +640,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
             elif choice == "4":
                 await self._voicemail()
             elif choice == "9":
-                await self.speak("Returning to the main menu.")
+                self.speak("Returning to the main menu.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
                 return
             elif choice == "0":
@@ -661,7 +658,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
         stats = self._telephony()
         inbound = stats.inbound_calls
         outbound = stats.outbound_calls
-        await self.speak(
+        self.speak(
             f"Inbound calls this cycle total {inbound}, outbound calls {outbound}. LiveKit auto-scales telephony capacity based on daily peaks."
         )
         self.state.audit_log.append("telephony:volume")
@@ -670,7 +667,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
         stats = self._telephony()
         queued = stats.queued_calls
         handle_time = format_seconds(stats.avg_handle_time_seconds)
-        await self.speak(
+        self.speak(
             f"There are currently {queued} callers waiting. Average handle time sits at {handle_time}."
         )
         self.state.audit_log.append("telephony:queue")
@@ -678,7 +675,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
     async def _sip_trunks(self) -> None:
         stats = self._telephony()
         trunks = stats.sip_trunks
-        await self.speak(
+        self.speak(
             f"SIP trunk health shows {trunks.healthy} healthy, {trunks.degraded} degraded, and {trunks.offline} offline connections."
         )
         self.state.audit_log.append("telephony:trunks")
@@ -686,7 +683,7 @@ class TelephonyOpsTask(BaseSubmenuTask):
     async def _voicemail(self) -> None:
         stats = self._telephony()
         voicemails = stats.voicemail_count
-        await self.speak(
+        self.speak(
             f"You have {voicemails} new voicemail messages. Callback automation can be toggled in the dashboard if you need faster follow-ups."
         )
         self.state.audit_log.append("telephony:voicemail")
@@ -697,7 +694,7 @@ class PerformanceMetricsTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="performance metrics")
 
     async def on_enter(self) -> None:
-        await self.speak(
+        self.speak(
             f"Performance metrics for {self.state.project_label}. Press nine to return or zero to end."
         )
         await self._loop()
@@ -727,7 +724,7 @@ class PerformanceMetricsTask(BaseSubmenuTask):
             elif choice == "5":
                 await self._comprehensive_summary()
             elif choice == "9":
-                await self.speak("Returning to the main menu.")
+                self.speak("Returning to the main menu.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
                 return
             elif choice == "0":
@@ -749,7 +746,7 @@ class PerformanceMetricsTask(BaseSubmenuTask):
             "3": ("speech-to-text", performance.stt),
         }
         label, metrics_obj = modality_map[option]
-        await self.speak(
+        self.speak(
             f"Current {label} latency shows {MockLiveKitDashboard.format_latency(metrics_obj)}."
         )
         self.state.audit_log.append(f"performance:{label}")
@@ -758,9 +755,9 @@ class PerformanceMetricsTask(BaseSubmenuTask):
         performance = self._performance()
         incidents = performance.last_incidents
         if incidents:
-            await self.speak("Recent incidents include " + format_list(incidents) + ".")
+            self.speak("Recent incidents include " + format_list(incidents) + ".")
         else:
-            await self.speak("No incidents have been reported in the last 30 days.")
+            self.speak("No incidents have been reported in the last 30 days.")
         self.state.audit_log.append("performance:incidents")
 
     async def _comprehensive_summary(self) -> None:
@@ -768,7 +765,7 @@ class PerformanceMetricsTask(BaseSubmenuTask):
         llm = performance.llm
         tts = performance.tts
         stt = performance.stt
-        await self.speak(
+        self.speak(
             "Overall system health is steady. "
             f"LLM latency: {MockLiveKitDashboard.format_latency(llm)}. "
             f"TTS latency: {MockLiveKitDashboard.format_latency(tts)}. "
@@ -782,7 +779,7 @@ class SupportServicesTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="support services")
 
     async def on_enter(self) -> None:
-        await self.speak(
+        self.speak(
             f"Support services for {self.state.project_label}. Press nine to return or zero to end."
         )
         await self._loop()
@@ -814,7 +811,7 @@ class SupportServicesTask(BaseSubmenuTask):
             elif choice == "4":
                 await self._documentation_links()
             elif choice == "9":
-                await self.speak("Returning to the main menu.")
+                self.speak("Returning to the main menu.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
                 return
             elif choice == "0":
@@ -824,31 +821,34 @@ class SupportServicesTask(BaseSubmenuTask):
     async def _ticket_status(self) -> None:
         support = self.dashboard.get_support_overview(self.account_id, self.project_id)
         tickets = support.open_tickets
-        await self.speak(
+        self.speak(
             f"You have {tickets} open tickets. SLA tier is {support.sla_tier}. Last contact was {support.last_agent_contact}."
         )
         self.state.audit_log.append("support:tickets")
 
     async def _request_callback(self) -> None:
         support = self.dashboard.get_support_overview(self.account_id, self.project_id)
-        await self.speak(
+        self.speak(
             "A callback request has been logged. A LiveKit engineer will reach out using the preferred contact on file."
         )
         new_pending = support.pending_callbacks + 1
-        await self.speak(
-            f"Current pending callback requests, including this one, total {new_pending}."
-        )
+        self.speak(f"Current pending callback requests, including this one, total {new_pending}.")
         self.state.audit_log.append("support:callback")
 
     async def _documentation_links(self) -> None:
-        await self.speak(
+        self.speak(
             "For deeper guidance, review the LiveKit Cloud agent deployment playbook and the SIP integration cookbook available in your dashboard's documentation tab."
         )
         self.state.audit_log.append("support:docs")
 
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+SubmenuTaskType = (
+    CloudAgentsTask
+    | UsageBillingTask
+    | TelephonyOpsTask
+    | PerformanceMetricsTask
+    | SupportServicesTask
+)
 
 
 @server.realtime_session(agent_name=AGENTIC_IVR_DISPATCH_NAME, on_session_end=on_session_end)
@@ -859,19 +859,12 @@ async def livekit_ivr_agent(ctx: JobContext) -> None:
     state = SessionState()
 
     session: AgentSession[SessionState] = AgentSession(
-        vad=ctx.proc.userdata["vad"],
+        vad=silero.VAD.load(),
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
         turn_detection=MultilingualModel(),
         userdata=state,
-    )
-
-    background_audio = BackgroundAudioPlayer(
-        ambient_sound=AudioConfig(
-            str(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bg_noise.mp3")),
-            volume=1.0,
-        ),
     )
 
     usage_collector = metrics.UsageCollector()
@@ -890,9 +883,9 @@ async def livekit_ivr_agent(ctx: JobContext) -> None:
     await session.start(
         agent=RootIVRAgent(dashboard=dashboard, state=state),
         room=ctx.room,
+        room_input_options=RoomInputOptions(audio_enabled=False),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
-    await background_audio.start(room=ctx.room, agent_session=session)
 
 
 if __name__ == "__main__":
