@@ -6,9 +6,7 @@ TTSModels = Literal[
     "/public/tts/en-rt",
 ]
 
-TTSEncoding = Literal[
-    "pcm_s16le",
-]
+TTSEncoding = Literal["pcm_s16le",]
 
 
 """Check https://space.respeecher.com/docs/api/tts/sampling-params-guide for details"""
