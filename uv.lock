@@ -55,7 +55,6 @@ members = [
     "livekit-plugins-openai",
     "livekit-plugins-playai",
     "livekit-plugins-resemble",
-    "livekit-plugins-respeecher",
     "livekit-plugins-rime",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
@@ -2417,20 +2416,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
-
-[[package]]
-name = "livekit-plugins-respeecher"
-source = { editable = "livekit-plugins/livekit-plugins-respeecher" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "livekit-agents" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp" },
-    { name = "livekit-agents", editable = "livekit-agents" },
-]
 
 [[package]]
 name = "livekit-plugins-rime"
