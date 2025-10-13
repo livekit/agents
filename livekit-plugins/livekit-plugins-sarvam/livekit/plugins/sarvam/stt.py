@@ -23,6 +23,7 @@ import asyncio
 import enum
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlencode
@@ -189,6 +190,7 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def model(self) -> str:
