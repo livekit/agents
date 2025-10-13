@@ -88,6 +88,7 @@ MODEL_SPEAKER_COMPATIBILITY = {
 
 class ConnectionState(enum.Enum):
     """WebSocket connection states for TTS."""
+
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
@@ -277,7 +278,7 @@ class TTS(tts.TTS):
             logger.error(
                 "Failed to connect to Sarvam TTS WebSocket",
                 extra={"error": str(e), "url": ws_url},
-                exc_info=True
+                exc_info=True,
             )
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
@@ -312,9 +313,9 @@ class TTS(tts.TTS):
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
             if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(
-                    self._opts.model, {}
-                ).get("all", [])
+                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+                    "all", []
+                )
                 raise ValueError(
                     f"Speaker '{speaker}' incompatible with {self._opts.model}. "
                     f"Compatible speakers: {', '.join(compatible_speakers)}"
@@ -521,10 +522,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        logger.info(
-            "Starting TTS WebSocket session",
-            extra=self._build_log_context()
-        )
+        logger.info("Starting TTS WebSocket session", extra=self._build_log_context())
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -542,8 +540,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     },
                 }
                 logger.debug(
-                    "Sending TTS config",
-                    extra={**self._build_log_context(), "config": config_msg}
+                    "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
                 )
                 await ws.send_str(json.dumps(config_msg))
 
@@ -561,9 +558,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             except Exception as e:
                 logger.error(
-                    f"Error in send task: {e}",
-                    extra=self._build_log_context(),
-                    exc_info=True
+                    f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
                 )
                 raise APIConnectionError(f"Send task failed: {e}") from e
 
@@ -578,37 +573,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSING,
                     ):
                         logger.info(
-                            "WebSocket connection closed by server",
-                            extra=self._build_log_context()
+                            "WebSocket connection closed by server", extra=self._build_log_context()
                         )
                         break
 
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        success = await self._handle_websocket_message(
-                            msg.data, output_emitter
-                        )
+                        success = await self._handle_websocket_message(msg.data, output_emitter)
                         if not success:
                             break  # Stop processing on error or completion
 
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         error_msg = f"WebSocket error: {msg.data}"
-                        logger.error(
-                            error_msg,
-                            extra=self._build_log_context()
-                        )
+                        logger.error(error_msg, extra=self._build_log_context())
                         raise APIConnectionError(error_msg)
 
             except asyncio.TimeoutError as e:
-                logger.error(
-                    "WebSocket received timeout",
-                    extra=self._build_log_context()
-                )
+                logger.error("WebSocket received timeout", extra=self._build_log_context())
                 raise APITimeoutError("WebSocket receive timeout") from e
             except Exception as e:
                 logger.error(
-                    f"Error in receive task: {e}",
-                    extra=self._build_log_context(),
-                    exc_info=True
+                    f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
                 )
                 raise
 
@@ -618,10 +602,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._ws_conn = ws
                 self._connection_state = ConnectionState.CONNECTED
 
-                logger.info(
-                    "WebSocket connected successfully",
-                    extra=self._build_log_context()
-                )
+                logger.info("WebSocket connected successfully", extra=self._build_log_context())
 
                 self._send_task = asyncio.create_task(send_task(ws))
                 self._recv_task = asyncio.create_task(recv_task(ws))
@@ -631,14 +612,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                     logger.info(
-                        "WebSocket session completed successfully",
-                        extra=self._build_log_context()
+                        "WebSocket session completed successfully", extra=self._build_log_context()
                     )
                 except Exception as e:
                     logger.error(
                         f"WebSocket session failed: {e}",
                         extra=self._build_log_context(),
-                        exc_info=True
+                        exc_info=True,
                     )
                     raise
                 finally:
@@ -649,17 +629,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED
-            logger.error(
-                f"Connection failed: {e}",
-                extra=self._build_log_context()
-            )
+            logger.error(f"Connection failed: {e}", extra=self._build_log_context())
             raise APIConnectionError(f"Failed to connect to TTS WebSocket: {e}") from e
         except Exception as e:
             self._connection_state = ConnectionState.FAILED
             logger.error(
                 f"Unexpected error in WebSocket session: {e}",
                 extra=self._build_log_context(),
-                exc_info=True
+                exc_info=True,
             )
             raise APIStatusError(f"TTS WebSocket session failed: {e}") from e
         finally:
@@ -681,14 +658,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not msg_type:
                 logger.warning(
                     "Received message without type field",
-                    extra={**self._build_log_context(), "data": resp}
+                    extra={**self._build_log_context(), "data": resp},
                 )
                 return True
 
-            logger.debug(
-                f"Processing message type: {msg_type}",
-                extra=self._build_log_context()
-            )
+            logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
             if msg_type == "audio":
                 return await self._handle_audio_message(resp, output_emitter)
@@ -698,37 +672,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             elif msg_type == "event":
                 return await self._handle_event_message(resp, output_emitter)
             else:
-                logger.debug(
-                    f"Unknown message type: {msg_type}",
-                    extra=self._build_log_context()
-                )
+                logger.debug(f"Unknown message type: {msg_type}", extra=self._build_log_context())
                 return True
 
         except json.JSONDecodeError as e:
             logger.warning(
                 f"Invalid JSON in WebSocket message: {e}",
-                extra={**self._build_log_context(), "raw_data": msg_data[:200]}
+                extra={**self._build_log_context(), "raw_data": msg_data[:200]},
             )
             return True  # Continue processing
         except Exception as e:
             logger.error(
                 f"Error processing WebSocket message: {e}",
                 extra=self._build_log_context(),
-                exc_info=True
+                exc_info=True,
             )
             raise APIStatusError(f"Message processing error: {e}") from e
 
-    async def _handle_audio_message(
-        self, resp: dict, output_emitter: tts.AudioEmitter
-    ) -> bool:
+    async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
         try:
             audio_data = resp.get("data", {}).get("audio", "")
             if not audio_data:
-                logger.debug(
-                    "Received empty audio data",
-                    extra=self._build_log_context()
-                )
+                logger.debug("Received empty audio data", extra=self._build_log_context())
                 return True
 
             audio_bytes = base64.b64decode(audio_data)
@@ -737,19 +703,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             return True
 
         except Exception as e:  # base64 decode error
-            logger.error(
-                f"Invalid base64 audio data: {e}",
-                extra=self._build_log_context()
-            )
+            logger.error(f"Invalid base64 audio data: {e}", extra=self._build_log_context())
             # Don't stop processing for audio decode errors
             return True
-        except Exception as e:
-            logger.error(
-                f"Error processing audio message: {e}",
-                extra=self._build_log_context(),
-                exc_info=True
-            )
-            raise
 
     async def _handle_error_message(self, resp: dict) -> None:
         """Handle error messages from the API."""
@@ -762,8 +718,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             extra={
                 **self._build_log_context(),
                 "error_code": error_code,
-                "error_message": error_msg
-            }
+                "error_message": error_msg,
+            },
         )
 
         # Determine if error is recoverable based on error code/type
@@ -773,30 +729,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         if is_recoverable:
             raise APIConnectionError(f"Recoverable TTS API error: {error_msg}")
         else:
-            raise APIStatusError(
-                message=f"TTS API error: {error_msg}",
-                status_code=500
-            )
+            raise APIStatusError(message=f"TTS API error: {error_msg}", status_code=500)
 
-    async def _handle_event_message(
-        self, resp: dict, output_emitter: tts.AudioEmitter
-    ) -> bool:
+    async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle event messages from the API."""
         event_data = resp.get("data", {})
         event_type = event_data.get("event_type")
 
         if event_type == "final":
-            logger.debug(
-                "Generation complete event received",
-                extra=self._build_log_context()
-            )
+            logger.debug("Generation complete event received", extra=self._build_log_context())
             output_emitter.end_input()
             return False  # Stop processing
         else:
-            logger.debug(
-                f"Unknown event type: {event_type}",
-                extra=self._build_log_context()
-            )
+            logger.debug(f"Unknown event type: {event_type}", extra=self._build_log_context())
             return True
 
     def _build_log_context(self) -> dict:
@@ -810,16 +755,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def aclose(self) -> None:
         """Close the stream and cleanup resources."""
-        logger.debug(
-            "Starting TTS stream cleanup",
-            extra=self._build_log_context()
-        )
+        logger.debug("Starting TTS stream cleanup", extra=self._build_log_context())
 
         self._connection_state = ConnectionState.DISCONNECTED
 
         # Cancel running tasks first
         tasks_to_cancel = []
-        for task_attr in ['_send_task', '_recv_task']:
+        for task_attr in ["_send_task", "_recv_task"]:
             task = getattr(self, task_attr, None)
             if task and not task.done():
                 tasks_to_cancel.append(task)
@@ -830,49 +772,30 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
             except Exception as e:
-                logger.warning(
-                    f"Error cancelling tasks: {e}",
-                    extra=self._build_log_context()
-                )
+                logger.warning(f"Error cancelling tasks: {e}", extra=self._build_log_context())
 
         # Close WebSocket connection
         if self._ws_conn and not self._ws_conn.closed:
             try:
                 await self._ws_conn.close()
-                logger.debug(
-                    "WebSocket connection closed",
-                    extra=self._build_log_context()
-                )
+                logger.debug("WebSocket connection closed", extra=self._build_log_context())
             except Exception as e:
-                logger.warning(
-                    f"Error closing WebSocket: {e}",
-                    extra=self._build_log_context()
-                )
+                logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
 
         # Close channels
-        for channel_name, channel in [
-            ("segments", self._segments_ch),
-            ("input", self._input_ch)
-        ]:
+        for channel_name, channel in [("segments", self._segments_ch), ("input", self._input_ch)]:
             try:
-                if hasattr(channel, 'closed') and not channel.closed:
-                    if hasattr(channel, 'close'):
+                if hasattr(channel, "closed") and not channel.closed:
+                    if hasattr(channel, "close"):
                         channel.close()
-                    logger.debug(
-                        f"{channel_name} channel closed",
-                        extra=self._build_log_context()
-                    )
+                    logger.debug(f"{channel_name} channel closed", extra=self._build_log_context())
             except Exception as e:
                 logger.warning(
-                    f"Error closing {channel_name} channel: {e}",
-                    extra=self._build_log_context()
+                    f"Error closing {channel_name} channel: {e}", extra=self._build_log_context()
                 )
 
         # Call parent cleanup
         try:
             await super().aclose()
         except Exception as e:
-            logger.warning(
-                f"Error in parent cleanup: {e}",
-                extra=self._build_log_context()
-            )
+            logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())

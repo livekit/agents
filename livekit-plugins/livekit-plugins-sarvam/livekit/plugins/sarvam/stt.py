@@ -93,13 +93,9 @@ class SarvamSTTOptions:
                 self.streaming_url = streaming_url
 
 
-def _get_option_value(
-    default_value: str, override_value: NotGivenOr[str]
-) -> str | NotGiven:
+def _get_option_value(default_value: str, override_value: NotGivenOr[str]) -> str | NotGiven:
     """Helper to get option value with NOT_GIVEN handling."""
-    return (
-        default_value if isinstance(override_value, type(NOT_GIVEN)) else override_value
-    )
+    return default_value if isinstance(override_value, type(NOT_GIVEN)) else override_value
 
 
 def _get_urls_for_model(model: str) -> tuple[str, str]:
@@ -119,9 +115,7 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
 
 def _calculate_audio_duration(
     buffer: AudioBuffer,
-) -> (
-    float
-):  # TODO: Copied from livekit/agents/utils/audio.py, check if it can be reused
+) -> float:  # TODO: Copied from livekit/agents/utils/audio.py, check if it can be reused
     """Calculate audio duration from buffer."""
     try:
         if isinstance(buffer, list):
@@ -329,20 +323,24 @@ class STT(stt.STT):
         """Create a streaming transcription session."""
         opts_language = _get_option_value(self._opts.language, language)
         opts_model = _get_option_value(self._opts.model, model)
-        opts_prompt = _get_option_value(self._opts.prompt or "", prompt)
 
         if not isinstance(opts_language, str):
             opts_language = self._opts.language
         if not isinstance(opts_model, str):
             opts_model = self._opts.model
-        if not isinstance(opts_prompt, str) and opts_prompt is not None:
-            opts_prompt = self._opts.prompt
+
+        # Handle prompt conversion from NotGiven to None
+        final_prompt: str | None
+        if isinstance(prompt, str):
+            final_prompt = prompt
+        else:
+            final_prompt = self._opts.prompt
 
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
             language=opts_language,
             model=opts_model,
-            prompt=opts_prompt,
+            prompt=final_prompt,
         )
 
         # Create a fresh session for this stream to avoid conflicts
@@ -409,9 +407,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
-        self._logger.debug(
-            "Starting stream cleanup", extra={"session_id": self._session_id}
-        )
+        self._logger.debug("Starting stream cleanup", extra={"session_id": self._session_id})
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.DISCONNECTED
@@ -436,9 +432,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             if self._ws and not self._ws.closed:
                 await self._ws.close()
-                self._logger.debug(
-                    "WebSocket closed", extra={"session_id": self._session_id}
-                )
+                self._logger.debug("WebSocket closed", extra={"session_id": self._session_id})
         except Exception as e:
             self._logger.warning(
                 f"Error closing WebSocket: {e}", extra={"session_id": self._session_id}
@@ -458,9 +452,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             if self._session and not self._session.closed:
                 await self._session.close()
-                self._logger.debug(
-                    "HTTP session closed", extra={"session_id": self._session_id}
-                )
+                self._logger.debug("HTTP session closed", extra={"session_id": self._session_id})
         except Exception as e:
             self._logger.warning(
                 f"Error closing session: {e}", extra={"session_id": self._session_id}
@@ -469,9 +461,7 @@ class SpeechStream(stt.SpeechStream):
             # Clear reference to help with garbage collection
             pass  # Session reference will be cleared when object is destroyed
 
-    def update_options(
-        self, *, language: str, model: str, prompt: str | None = None
-    ) -> None:
+    def update_options(self, *, language: str, model: str, prompt: str | None = None) -> None:
         """Update streaming options."""
         if not language or not language.strip():
             raise ValueError("Language cannot be empty")
@@ -562,9 +552,7 @@ class SpeechStream(stt.SpeechStream):
         """Run a single WebSocket connection attempt."""
         # Check if session is still valid
         if self._session.closed:
-            raise APIConnectionError(
-                "Session is closed, cannot establish WebSocket connection"
-            )
+            raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTING
@@ -641,9 +629,7 @@ class SpeechStream(stt.SpeechStream):
                         if isinstance(exc, BaseException):
                             raise exc
                         else:
-                            raise RuntimeError(
-                                f"Task failed with non-BaseException: {exc}"
-                            )
+                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
 
         finally:
             # Clean up tasks
@@ -664,6 +650,7 @@ class SpeechStream(stt.SpeechStream):
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
         import base64
+
         import numpy as np
 
         # Audio buffering for chunked sending
@@ -688,14 +675,10 @@ class SpeechStream(stt.SpeechStream):
                         # Check if we have enough data for a chunk
                         while len(audio_buffer) >= chunk_size:
                             # Convert to Int16Array
-                            chunk_data = np.array(
-                                audio_buffer[:chunk_size], dtype=np.int16
-                            )
+                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
 
                             # Convert to base64
-                            base64_audio = base64.b64encode(
-                                chunk_data.tobytes()
-                            ).decode("utf-8")
+                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
 
                             # Send audio in the required format
                             audio_message = {
@@ -794,9 +777,7 @@ class SpeechStream(stt.SpeechStream):
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     error_msg = f"WebSocket error: {ws.exception()}"
-                    self._logger.error(
-                        error_msg, extra={"session_id": self._session_id}
-                    )
+                    self._logger.error(error_msg, extra={"session_id": self._session_id})
                     raise APIConnectionError(error_msg)
 
                 elif msg.type in (
@@ -868,9 +849,7 @@ class SpeechStream(stt.SpeechStream):
         request_id = transcript_data.get("request_id", "")
 
         if not transcript_text:
-            self._logger.debug(
-                "Received empty transcript", extra={"session_id": self._session_id}
-            )
+            self._logger.debug("Received empty transcript", extra={"session_id": self._session_id})
             return
 
         try:
@@ -946,13 +925,9 @@ class SpeechStream(stt.SpeechStream):
             if signal_type == "START_SPEECH":
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH
-                    )
+                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     self._event_ch.send_nowait(start_event)
-                    self._logger.debug(
-                        "Speech started", extra={"session_id": self._session_id}
-                    )
+                    self._logger.debug("Speech started", extra={"session_id": self._session_id})
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
