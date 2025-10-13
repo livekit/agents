@@ -56,6 +56,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .transcription.filters import TextTransforms
 
 
 @dataclass
@@ -82,6 +83,7 @@ class VoiceOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
+    tts_text_transforms: Sequence[TextTransforms] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -137,6 +139,9 @@ class VoiceActivityVideoSampler:
         return False
 
 
+DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -161,6 +166,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         resume_false_interruption: bool = True,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -234,8 +240,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``. When NOT_GIVEN, it's disabled.
-            preemptive_generation (bool): Whether to use preemptive generation.
-                Default ``False``.
+            tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
+                to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
+                Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
             preemptive_generation (bool):
                 Whether to speculatively begin LLM and TTS requests before an end-of-turn is
                 detected. When True, the agent sends inference calls as soon as a user
@@ -276,6 +283,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             false_interruption_timeout=false_interruption_timeout,
             resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
+            tts_text_transforms=(
+                tts_text_transforms
+                if is_given(tts_text_transforms)
+                else DEFAULT_TTS_TEXT_TRANSFORMS
+            ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
@@ -284,13 +296,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
-            stt = inference.STT(model=stt)
+            stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM(model=llm)
+            llm = inference.LLM.from_model_string(llm)
 
         if isinstance(tts, str):
-            tts = inference.TTS(model=tts)
+            tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt or None
         self._vad = vad or None
@@ -648,8 +660,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
 
-    def shutdown(self) -> None:
-        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
+    def shutdown(self, *, drain: bool = True) -> None:
+        self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
@@ -668,6 +680,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             self._closing = True
+            self._cancel_user_away_timer()
 
             if self._activity is not None:
                 if not drain:
@@ -711,10 +724,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-            if self._room_io:
-                await self._room_io.aclose()
-                self._room_io = None
-
             self._started = False
             if self._session_span:
                 self._session_span.end()
@@ -722,12 +731,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
-            self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            # close room io after close event is emitted
+            if self._room_io:
+                await self._room_io.aclose()
+                self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 

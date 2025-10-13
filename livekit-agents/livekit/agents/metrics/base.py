@@ -5,6 +5,11 @@ from typing import Literal, Union
 from pydantic import BaseModel
 
 
+class Metadata(BaseModel):
+    model_name: str | None = None
+    model_provider: str | None = None
+
+
 class LLMMetrics(BaseModel):
     type: Literal["llm_metrics"] = "llm_metrics"
     label: str
@@ -18,8 +23,8 @@ class LLMMetrics(BaseModel):
     prompt_cached_tokens: int
     total_tokens: int
     tokens_per_second: float
-    model: str
     speech_id: str | None = None
+    metadata: Metadata | None = None
 
 
 class STTMetrics(BaseModel):
@@ -33,6 +38,7 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    metadata: Metadata | None = None
 
 
 class TTSMetrics(BaseModel):
@@ -48,6 +54,7 @@ class TTSMetrics(BaseModel):
     streamed: bool
     segment_id: str | None = None
     speech_id: str | None = None
+    metadata: Metadata | None = None
 
 
 class VADMetrics(BaseModel):
@@ -57,6 +64,7 @@ class VADMetrics(BaseModel):
     idle_time: float
     inference_duration_total: float
     inference_count: int
+    metadata: Metadata | None = None
 
 
 class EOUMetrics(BaseModel):
@@ -80,6 +88,8 @@ class EOUMetrics(BaseModel):
 
     speech_id: str | None = None
 
+    metadata: Metadata | None = None
+
 
 class RealtimeModelMetrics(BaseModel):
     class CachedTokenDetails(BaseModel):
@@ -101,7 +111,6 @@ class RealtimeModelMetrics(BaseModel):
 
     type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
     label: str
-    model: str
     request_id: str
     timestamp: float
     """The timestamp of the response creation."""
@@ -123,6 +132,7 @@ class RealtimeModelMetrics(BaseModel):
     """Details about the input tokens used in the Response."""
     output_token_details: OutputTokenDetails
     """Details about the output tokens used in the Response."""
+    metadata: Metadata | None = None
 
 
 AgentMetrics = Union[

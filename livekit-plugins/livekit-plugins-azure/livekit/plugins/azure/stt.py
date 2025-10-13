@@ -147,6 +147,14 @@ class STT(stt.STT):
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Azure STT"
+
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,

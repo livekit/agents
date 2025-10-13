@@ -142,6 +142,14 @@ class VAD(agents.vad.VAD):
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
 
+    @property
+    def model(self) -> str:
+        return "silero"
+
+    @property
+    def provider(self) -> str:
+        return "ONNX"
+
     def stream(self) -> VADStream:
         """
         Create a new VADStream for processing audio data.

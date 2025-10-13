@@ -20,7 +20,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import aiohttp
 
@@ -73,6 +73,9 @@ class AudioFormat(str, Enum):
     pcm = "pcm"
 
 
+ModelVersion = Literal["1", "2"]
+
+
 DEFAULT_HEADERS = {
     "X-Hume-Client-Name": "livekit",
     "X-Hume-Client-Version": __version__,
@@ -89,6 +92,7 @@ class _TTSOptions:
     api_key: str
     base_url: str
     voice: VoiceById | VoiceByName | None
+    model_version: ModelVersion | None
     description: str | None
     speed: float | None
     trailing_silence: float | None
@@ -106,6 +110,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         voice: VoiceById | VoiceByName | None = DEFAULT_VOICE,
+        model_version: ModelVersion | None = "1",
         description: str | None = None,
         speed: float | None = None,
         trailing_silence: float | None = None,
@@ -121,10 +126,12 @@ class TTS(tts.TTS):
         Args:
             api_key: Hume AI API key. If not provided, will look for HUME_API_KEY environment
                 variable.
-            voice: A voice from the voice library specifed by name or id.
+            voice: A voice from the voice library specified by name or id.
+            model_version: Specifies which version of Octave to use. See Hume's documentation for
+                details on model version differences: https://dev.hume.ai/docs/text-to-speech-tts/overview.
             description: Natural language instructions describing how the synthesized speech
                 should sound (≤1000 characters).
-            speed: Speed multiplier for the synthesized speech (≥0.25, ≤3.0, default: 1.0).
+            speed: Speed multiplier for the synthesized speech (≥0.5, ≤2.0, default: 1.0).
             trailing_silence: Duration of trailing silence (in seconds) to add to each utterance
                 (≥0, ≤5.0, default: 0.35).
             context: Optional context for synthesis, either as text or list of utterances.
@@ -157,6 +164,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             api_key=key,
             voice=voice,
+            model_version=model_version,
             description=description,
             speed=speed,
             trailing_silence=trailing_silence,
@@ -166,6 +174,14 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
+
+    @property
+    def model(self) -> str:
+        return "Octave"
+
+    @property
+    def provider(self) -> str:
+        return "Hume"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -187,10 +203,10 @@ class TTS(tts.TTS):
         """Update TTS options used for all future synthesis (until updated again)
 
         Args:
-            voice: A voice from the voice library specifed by name or id.
+            voice: A voice from the voice library specified by name or id.
             description: Natural language instructions describing how the synthesized speech
                 should sound (≤1000 characters).
-            speed: Speed multiplier for the synthesized speech (≥0.25, ≤3.0, default: 1.0).
+            speed: Speed multiplier for the synthesized speech (≥0.5, ≤2.0, default: 1.0).
             trailing_silence: Duration of trailing silence (in seconds) to add to each utterance.
             context: Optional context for synthesis, either as text or list of utterances.
             instant_mode: Whether to use instant mode.
@@ -239,6 +255,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         payload: dict[str, Any] = {
             "utterances": [utterance],
+            "version": self._opts.model_version,
             "strip_headers": True,
             "instant_mode": self._opts.instant_mode,
             "format": {"type": self._opts.audio_format.value},
