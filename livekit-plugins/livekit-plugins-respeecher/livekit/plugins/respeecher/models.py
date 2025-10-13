@@ -8,7 +8,6 @@ TTSModels = Literal[
 
 TTSEncoding = Literal[
     "pcm_s16le",
-    "pcm_f32le",
 ]
 
 
