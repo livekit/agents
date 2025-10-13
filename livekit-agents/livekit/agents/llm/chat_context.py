@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypeAlias
+from typing_extensions import TypeAlias, TypedDict
 
 from livekit import rtc
 
@@ -62,7 +62,7 @@ class ImageContent(BaseModel):
     # With an external URL
     chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
-    """  # noqa: E501
+    """
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
     """
@@ -105,6 +105,49 @@ class AudioContent(BaseModel):
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 
+# The metrics are stored in a dict, since some fields may not be relevant
+# in certain context (e.g., text-only mode or when using a speech-to-speech model).
+class MetricsReport(TypedDict, total=False):
+    started_speaking_at: float
+    stopped_speaking_at: float
+
+    transcription_delay: float
+    """Time taken to obtain the transcript after the end of the user's speech
+
+    User `ChatMessage` only
+    """
+
+    end_of_turn_delay: float
+    """Amount of time between the end of speech and the decision to end the user's turn
+
+    User `ChatMessage` only
+    """
+
+    on_user_turn_completed_delay: float
+    """Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
+
+    User `ChatMessage` only
+    """
+
+    llm_node_ttft: float
+    """Time taken for the `llm_node` to return the first token
+
+    Assistant `ChatMessage` only
+    """
+
+    tts_node_ttfb: float
+    """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
+
+    Assistant `ChatMessage` only
+    """
+
+    e2e_latency: float
+    """Time from when the user finished speaking to when the agent began responding
+
+    Assistant `ChatMessage` only
+    """
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
@@ -112,8 +155,10 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     transcript_confidence: float | None = None
-    hash: bytes | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    metrics: MetricsReport = Field(default_factory=MetricsReport)
     created_at: float = Field(default_factory=time.time)
+    hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
 
     @property
     def text_content(self) -> str | None:
@@ -150,19 +195,16 @@ class FunctionCallOutput(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-""""
 class AgentHandoff(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
     old_agent_id: str | None
     new_agent_id: str
-    old_agent: Agent | None = Field(exclude=True)
-    new_agent: Agent | None = Field(exclude=True)
     created_at: float = Field(default_factory=time.time)
-"""
+
 
 ChatItem = Annotated[
-    Union[ChatMessage, FunctionCall, FunctionCallOutput], Field(discriminator="type")
+    Union[ChatMessage, FunctionCall, FunctionCallOutput, AgentHandoff], Field(discriminator="type")
 ]
 
 
@@ -297,7 +339,7 @@ class ChatContext:
         )
 
         new_items = self._items[-max_items:]
-        # chat ctx shouldn't start with function_call or function_call_output
+        # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
             "function_call",
             "function_call_output",

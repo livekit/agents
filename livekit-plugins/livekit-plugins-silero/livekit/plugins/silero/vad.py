@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
 
@@ -142,6 +141,14 @@ class VAD(agents.vad.VAD):
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
 
+    @property
+    def model(self) -> str:
+        return "silero"
+
+    @property
+    def provider(self) -> str:
+        return "ONNX"
+
     def stream(self) -> VADStream:
         """
         Create a new VADStream for processing audio data.
@@ -206,9 +213,6 @@ class VADStream(agents.vad.VADStream):
         super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
-
-        self._executor = ThreadPoolExecutor(max_workers=1)
-        self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
         self._exp_filter = utils.ExpFilter(alpha=0.35)
 
         self._input_sample_rate = 0
@@ -351,9 +355,7 @@ class VADStream(agents.vad.VADStream):
                 )
 
                 # run the inference
-                p = await self._loop.run_in_executor(
-                    self._executor, self._model, inference_f32_data
-                )
+                p = await self._loop.run_in_executor(None, self._model, inference_f32_data)
                 p = self._exp_filter.apply(exp=1.0, sample=p)
 
                 window_duration = self._model.window_size_samples / self._opts.sample_rate

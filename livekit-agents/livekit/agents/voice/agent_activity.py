@@ -13,6 +13,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
+from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
@@ -76,6 +77,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 @dataclass
 class _PreemptiveGeneration:
     speech_handle: SpeechHandle
+    user_message: llm.ChatMessage
     info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
     tools: list[llm.FunctionTool | llm.RawFunctionTool]
@@ -961,6 +963,11 @@ class AgentActivity(RecognitionHooks):
                     await asyncio.sleep(
                         self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
                     )
+                    # check again if speech is done after sleep delay
+                    if speech.done():
+                        # skip done speech (interrupted during delay)
+                        self._current_speech = None
+                        continue
                 speech._authorize_generation()
                 await speech._wait_for_generation()
                 self._current_speech = None
@@ -1135,7 +1142,7 @@ class AgentActivity(RecognitionHooks):
 
     # region recognition hooks
 
-    def on_start_of_speech(self, ev: vad.VADEvent) -> None:
+    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
 
         if self._false_interruption_timer:
@@ -1143,10 +1150,13 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
 
-    def on_end_of_speech(self, ev: vad.VADEvent) -> None:
+    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
+        speech_end_time = time.time()
+        if ev:
+            speech_end_time = speech_end_time - ev.silence_duration
         self._session._update_user_state(
             "listening",
-            last_speaking_time=time.time() - ev.silence_duration,
+            last_speaking_time=speech_end_time,
         )
 
         if (
@@ -1224,10 +1234,13 @@ class AgentActivity(RecognitionHooks):
             transcript_confidence=info.transcript_confidence,
         )
         chat_ctx = self._agent.chat_ctx.copy()
+        speech_handle = self._generate_reply(
+            user_message=user_message, chat_ctx=chat_ctx, schedule_speech=False
+        )
+
         self._preemptive_generation = _PreemptiveGeneration(
-            speech_handle=self._generate_reply(
-                user_message=user_message, chat_ctx=chat_ctx, schedule_speech=False
-            ),
+            speech_handle=speech_handle,
+            user_message=user_message,
             info=info,
             chat_ctx=chat_ctx.copy(),
             tools=self.tools.copy(),
@@ -1343,7 +1356,7 @@ class AgentActivity(RecognitionHooks):
         # the user can edit it for the current generation, but changes will not be kept inside the
         # Agent.chat_ctx
         temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
-        start_time = time.time()
+        start_time = time.perf_counter()
         try:
             await self._agent.on_user_turn_completed(
                 temp_mutable_chat_ctx, new_message=user_message
@@ -1354,7 +1367,7 @@ class AgentActivity(RecognitionHooks):
             logger.exception("error occured during on_user_turn_completed")
             return
 
-        callback_duration = time.time() - start_time
+        on_user_turn_completed_delay = time.perf_counter() - start_time
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -1372,6 +1385,24 @@ class AgentActivity(RecognitionHooks):
                 self._session._conversation_item_added(user_message)
             return
 
+        metrics_report: llm.MetricsReport = {}
+        if info.started_speaking_at is not None:
+            metrics_report["started_speaking_at"] = info.started_speaking_at
+
+        if info.stopped_speaking_at is not None:
+            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
+
+        if info.transcription_delay is not None:
+            metrics_report["transcription_delay"] = info.transcription_delay
+
+        if info.end_of_turn_delay is not None:
+            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
+
+        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
+
+        if user_message is not None:
+            user_message.metrics = metrics_report
+
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
             # make sure the on_user_turn_completed didn't change some request parameters
@@ -1383,6 +1414,10 @@ class AgentActivity(RecognitionHooks):
                 and preemptive.tool_choice == self._tool_choice
             ):
                 speech_handle = preemptive.speech_handle
+
+                # preemptive generation is using another ChatMessage created outside of the on_end_of_turn callback,
+                # inject the metrics here.
+                preemptive.user_message.metrics = metrics_report
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
                     "using preemptive generation",
@@ -1410,13 +1445,21 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt()
 
+        metadata: Metadata | None = None
+        if isinstance(self.turn_detection, str):
+            metadata = Metadata(model_name="unknown", model_provider=self.turn_detection)
+        elif self.turn_detection is not None:
+            metadata = Metadata(
+                model_name=self.turn_detection.model, model_provider=self.turn_detection.provider
+            )
+
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
-            end_of_utterance_delay=info.end_of_utterance_delay,
-            transcription_delay=info.transcription_delay,
-            on_user_turn_completed_delay=callback_duration,
+            end_of_utterance_delay=info.end_of_turn_delay or 0.0,
+            transcription_delay=info.transcription_delay or 0.0,
+            on_user_turn_completed_delay=on_user_turn_completed_delay,
             speech_id=speech_handle.id,
-            last_speaking_time=info.last_speaking_time,
+            metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
@@ -1482,6 +1525,7 @@ class AgentActivity(RecognitionHooks):
                     node=self._agent.tts_node,
                     input=audio_source,
                     model_settings=model_settings,
+                    text_transforms=self._session.options.tts_text_transforms,
                 )
                 tasks.append(tts_task)
                 if (
@@ -1570,7 +1614,8 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
-        _tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
+        _previous_user_metrics: llm.MetricsReport | None = None,
+        _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
         from .agent import ModelSettings
 
@@ -1578,6 +1623,7 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
+
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
@@ -1620,9 +1666,8 @@ class AgentActivity(RecognitionHooks):
         if audio_output is not None:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node,
-                input=tts_text_input,
-                model_settings=model_settings,
+                node=self._agent.tts_node, input=tts_text_input, model_settings=model_settings,
+                text_transforms=self._session.options.tts_text_transforms,
             )
             tasks.append(tts_task)
             if (
@@ -1638,9 +1683,12 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
 
         # add new message to chat context if the speech is scheduled
+
+        user_metrics: llm.MetricsReport | None = _previous_user_metrics
         if new_message is not None and speech_handle.scheduled:
             self._agent._chat_ctx.insert(new_message)
             self._session._conversation_item_added(new_message)
+            user_metrics = new_message.metrics
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -1672,7 +1720,12 @@ class AgentActivity(RecognitionHooks):
             )
             tasks.append(text_forward_task)
 
+        started_speaking_at: float | None = None
+        stopped_speaking_at: float | None = None
+
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            nonlocal started_speaking_at
+            started_speaking_at = time.time()
             self._session._update_agent_state("speaking")
 
         audio_out: _AudioOutput | None = None
@@ -1731,15 +1784,40 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
+        stopped_speaking_at = time.time()
+        assistant_metrics: llm.MetricsReport = {}
+
+        if llm_gen_data.ttft is not None:
+            assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
+
+        if tts_gen_data and tts_gen_data.ttfb is not None:
+            assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+
+        if stopped_speaking_at and started_speaking_at:
+            assistant_metrics["started_speaking_at"] = started_speaking_at
+            assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+            if (
+                user_metrics
+                and "stopped_speaking_at" in user_metrics
+                and "started_speaking_at" in user_metrics
+            ):
+                assistant_metrics["e2e_latency"] = (
+                    started_speaking_at - user_metrics["stopped_speaking_at"]
+                )
+
+        if generated_msg and assistant_metrics:
+            generated_msg.metrics = assistant_metrics
+
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
 
         # add the tools messages that triggers this reply to the chat context
-        if _tools_messages:
-            for msg in _tools_messages:
+        if _previous_tools_messages:
+            for msg in _previous_tools_messages:
                 # reset the created_at to the reply start time
                 msg.created_at = reply_started_at
-            self._agent._chat_ctx.insert(_tools_messages)
-            self._session._tool_items_added(_tools_messages)
+            self._agent._chat_ctx.insert(_previous_tools_messages)
+            self._session._tool_items_added(_previous_tools_messages)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1783,6 +1861,7 @@ class AgentActivity(RecognitionHooks):
             )
 
         if generated_msg:
+            chat_ctx.insert(generated_msg)
             self._agent._chat_ctx.insert(generated_msg)
             self._session._conversation_item_added(generated_msg)
             current_span.set_attribute(
@@ -1866,7 +1945,10 @@ class AgentActivity(RecognitionHooks):
                             if draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
-                        _tools_messages=tool_messages,
+                        # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
+                        # tool response generation
+                        _previous_user_metrics=user_metrics if not generated_msg else None,
+                        _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",
@@ -2015,6 +2097,7 @@ class AgentActivity(RecognitionHooks):
                                 node=self._agent.tts_node,
                                 input=tts_text_input,
                                 model_settings=model_settings,
+                                text_transforms=self._session.options.tts_text_transforms,
                             )
 
                             if (

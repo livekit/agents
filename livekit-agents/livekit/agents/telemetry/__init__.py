@@ -1,5 +1,5 @@
 from . import http_server, metrics, trace_types, utils
-from .traces import set_tracer_provider, tracer
+from .traces import set_tracer_provider, tracer, _setup_cloud_tracer, _upload_session_report
 
 __all__ = [
     "tracer",
@@ -8,6 +8,8 @@ __all__ = [
     "http_server",
     "set_tracer_provider",
     "utils",
+    "_setup_cloud_tracer",
+    "_upload_session_report",
 ]
 
 # Cleanup docs of unexported modules
