@@ -97,6 +97,7 @@ class TaskOrchestrator(AgentTask[ResultT]):
                     self.chat_ctx.items[-1]
                 )  # append last said message triggering the regression
                 self._current_agent_task._chat_ctx.items = chat_items
+
             current_tools = self._current_agent_task.tools
             current_tools.append(self._out_of_scope_func)
             await self._current_agent_task.update_tools(current_tools)
@@ -104,8 +105,7 @@ class TaskOrchestrator(AgentTask[ResultT]):
             result = await self._current_agent_task
 
             if result is not None:
-                self._task_results[self._current_task] = result
-
+                self._task_results[self._current_task.id] = result
                 if self._current_task not in self._visited_tasks:
                     self._visited_tasks[self._current_task.id] = self._current_task
 
@@ -125,8 +125,9 @@ class TaskOrchestrator(AgentTask[ResultT]):
             ],
         ):
             if task_id in self._visited_tasks.keys():
-                self._current_agent_task.complete(None)
-                self._task_stack.append(self._current_task)
+                if not self._current_agent_task.done():
+                    self._current_agent_task.complete(None)
+                    self._task_stack.append(self._current_task)
                 self._task_stack.append(self._visited_tasks[task_id])
                 return
             else:
