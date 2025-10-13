@@ -90,7 +90,7 @@ async def collect_digits(
     *,
     prompt: str,
     num_digits: int,
-    confirmation: bool = False,
+    confirmation: bool = True,
 ) -> str:
     while True:
         try:
@@ -195,7 +195,6 @@ class RootIVRAgent(Agent):
                     " Say the digits clearly or use the keypad."
                 ),
                 num_digits=6,
-                confirmation=False,
             )
             candidate = f"ACCT-{digits}"
             logger.debug("account candidate: %s", candidate)
@@ -220,7 +219,6 @@ class RootIVRAgent(Agent):
                     " If you are unsure, check the LiveKit Cloud dashboard."
                 ),
                 num_digits=6,
-                confirmation=False,
             )
             candidate = f"PRJ-{digits}"
             if not self._dashboard.project_exists(self._state.account_id, candidate):
@@ -854,7 +852,6 @@ async def livekit_ivr_agent(ctx: JobContext) -> None:
     await session.start(
         agent=RootIVRAgent(dashboard=dashboard, state=state),
         room=ctx.room,
-        room_input_options=RoomInputOptions(audio_enabled=False),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
