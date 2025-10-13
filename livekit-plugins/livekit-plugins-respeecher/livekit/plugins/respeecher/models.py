@@ -26,14 +26,14 @@ class VoiceSettings:
 class Voice(dict):
     """Voice model for Respeecher - behaves like a dict with guaranteed `id` and optional `sampling_params`"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         if "id" not in self:
             raise ValueError("Voice must have an 'id' field")
 
     @property
     def id(self) -> str:
-        return self["id"]
+        return str(self["id"])
 
     @property
     def sampling_params(self) -> Optional[SamplingParams]:

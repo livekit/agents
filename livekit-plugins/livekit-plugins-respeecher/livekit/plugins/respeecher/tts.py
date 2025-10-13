@@ -224,7 +224,7 @@ class ChunkedStream(tts.ChunkedStream):
             is_given(self._tts._opts.voice_settings)
             and self._tts._opts.voice_settings.sampling_params
         ):
-            json_data["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params
+            json_data["voice"]["sampling_params"] = self._tts._opts.voice_settings.sampling_params  # type: ignore[index]
 
         http_url = f"{self._tts._opts.base_url}{self._tts._opts.model}/tts/bytes"
 
@@ -275,14 +275,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         context_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=context_id,
-            sample_rate=self._tts._opts.sample_rate,
+            sample_rate=self._tts._opts.sample_rate,  # type: ignore[attr-defined]
             num_channels=1,
             stream=True,
             mime_type="audio/pcm",
         )
         output_emitter.start_segment(segment_id=context_id)
 
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()  # type: ignore[attr-defined]
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -298,20 +298,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "context_id": context_id,
                     "transcript": sent.token,
                     "voice": {
-                        "id": self._tts._opts.voice_id,
+                        "id": self._tts._opts.voice_id,  # type: ignore[attr-defined]
                     },
                     "continue": True,
                     "output_format": {
-                        "encoding": self._tts._opts.encoding,
-                        "sample_rate": self._tts._opts.sample_rate,
+                        "encoding": self._tts._opts.encoding,  # type: ignore[attr-defined]
+                        "sample_rate": self._tts._opts.sample_rate,  # type: ignore[attr-defined]
                     },
                 }
                 if (
-                    is_given(self._tts._opts.voice_settings)
-                    and self._tts._opts.voice_settings.sampling_params
+                    is_given(self._tts._opts.voice_settings)  # type: ignore[attr-defined]
+                    and self._tts._opts.voice_settings.sampling_params  # type: ignore[attr-defined]
                 ):
                     generate_request["voice"]["sampling_params"] = (
-                        self._tts._opts.voice_settings.sampling_params
+                        self._tts._opts.voice_settings.sampling_params  # type: ignore[attr-defined]
                     )
 
                 self._mark_started()
@@ -322,20 +322,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "context_id": context_id,
                 "transcript": "",
                 "voice": {
-                    "id": self._tts._opts.voice_id,
+                    "id": self._tts._opts.voice_id,  # type: ignore[attr-defined]
                 },
                 "continue": False,
                 "output_format": {
-                    "encoding": self._tts._opts.encoding,
-                    "sample_rate": self._tts._opts.sample_rate,
+                    "encoding": self._tts._opts.encoding,  # type: ignore[attr-defined]
+                    "sample_rate": self._tts._opts.sample_rate,  # type: ignore[attr-defined]
                 },
             }
             if (
-                is_given(self._tts._opts.voice_settings)
-                and self._tts._opts.voice_settings.sampling_params
+                is_given(self._tts._opts.voice_settings)  # type: ignore[attr-defined]
+                and self._tts._opts.voice_settings.sampling_params  # type: ignore[attr-defined]
             ):
-                end_request["voice"]["sampling_params"] = (
-                    self._tts._opts.voice_settings.sampling_params
+                end_request["voice"]["sampling_params"] = (  # type: ignore[index]
+                    self._tts._opts.voice_settings.sampling_params  # type: ignore[attr-defined]
                 )
             await ws.send_str(json.dumps(end_request))
 
@@ -378,7 +378,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:  # type: ignore[attr-defined]
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),
