@@ -381,9 +381,6 @@ class CloudAgentsTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="cloud agent operations")
 
     async def on_enter(self) -> None:
-        self.speak(
-            f"Cloud agent menu for {self.state.project_label}. Press nine to return to the main menu or zero to end the call."
-        )
         await self._loop()
 
     async def _loop(self) -> None:
@@ -505,9 +502,6 @@ class UsageBillingTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="usage and billing")
 
     async def on_enter(self) -> None:
-        self.speak(
-            f"Usage and billing for {self.state.project_label}. Press nine to return to the main menu or zero to end."
-        )
         await self._loop()
 
     async def _loop(self) -> None:
@@ -595,9 +589,6 @@ class TelephonyOpsTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="telephony operations")
 
     async def on_enter(self) -> None:
-        self.speak(
-            f"Telephony overview for {self.state.project_label}. Press nine to return or zero to end the call."
-        )
         await self._loop()
 
     async def _loop(self) -> None:
@@ -680,9 +671,6 @@ class PerformanceMetricsTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="performance metrics")
 
     async def on_enter(self) -> None:
-        self.speak(
-            f"Performance metrics for {self.state.project_label}. Press nine to return or zero to end."
-        )
         await self._loop()
 
     async def _loop(self) -> None:
@@ -765,9 +753,6 @@ class SupportServicesTask(BaseSubmenuTask):
         super().__init__(state=state, dashboard=dashboard, menu_name="support services")
 
     async def on_enter(self) -> None:
-        self.speak(
-            f"Support services for {self.state.project_label}. Press nine to return or zero to end."
-        )
         await self._loop()
 
     async def _loop(self) -> None:
