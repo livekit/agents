@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
-    AgentFalseInterruptionEvent,
     AgentSession,
     AgentTask,
     JobContext,
@@ -19,8 +18,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask, Task, TaskOrchestrator
 from livekit.agents.llm import function_tool
-from livekit.agents.types import NOT_GIVEN
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero
 
 
 @dataclass
@@ -29,11 +27,11 @@ class Userdata:
 
 
 def write_to_csv(filename: str, data: dict):
-    with open(filename, "w", newline="") as csvfile:
+    with open(filename, "a", newline="") as csvfile:
         fieldnames = data.keys()
         csv_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         if not os.path.exists(filename):
-            csv_writer.writeheader(data)
+            csv_writer.writeheader()
         csv_writer.writerow(data)
 
 
@@ -41,8 +39,9 @@ class ExperienceTask(AgentTask[str]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
+            You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             Record how many years of experience the candidate has and the descriptions of their previous jobs if any. There is no set required amount for this position.
-            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details.
+            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details. If the candidate wishes to change a previous answer, call out_of_scope.
             """,
         )
 
@@ -62,29 +61,29 @@ class ExperienceTask(AgentTask[str]):
         self.complete(experience_description)
 
 
-class CommuteTask(AgentTask[bool]):
+class CommuteTask(AgentTask[str]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
+            You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week.
-            Maintain a friendly disposition.
             """,
         )
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Gather the candidate's commute flexibility, specfically whether or not they are able to commute to the office.",
+            instructions="Gather the candidate's commute flexibility, specfically whether or not they are able to commute to the office. Be brief and to the point.",
             tool_choice="none",
         )
 
     @function_tool()
-    async def record_commute_flexibility(self, context: RunContext, can_commute: bool) -> None:
+    async def record_commute_flexibility(self, context: RunContext, commute_notes: str) -> None:
         """Call to record whether or not the candidate can commute to the office.
 
         Args:
-            can_commute (bool): If the candidate can commute or not
+            commute_notes (str): If the candidate can commute or not and additional notes about the candidate's commute flexibility
         """
-        self.complete(can_commute)
+        self.complete(commute_notes)
 
 
 class SurveyAgent(Agent):
@@ -110,12 +109,16 @@ class SurveyAgent(Agent):
             Task(lambda: CommuteTask(), id="commute_task", description="Asks about commute"),
             Task(lambda: GetEmailTask(), id="get_email_task", description="Collects email"),
         ]
-
         results = await TaskOrchestrator(tasks)
         # TaskOrchestrator returns a dictionary with Task IDs as the keys and the results as the values
         self.session.userdata = results
 
         write_to_csv(filename="results.csv", data=results)
+
+    async def on_exit(self) -> None:
+        await self.session.generate_reply(
+            instructions="The interview is now complete, alert the user and thank them for their time. They will hear back within 3 days."
+        )
 
 
 logger = logging.getLogger("SurveyAgent")
@@ -130,17 +133,12 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=Userdata(task_results={}),
-        llm=openai.LLM(model="gpt-4o"),
+        llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=cartesia.TTS(),
+        tts=openai.TTS(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
-
-    @session.on("agent_false_interruption")
-    def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
-        logger.info("false positive interruption, resuming")
-        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
 
     usage_collector = metrics.UsageCollector()
 
