@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 
 from livekit.agents import llm
+from livekit.agents.log import logger
 
 from .utils import group_tool_calls
 
@@ -34,7 +35,8 @@ def to_chat_ctx(
         elif msg.type == "function_call_output":
             role = "user"
         else:
-            raise ValueError(f"Unknown message type: {msg.type!r}")
+            logger.warning("Skipping unknown message type %r", msg.type)
+            continue
 
         # if the effective role changed, finalize the previous turn.
         if role != current_role:

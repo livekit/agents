@@ -321,28 +321,26 @@ class LLMStream(llm.LLMStream):
                 ),
             )
         elif "contentBlockStop" in chunk:
-            if self._tool_call_id is None:
-                logger.warning("aws bedrock llm: no tool call id in the response")
-                return None
-            if self._fnc_name is None:
-                logger.warning("aws bedrock llm: no function name in the response")
-                return None
-            if self._fnc_arg_parts is None:
-                logger.warning("aws bedrock llm: no function arguments in the response")
-                return None
-            chat_chunk = llm.ChatChunk(
-                id=request_id,
-                delta=llm.ChoiceDelta(
-                    role="assistant",
-                    tool_calls=[
-                        FunctionToolCall(
-                            arguments="".join(self._fnc_arg_parts),
-                            name=self._fnc_name,
-                            call_id=self._tool_call_id,
-                        ),
-                    ],
-                ),
-            )
-            self._tool_call_id = self._fnc_name = self._fnc_arg_parts = None
-            return chat_chunk
+            if self._tool_call_id:
+                if self._fnc_name is None:
+                    logger.warning("aws bedrock llm: no function name in the response")
+                    return None
+                if self._fnc_arg_parts is None:
+                    logger.warning("aws bedrock llm: no function arguments in the response")
+                    return None
+                chat_chunk = llm.ChatChunk(
+                    id=request_id,
+                    delta=llm.ChoiceDelta(
+                        role="assistant",
+                        tool_calls=[
+                            FunctionToolCall(
+                                arguments="".join(self._fnc_arg_parts),
+                                name=self._fnc_name,
+                                call_id=self._tool_call_id,
+                            ),
+                        ],
+                    ),
+                )
+                self._tool_call_id = self._fnc_name = self._fnc_arg_parts = None
+                return chat_chunk
         return None
