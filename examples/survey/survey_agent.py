@@ -86,6 +86,33 @@ class CommuteTask(AgentTask[str]):
         self.complete(commute_notes)
 
 
+class IntroTask(AgentTask[str]):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="""
+            You are an interviewer screening a candidate for a software engineering position. You both have just started the call.
+            Welcome the candidate to the interview and remain positive and concise. Take note of their attitude and how they respond.
+            You will also be collecting their name.
+            """,
+        )
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="Welcome the candidate by introducing yourself and gather their name after their introduction.",
+            tool_choice="none",
+        )
+
+    @function_tool()
+    async def record_name(self, context: RunContext, name: str, notes: str) -> None:
+        """Call to record the candidate's name and any notes about their attitude
+
+        Args:
+            name (str): The candidate's name
+            notes (str): Any additional notes about the candidate's responses (if none, return "none")
+        """
+        self.complete(name)
+
+
 class SurveyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -95,11 +122,6 @@ class SurveyAgent(Agent):
         )
 
     async def on_enter(self) -> AgentTask:
-        await self.session.generate_reply(
-            instructions="Welcome the candidate for the Software Engineer interview."
-        )
-        # maybe make the greeting a task as well so we can collect the response
-
         tasks = [
             Task(
                 lambda: ExperienceTask(),
@@ -108,6 +130,7 @@ class SurveyAgent(Agent):
             ),
             Task(lambda: CommuteTask(), id="commute_task", description="Asks about commute"),
             Task(lambda: GetEmailTask(), id="get_email_task", description="Collects email"),
+            Task(lambda: IntroTask(), id="get_name_intro_task", description="Collects name"),
         ]
         results = await TaskOrchestrator(tasks)
         # TaskOrchestrator returns a dictionary with Task IDs as the keys and the results as the values
@@ -146,7 +169,6 @@ async def entrypoint(ctx: JobContext):
         summary = usage_collector.get_summary()
         logger.info(f"Usage: {summary}")
 
-    # add shutdown callback of conversation summary
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
