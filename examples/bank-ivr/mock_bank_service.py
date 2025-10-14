@@ -102,9 +102,9 @@ class MockBankService:
         )
 
         customers = {
-            "11111111": CustomerProfile(
+            "53001422": CustomerProfile(
                 customer_id="53001422",
-                pin="1111",
+                pin="1942",
                 full_name="Jordan Carter",
                 branch_name="Downtown Austin",
                 deposit_accounts=(
