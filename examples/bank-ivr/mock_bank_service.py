@@ -102,9 +102,9 @@ class MockBankService:
         )
 
         customers = {
-            "53001422": CustomerProfile(
-                customer_id="53001422",
-                pin="1942",
+            "10000001": CustomerProfile(
+                customer_id="10000001",
+                pin="0000",
                 full_name="Jordan Carter",
                 branch_name="Downtown Austin",
                 deposit_accounts=(
@@ -163,9 +163,9 @@ class MockBankService:
                     ),
                 ),
             ),
-            "28890317": CustomerProfile(
-                customer_id="28890317",
-                pin="6231",
+            "20000002": CustomerProfile(
+                customer_id="20000002",
+                pin="1111",
                 full_name="Riley Martinez",
                 branch_name="North Loop",
                 deposit_accounts=(
