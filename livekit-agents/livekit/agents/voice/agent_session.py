@@ -315,11 +315,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts_error_counts = 0
 
         # configurable IO
-        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
+        self._input = io.AgentInput(
+            self._on_video_input_changed,
+            self._on_audio_input_changed,
+            audio_enabled_changed=self._on_audio_input_enabled_changed,
+        )
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
             self._on_text_output_changed,
+            audio_enabled_changed=self._on_audio_output_enabled_changed,
         )
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
@@ -1154,6 +1159,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._forward_audio_task(), name="_forward_audio_task"
         )
 
+    def _on_audio_input_enabled_changed(self, enabled: bool) -> None:
+        if self._activity is not None:
+            self._activity.on_audio_input_enabled_changed(enabled)
+        if self._next_activity is not None:
+            self._next_activity.on_audio_input_enabled_changed(enabled)
+
     def _on_video_output_changed(self) -> None:
         pass
 
@@ -1171,6 +1182,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_text_output_changed(self) -> None:
         pass
+
+    def _on_audio_output_enabled_changed(self, enabled: bool) -> None:
+        if self._activity is not None:
+            self._activity.on_audio_output_enabled_changed(enabled)
+        if self._next_activity is not None:
+            self._next_activity.on_audio_output_enabled_changed(enabled)
 
     # ---
 
