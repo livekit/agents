@@ -5,7 +5,6 @@ from typing import Annotated, Any, TypeAlias
 from pydantic import Field
 
 from ... import FunctionTool, llm
-from ...llm import ChatContext
 from ...llm.tool_context import ToolError, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
@@ -24,7 +23,6 @@ class Task:
         self._id = id
         self._description = description
         self._task = None
-        self._saved_chat_ctx = ChatContext()
 
     @property
     def id(self) -> str:
@@ -34,12 +32,9 @@ class Task:
     def description(self) -> str:
         return self._description
 
-    async def create_new_task(self) -> AgentTask:
-        if self._task:
-            self._saved_chat_ctx = self._task.chat_ctx
-
+    async def create_new_task(self, chat_ctx: llm.ChatContext) -> AgentTask:
         self._task = self._task_factory()
-        await self._task.update_chat_ctx(self._saved_chat_ctx)
+        await self._task.update_chat_ctx(chat_ctx)
 
         return self._task
 
@@ -89,14 +84,8 @@ class TaskOrchestrator(AgentTask[ResultT]):
     async def on_enter(self):
         while len(self._task_stack) > 0:
             self._current_task = self._task_stack.pop()
-            self._current_agent_task = await self._current_task.create_new_task()
-
-            if self._current_task.id in self._visited_tasks.keys():
-                chat_items = self._current_agent_task.chat_ctx.copy().items
-                chat_items.append(
-                    self.chat_ctx.items[-1]
-                )  # append last said message triggering the regression
-                self._current_agent_task._chat_ctx.items = chat_items
+            shared_chat_ctx = self.chat_ctx.copy()
+            self._current_agent_task = await self._current_task.create_new_task(shared_chat_ctx)
 
             current_tools = self._current_agent_task.tools
             current_tools.append(self._out_of_scope_func)
