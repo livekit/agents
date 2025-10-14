@@ -91,6 +91,7 @@ class TTS(tts.TTS):
         apply_text_normalization: Literal["auto", "off", "on"] = "auto",
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
+        enable_logging: bool = True,
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -111,6 +112,7 @@ class TTS(tts.TTS):
             auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Sentence tokenizer will be used to synthesize one sentence at a time. Defaults to True.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
+            enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
@@ -162,6 +164,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
+            enable_logging=enable_logging,
             language=language,
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
@@ -455,6 +458,7 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
+    enable_logging: bool
     inactivity_timeout: int
     sync_alignment: bool
     apply_text_normalization: Literal["auto", "on", "off"]
@@ -793,6 +797,7 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     if is_given(opts.language):
         params.append(f"language_code={opts.language}")
     params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
+    params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")
     params.append(f"apply_text_normalization={opts.apply_text_normalization}")
     if opts.sync_alignment:
