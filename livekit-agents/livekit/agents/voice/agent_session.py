@@ -22,10 +22,10 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
+from .. import cli, llm, stt, tts, utils, vad
 from .. import inference, llm, stt, tts, utils, vad
-from ..cli import cli
 from ..job import get_job_context
-from ..llm import ChatContext
+from ..llm import ChatContext, AgentHandoff
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -40,6 +40,8 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
+    AgentEvent,
+    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -52,10 +54,13 @@ from .events import (
 )
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
+from .recorder_io import RecorderIO
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .transcription.filters import TextTransforms
 
 
 @dataclass
@@ -68,7 +73,7 @@ class SessionConnectOptions:
 
 
 @dataclass
-class VoiceOptions:
+class AgentSessionOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
@@ -82,6 +87,7 @@ class VoiceOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
+    tts_text_transforms: Sequence[TextTransforms] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -137,6 +143,9 @@ class VoiceActivityVideoSampler:
         return False
 
 
+DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -161,6 +170,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         resume_false_interruption: bool = True,
         min_consecutive_speech_delay: float = 0.0,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -179,7 +189,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             turn_detection (TurnDetectionMode, optional): Strategy for deciding
-                when the user has finished speaking.
+                when the user has finifshed speaking.
 
                 * ``"stt"`` – rely on speech-to-text end-of-utterance cues
                 * ``"vad"`` – rely on Voice Activity Detection start/stop cues
@@ -234,6 +244,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript as the input of the ``transcription_node``. Only applies
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``. When NOT_GIVEN, it's disabled.
+            tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
+                to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
+                Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
             preemptive_generation (bool): Whether to use preemptive generation.
                 Default ``False``.
             preemptive_generation (bool):
@@ -264,7 +277,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
-        self._opts = VoiceOptions(
+        self._opts = AgentSessionOptions(
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
@@ -276,6 +289,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             false_interruption_timeout=false_interruption_timeout,
             resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
+            tts_text_transforms=(
+                tts_text_transforms
+                if is_given(tts_text_transforms)
+                else DEFAULT_TTS_TEXT_TRANSFORMS
+            ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
@@ -284,13 +302,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
-            stt = inference.STT(model=stt)
+            stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM(model=llm)
+            llm = inference.LLM.from_model_string(llm)
 
         if isinstance(tts, str):
-            tts = inference.TTS(model=tts)
+            tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt or None
         self._vad = vad or None
@@ -319,6 +337,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         # this is not exposed, if users want access to it, they can create their own RoomIO
         self._room_io: room_io.RoomIO | None = None
+        self._recorder_io: RecorderIO | None = None
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -339,6 +358,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+
+        self._recorded_events: list[AgentEvent] = []
+
+    def emit(self, event: EventTypes, arg: AgentEvent) -> None:
+        self._recorded_events.append(arg)
+        super().emit(event, arg)
 
     @property
     def userdata(self) -> Userdata_T:
@@ -368,7 +393,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._output
 
     @property
-    def options(self) -> VoiceOptions:
+    def options(self) -> AgentSessionOptions:
         return self._opts
 
     @property
@@ -438,6 +463,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        record: bool = True,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -454,36 +480,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._recorded_events = []
+            self._room_io = None
+            self._recorder_io = None
+
             self._closing = False
             self._root_span_context = otel_context.get_current()
             self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
-            current_span.set_attribute(
-                trace_types.ATTR_SESSION_OPTIONS,
-                json.dumps({k: v for k, v in asdict(self._opts).items() if is_given(v)}),
-            )
 
             self._agent = agent
             self._update_agent_state("initializing")
 
             tasks: list[asyncio.Task[None]] = []
-            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
-                from .chat_cli import ChatCLI
 
-                if (
-                    self.input.audio is not None
-                    or self.output.audio is not None
-                    or self.output.transcription is not None
-                ):
+            c = cli.AgentsConsole.get_instance()
+            if c.enabled and not c.io_acquired:
+                if self.input.audio is not None or self.output.audio is not None:
                     logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
-                        "or output.transcription is already set, overriding.."
+                        "agent started with the console subcommand, but input.audio/output.audio "
+                        "is already set, overriding..."
                     )
 
-                chat_cli = ChatCLI(self)
-                tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
-
+                c.acquire_io(loop=self._loop, session=self)
             elif is_given(room) and not self._room_io:
                 room_input_options = copy.copy(
                     room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
@@ -519,11 +539,34 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     input_options=room_input_options,
                     output_options=room_output_options,
                 )
-                tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
+                await self._room_io.start()
 
             # session can be restarted, register the callbacks only once
             try:
                 job_ctx = get_job_context()
+
+                if self.input.audio and self.output.audio:
+                    if record:
+                        self._recorder_io = RecorderIO(agent_session=self)
+                        self.input.audio = self._recorder_io.record_input(self.input.audio)
+                        self.output.audio = self._recorder_io.record_output(self.output.audio)
+
+                        if (c.enabled and c.record) or not c.enabled:
+                            task = asyncio.create_task(
+                                self._recorder_io.start(output_path=job_ctx.session_directory / "audio.ogg")
+                            )
+                            tasks.append(task)
+
+
+                if record:
+                    if job_ctx._primary_agent_session is None:
+                        job_ctx._primary_agent_session = self
+                    else:
+                        raise RuntimeError(
+                            "Only one `AgentSession` can be the primary at a time. "
+                            "If you want to ignore primary designation, use session.start(record=False)."
+                        )
+
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
                 current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
                 current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
@@ -648,8 +691,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aclose_impl(error=error, drain=drain, reason=reason)
         )
 
-    def shutdown(self) -> None:
-        self._close_soon(error=None, drain=True, reason=CloseReason.USER_INITIATED)
+    def shutdown(self, *, drain: bool = True) -> None:
+        self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
@@ -713,7 +756,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._room_io:
                 await self._room_io.aclose()
-                self._room_io = None
+
+            if self._recorder_io:
+                await self._recorder_io.aclose()
 
             self._started = False
             if self._session_span:
@@ -770,22 +815,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         run_state = self._global_run_state
-        if self._activity.scheduling_paused:
-            if self._next_activity is None:
-                raise RuntimeError("AgentSession is closing, cannot use say()")
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
-            handle = self._next_activity.say(
-                text,
-                audio=audio,
-                allow_interruptions=allow_interruptions,
-                add_to_chat_ctx=add_to_chat_ctx,
-            )
-            if run_state:
-                run_state._watch_handle(handle)
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use say()")
 
-            return handle
-
-        handle = self._activity.say(
+        handle = activity.say(
             text,
             audio=audio,
             allow_interruptions=allow_interruptions,
@@ -950,6 +985,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     new_agent=self._activity.agent,
                 )
 
+            self._chat_ctx.insert(
+                AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
+                )
+            )
+
             if new_activity == "start":
                 await self._activity.start()
             elif new_activity == "resume":
@@ -1095,10 +1137,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._user_state
         self._user_state = state
-        self.emit(
-            "user_state_changed",
-            UserStateChangedEvent(old_state=old_state, new_state=state),
-        )
+        self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         self.emit("user_input_transcribed", ev)

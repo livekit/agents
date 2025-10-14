@@ -9,6 +9,8 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
+    AgentHandoff,
+    MetricsReport,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .llm import (
@@ -57,6 +59,8 @@ __all__ = [
     "FunctionCallOutput",
     "AudioContent",
     "ImageContent",
+    "AgentHandoff",
+    "MetricsReport",
     "ChatItem",
     "ChoiceDelta",
     "ChatChunk",

@@ -183,6 +183,14 @@ class STT(stt.STT):
             connect_cb=self._create_client,
         )
 
+    @property
+    def model(self) -> str:
+        return self._config.model
+
+    @property
+    def provider(self) -> str:
+        return "Google Cloud Platform"
+
     async def _create_client(self, timeout: float) -> SpeechAsyncClient:
         # Add support for passing a specific location that matches recognizer
         # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages

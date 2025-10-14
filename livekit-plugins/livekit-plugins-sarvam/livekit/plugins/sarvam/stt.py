@@ -60,8 +60,8 @@ class SarvamSTTOptions:
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
+    api_key: str
     model: SarvamSTTModels | str = "saarika:v2.5"
-    api_key: str | None = None
     base_url: str = SARVAM_STT_BASE_URL
 
 
@@ -105,6 +105,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Sarvam"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

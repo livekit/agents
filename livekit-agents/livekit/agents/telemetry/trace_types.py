@@ -40,7 +40,7 @@ ATTR_EOU_LANGUAGE = "lk.eou.language"
 ATTR_USER_TRANSCRIPT = "lk.user_transcript"
 ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
-ATTR_END_OF_UTTERANCE_DELAY = "lk.end_of_utterance_delay"
+ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"

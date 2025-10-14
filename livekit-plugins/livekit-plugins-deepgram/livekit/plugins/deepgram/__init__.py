@@ -20,10 +20,11 @@ See https://docs.livekit.io/agents/integrations/stt/deepgram/ for more informati
 """
 
 from .stt import STT, SpeechStream
+from .stt_v2 import SpeechStreamv2, STTv2
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "__version__", "TTS"]
+__all__ = ["STT", "SpeechStream", "STTv2", "SpeechStreamv2", "__version__", "TTS"]
 
 
 from livekit.agents import Plugin
