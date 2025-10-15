@@ -2181,14 +2181,15 @@ class AgentActivity(RecognitionHooks):
                         forwarded_text = ""
                         playback_position = 0
 
-                    # truncate server-side message
-                    msg_modalities = await msg_gen.modalities
-                    self._rt_session.truncate(
-                        message_id=msg_gen.message_id,
-                        modalities=msg_modalities,
-                        audio_end_ms=int(playback_position * 1000),
-                        audio_transcript=forwarded_text,
-                    )
+                    # truncate server-side message (if supported)
+                    if self.llm.capabilities.message_truncation:
+                        msg_modalities = await msg_gen.modalities
+                        self._rt_session.truncate(
+                            message_id=msg_gen.message_id,
+                            modalities=msg_modalities,
+                            audio_end_ms=int(playback_position * 1000),
+                            audio_transcript=forwarded_text,
+                        )
 
                 msg: llm.ChatMessage | None = None
                 if forwarded_text:
