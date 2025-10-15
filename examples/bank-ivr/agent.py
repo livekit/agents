@@ -110,17 +110,13 @@ async def run_menu(
     prompt: str,
     options: dict[str, str],
     invalid_message: str = "I did not catch that selection. Let's try again.",
-    first_attempt: bool = True,
 ) -> str:
     normalized_options = dict(options.items())
 
     while True:
-        if first_attempt:
-            instructions_text = f"{prompt} " + " ".join(
-                f"Press {digit} for {label}." for digit, label in normalized_options.items()
-            )
-        else:
-            instructions_text = "Inform user that if they're still looking for another option, enter the number that matches it now."
+        instructions_text = f"{prompt} " + " ".join(
+            f"Press {digit} for {label}." for digit, label in normalized_options.items()
+        )
 
         try:
             result = await GetDtmfTask(
@@ -132,7 +128,6 @@ async def run_menu(
             speak(agent, exc.message if hasattr(exc, "message") else str(exc))
             continue
 
-        first_attempt = False
         if result.user_input in normalized_options:
             choice = result.user_input
             logger.debug("menu selection: %s -> %s", choice, normalized_options[choice])
@@ -223,19 +218,12 @@ class RootBankIVRAgent(Agent):
             "5": SupportTask,
         }
 
-        first_attempt = True
         while True:
             prompt = (
                 f"Main menu for {self._state.customer_name}. "
                 "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, 5 for support, or 6 to switch profile."
             )
-            choice = await run_menu(
-                self,
-                prompt=prompt,
-                options=options,
-                first_attempt=first_attempt,
-            )
-            first_attempt = False
+            choice = await run_menu(self, prompt=prompt, options=options)
 
             if choice in choice_to_task:
                 task = choice_to_task[choice](state=self._state, service=self._service)
@@ -374,15 +362,12 @@ class DepositAccountsTask(BaseBankTask):
             "9": "Return to the main menu",
         }
 
-        first_attempt = True
         while True:
             choice = await run_menu(
                 self,
                 prompt="Deposit accounts menu",
                 options=options,
-                first_attempt=first_attempt,
             )
-            first_attempt = False
 
             if choice == "1":
                 await self._account_balances()
@@ -436,7 +421,6 @@ class DepositAccountsTask(BaseBankTask):
             self,
             prompt="Choose an account to hear recent activity.",
             options=menu,
-            first_attempt=True,
         )
 
         if selection == "9":
@@ -471,15 +455,8 @@ class CreditCardsTask(BaseBankTask):
             "9": "Return to main menu",
         }
 
-        first_attempt = True
         while True:
-            choice = await run_menu(
-                self,
-                prompt="Credit card menu",
-                options=options,
-                first_attempt=first_attempt,
-            )
-            first_attempt = False
+            choice = await run_menu(self, prompt="Credit card menu", options=options)
             if choice == "1":
                 await self._statement_details()
             elif choice == "2":
@@ -539,15 +516,8 @@ class LoansTask(BaseBankTask):
             "9": "Return to main menu",
         }
 
-        first_attempt = True
         while True:
-            choice = await run_menu(
-                self,
-                prompt="Loans menu",
-                options=options,
-                first_attempt=first_attempt,
-            )
-            first_attempt = False
+            choice = await run_menu(self, prompt="Loans menu", options=options)
             if choice == "1":
                 await self._balances()
             elif choice == "2":
@@ -610,15 +580,8 @@ class RewardsTask(BaseBankTask):
             "9": "Return to main menu",
         }
 
-        first_attempt = True
         while True:
-            choice = await run_menu(
-                self,
-                prompt="Rewards menu",
-                options=options,
-                first_attempt=first_attempt,
-            )
-            first_attempt = False
+            choice = await run_menu(self, prompt="Rewards menu", options=options)
             if choice == "1":
                 await self._balance_and_tier()
             elif choice == "2":
@@ -679,15 +642,8 @@ class SupportTask(BaseBankTask):
             "9": "Return to main menu",
         }
 
-        first_attempt = True
         while True:
-            choice = await run_menu(
-                self,
-                prompt="Support menu",
-                options=options,
-                first_attempt=first_attempt,
-            )
-            first_attempt = False
+            choice = await run_menu(self, prompt="Support menu", options=options)
             if choice == "1":
                 await self._open_tickets()
             elif choice == "2":
