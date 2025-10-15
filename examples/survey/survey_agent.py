@@ -61,7 +61,7 @@ class ExperienceTask(AgentTask[str]):
         self.complete(experience_description)
 
 
-class CommuteTask(AgentTask[str]):
+class CommuteTask(AgentTask[dict]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
@@ -69,6 +69,7 @@ class CommuteTask(AgentTask[str]):
             Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week.
             """,
         )
+        self._result = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -77,13 +78,42 @@ class CommuteTask(AgentTask[str]):
         )
 
     @function_tool()
-    async def record_commute_flexibility(self, context: RunContext, commute_notes: str) -> None:
+    async def record_commute_flexibility(self, context: RunContext, can_commute: bool) -> None:
         """Call to record whether or not the candidate can commute to the office.
 
         Args:
-            commute_notes (str): If the candidate can commute or not and additional notes about the candidate's commute flexibility
+            can_commute (bool): If the candidate can commute or not
         """
-        self.complete(commute_notes)
+        if can_commute:
+            self._result["can_commute"] = can_commute
+            commute_method = await CommuteMethodTask(commute_task=self)
+            self._result["commute_method"] = commute_method
+        self.complete(self._result)
+
+
+class CommuteMethodTask(AgentTask[str]):
+    def __init__(self, commute_task: CommuteTask) -> None:
+        super().__init__(
+            instructions="You will now be collecting the candidate's method of transportation.",
+            chat_ctx=commute_task.chat_ctx,
+            tools=[commute_task.tools[1]],
+        )  # add out of scope method
+        self._commute_task = commute_task
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="Gather their transportation method.",
+            tool_choice="none",
+        )
+
+    @function_tool()
+    async def record_commute_method(self, context: RunContext, commute_method: str) -> None:
+        """Call to record the candidate's method of transportation for their commute.
+
+        Args:
+            commute_method (str): The candidate's method of transportation for their commute.
+        """
+        self.complete(commute_method)
 
 
 class IntroTask(AgentTask[str]):
