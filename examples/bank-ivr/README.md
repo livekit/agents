@@ -2,7 +2,7 @@
 
 This example mirrors the telecom IVR demo but shifts the narrative to a retail banking assistant. It showcases:
 
-- A `MockBankService` that exposes read-only customer data for checking/savings accounts, credit cards, loans, rewards, and support tickets.
+- A `MockBankService` that exposes read-only customer data for checking/savings accounts, credit cards, loans, and rewards.
 - A multi-agent IVR tree where the root agent authenticates callers and hands off to submenu tasks implemented with `AgentTask` for each banking domain.
 - Voice-ready prompts and DTMF collection using the LiveKit agents toolkit.
 
@@ -19,9 +19,7 @@ graph TD
     RM --> M2[2 · Credit Cards]
     RM --> M3[3 · Loans & Mortgages]
     RM --> M4[4 · Rewards & Benefits]
-    RM --> M5[5 · Customer Support]
-    RM --> M6[6 · Switch Profile]
-    RM --> M0[0 · Human Specialist]
+    RM --> M5[5 · Switch Profile]
 
     subgraph "Deposit Accounts Task"
         M1 --> DA1[Balances]
@@ -29,7 +27,6 @@ graph TD
         M1 --> DA3[Recent Transactions]
         M1 --> DA4[Total Deposits]
         M1 --> DA9[9 · Return]
-        M1 --> DA0[0 · Specialist]
     end
 
     subgraph "Credit Cards Task"
@@ -37,7 +34,6 @@ graph TD
         M2 --> CC2[Rewards Rates]
         M2 --> CC3[Total Balances]
         M2 --> CC9[9 · Return]
-        M2 --> CC0[0 · Specialist]
     end
 
     subgraph "Loans Task"
@@ -45,7 +41,6 @@ graph TD
         M3 --> LN2[Upcoming Payments]
         M3 --> LN3[Autopay Status]
         M3 --> LN9[9 · Return]
-        M3 --> LN0[0 · Specialist]
     end
 
     subgraph "Rewards Task"
@@ -53,20 +48,10 @@ graph TD
         M4 --> RW2[Cashback]
         M4 --> RW3[Expiring Points]
         M4 --> RW9[9 · Return]
-        M4 --> RW0[0 · Specialist]
     end
 
-    subgraph "Support Task"
-        M5 --> SP1[Open Tickets]
-        M5 --> SP2[Request Callback]
-        M5 --> SP3[Branch Info]
-        M5 --> SP9[9 · Return]
-        M5 --> SP0[0 · Specialist]
-    end
-
-    M6 --> SW((Re-Authenticate))
+    M5 --> SW((Re-Authenticate))
     SW --> RM
-    M0 --> END((Transfer to Specialist))
 ```
 
 Run the mock service tests with:
