@@ -356,7 +356,10 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(final_event)
 
-            if end_of_turn and (not (is_given(self._opts.format_turns) and self._opts.format_turns) or turn_is_formatted):
+            if end_of_turn and (
+                not (is_given(self._opts.format_turns) and self._opts.format_turns)
+                or turn_is_formatted
+            ):
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[stt.SpeechData(language="en", text=transcript)],
