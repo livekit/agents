@@ -348,7 +348,7 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[stt.SpeechData(language="en", text=interim_text)],
                 )
                 self._event_ch.send_nowait(interim_event)
-            
+
             if utterance:
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
@@ -362,7 +362,7 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[stt.SpeechData(language="en", text=transcript)],
                 )
                 self._event_ch.send_nowait(final_event)
-                
+
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
                 if self._speech_duration > 0.0:
