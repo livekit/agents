@@ -50,6 +50,8 @@ from .models import (
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2025-04-16"
+API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "2024-11-13"
+MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "sonic-2-2025-03-07"
 
 
 @dataclass
@@ -64,6 +66,7 @@ class _TTSOptions:
     api_key: str
     language: str
     base_url: str
+    api_version: str
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -89,6 +92,7 @@ class TTS(tts.TTS):
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
         base_url: str = "https://api.cartesia.ai",
+        api_version: str = API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -123,12 +127,16 @@ class TTS(tts.TTS):
         if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
 
-        if (speed or emotion) and model != "sonic-2-2025-03-07":
-            logger.warning(
-                "speed and emotion controls are only supported for model 'sonic-2-2025-03-07', "
-                "see https://docs.cartesia.ai/developer-tools/changelog for details",
-                extra={"model": model, "speed": speed, "emotion": emotion},
-            )
+        if speed or emotion:
+            if (
+                api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+                or model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+            ):
+                logger.warning(
+                    f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
+                    "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                    extra={"model": model, "speed": speed, "emotion": emotion},
+                )
 
         self._opts = _TTSOptions(
             model=model,
@@ -141,6 +149,7 @@ class TTS(tts.TTS):
             api_key=cartesia_api_key,
             base_url=base_url,
             word_timestamps=word_timestamps,
+            api_version=api_version,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -170,7 +179,7 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
-            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
+            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
         )
         return await asyncio.wait_for(session.ws_connect(url), timeout)
 
@@ -194,6 +203,7 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str | list[float]] = NOT_GIVEN,
         speed: NotGivenOr[TTSVoiceSpeed | float | None] = NOT_GIVEN,
         emotion: NotGivenOr[list[TTSVoiceEmotion | str] | None] = NOT_GIVEN,
+        api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -218,13 +228,19 @@ class TTS(tts.TTS):
             self._opts.speed = cast(Optional[Union[TTSVoiceSpeed, float]], speed)
         if is_given(emotion):
             self._opts.emotion = emotion
+        if is_given(api_version):
+            self._opts.api_version = api_version
 
-        if (speed or emotion) and self._opts.model != "sonic-2-2025-03-07":
-            logger.warning(
-                "speed and emotion controls are only supported for model 'sonic-2-2025-03-07', "
-                "see https://docs.cartesia.ai/developer-tools/changelog for details",
-                extra={"model": self._opts.model, "speed": speed, "emotion": emotion},
-            )
+        if speed or emotion:
+            if (
+                self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+                or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+            ):
+                logger.warning(
+                    f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
+                    "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                    extra={"model": self._opts.model, "speed": speed, "emotion": emotion},
+                )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

@@ -23,7 +23,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         # both Gemini and OpenAI Realtime API support streaming video input
-        llm=google.beta.realtime.RealtimeModel(),
+        llm=google.realtime.RealtimeModel(),
         # customize how video frames are sampled
         # by default it's 1fps while the user is speaking and 0.3fps when silent
         # video_sampler=voice.VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.1),

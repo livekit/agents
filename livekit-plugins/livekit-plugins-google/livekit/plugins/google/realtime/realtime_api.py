@@ -23,11 +23,11 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import audio as audio_utils, images, is_given
-from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
+from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
-from ...log import logger
-from ...tools import _LLMTool
-from ...utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
+from ..log import logger
+from ..tools import _LLMTool
+from ..utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
