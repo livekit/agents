@@ -335,7 +335,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.model = model
         if is_given(language):
             self._opts.language = language
-        self._reconnect_event.set()            
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
