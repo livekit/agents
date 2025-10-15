@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 
 # Configuration
 ROOM_NAME = "dtmf-agent-example"
-AGENT_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "dtmf-agent")
+AGENT_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "my-telephony-agent")
 OUTBOUND_TRUNK_ID = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
 

@@ -24,14 +24,14 @@ load_dotenv()
 server = AgentServer()
 
 
-PHONE_TREE_AGENT_DISPATCH_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "dtmf-agent")
+PHONE_TREE_AGENT_DISPATCH_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "my-telephony-agent")
 
 
 class DtmfAgent(Agent):
     def __init__(self, goal: str) -> None:
         super().__init__(
             instructions=(
-                "You are a voice assistant that can help users navigate a phone tree IVR system by pressing numbers on the phone. "
+                "You are a voice assistant that can help users navigate a bank IVR system by pressing numbers on the phone. "
                 "You have access to a tool to send a sequence of dtmf number inputs. Prefer using the tool to send number input over using your own voice. "
                 f"You are connected to a automatic IVR system and your goal is {goal}. "
                 "Listen to the IVR instructions and follow them carefully to navigate to the correct place to enter the account number. "
