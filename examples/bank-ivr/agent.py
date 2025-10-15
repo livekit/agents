@@ -13,7 +13,6 @@ from mock_bank_service import (
     LoanAccount,
     MockBankService,
     RewardsSummary,
-    SupportTicket,
     format_currency,
     format_transactions,
 )
@@ -60,7 +59,6 @@ class SessionState:
     card_cache: dict[str, tuple[CreditCard, ...]] = field(default_factory=dict)
     loan_cache: dict[str, tuple[LoanAccount, ...]] = field(default_factory=dict)
     rewards_cache: dict[str, RewardsSummary] = field(default_factory=dict)
-    tickets_cache: dict[str, tuple[SupportTicket, ...]] = field(default_factory=dict)
     audit_log: list[str] = field(default_factory=list)
 
 
@@ -182,7 +180,6 @@ class RootBankIVRAgent(Agent):
                 self._state.card_cache[customer_id] = profile.credit_cards
                 self._state.loan_cache[customer_id] = profile.loans
                 self._state.rewards_cache[customer_id] = profile.rewards
-                self._state.tickets_cache[customer_id] = profile.support_tickets
                 self._state.audit_log.append(f"auth_success:{customer_id}")
                 await add_event_message(
                     self, content=f"Authentication successful for {profile.full_name}"
@@ -206,8 +203,7 @@ class RootBankIVRAgent(Agent):
             "2": "credit cards",
             "3": "loans and mortgages",
             "4": "rewards and benefits",
-            "5": "customer support",
-            "6": "switch profile",
+            "5": "switch profile",
         }
 
         choice_to_task: dict[str, type[SubmenuTaskType]] = {
@@ -215,13 +211,12 @@ class RootBankIVRAgent(Agent):
             "2": CreditCardsTask,
             "3": LoansTask,
             "4": RewardsTask,
-            "5": SupportTask,
         }
 
         while True:
             prompt = (
                 f"Main menu for {self._state.customer_name}. "
-                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, 5 for support, or 6 to switch profile."
+                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, or 5 to switch profile."
             )
             choice = await run_menu(self, prompt=prompt, options=options)
 
@@ -232,7 +227,7 @@ class RootBankIVRAgent(Agent):
                     return
                 continue
 
-            if choice == "6":
+            if choice == "5":
                 await self._switch_profile()
                 continue
 
@@ -289,7 +284,6 @@ class RootBankIVRAgent(Agent):
                 self._state.card_cache[chosen_id] = profile.credit_cards
                 self._state.loan_cache[chosen_id] = profile.loans
                 self._state.rewards_cache[chosen_id] = profile.rewards
-                self._state.tickets_cache[chosen_id] = profile.support_tickets
                 speak(self, f"Verified. You're now managing accounts for {profile.full_name}.")
                 return
 
@@ -627,69 +621,7 @@ class RewardsTask(BaseBankTask):
         self.state.audit_log.append("rewards:expiring")
 
 
-class SupportTask(BaseBankTask):
-    def __init__(self, *, state: SessionState, service: MockBankService) -> None:
-        super().__init__(state=state, service=service, menu_name="customer support")
-
-    async def on_enter(self) -> None:
-        await self._loop()
-
-    async def _loop(self) -> None:
-        options = {
-            "1": "Open support tickets",
-            "2": "Request a callback",
-            "3": "Branch information",
-            "9": "Return to main menu",
-        }
-
-        while True:
-            choice = await run_menu(self, prompt="Support menu", options=options)
-            if choice == "1":
-                await self._open_tickets()
-            elif choice == "2":
-                await self._request_callback()
-            elif choice == "3":
-                await self._branch_information()
-            elif choice == "9":
-                self.speak("Returning to the main menu now.")
-                self.complete(TaskOutcome.RETURN_TO_ROOT)
-                return
-
-    def _tickets(self) -> tuple[SupportTicket, ...]:
-        cached = self.state.tickets_cache.get(self.customer_id)
-        if cached is not None:
-            return cached
-        tickets = self.service.list_support_tickets(self.customer_id)
-        self.state.tickets_cache[self.customer_id] = tickets
-        return tickets
-
-    async def _open_tickets(self) -> None:
-        tickets = self._tickets()
-        if not tickets:
-            self.speak("There are no open support tickets on your account.")
-        else:
-            lines = [
-                f"Ticket {ticket.reference} opened {ticket.opened_at} is {ticket.status} regarding {ticket.topic}."
-                for ticket in tickets
-            ]
-            self.speak(" ".join(lines))
-        self.state.audit_log.append("support:tickets")
-
-    async def _request_callback(self) -> None:
-        self.speak(
-            "A callback request has been logged. A banker will reach out within the next business day."
-        )
-        self.state.audit_log.append("support:callback")
-
-    async def _branch_information(self) -> None:
-        branch = self.state.branch_name or "your home"
-        self.speak(
-            f"Your home branch is {branch}. Lobby hours are Monday through Friday, 9 AM to 5 PM."
-        )
-        self.state.audit_log.append("support:branch")
-
-
-SubmenuTaskType = DepositAccountsTask | CreditCardsTask | LoansTask | RewardsTask | SupportTask
+SubmenuTaskType = DepositAccountsTask | CreditCardsTask | LoansTask | RewardsTask
 
 
 @server.realtime_session(agent_name=BANK_IVR_DISPATCH_NAME)

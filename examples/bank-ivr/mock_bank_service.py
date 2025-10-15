@@ -57,14 +57,6 @@ class RewardsSummary:
 
 
 @dataclass(frozen=True)
-class SupportTicket:
-    reference: str
-    opened_at: str
-    status: str
-    topic: str
-
-
-@dataclass(frozen=True)
 class CustomerProfile:
     customer_id: str
     pin: str
@@ -74,7 +66,6 @@ class CustomerProfile:
     credit_cards: tuple[CreditCard, ...]
     loans: tuple[LoanAccount, ...]
     rewards: RewardsSummary
-    support_tickets: tuple[SupportTicket, ...]
 
 
 class MockBankService:
@@ -154,14 +145,6 @@ class MockBankService:
                     expiring_next_statement=4000,
                     cashback_available=182.55,
                 ),
-                support_tickets=(
-                    SupportTicket(
-                        reference="CS-44721",
-                        opened_at="2025-10-02",
-                        status="Awaiting Customer",
-                        topic="Upload proof of homeowners insurance",
-                    ),
-                ),
             ),
             "20000002": CustomerProfile(
                 customer_id="20000002",
@@ -217,7 +200,6 @@ class MockBankService:
                     expiring_next_statement=0,
                     cashback_available=32.18,
                 ),
-                support_tickets=(),
             ),
         }
 
@@ -285,11 +267,6 @@ class MockBankService:
 
     def get_rewards(self, customer_id: str) -> RewardsSummary:
         return self.get_profile(customer_id).rewards
-
-    # -- Support ---------------------------------------------------------------------
-
-    def list_support_tickets(self, customer_id: str) -> tuple[SupportTicket, ...]:
-        return self.get_profile(customer_id).support_tickets
 
 
 def format_currency(value: float) -> str:

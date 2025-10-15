@@ -81,15 +81,6 @@ def test_rewards_summary(service: MockBankService) -> None:
     assert rewards.points_balance == 138940
 
 
-def test_support_tickets(service: MockBankService) -> None:
-    tickets = service.list_support_tickets("10000001")
-    assert len(tickets) == 1
-    assert tickets[0].status == "Awaiting Customer"
-
-    no_tickets = service.list_support_tickets("20000002")
-    assert no_tickets == ()
-
-
 def test_format_helpers(service: MockBankService) -> None:
     currency = format_currency(1234.5)
     assert currency == "$1,234.50"
