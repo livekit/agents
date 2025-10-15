@@ -92,7 +92,7 @@ class TTS(tts.TTS):
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
         base_url: str = "https://api.cartesia.ai",
-        api_version: str = API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
+        api_version: str = API_VERSION,
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
