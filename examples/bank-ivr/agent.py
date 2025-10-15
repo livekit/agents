@@ -39,7 +39,7 @@ load_dotenv()
 logger = logging.getLogger("bank-ivr")
 
 
-BANK_IVR_DISPATCH_NAME = os.getenv("BANK_IVR_DISPATCH_NAME", "my-telephony-agent")
+BANK_IVR_DISPATCH_NAME = os.getenv("BANK_IVR_DISPATCH_NAME", "bank-ivr-agent")
 
 
 server = AgentServer()
