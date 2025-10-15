@@ -49,7 +49,6 @@ server = AgentServer()
 class TaskOutcome(str, Enum):
     RETURN_TO_ROOT = "return_to_root"
     END_SESSION = "end_session"
-    TRANSFER_SPECIALIST = "transfer_specialist"
 
 
 @dataclass
@@ -150,7 +149,7 @@ class RootBankIVRAgent(Agent):
         super().__init__(
             instructions=(
                 "You are the automated telephone assistant for Horizon Federal Bank. "
-                "Authenticate callers, guide them through the banking menu, and remind them they can press 9 to return to the main menu or 0 to talk to a human specialist."
+                "Authenticate callers, guide them through the banking menu, and remind them they can press 9 to return to the main menu."
             ),
         )
         self._service = service
@@ -214,7 +213,6 @@ class RootBankIVRAgent(Agent):
             "4": "rewards and benefits",
             "5": "customer support",
             "6": "switch profile",
-            "0": "speak with a specialist",
         }
 
         choice_to_task: dict[str, type[SubmenuTaskType]] = {
@@ -225,12 +223,19 @@ class RootBankIVRAgent(Agent):
             "5": SupportTask,
         }
 
+        first_attempt = True
         while True:
             prompt = (
                 f"Main menu for {self._state.customer_name}. "
-                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, 5 for support, 6 to switch profile, or 0 for a human specialist."
+                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, 5 for support, or 6 to switch profile."
             )
-            choice = await run_menu(self, prompt=prompt, options=options)
+            choice = await run_menu(
+                self,
+                prompt=prompt,
+                options=options,
+                first_attempt=first_attempt,
+            )
+            first_attempt = False
 
             if choice in choice_to_task:
                 task = choice_to_task[choice](state=self._state, service=self._service)
@@ -243,23 +248,9 @@ class RootBankIVRAgent(Agent):
                 await self._switch_profile()
                 continue
 
-            if choice == "0":
-                speak(
-                    self,
-                    "Connecting you to a Horizon Federal Bank specialist now. Please hold.",
-                    allow_interruptions=False,
-                )
-                return
-
     async def _handle_task_outcome(self, outcome: TaskOutcome) -> bool:
         if outcome == TaskOutcome.RETURN_TO_ROOT:
             return False
-        if outcome == TaskOutcome.TRANSFER_SPECIALIST:
-            speak(
-                self,
-                "I'll bring a banking specialist into the call. One moment, please.",
-                allow_interruptions=False,
-            )
         if outcome == TaskOutcome.END_SESSION:
             await self._farewell()
         return True
@@ -346,7 +337,7 @@ class BaseBankTask(AgentTask[TaskOutcome]):
         super().__init__(
             instructions=(
                 f"You are handling the {menu_name} submenu for Horizon Federal Bank. "
-                "Speak professionally, cite balances precisely, and remind callers that pressing 9 returns to the main menu and 0 routes to a specialist."
+                "Speak professionally, cite balances precisely, and remind callers that pressing 9 returns to the main menu."
             )
         )
         self.state = state
@@ -381,7 +372,6 @@ class DepositAccountsTask(BaseBankTask):
             "3": "Listen to recent transactions",
             "4": "Total deposits across accounts",
             "9": "Return to the main menu",
-            "0": "Talk to a specialist",
         }
 
         first_attempt = True
@@ -405,10 +395,6 @@ class DepositAccountsTask(BaseBankTask):
             elif choice == "9":
                 self.speak("Returning to the main menu now.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
-                return
-            elif choice == "0":
-                self.speak("Connecting you to a banking specialist now. Please hold.")
-                self.complete(TaskOutcome.TRANSFER_SPECIALIST)
                 return
 
     def _accounts(self) -> tuple[DepositAccount, ...]:
@@ -483,7 +469,6 @@ class CreditCardsTask(BaseBankTask):
             "2": "Rewards earning rates",
             "3": "Total card balances",
             "9": "Return to main menu",
-            "0": "Talk to a specialist",
         }
 
         first_attempt = True
@@ -504,10 +489,6 @@ class CreditCardsTask(BaseBankTask):
             elif choice == "9":
                 self.speak("Returning you to the main menu now.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
-                return
-            elif choice == "0":
-                self.speak("Connecting you to a credit specialist now. Please hold.")
-                self.complete(TaskOutcome.TRANSFER_SPECIALIST)
                 return
 
     def _cards(self) -> tuple[CreditCard, ...]:
@@ -556,7 +537,6 @@ class LoansTask(BaseBankTask):
             "2": "Upcoming payments",
             "3": "Autopay status",
             "9": "Return to main menu",
-            "0": "Talk to a specialist",
         }
 
         first_attempt = True
@@ -577,10 +557,6 @@ class LoansTask(BaseBankTask):
             elif choice == "9":
                 self.speak("Returning to the main menu now.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
-                return
-            elif choice == "0":
-                self.speak("Connecting you to a loan specialist now. Please hold.")
-                self.complete(TaskOutcome.TRANSFER_SPECIALIST)
                 return
 
     def _loans(self) -> tuple[LoanAccount, ...]:
@@ -632,7 +608,6 @@ class RewardsTask(BaseBankTask):
             "2": "Cashback available",
             "3": "Expiring points",
             "9": "Return to main menu",
-            "0": "Talk to a specialist",
         }
 
         first_attempt = True
@@ -653,10 +628,6 @@ class RewardsTask(BaseBankTask):
             elif choice == "9":
                 self.speak("Returning to the main menu now.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
-                return
-            elif choice == "0":
-                self.speak("Connecting you to a rewards specialist now. Please hold.")
-                self.complete(TaskOutcome.TRANSFER_SPECIALIST)
                 return
 
     def _rewards(self) -> RewardsSummary:
@@ -706,7 +677,6 @@ class SupportTask(BaseBankTask):
             "2": "Request a callback",
             "3": "Branch information",
             "9": "Return to main menu",
-            "0": "Talk to a specialist",
         }
 
         first_attempt = True
@@ -727,10 +697,6 @@ class SupportTask(BaseBankTask):
             elif choice == "9":
                 self.speak("Returning to the main menu now.")
                 self.complete(TaskOutcome.RETURN_TO_ROOT)
-                return
-            elif choice == "0":
-                self.speak("Connecting you to a customer specialist now. Please hold.")
-                self.complete(TaskOutcome.TRANSFER_SPECIALIST)
                 return
 
     def _tickets(self) -> tuple[SupportTicket, ...]:
