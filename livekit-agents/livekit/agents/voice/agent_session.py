@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import time
 from collections.abc import AsyncIterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -22,10 +21,9 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import cli, llm, stt, tts, utils, vad
-from .. import inference, llm, stt, tts, utils, vad
+from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import get_job_context
-from ..llm import ChatContext, AgentHandoff
+from ..llm import AgentHandoff, ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -41,7 +39,6 @@ from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
-    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -52,10 +49,9 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
-from .recorder_io import RecorderIO
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -87,6 +83,7 @@ class AgentSessionOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
+    talking_to_ivr: bool
     tts_text_transforms: Sequence[TextTransforms] | None
 
 
@@ -172,6 +169,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        talking_to_ivr: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -256,6 +254,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            talking_to_ivr (bool): Indicates the participant the agent interacts with is an
+                IVR system (instead of a human caller). Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -295,6 +295,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
+            talking_to_ivr=talking_to_ivr,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -553,10 +554,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                         if (c.enabled and c.record) or not c.enabled:
                             task = asyncio.create_task(
-                                self._recorder_io.start(output_path=job_ctx.session_directory / "audio.ogg")
+                                self._recorder_io.start(
+                                    output_path=job_ctx.session_directory / "audio.ogg"
+                                )
                             )
                             tasks.append(task)
-
 
                 if record:
                     if job_ctx._primary_agent_session is None:
