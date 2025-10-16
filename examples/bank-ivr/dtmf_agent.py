@@ -28,7 +28,7 @@ PHONE_TREE_AGENT_DISPATCH_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "my
 
 
 class DtmfAgent(Agent):
-    def __init__(self, goal: str) -> None:
+    def __init__(self, tasks: list[str]) -> None:
         super().__init__(
             instructions=(
                 dedent(
@@ -38,9 +38,14 @@ class DtmfAgent(Agent):
                     # Instructions
                     - Use the DTMF tool whenever digits are required to be entered; do not say numbers aloud if keypad entry is expected.
                     - Assume the persona of a human caller interacting naturally with the IVR.
-                    - Your primary goal is: `{goal}`.
+
+                    # Tasks
+                    Below are the tasks you will perform:
+
+                    {"\n".join([f"{i + 1}. {task}" for i, task in enumerate(tasks)])}
+
+
                     - Carefully listen to each IVR prompt and select the most appropriate option.
-                    - After each digit entry, validate whether the intended IVR action occurred (e.g., appropriate menu or response received) in 1-2 lines, and decide whether to continue or self-correct if needed.
                     - Use only the DTMF tool to follow the IVR instructions; if an unavailable action is required, note the limitation and propose alternatives.
                     # Example
                     - If the prompt states: “Press 1 for account services,” call `send_dtmf_events` with `['1']` will wait IVR to process. Use `['1', '#']` to bypass the waiting period.
@@ -49,6 +54,16 @@ class DtmfAgent(Agent):
                 )
             ),
         )
+
+    # @function_tool
+    # async def record_info(self, content: str) -> None:
+    #     """
+    #     Record the IVR navigation task results.
+
+    #     Args:
+    #         content: The information gathered from completing a task, short validation, or any IVR interaction observation.
+    #     """
+    #     logger.info(f"==> {content}")
 
 
 @server.realtime_session(agent_name=PHONE_TREE_AGENT_DISPATCH_NAME)
@@ -63,7 +78,16 @@ async def dtmf_session(ctx: JobContext) -> None:
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
         dial_to_phone_ivr=True,
+        min_endpointing_delay=2,
     )
+
+    tasks = [
+        "Retrieve the checking account balance and read the three most recent transactions.",
+        "Confirm the high-yield savings balance and the posted interest rate.",
+        "Report the Platinum Travel Rewards credit card statement balance, minimum payment, and due date.",
+        "Summarize the mortgage outstanding balance, monthly payment amount, and next payment due date.",
+        "Provide the customer's reward tier, total points, and available cashback.",
+    ]
 
     usage_collector = metrics.UsageCollector()
 
@@ -79,7 +103,7 @@ async def dtmf_session(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=DtmfAgent(goal=("ask about current account balance")),
+        agent=DtmfAgent(tasks=tasks),
         room=ctx.room,
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )

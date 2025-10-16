@@ -49,6 +49,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .ivr_activity import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
@@ -84,6 +85,7 @@ class AgentSessionOptions:
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
     dial_to_phone_ivr: bool
+    max_ivr_silence_duration: float
     tts_text_transforms: Sequence[TextTransforms] | None
 
 
@@ -170,6 +172,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         dial_to_phone_ivr: bool = False,
+        max_ivr_silence_duration: float = 15.0,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -296,6 +299,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             dial_to_phone_ivr=dial_to_phone_ivr,
+            max_ivr_silence_duration=max_ivr_silence_duration,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -361,6 +365,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._root_span_context: otel_context.Context | None = None
 
         self._recorded_events: list[AgentEvent] = []
+
+        # ivr activity
+        self._ivr_activity: IVRActivity | None = None
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
@@ -569,6 +576,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             "If you want to ignore primary designation, use session.start(record=False)."
                         )
 
+                if self.options.dial_to_phone_ivr:
+                    self._ivr_activity = IVRActivity(
+                        self, max_silence_duration=self.options.max_ivr_silence_duration
+                    )
+                    tasks.append(
+                        asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
+                    )
+
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
                 current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
                 current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
@@ -761,6 +776,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._recorder_io:
                 await self._recorder_io.aclose()
+
+            if self._ivr_activity is not None:
+                await self._ivr_activity.aclose()
 
             self._started = False
             if self._session_span:
@@ -957,6 +975,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._activity_lock:
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
+
+            if self._ivr_activity is not None:
+                await self._ivr_activity.update_agent(agent)
 
             if new_activity == "start":
                 if agent._activity is not None:

@@ -269,13 +269,7 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
-        tools = self._agent.tools + self._mcp_tools  # type: ignore
-
-        if self._session.options.dial_to_phone_ivr:
-            from ..beta.tools.send_dtmf import send_dtmf_events
-
-            tools.append(send_dtmf_events)
-        return tools
+        return self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
     def min_consecutive_speech_delay(self) -> float:
