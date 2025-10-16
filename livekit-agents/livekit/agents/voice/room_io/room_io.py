@@ -83,8 +83,8 @@ class RoomInputOptions:
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
-    delete_room_on_close: bool = True
-    """Delete the room when the AgentSession is closed"""
+    delete_room_on_close: bool = False
+    """Delete the room when the AgentSession is closed, default to False"""
 
 
 @dataclass
@@ -261,6 +261,7 @@ class RoomIO:
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
+        self._agent_session.off("close", self._on_agent_session_close)
 
         if self._text_stream_handler_registered:
             self._room.unregister_text_stream_handler(TOPIC_CHAT)
@@ -485,6 +486,13 @@ class RoomIO:
         self._update_state_atask = asyncio.create_task(_set_state())
 
     def _on_agent_session_close(self, ev: CloseEvent) -> None:
-        if self._input_options.delete_room_on_close:
+        def _on_delete_room_task_done(task: asyncio.Future[api.DeleteRoomResponse]) -> None:
+            self._delete_room_task = None
+
+        if self._input_options.delete_room_on_close and self._delete_room_task is None:
             job_ctx = get_job_context()
+            logger.info(
+                "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)"
+            )
             self._delete_room_task = job_ctx.delete_room()
+            self._delete_room_task.add_done_callback(_on_delete_room_task_done)

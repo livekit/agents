@@ -407,6 +407,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
