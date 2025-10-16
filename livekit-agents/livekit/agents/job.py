@@ -316,6 +316,10 @@ class JobContext:
         trunk_id: str,
         participant_identity: str,
         participant_name: NotGivenOr[str] = "SIP-participant",
+        wait_until_answered: bool = False,
+        play_dialtone: bool = False,
+        play_ringtone: bool = False,
+        **kwargs: Any,
     ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """
         Add a SIP participant to the room.
@@ -327,6 +331,11 @@ class JobContext:
             trunk_id: The ID of the SIP trunk to use
             participant_identity: The identity of the participant to add
             participant_name: The name of the participant to add
+            wait_until_answered: Blocks until user answers the call, or if the call fails
+            play_dialtone: Whether to play a dialtone during the call
+            play_ringtone: Whether to play a ringtone during the call
+
+            Additional arguments defined by api.CreateSIPParticipantRequest can be listed as kwargs
 
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
@@ -345,6 +354,10 @@ class JobContext:
                     sip_trunk_id=trunk_id,
                     sip_call_to=call_to,
                     participant_name=participant_name if is_given(participant_name) else None,
+                    wait_until_answered=wait_until_answered,
+                    play_dialtone=play_dialtone,
+                    play_ringtone=play_ringtone,
+                    **kwargs,
                 )
             ),
         )
@@ -357,6 +370,7 @@ class JobContext:
         participant: rtc.RemoteParticipant | str,
         transfer_to: str,
         play_dialtone: bool = False,
+        **kwargs: Any,
     ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """Transfer a SIP participant to another number.
 
@@ -366,6 +380,8 @@ class JobContext:
                          This can either be a number (+12345555555) or a
                          sip host (sip:<user>@<host>)
             play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
+
+            Additional arguments defined by api.TransferSIPParticipantRequest can be listed as kwargs
 
 
         Returns:
@@ -397,6 +413,7 @@ class JobContext:
                     participant_identity=participant_identity,
                     transfer_to=transfer_to,
                     play_dialtone=play_dialtone,
+                    **kwargs,
                 )
             ),
         )
