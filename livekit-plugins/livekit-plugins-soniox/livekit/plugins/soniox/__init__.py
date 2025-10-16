@@ -17,10 +17,17 @@
 See https://docs.livekit.io/agents/integrations/stt/soniox/ for more information.
 """
 
-from .stt import STT, STTOptions
+from .stt import STT, ContextGeneralItem, ContextObject, ContextTranslationTerm, STTOptions
 from .version import __version__
 
-__all__ = ["STT", "STTOptions", "__version__"]
+__all__ = [
+    "STT",
+    "STTOptions",
+    "ContextObject",
+    "ContextGeneralItem",
+    "ContextTranslationTerm",
+    "__version__",
+]
 
 
 from livekit.agents import Plugin
