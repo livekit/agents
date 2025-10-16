@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from livekit.agents.inference_runner import _InferenceRunner
+from livekit.agents.inference_runner import LocalInferenceRunner
 
 from .base import EOUModelBase, _EUORunnerBase
 
@@ -29,4 +29,4 @@ class EnglishModel(EOUModelBase):
         return _EUORunnerEn.INFERENCE_METHOD
 
 
-_InferenceRunner.register_runner(_EUORunnerEn)
+LocalInferenceRunner.register_runner(_EUORunnerEn)
