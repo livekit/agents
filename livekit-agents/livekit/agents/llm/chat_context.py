@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool, RawFunctionTool
+    from ..llm import FunctionTool, RawFunctionTool, LLM
 
 
 class ImageContent(BaseModel):
@@ -232,6 +232,7 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -240,6 +241,8 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if is_given(extra):
+            kwargs["extra"] = extra
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
@@ -494,6 +497,93 @@ class ChatContext:
                 return i + 1
 
         return 0
+
+    async def summarize(
+        self,
+        llm_v: LLM,
+        *,
+        keep_last_turns: int = 2,
+    ) -> ChatContext:
+        to_summarize: list[ChatMessage] = []
+        for item in self.items:
+            if item.type != "message":
+                continue
+            if item.role not in ("user", "assistant"):
+                continue
+            if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+                continue
+
+            text = (item.text_content or "").strip()
+            if text:
+                to_summarize.append(item)
+        if not to_summarize:
+            return self
+
+        tail_n = max(0, min(len(to_summarize), keep_last_turns * 2))
+        if tail_n == 0:
+            head, tail = to_summarize, []
+        else:
+            head, tail = to_summarize[:-tail_n], to_summarize[-tail_n:]
+
+        if not head:
+            return self
+        
+        source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
+        if not source_text:
+            return self
+
+        chat_ctx = ChatContext()
+        chat_ctx.add_message(
+            role="system",
+            content=(
+                "Compress older chat history into a short, faithful summary.\n"
+                "Focus on user goals, constraints, decisions, key facts/preferences/entities, and pending tasks.\n"
+                "Exclude chit-chat and greetings. Be concise."
+            ),
+        )
+        chat_ctx.add_message(
+            role="user",
+            content=f"Conversation to summarize:\n\n{source_text}",
+        )
+
+        chunks: list[str] = []
+        async for chunk in llm_v.chat(chat_ctx=chat_ctx):
+            if chunk.delta and chunk.delta.content:
+                chunks.append(chunk.delta.content)
+
+        summary = "".join(chunks).strip()
+        if not summary:
+            return self
+
+        tail_start_ts = tail[0].created_at if tail else float("inf")
+
+        preserved: list[ChatItem] = []
+        for it in self.items:
+            if (
+                it.type in ("function_call", "function_call_output")
+                and it.created_at < tail_start_ts
+            ):
+                continue
+
+            if it.type == "message" and it.role in ("user", "assistant"):
+                continue
+
+            preserved.append(it)
+
+        self._items = preserved
+
+        created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
+        summary_msg = self.add_message(
+            role="assistant",
+            content=f"[history summary]\n{summary}",
+            created_at=created_at_hint,
+            extra={"is_summary": True}
+        )
+
+        for msg in tail:
+            self._items.append(msg)
+
+        return self
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ChatContext:
