@@ -386,7 +386,7 @@ class STT(stt.STT):
         if self._stt_options.additional_vocab:
             # API expects list of dicts, not dict format
             transcription_config.additional_vocab = [  # type: ignore
-                {"content": e.content, "sounds_like": e.sounds_like}
+                {"content": e.content, **(e.sounds_like and {"sounds_like": e.sounds_like})}
                 for e in self._stt_options.additional_vocab
             ]
 
