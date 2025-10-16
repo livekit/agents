@@ -83,7 +83,7 @@ class AgentSessionOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
-    talking_to_ivr: bool
+    dial_to_phone_ivr: bool
     tts_text_transforms: Sequence[TextTransforms] | None
 
 
@@ -169,7 +169,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
-        talking_to_ivr: bool = False,
+        dial_to_phone_ivr: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -254,8 +254,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
-            talking_to_ivr (bool): Indicates the participant the agent interacts with is an
-                IVR system (instead of a human caller). Defaults to ``False``.
+            dial_to_phone_ivr (bool): Indicates the participant that the agent interacts with is a phone number
+                which could potentially be an IVR system. Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -295,7 +295,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
-            talking_to_ivr=talking_to_ivr,
+            dial_to_phone_ivr=dial_to_phone_ivr,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()

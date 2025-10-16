@@ -269,7 +269,13 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
-        return self._agent.tools + self._mcp_tools  # type: ignore
+        tools = self._agent.tools + self._mcp_tools  # type: ignore
+
+        if self._session.options.dial_to_phone_ivr:
+            from ..beta.tools.send_dtmf import send_dtmf_events
+
+            tools.append(send_dtmf_events)
+        return tools
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -1666,7 +1672,9 @@ class AgentActivity(RecognitionHooks):
         if audio_output is not None:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node, input=tts_text_input, model_settings=model_settings,
+                node=self._agent.tts_node,
+                input=tts_text_input,
+                model_settings=model_settings,
                 text_transforms=self._session.options.tts_text_transforms,
             )
             tasks.append(tts_task)

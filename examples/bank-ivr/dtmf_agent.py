@@ -1,5 +1,6 @@
 import logging
 import os
+from textwrap import dedent
 
 from dotenv import load_dotenv
 
@@ -13,7 +14,6 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.agents.beta.tools.send_dtmf import send_dtmf_events
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 logger = logging.getLogger("phone-tree-agent")
@@ -31,12 +31,23 @@ class DtmfAgent(Agent):
     def __init__(self, goal: str) -> None:
         super().__init__(
             instructions=(
-                "You are a voice assistant that can help users navigate a bank IVR system by pressing numbers on the phone. "
-                "You have access to a tool to send a sequence of dtmf number inputs. Prefer using the tool to send number input over using your own voice. "
-                f"You are connected to a automatic IVR system and your goal is {goal}. "
-                "Listen to the IVR instructions and follow them carefully to navigate to the correct place to enter the account number. "
+                dedent(
+                    f"""
+                    # Role and Objective
+                    - Act as a voice assistant that helps users navigate a bank's IVR system by entering numbers via keypad as a simulated human caller.
+                    # Instructions
+                    - Use the DTMF tool whenever digits are required to be entered; do not say numbers aloud if keypad entry is expected.
+                    - Assume the persona of a human caller interacting naturally with the IVR.
+                    - Your primary goal is: `{goal}`.
+                    - Carefully listen to each IVR prompt and select the most appropriate option.
+                    - After each digit entry, validate whether the intended IVR action occurred (e.g., appropriate menu or response received) in 1-2 lines, and decide whether to continue or self-correct if needed.
+                    - Use only the DTMF tool to follow the IVR instructions; if an unavailable action is required, note the limitation and propose alternatives.
+                    # Example
+                    - If the prompt states: “Press 1 for account services,” call `send_dtmf_events` with `['1']` will wait IVR to process. Use `['1', '#']` to bypass the waiting period.
+                    - Prefer bypassing the waiting period by always appending `#` to the digit sequence you send; the IVR treats that as an instant confirmation.
+                    """
+                )
             ),
-            tools=[send_dtmf_events],
         )
 
 
@@ -48,9 +59,10 @@ async def dtmf_session(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4.1"),
+        llm=openai.LLM(model="gpt-5"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
+        dial_to_phone_ivr=True,
     )
 
     usage_collector = metrics.UsageCollector()
