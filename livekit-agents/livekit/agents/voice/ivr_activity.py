@@ -40,7 +40,6 @@ class IVRActivity:
     async def update_agent(self, agent: Agent) -> None:
         from ..beta.tools.send_dtmf import send_dtmf_events
 
-        logger.info("Adding send_dtmf_events tool to agent")
         agent._tools.append(send_dtmf_events)
 
     def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
@@ -61,7 +60,7 @@ class IVRActivity:
 
     async def _send_silence_reminder(self) -> None:
         logger.info("Sending silence reminder")
-        await self._session.generate_reply(user_input=DEFAULT_SILENCE_REMINDER_MESSAGE)
+        self._session.generate_reply(user_input=DEFAULT_SILENCE_REMINDER_MESSAGE)
 
     async def aclose(self) -> None:
         self._send_silence_reminder_debounced.cancel()

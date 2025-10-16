@@ -154,21 +154,21 @@ class RootBankIVRAgent(Agent):
 
     async def _authenticate_customer(self) -> None:
         while True:
-            # customer_id = await collect_digits(
-            #     self,
-            #     prompt="Please enter your eight digit customer ID",
-            #     num_digits=8,
-            #     confirmation=False,
-            # )
-            customer_id = "10000001"
+            customer_id = await collect_digits(
+                self,
+                prompt="Please enter your eight digit customer ID",
+                num_digits=8,
+                confirmation=True,
+            )
+            # customer_id = "10000001"
             await add_event_message(self, content=f"User entered customer ID: {customer_id}")
-            # pin = await collect_digits(
-            #     self,
-            #     prompt="Now enter your four digit telephone banking PIN",
-            #     num_digits=4,
-            #     confirmation=False,
-            # )
-            pin = "0000"
+            pin = await collect_digits(
+                self,
+                prompt="Now enter your four digit telephone banking PIN",
+                num_digits=4,
+                confirmation=True,
+            )
+            # pin = "0000"
             await add_event_message(self, content=f"User entered PIN: {pin}")
 
             if self._service.authenticate(customer_id, pin):

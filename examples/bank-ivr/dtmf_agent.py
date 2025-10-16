@@ -14,6 +14,7 @@ from livekit.agents import (
     cli,
     metrics,
 )
+from livekit.agents.llm.tool_context import function_tool
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 logger = logging.getLogger("phone-tree-agent")
@@ -44,7 +45,7 @@ class DtmfAgent(Agent):
 
                     {"\n".join([f"{i + 1}. {task}" for i, task in enumerate(tasks)])}
 
-
+                    - You will use account number 10000001 and PIN 0000 to authenticate and navigate the IVR.
                     - Carefully listen to each IVR prompt and select the most appropriate option.
                     - Use only the DTMF tool to follow the IVR instructions; if an unavailable action is required, note the limitation and propose alternatives.
                     # Example
@@ -55,15 +56,15 @@ class DtmfAgent(Agent):
             ),
         )
 
-    # @function_tool
-    # async def record_info(self, content: str) -> None:
-    #     """
-    #     Record the IVR navigation task results.
+    @function_tool
+    async def record_task_result(self, content: str) -> None:
+        """
+        Record the IVR navigation task results.
 
-    #     Args:
-    #         content: The information gathered from completing a task, short validation, or any IVR interaction observation.
-    #     """
-    #     logger.info(f"==> {content}")
+        Args:
+            content: The information gathered from completing a task, short validation, or any IVR interaction observation.
+        """
+        logger.info(f"==> {content}")
 
 
 @server.realtime_session(agent_name=PHONE_TREE_AGENT_DISPATCH_NAME)
