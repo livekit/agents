@@ -519,17 +519,20 @@ class ChatContext:
         if not to_summarize:
             return self
 
-        tail_n = min(len(to_summarize), max(0, keep_last_turns) * 2)
-        head = to_summarize[:-tail_n] if tail_n else []
-        tail = to_summarize[-tail_n:] if tail_n else []
+        tail_n = max(0, min(len(to_summarize), keep_last_turns * 2))
+        if tail_n == 0:
+            head, tail = to_summarize, []
+        else:
+            head, tail = to_summarize[:-tail_n], to_summarize[-tail_n:]
+
         if not head:
             return self
-
+        
         source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
         if not source_text:
             return self
 
-        chat_ctx = llm_v.ChatContext()
+        chat_ctx = ChatContext()
         chat_ctx.add_message(
             role="system",
             content=(
@@ -569,7 +572,7 @@ class ChatContext:
 
         self._items = preserved
 
-        created_at_hint = (tail[0].created_at - 1e-6) if tail else None
+        created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
         summary_msg = self.add_message(
             role="assistant",
             content=f"[history summary]\n{summary}",
