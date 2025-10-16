@@ -503,7 +503,6 @@ class ChatContext:
         llm_v: LLM,
         *,
         keep_last_turns: int = 2,
-        max_summary_tokens: int = 220,
     ) -> ChatContext:
         to_summarize: list[ChatMessage] = []
         for item in self.items:
@@ -544,10 +543,8 @@ class ChatContext:
             content=f"Conversation to summarize:\n\n{source_text}",
         )
 
-        extra_kwargs = {"max_tokens": max_summary_tokens}
-
         chunks: list[str] = []
-        async for chunk in llm_v.chat(chat_ctx=chat_ctx, extra_kwargs=extra_kwargs):
+        async for chunk in llm_v.chat(chat_ctx=chat_ctx):
             if chunk.delta and chunk.delta.content:
                 chunks.append(chunk.delta.content)
 
