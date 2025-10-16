@@ -26,6 +26,7 @@ from aws_sdk_bedrock_runtime.models import (
     InvokeModelWithBidirectionalStreamInputChunk,
     ModelErrorException,
     ModelNotReadyException,
+    ModelStreamErrorException,
     ModelTimeoutException,
     ThrottlingException,
     ValidationException,
@@ -963,7 +964,12 @@ class RealtimeSession(  # noqa: F811
                             ),
                         )
                         raise
-                except (ThrottlingException, ModelNotReadyException, ModelErrorException) as re:
+                except (
+                    ThrottlingException,
+                    ModelNotReadyException,
+                    ModelErrorException,
+                    ModelStreamErrorException,
+                ) as re:
                     logger.warning(f"Retryable error: {re}\nAttempting to recover...")
                     await self._restart_session(re)
                     break
