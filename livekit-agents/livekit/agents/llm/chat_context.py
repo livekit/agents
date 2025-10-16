@@ -574,8 +574,8 @@ class ChatContext:
             role="assistant",
             content=f"[history summary]\n{summary}",
             created_at=created_at_hint,
+            extra={"is_summary": True}
         )
-        summary_msg.extra["is_summary"] = True
 
         for msg in tail:
             self._items.append(msg)
