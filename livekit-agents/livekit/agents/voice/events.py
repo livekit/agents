@@ -119,6 +119,8 @@ class UserInputTranscribedEvent(BaseModel):
     speaker_id: str | None = None
     language: str | None = None
     created_at: float = Field(default_factory=time.time)
+    start_time: float | None = None
+    end_time: float | None = None
 
 
 class AgentFalseInterruptionEvent(BaseModel):
