@@ -5,10 +5,10 @@ from time import perf_counter
 
 import aiohttp
 
-from livekit.agents import llm, utils
+from livekit.agents import get_job_context, llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .base import EOUModelBase, _EUORunnerBase
+from .base import MAX_HISTORY_TURNS, EOUModelBase, _EUORunnerBase
 from .log import logger
 
 REMOTE_INFERENCE_TIMEOUT = 2
@@ -38,33 +38,51 @@ class MultilingualModel(EOUModelBase):
 
         threshold = await super().unlikely_threshold(language)
         if threshold is None:
-            if url := _remote_inference_url():
-                async with utils.http_context.http_session().post(
-                    url=url,
-                    json={
-                        "language": language,
-                    },
-                    timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
-                ) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
-                    threshold = data.get("threshold")
-                    if threshold:
-                        self._languages[language] = {"threshold": threshold}
+            try:
+                if url := _remote_inference_url():
+                    async with utils.http_context.http_session().post(
+                        url=url,
+                        json={
+                            "language": language,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                        threshold = data.get("threshold")
+                        if threshold:
+                            self._languages[language] = {"threshold": threshold}
+            except Exception as e:
+                logger.warning("Error fetching threshold for language %s", language, exc_info=e)
 
         return threshold
 
     async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        timeout: float | None = 3,
     ) -> float:
         url = _remote_inference_url()
         if not url:
             return await super().predict_end_of_turn(chat_ctx, timeout=timeout)
 
+        messages = chat_ctx.copy(
+            exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
+        ).truncate(max_items=MAX_HISTORY_TURNS)
+
+        ctx = get_job_context()
+        request = messages.to_dict(exclude_image=True, exclude_audio=True, exclude_timestamp=True)
+        request["jobId"] = ctx.job.id
+        request["workerId"] = ctx.worker_id
+        agent_id = os.getenv("LIVEKIT_AGENT_ID")
+        if agent_id:
+            request["agentId"] = agent_id
+
         started_at = perf_counter()
         async with utils.http_context.http_session().post(
             url=url,
-            json=chat_ctx.to_dict(exclude_function_call=True),
+            json=request,
             timeout=aiohttp.ClientTimeout(total=REMOTE_INFERENCE_TIMEOUT),
         ) as resp:
             resp.raise_for_status()

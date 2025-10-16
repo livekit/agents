@@ -58,6 +58,7 @@ from .version import __version__
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
+HEARTBEAT_INTERVAL = 30
 
 
 def _default_initialize_process_fnc(proc: JobProcess) -> Any:
@@ -175,7 +176,7 @@ class WorkerOptions:
     drain_timeout: int = 1800
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+        dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
@@ -254,10 +255,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
-        opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
-        opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
-        opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
-        opts._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or None
+        opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL", "")
+        opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY", "")
+        opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET", "")
+        opts._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN", None)
 
         if not opts.ws_url:
             raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
@@ -269,6 +270,13 @@ class Worker(utils.EventEmitter[EventTypes]):
             raise ValueError(
                 "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
             )
+
+        # Ensure job processes and thread executors can initialize JobContext.api
+        # by inheriting credentials from environment variables. This guarantees that
+        # ctx.api works even when credentials are only supplied via WorkerOptions.
+        os.environ["LIVEKIT_URL"] = opts.ws_url
+        os.environ["LIVEKIT_API_KEY"] = opts.api_key
+        os.environ["LIVEKIT_API_SECRET"] = opts.api_secret
 
         if opts.job_memory_limit_mb > 0 and opts.job_executor_type != JobExecutorType.PROCESS:
             logger.warning(
@@ -650,6 +658,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     headers=headers,
                     params=params,
                     autoping=True,
+                    heartbeat=HEARTBEAT_INTERVAL,
                     proxy=self._opts.http_proxy or None,
                 )
 

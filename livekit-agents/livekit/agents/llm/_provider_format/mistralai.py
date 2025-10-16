@@ -1,33 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from livekit.agents import llm
 
+from .openai import to_chat_ctx as openai_to_chat_ctx
+
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], Literal[None]]:
-    if isinstance(chat_ctx, llm.ChatContext):
-        messages = chat_ctx.to_dict().get("items", [])
-        messages_mistral: list[dict[str, Any]] = []
-        for element in messages:
-            content_list = element.get("content", [])
-            if (
-                not content_list
-                or not isinstance(content_list[0], str)
-                or not content_list[0].strip()
-            ):
-                continue
+    messages, _ = openai_to_chat_ctx(chat_ctx, inject_dummy_user_message=inject_dummy_user_message)
 
-            content = content_list[0]
-            role = element.get("role")
-
-            if role == "assistant":
-                messages_mistral.append({"role": "assistant", "content": content})
-            elif role == "user":
-                messages_mistral.append({"role": "user", "content": content})
-            elif role == "system":
-                messages_mistral.append({"role": "system", "content": content})
-
-    return messages_mistral, None
+    if inject_dummy_user_message and (not messages or messages[-1]["role"] not in ["user", "tool"]):
+        messages.append({"role": "user", "content": ""})
+    return messages, None

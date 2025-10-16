@@ -505,6 +505,10 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
         assert push_text_task.done(), "expected push_text_task to be done"
 
+        # used by empty test
+        if not segments:
+            return
+
         request_id = audio_events[0].request_id
         assert request_id, "expected to have a request_id"
         assert all(e.request_id == request_id for e in audio_events), (
@@ -625,7 +629,31 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
     except asyncio.TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
-        print("closing tts_v")
+        await tts_v.aclose()
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("tts_factory", STREAM_TTS)
+async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
+    setup_oai_proxy(toxiproxy)
+    tts_info: dict = tts_factory()
+    tts_v: tts.TTS = tts_info["tts"]
+    proxy_upstream = tts_info["proxy-upstream"]
+    proxy_name = f"{tts_v.label}-proxy"
+    toxiproxy.create(proxy_upstream, proxy_name, listen=PROXY_LISTEN, enabled=True)
+    try:
+        # test one segment
+        await asyncio.wait_for(
+            _do_stream(
+                tts_v,
+                [],
+                conn_options=APIConnectOptions(max_retry=3, timeout=5),
+            ),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        pytest.fail("test timed out after 30 seconds")
+    finally:
         await tts_v.aclose()
 
 

@@ -52,6 +52,7 @@ class _TTSOptions:
     volume_gain_db: float
     custom_pronunciations: CustomPronunciations | None
     enable_ssml: bool
+    use_markup: bool
 
 
 class TTS(tts.TTS):
@@ -61,6 +62,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
+        voice_cloning_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
@@ -74,6 +76,7 @@ class TTS(tts.TTS):
         custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
         enable_ssml: bool = False,
+        use_markup: bool = False,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -86,6 +89,7 @@ class TTS(tts.TTS):
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
@@ -98,6 +102,7 @@ class TTS(tts.TTS):
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
+            use_markup (bool, optional): Whether to enable markup input for HD voices. Default is False.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
@@ -105,8 +110,11 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        if enable_ssml and use_streaming:
-            raise ValueError("SSML support is not available for streaming synthesis")
+        if enable_ssml:
+            if use_streaming:
+                raise ValueError("SSML support is not available for streaming synthesis")
+            if use_markup:
+                raise ValueError("SSML support is not available for markup input")
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
@@ -115,13 +123,18 @@ class TTS(tts.TTS):
 
         lang = language if is_given(language) else DEFAULT_LANGUAGE
         ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
-        name = DEFAULT_VOICE_NAME if not is_given(voice_name) else voice_name
 
         voice_params = texttospeech.VoiceSelectionParams(
-            name=name,
             language_code=lang,
             ssml_gender=ssml_gender,
         )
+        if is_given(voice_cloning_key):
+            voice_params.voice_clone = texttospeech.VoiceCloneParams(
+                voice_cloning_key=voice_cloning_key,
+            )
+        else:
+            voice_params.name = voice_name if is_given(voice_name) else DEFAULT_VOICE_NAME
+
         if not is_given(tokenizer):
             tokenizer = tokenize.blingfire.SentenceTokenizer()
 
@@ -138,8 +151,17 @@ class TTS(tts.TTS):
             volume_gain_db=volume_gain_db,
             custom_pronunciations=pronunciations,
             enable_ssml=enable_ssml,
+            use_markup=use_markup,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    @property
+    def model(self) -> str:
+        return "Chirp3"
+
+    @property
+    def provider(self) -> str:
+        return "Google Cloud Platform"
 
     def update_options(
         self,
@@ -231,19 +253,21 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            input = (
-                texttospeech.SynthesisInput(
-                    ssml=self._build_ssml(),
-                    custom_pronunciations=self._opts.custom_pronunciations,
+            if self._opts.use_markup:
+                tts_input = texttospeech.SynthesisInput(
+                    markup=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
                 )
-                if self._opts.enable_ssml
-                else texttospeech.SynthesisInput(
-                    text=self._input_text,
-                    custom_pronunciations=self._opts.custom_pronunciations,
+            elif self._opts.enable_ssml:
+                tts_input = texttospeech.SynthesisInput(
+                    ssml=self._build_ssml(), custom_pronunciations=self._opts.custom_pronunciations
                 )
-            )
+            else:
+                tts_input = texttospeech.SynthesisInput(
+                    text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
+                )
+
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
-                input=input,
+                input=tts_input,
                 voice=self._opts.voice,
                 audio_config=texttospeech.AudioConfig(
                     audio_encoding=self._opts.encoding,
@@ -348,8 +372,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 async for input in input_stream:
                     self._mark_started()
-                    yield texttospeech.StreamingSynthesizeRequest(
-                        input=texttospeech.StreamingSynthesisInput(text=input.token)
+                    yield (
+                        texttospeech.StreamingSynthesizeRequest(
+                            input=texttospeech.StreamingSynthesisInput(markup=input.token)
+                            if self._opts.use_markup
+                            else texttospeech.StreamingSynthesisInput(text=input.token)
+                        )
                     )
 
             except Exception:

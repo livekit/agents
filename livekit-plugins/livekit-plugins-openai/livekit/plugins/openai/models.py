@@ -1,4 +1,5 @@
-from typing import Literal
+from dataclasses import dataclass
+from typing import Literal, Optional, TypedDict, Union
 
 from openai.types import AudioModel
 
@@ -18,6 +19,9 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
     "gpt-4.1",
     "gpt-4.1-mini",
     "gpt-4.1-nano",
@@ -45,6 +49,11 @@ ChatModels = Literal[
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-16k-0613",
 ]
+RealtimeModels = Literal[
+    "gpt-realtime",
+    "gpt-realtime-2025-08-28",
+    "gpt-4o-realtime-preview",
+]
 EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
@@ -58,12 +67,46 @@ TelnyxChatModels = Literal[
     "meta-llama/Meta-Llama-3.1-70B-Instruct",
 ]
 
+NebiusChatModels = Literal[
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Llama-3.3-8B-Instruct",
+    "meta-llama/Meta-Llama-3.1-405B-Instruct",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "moonshotai/Kimi-K2-Instruct",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "NousResearch/Hermes-4-405B",
+    "NousResearch/Hermes-4-70B",
+    "zai-org/GLM-4.5",
+    "zai-org/GLM-4.5-Air",
+    "deepseek-ai/DeepSeek-R1-0528",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "Qwen/Qwen3-235B-A22B",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-30B-A3B",
+    "Qwen/Qwen3-4B-fast",
+    "Qwen/Qwen3-14B",
+    "Qwen/Qwen2.5-Coder-7B",
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "mistralai/Mistral-Nemo-Instruct-2407",
+    "google/gemma-2-2b-it",
+]
+
 CerebrasChatModels = Literal[
     "llama3.1-8b",
     "llama-3.3-70b",
     "llama-4-scout-17b-16e-instruct",
+    "llama-4-maverick-17b-128e-instruct",
     "qwen-3-32b",
-    "deepseek-r1-distill-llama-70b",
+    "qwen-3-235b-a22b-instruct-2507",
+    "qwen-3-235b-a22b-thinking-2507",
+    "qwen-3-coder-480b",
+    "gpt-oss-120b",
 ]
 
 PerplexityChatModels = Literal[
@@ -202,3 +245,34 @@ XAIChatModels = Literal[
     "grok-2-image-1212",
     "grok-2-1212",
 ]
+
+
+def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
+    return model in [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+    ]
+
+
+@dataclass
+class OpenRouterWebPlugin:
+    """OpenRouter web search plugin configuration"""
+
+    max_results: int = 5
+    search_prompt: Optional[str] = None
+    id: str = "web"
+
+
+class OpenRouterProviderPreferences(TypedDict, total=False):
+    """OpenRouter provider routing preferences."""
+
+    order: list[str]
+    allow_fallbacks: bool
+    require_parameters: bool
+    data_collection: Literal["allow", "deny"]
+    only: list[str]
+    ignore: list[str]
+    quantizations: list[str]
+    sort: Literal["price", "throughput", "latency"]
+    max_price: dict[str, float]

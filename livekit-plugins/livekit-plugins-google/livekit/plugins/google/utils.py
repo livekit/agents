@@ -16,6 +16,8 @@ from livekit.agents.llm.tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .tools import _LLMTool
@@ -23,21 +25,37 @@ from .tools import _LLMTool
 __all__ = ["to_fnc_ctx"]
 
 
-def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.FunctionDeclaration]:
+def to_fnc_ctx(
+    fncs: list[FunctionTool | RawFunctionTool],
+    *,
+    use_parameters_json_schema: bool = True,
+    tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+) -> list[types.FunctionDeclaration]:
     tools: list[types.FunctionDeclaration] = []
     for fnc in fncs:
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
-            tools.append(
-                types.FunctionDeclaration(
-                    name=info.name,
-                    description=info.raw_schema.get("description", ""),
-                    parameters_json_schema=info.raw_schema.get("parameters", {}),
+            fnc_kwargs = {
+                "name": info.name,
+                "description": info.raw_schema.get("description", ""),
+            }
+            if use_parameters_json_schema:
+                fnc_kwargs["parameters_json_schema"] = info.raw_schema.get("parameters", {})
+            else:
+                # https://github.com/googleapis/python-genai/issues/1147
+                fnc_kwargs["parameters"] = types.Schema.from_json_schema(
+                    json_schema=types.JSONSchema.model_validate(
+                        info.raw_schema.get("parameters", {})
+                    )
                 )
-            )
+
+            if is_given(tool_behavior):
+                fnc_kwargs["behavior"] = tool_behavior
+
+            tools.append(types.FunctionDeclaration(**fnc_kwargs))
 
         elif is_function_tool(fnc):
-            tools.append(_build_gemini_fnc(fnc))
+            tools.append(_build_gemini_fnc(fnc, tool_behavior=tool_behavior))
 
     return tools
 
@@ -79,7 +97,10 @@ def create_tools_config(
 
 
 def get_tool_results_for_realtime(
-    chat_ctx: llm.ChatContext, *, vertexai: bool = False
+    chat_ctx: llm.ChatContext,
+    *,
+    vertexai: bool = False,
+    tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
 ) -> types.LiveClientToolResponse | None:
     function_responses: list[types.FunctionResponse] = []
     for msg in chat_ctx.items:
@@ -87,6 +108,9 @@ def get_tool_results_for_realtime(
             res = types.FunctionResponse(
                 name=msg.name,
                 response={"output": msg.output},
+                scheduling=tool_response_scheduling
+                if is_given(tool_response_scheduling)
+                else types.FunctionResponseScheduling.WHEN_IDLE,
             )
             if not vertexai:
                 # vertexai does not support id in FunctionResponse
@@ -100,14 +124,21 @@ def get_tool_results_for_realtime(
     )
 
 
-def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
+def _build_gemini_fnc(
+    function_tool: FunctionTool, *, tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
+) -> types.FunctionDeclaration:
     fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
-    return types.FunctionDeclaration(
-        name=fnc["name"],
-        description=fnc["description"],
-        parameters=types.Schema.model_validate(json_schema) if json_schema else None,
-    )
+
+    kwargs = {
+        "name": fnc["name"],
+        "description": fnc["description"],
+        "parameters": types.Schema.model_validate(json_schema) if json_schema else None,
+    }
+    if is_given(tool_behavior):
+        kwargs["behavior"] = tool_behavior
+
+    return types.FunctionDeclaration(**kwargs)
 
 
 def to_response_format(response_format: type | dict) -> types.SchemaUnion:

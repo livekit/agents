@@ -94,6 +94,18 @@ class STT(stt.STT):
             region=region,
         )
 
+    @property
+    def model(self) -> str:
+        return (
+            self._config.language_model_name
+            if is_given(self._config.language_model_name)
+            else "unknown"
+        )
+
+    @property
+    def provider(self) -> str:
+        return "Amazon Transcribe"
+
     async def aclose(self) -> None:
         await super().aclose()
 
@@ -192,7 +204,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
+                            alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
@@ -200,20 +212,22 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
+                            alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
             if not resp.is_partial:
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
+    def _streaming_recognize_response_to_speech_data(self, resp: Result) -> stt.SpeechData:
+        confidence = 0.0
+        if resp.alternatives and (items := resp.alternatives[0].items):
+            confidence = items[0].confidence or 0.0
 
-def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData:
-    data = stt.SpeechData(
-        language="en-US",
-        start_time=resp.start_time if resp.start_time else 0.0,
-        end_time=resp.end_time if resp.end_time else 0.0,
-        text=resp.alternatives[0].transcript if resp.alternatives else "",
-    )
-
-    return data
+        return stt.SpeechData(
+            language=resp.language_code or self._opts.language,
+            start_time=resp.start_time if resp.start_time is not None else 0.0,
+            end_time=resp.end_time if resp.end_time is not None else 0.0,
+            text=resp.alternatives[0].transcript if resp.alternatives else "",
+            confidence=confidence,
+        )

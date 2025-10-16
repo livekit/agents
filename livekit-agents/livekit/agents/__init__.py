@@ -20,7 +20,7 @@ documentation, and examples.
 
 import typing
 
-from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice  # noqa: F401
+from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -78,6 +78,18 @@ from .voice import (
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
+from .voice.run_result import (
+    AgentHandoffEvent,
+    ChatMessageEvent,
+    EventAssert,
+    EventRangeAssert,
+    FunctionCallEvent,
+    FunctionCallOutputEvent,
+    RunAssert,
+    RunEvent,
+    RunResult,
+    mock_tools,
+)
 from .worker import (
     SimulateJobInfo,
     Worker,
@@ -165,11 +177,23 @@ __all__ = [
     "llm",
     "metrics",
     "stt",
+    "inference",
     "tokenize",
     "tts",
     "utils",
     "vad",
     "voice",
+    # run_result
+    "mock_tools",
+    "EventAssert",
+    "EventRangeAssert",
+    "RunAssert",
+    "RunResult",
+    "RunEvent",
+    "ChatMessageEvent",
+    "FunctionCallEvent",
+    "FunctionCallOutputEvent",
+    "AgentHandoffEvent",
 ]
 
 # Cleanup docs of unexported modules

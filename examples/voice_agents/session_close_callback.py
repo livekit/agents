@@ -1,9 +1,17 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, CloseEvent, JobContext, WorkerOptions, cli, llm
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    CloseEvent,
+    JobContext,
+    RoomInputOptions,
+    WorkerOptions,
+    cli,
+    llm,
+)
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -21,8 +29,6 @@ class MyAgent(Agent):
     def __init__(self):
         super().__init__(instructions="You are a helpful assistant.")
 
-        self._closing_task: asyncio.Task[None] | None = None
-
     @llm.function_tool
     async def close_session(self):
         """Called when user want to leave the conversation"""
@@ -30,8 +36,7 @@ class MyAgent(Agent):
         logger.info("Closing session from function tool")
         await self.session.generate_reply(instructions="say goodbye to the user")
 
-        # don't await it, the function call will be awaited before closing
-        self._closing_task = asyncio.create_task(self.session.aclose())
+        self.session.shutdown()
 
 
 async def entrypoint(ctx: JobContext):
@@ -45,7 +50,13 @@ async def entrypoint(ctx: JobContext):
     # session will be closed automatically when the linked participant disconnects
     # with reason CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED
     # or you can disable it by setting the RoomInputOptions.close_on_disconnect to False
-    await session.start(agent=MyAgent(), room=ctx.room)
+    await session.start(
+        agent=MyAgent(),
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            delete_room_on_close=True,  # Optionally, you can delete the room when the session is closed
+        ),
+    )
 
     @session.on("close")
     def on_close(ev: CloseEvent):
@@ -57,12 +68,18 @@ async def entrypoint(ctx: JobContext):
                 text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"
                 if item.interrupted:
                     text += " (interrupted)"
-                print(text)
-        print("=" * 20)
 
-        # Optionally, you can delete the room when the session is closed
-        # this will stop the worker immediately
-        ctx.delete_room()
+            elif item.type == "function_call":
+                text = f"function_call: {item.name}, arguments: {item.arguments}"
+
+            elif item.type == "function_call_output":
+                text = f"{item.name}: '{item.output}'"
+                if item.is_error:
+                    text += " (error)"
+
+            print(text)
+
+        print("=" * 20)
 
 
 if __name__ == "__main__":

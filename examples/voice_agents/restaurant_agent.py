@@ -14,6 +14,15 @@ from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
 
+# This example demonstrates a multi-agent system where tasks are delegated to sub-agents
+# based on the user's request.
+#
+# The user is initially connected to a greeter, and depending on their need, the call is
+# handed off to other agents that could help with the more specific tasks.
+# This helps to keep each agent focused on the task at hand, and also reduces costs
+# since only a subset of the tools are used at any given time.
+
+
 logger = logging.getLogger("restaurant-example")
 logger.setLevel(logging.INFO)
 

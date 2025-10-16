@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, tts, utils, vad
+from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
     RawFunctionTool,
+    RealtimeModel,
     find_function_tools,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
@@ -21,6 +22,7 @@ from ..utils import is_given
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
@@ -41,20 +43,32 @@ class Agent:
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         self._instructions = instructions
         self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
+
+        if isinstance(stt, str):
+            stt = inference.STT.from_model_string(stt)
+
+        if isinstance(llm, str):
+            llm = inference.LLM.from_model_string(llm)
+
+        if isinstance(tts, str):
+            tts = inference.TTS.from_model_string(tts)
+
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -62,6 +76,8 @@ class Agent:
         self._allow_interruptions = allow_interruptions
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
+        self._min_endpointing_delay = min_endpointing_delay
+        self._max_endpointing_delay = max_endpointing_delay
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -148,7 +164,9 @@ class Agent:
 
         await self._activity.update_tools(tools)
 
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+    async def update_chat_ctx(
+        self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
+    ) -> None:
         """
         Updates the agent's chat context.
 
@@ -158,15 +176,21 @@ class Agent:
         Args:
             chat_ctx (llm.ChatContext):
                 The new or updated chat context for the agent.
+            exclude_invalid_function_calls (bool): Whether to exclude function calls
+                and outputs not from the agent's tools.
 
         Raises:
             llm.RealtimeError: If updating the realtime session chat context fails.
         """
         if self._activity is None:
-            self._chat_ctx = chat_ctx.copy(tools=self._tools)
+            self._chat_ctx = chat_ctx.copy(
+                tools=self._tools if exclude_invalid_function_calls else NOT_GIVEN
+            )
             return
 
-        await self._activity.update_chat_ctx(chat_ctx)
+        await self._activity.update_chat_ctx(
+            chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
+        )
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -536,6 +560,25 @@ class Agent:
         return self._allow_interruptions
 
     @property
+    def min_endpointing_delay(self) -> NotGivenOr[float]:
+        """
+        Minimum time-in-seconds the agent must wait after a potential end-of-utterance signal
+        before it declares the user’s turn complete.
+
+        If this property was set at Agent creation, it will be used at runtime instead of the session's value.
+        """
+        return self._min_endpointing_delay
+
+    @property
+    def max_endpointing_delay(self) -> NotGivenOr[float]:
+        """
+        Maximum time-in-seconds the agent will wait before terminating the turn.
+
+        If this property was set at Agent creation, it will be used at runtime instead of the session's value.
+        """
+        return self._max_endpointing_delay
+
+    @property
     def min_consecutive_speech_delay(self) -> NotGivenOr[float]:
         """
         Retrieves the minimum consecutive speech delay for the agent.
@@ -590,6 +633,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         super().__init__(
@@ -603,6 +648,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             tts=tts,
             mcp_servers=mcp_servers,
             allow_interruptions=allow_interruptions,
+            min_endpointing_delay=min_endpointing_delay,
+            max_endpointing_delay=max_endpointing_delay,
         )
 
         self.__started = False
@@ -677,6 +724,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+
+        if (
+            task_info.function_call
+            and isinstance(old_activity.llm, RealtimeModel)
+            and not old_activity.llm.capabilities.manual_function_calls
+        ):
+            logger.error(
+                f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context, "
+                "using AgentTask inside a function tool may have unexpected behavior."
+            )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         await session._update_activity(
