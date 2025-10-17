@@ -339,8 +339,11 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError(
                 f"Fish Audio TTS request timed out after {self._conn_options.timeout}s"
             ) from e
-        except (APIConnectionError, APIStatusError, APITimeoutError):
-            # Already logged at lower level - just re-raise
+        except APITimeoutError:
+            # Already logged - re-raise without wrapping
+            raise
+        except (APIConnectionError, APIStatusError):
+            # Already logged - re-raise without wrapping
             raise
         except Exception as e:
             # Unexpected errors only (shouldn't happen in normal operation)
@@ -470,8 +473,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     extra={"latency_mode": self._opts.latency_mode},
                 )
                 raise APITimeoutError("Fish Audio WebSocket streaming timed out") from e
-            except (APIConnectionError, APIStatusError, APITimeoutError):
-                # Already logged - just re-raise
+            except APITimeoutError:
+                # Already logged - re-raise without wrapping
+                raise
+            except (APIConnectionError, APIStatusError):
+                # Already logged - re-raise without wrapping
                 raise
             except Exception as e:
                 # Unexpected errors during streaming
