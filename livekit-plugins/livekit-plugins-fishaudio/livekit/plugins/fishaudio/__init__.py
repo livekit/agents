@@ -17,6 +17,9 @@
 See https://docs.livekit.io/agents for more information.
 """
 
+from livekit.agents import Plugin
+
+from .log import logger
 from .models import OutputFormat, TTSBackends
 from .tts import TTS, create_reference_audio
 from .version import __version__
@@ -29,14 +32,10 @@ __all__ = [
     "__version__",
 ]
 
-from livekit.agents import Plugin
-
-from .log import logger
-
 
 class FishAudioPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__ or "", logger)
 
 
 Plugin.register_plugin(FishAudioPlugin())

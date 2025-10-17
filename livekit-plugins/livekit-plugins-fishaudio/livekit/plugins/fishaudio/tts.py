@@ -70,8 +70,8 @@ class TTS(tts.TTS):
                 "Fish Audio API key is required, either as argument or set FISH_API_KEY environment variable"
             )
 
-        self._model = model
-        self._output_format = output_format
+        self._model: TTSBackends = model
+        self._output_format: OutputFormat = output_format
         self._reference_id = reference_id or os.getenv("FISH_AUDIO_REFERENCE_ID")
         self._base_url = base_url
 
@@ -173,9 +173,10 @@ class TTS(tts.TTS):
         return ChunkedStream(tts_instance=self, input_text=text, conn_options=conn_options)
 
     async def aclose(self) -> None:
-        """Close TTS resources."""
-        # Fish Audio SDK doesn't require explicit cleanup
-        pass
+        """
+        Close TTS resources.
+        Fish Audio SDK doesn't require explicit cleanup.
+        """
 
 
 class ChunkedStream(tts.ChunkedStream):
