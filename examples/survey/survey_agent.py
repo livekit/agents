@@ -35,7 +35,146 @@ def write_to_csv(filename: str, data: dict):
         csv_writer.writerow(data)
 
 
-class ExperienceTask(AgentTask[str]):
+@function_tool()
+async def disqualify(context: RunContext, disqualification_reason: str) -> None:
+    """Call if the candidate refuses to explicitly answer or if they do not meet the prerequisites for the position.
+    This function will terminate the interview and hang up.
+
+    Args:
+        disqualification_reason (str): The justification for ending the interview (ex. Refuses to answer question)
+    """
+    context.session.generate_reply(
+        instructions=f"The interview is ending now, inform the candidate that the reason was {disqualification_reason}"
+    )
+    # wip: in this scenario, disqualified candidates do not get recorded into the csv file, is that ideal?
+    context.session.shutdown()
+
+
+class WorkDistributionTask(AgentTask[str]):
+    def __init__(self, team_size: int) -> None:
+        super().__init__(
+            instructions="""You will be asking the candidate about their project in relation to their team size."""
+        )
+        self._team_size = team_size
+
+    async def on_enter(self) -> None:
+        if self._team_size == 1:
+            self.session.generate_reply(
+                instructions="Have the candidate walk you through their thought process on splitting the project work between a team of four. If unspecified, probe further on why they made their decisions."
+            )
+
+        else:
+            self.session.generate_reply(
+                instructions="Inquire how the work was divided up between the team. If the candidate believes that there was a better way to distribute work, probe further on what they would change."
+            )
+
+    @function_tool()
+    async def record_work_division_response(self, overall_response: str):
+        """Call once the candidate has provided a complete overview to their perspective on work division.
+
+        Args:
+            overall_response (str): A complete and well rounded response to project work division inquiries
+        """
+        self.complete(overall_response)
+
+
+class ExpandProjectTask(AgentTask[dict]):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You will be asking the candidate to expand upon their project intentions, whether it be to scale their current one or to create a new one."
+        )
+        self._result = {}
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(
+            instructions="Allow the candidate to choose a scenario between expanding upon the project they are currently speaking of or creating a new project entirely. Dissect their thought process and decisions."
+        )
+
+    @function_tool()
+    async def record_old_project_expansion_response(
+        self, new_features: str, scale_plan: str, overall_response: str
+    ):
+        """Call if the candidate decides to scale their previous project.
+
+        Args:
+            new_features (str): Record any new features the candidate expressed adding, such as improving GUI or adding an AI component.
+            scale_plan (str): Record how the candidate expressed scaling their project, such as deploying it if not already
+            overall_response (str): An overview of the candidate's response
+        """
+        # wip: summarize into fewer args
+        self.session.generate_reply(
+            instructions="Express interest in seeing the candidate scale their project as they described in the future."
+        )
+        self._result["new_features"] = new_features
+        self._result["scale_plan"] = scale_plan
+        self._result["overall_response"] = overall_response
+        self.complete(self._result)
+
+    @function_tool()
+    async def record_new_project_creation_response(
+        self, new_project_type: str, development_plan: str, overall_response: str
+    ):
+        """Call if the candidate decides to create a new project entirely.
+
+        Args:
+            new_project_type (str): The type of project, such as mobile app or AI program
+            development_plan (str): Record how the candidate plans to develop this project from start to finish with detail
+            overall_response (str): An overview of the candidate's response
+        """
+        self.session.generate_reply(
+            instructions="Respond to the candidate's project idea and express support for pursuing it in the future."
+        )
+        # wip: summarize into fewer args
+        self._result["new_project_type"] = new_project_type
+        self._result["development_plan"] = development_plan
+        self._result["overall_response"] = overall_response
+        self.complete(self._result)
+
+
+class ProjectTask(AgentTask[dict]):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
+                         Gather information about the most technical project the candidate has attempted and probe for their thinking process. Note specificities such as if they worked solo or in a team, and the technology stack they used
+                         if applicable. If they have no projects to dissect, call disqualify(). Do not mention any prerequisites for this position.""",
+            tools=[disqualify],
+        )
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="Learn about the candidate's most technically difficult project, be inquisitive on their design choices and thinking process."
+        )
+
+    @function_tool()
+    async def record_project_details(
+        self, context: RunContext, team_size: int, project_type: str, notes: str
+    ) -> None:  # wip: shorten args
+        """Call to record team size, a categorization of the project, and any additional notes before another round of questions.
+
+        Args:
+            team_size (int): The size of the project team, minimum of 1
+            project_type (str): The type of project being described, such as "full stack application" or "data visualization"
+            notes (str): Any further notes on the candidate's prologue of their project
+        """
+        tasks = [
+            Task(
+                lambda: WorkDistributionTask(team_size=team_size),
+                id="work_distribution_task",
+                description="Collects the candidate's perspective on work distribution regarding their project",
+            ),
+            Task(
+                lambda: ExpandProjectTask(),
+                id="expand_project_task",
+                description="Collects the candidate's response on either scaling a previous project or creating a new one",
+            ),
+        ]
+        task_group = TaskOrchestrator(tasks=tasks)
+        results = await task_group
+
+        self.complete(results)
+
+
+class ExperienceTask(AgentTask[dict]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
@@ -43,6 +182,7 @@ class ExperienceTask(AgentTask[str]):
             Record how many years of experience the candidate has and the descriptions of their previous jobs if any. There is no set required amount for this position.
             Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details. If the candidate wishes to change a previous answer, call out_of_scope.
             """,
+            tools=[disqualify],
         )
 
     async def on_enter(self) -> None:
@@ -68,6 +208,7 @@ class CommuteTask(AgentTask[dict]):
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week.
             """,
+            tools=[disqualify],
         )
         self._result = {}
 
@@ -84,20 +225,25 @@ class CommuteTask(AgentTask[dict]):
         Args:
             can_commute (bool): If the candidate can commute or not
         """
+        self._result["can_commute"] = can_commute
         if can_commute:
-            self._result["can_commute"] = can_commute
             commute_method = await CommuteMethodTask(commute_task=self)
             self._result["commute_method"] = commute_method
+
         self.complete(self._result)
 
 
 class CommuteMethodTask(AgentTask[str]):
     def __init__(self, commute_task: CommuteTask) -> None:
+        out_of_scope_tool = None
+        for tool in commute_task.tools:  # wip: will query better
+            if tool.__name__ == "out_of_scope":
+                out_of_scope_tool = tool
         super().__init__(
             instructions="You will now be collecting the candidate's method of transportation.",
             chat_ctx=commute_task.chat_ctx,
-            tools=[commute_task.tools[1]],
-        )  # add out of scope method
+            tools=[out_of_scope_tool],
+        )
         self._commute_task = commute_task
 
     async def on_enter(self) -> None:
@@ -134,12 +280,13 @@ class IntroTask(AgentTask[str]):
 
     @function_tool()
     async def record_name(self, context: RunContext, name: str, notes: str) -> None:
-        """Call to record the candidate's name and any notes about their attitude
+        """Call to record the candidate's name and any notes about their response
 
         Args:
             name (str): The candidate's name
             notes (str): Any additional notes about the candidate's responses (if none, return "none")
         """
+
         self.complete(name)
 
 
@@ -153,6 +300,11 @@ class SurveyAgent(Agent):
 
     async def on_enter(self) -> AgentTask:
         tasks = [
+            Task(
+                lambda: ProjectTask(),
+                id="project_task",
+                description="Probes the user about their thought process on projects",
+            ),
             Task(
                 lambda: ExperienceTask(),
                 id="experience_task",
