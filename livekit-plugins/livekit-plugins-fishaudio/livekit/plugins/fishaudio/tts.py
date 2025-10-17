@@ -97,7 +97,7 @@ class TTS(tts.TTS):
         self._output_format: OutputFormat = output_format
         self._reference_id = reference_id or os.getenv("FISH_AUDIO_REFERENCE_ID")
         self._base_url = base_url or "https://api.fish.audio"
-        self._latency_mode = latency_mode
+        self._latency_mode: LatencyMode = latency_mode
         self._streaming = streaming
         self._temperature = temperature
         self._top_p = top_p
