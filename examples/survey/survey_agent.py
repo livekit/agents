@@ -11,6 +11,7 @@ from livekit.agents import (
     AgentTask,
     JobContext,
     JobProcess,
+    RoomInputOptions,
     RunContext,
     WorkerOptions,
     cli,
@@ -46,7 +47,7 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     context.session.generate_reply(
         instructions=f"The interview is ending now, inform the candidate that the reason was {disqualification_reason}"
     )
-    # wip: in this scenario, disqualified candidates do not get recorded into the csv file, is that ideal?
+    # in this scenario, disqualified candidates do not get recorded into the csv file, is that ideal?
     context.session.shutdown()
 
 
@@ -73,7 +74,7 @@ class WorkDistributionTask(AgentTask[str]):
         """Call once the candidate has provided a complete overview to their perspective on work division.
 
         Args:
-            overall_response (str): A complete and well rounded response to project work division inquiries
+            overall_response (str): The candidate's response to approaching work division, especially regarding their aforementioned project
         """
         self.complete(overall_response)
 
@@ -101,7 +102,6 @@ class ExpandProjectTask(AgentTask[dict]):
             scale_plan (str): Record how the candidate expressed scaling their project, such as deploying it if not already
             overall_response (str): An overview of the candidate's response
         """
-        # wip: summarize into fewer args
         self.session.generate_reply(
             instructions="Express interest in seeing the candidate scale their project as they described in the future."
         )
@@ -124,7 +124,6 @@ class ExpandProjectTask(AgentTask[dict]):
         self.session.generate_reply(
             instructions="Respond to the candidate's project idea and express support for pursuing it in the future."
         )
-        # wip: summarize into fewer args
         self._result["new_project_type"] = new_project_type
         self._result["development_plan"] = development_plan
         self._result["overall_response"] = overall_response
@@ -147,14 +146,13 @@ class ProjectTask(AgentTask[dict]):
 
     @function_tool()
     async def record_project_details(
-        self, context: RunContext, team_size: int, project_type: str, notes: str
-    ) -> None:  # wip: shorten args
+        self, context: RunContext, team_size: int, project_description: str
+    ) -> None:
         """Call to record team size, a categorization of the project, and any additional notes before another round of questions.
 
         Args:
             team_size (int): The size of the project team, minimum of 1
-            project_type (str): The type of project being described, such as "full stack application" or "data visualization"
-            notes (str): Any further notes on the candidate's prologue of their project
+            project_description (str): A description of the project, including the type of project being described, such as "full stack application." Include the technology stack they used and their reasoning behind it.
         """
         tasks = [
             Task(
@@ -170,7 +168,6 @@ class ProjectTask(AgentTask[dict]):
         ]
         task_group = TaskOrchestrator(tasks=tasks)
         results = await task_group
-
         self.complete(results)
 
 
@@ -196,7 +193,7 @@ class ExperienceTask(AgentTask[dict]):
         """Call to record the years of experience the candidate has and its descriptions.
 
         Args:
-            experience_description (str): The years of experience the candidate has and a description
+            experience_description (str): The years of experience the candidate has and a description of each role they previously held. Take note of the corresponding companies as well.
         """
         self.complete(experience_description)
 
@@ -236,13 +233,13 @@ class CommuteTask(AgentTask[dict]):
 class CommuteMethodTask(AgentTask[str]):
     def __init__(self, commute_task: CommuteTask) -> None:
         out_of_scope_tool = None
-        for tool in commute_task.tools:  # wip: will query better
+        for tool in commute_task.tools:
             if tool.__name__ == "out_of_scope":
                 out_of_scope_tool = tool
         super().__init__(
             instructions="You will now be collecting the candidate's method of transportation.",
             chat_ctx=commute_task.chat_ctx,
-            tools=[out_of_scope_tool],
+            tools=[disqualify, out_of_scope_tool],
         )
         self._commute_task = commute_task
 
@@ -262,15 +259,16 @@ class CommuteMethodTask(AgentTask[str]):
         self.complete(commute_method)
 
 
-class IntroTask(AgentTask[str]):
+class IntroTask(AgentTask[dict]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You both have just started the call.
-            Welcome the candidate to the interview and remain positive and concise. Take note of their attitude and how they respond.
-            You will also be collecting their name.
+            Welcome the candidate to the interview, remain positive and concise.
+            You will also be collecting their name and introduction.
             """,
         )
+        self._results = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -279,15 +277,16 @@ class IntroTask(AgentTask[str]):
         )
 
     @function_tool()
-    async def record_name(self, context: RunContext, name: str, notes: str) -> None:
+    async def record_name(self, context: RunContext, name: str, intro_notes: str) -> None:
         """Call to record the candidate's name and any notes about their response
 
         Args:
             name (str): The candidate's name
-            notes (str): Any additional notes about the candidate's responses (if none, return "none")
+            intro_notes (str): The candidate's introduction and any additional notes
         """
-
-        self.complete(name)
+        self._results["name"] = name
+        self._results["intro_notes"] = intro_notes
+        self.complete(self._results)
 
 
 class SurveyAgent(Agent):
@@ -356,6 +355,9 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=SurveyAgent(),
         room=ctx.room,
+        room_input_options=RoomInputOptions(
+            delete_room_on_close=True,
+        ),
     )
 
     await ctx.connect()
