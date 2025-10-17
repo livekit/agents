@@ -24,8 +24,8 @@ from fish_audio_sdk import (  # type: ignore[import-untyped]
     ReferenceAudio,
     Session as FishAudioSession,
     TTSRequest,
-    WebSocketErr,
 )
+from fish_audio_sdk.exceptions import WebSocketErr  # type: ignore[import-untyped]
 
 from livekit.agents import (
     APIConnectionError,
@@ -150,6 +150,8 @@ class TTS(tts.TTS):
     def _ensure_ws_session(self) -> AsyncWebSocketSession:
         """Ensure WebSocket session is initialized."""
         if self._ws_session is None:
+            # _api_key is guaranteed to be str after __init__ validation
+            assert self._api_key is not None, "API key must be set"
             self._ws_session = AsyncWebSocketSession(apikey=self._api_key, base_url=self._base_url)
         return self._ws_session
 
