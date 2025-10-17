@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Agent Framework plugin for voice synthesis with Fish Audio's API."
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9.0"
+requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "fishaudio", "fish-audio"]
 classifiers = [
@@ -18,8 +18,9 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = ["livekit-agents[codecs]>=1.2.15", "fish-audio-sdk"]

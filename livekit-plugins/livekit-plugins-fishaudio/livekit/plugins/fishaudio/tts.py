@@ -16,17 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
-from fish_audio_sdk import ReferenceAudio
-from fish_audio_sdk import Session as FishAudioSession
-from fish_audio_sdk import TTSRequest
+from fish_audio_sdk import ReferenceAudio, Session as FishAudioSession, TTSRequest  # type: ignore[import-untyped]
+
 from livekit.agents import tts, utils
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import OutputFormat, TTSBackends
+
+if TYPE_CHECKING:
+    pass
 
 
 class TTS(tts.TTS):
@@ -137,7 +138,8 @@ class TTS(tts.TTS):
         Returns:
             list[dict[str, Any]]: List of available voice models with their metadata.
         """
-        return await self._session.list_models.awaitable()
+        result = await self._session.list_models.awaitable()
+        return cast(list[dict[str, Any]], result)
 
     async def get_model(self, model_id: str) -> dict[str, Any]:
         """
@@ -149,7 +151,8 @@ class TTS(tts.TTS):
         Returns:
             dict[str, Any]: Model information including metadata and capabilities.
         """
-        return await self._session.get_model.awaitable(model_id)
+        result = await self._session.get_model.awaitable(model_id)
+        return cast(dict[str, Any], result)
 
     def synthesize(
         self,
@@ -190,9 +193,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(
-            tts=tts_instance, input_text=input_text, conn_options=conn_options
-        )
+        super().__init__(tts=tts_instance, input_text=input_text, conn_options=conn_options)
         self._tts_instance = tts_instance
         self._input_text = input_text
         self._conn_options = conn_options
@@ -243,9 +244,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         audio_data = bytearray()
         try:
-            for chunk in self._tts_instance.session.tts(
-                request, backend=self._tts_instance.model
-            ):
+            for chunk in self._tts_instance.session.tts(request, backend=self._tts_instance.model):
                 audio_data.extend(chunk)
         except Exception as e:
             logger.error("Fish Audio SDK TTS call failed", exc_info=e)
