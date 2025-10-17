@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from livekit import rtc
 
@@ -18,6 +19,9 @@ from ...voice.events import AgentStateChangedEvent, UserStateChangedEvent
 from ..workflows.utils import DtmfEvent, format_dtmf
 
 logger = logging.getLogger("dtmf-inputs")
+
+if TYPE_CHECKING:
+    from ...voice.speech_handle import SpeechHandle
 
 
 @dataclass
@@ -40,6 +44,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         *,
         num_digits: int,
         ask_for_confirmation: bool = False,
+        repeat_instructions: int = 1,
         dtmf_input_timeout: float = 5.0,
         dtmf_stop_event: DtmfEvent = DtmfEvent.POUND,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
@@ -48,17 +53,21 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         """
         Args:
             num_digits: The number of digits to collect.
-            chat_ctx: The chat context to use.
+            ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
+            repeat_instructions: The number of times to repeat the initial instructions.
             dtmf_input_timeout: The per-digit timeout.
             dtmf_stop_event: The DTMF event to stop collecting inputs.
-            ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
+            chat_ctx: The chat context to use.
             extra_instructions: Extra instructions to add to the task.
         """
         if num_digits <= 0:
             raise ValueError("num_digits must be greater than 0")
+        if repeat_instructions <= 0:
+            raise ValueError("repeat_instructions must be greater than 0")
 
         self._curr_dtmf_inputs: list[DtmfEvent] = []
         self._dtmf_reply_running: bool = False
+        self._repeat_instructions: int = repeat_instructions
 
         @function_tool
         async def confirm_inputs(inputs: list[DtmfEvent]) -> None:
@@ -115,6 +124,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
             self._dtmf_reply_running = True
 
             try:
+                self._cancel_repeat_instructions_task()
                 self.session.interrupt()
 
                 dmtf_str = format_dtmf(self._curr_dtmf_inputs)
@@ -171,6 +181,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                 self._generate_dtmf_reply.schedule()
 
         self._generate_dtmf_reply: Debounced[None] = _generate_dtmf_reply
+        self._repeat_instructions_task: asyncio.Task[None] | None = None
         self._on_sip_dtmf_received: Callable[[rtc.SipDTMF], None] = _on_sip_dtmf_received
         self._on_user_state_changed: Callable[[UserStateChangedEvent], None] = (
             _on_user_state_changed
@@ -188,7 +199,9 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         self.session.on("agent_state_changed", self._on_user_state_changed)
         self.session.on("agent_state_changed", self._on_agent_state_changed)
-        self.session.generate_reply(tool_choice="none")
+        self._repeat_instructions_task = asyncio.create_task(
+            self._generate_instructions_with_repeat()
+        )
 
     async def on_exit(self) -> None:
         ctx = get_job_context()
@@ -196,4 +209,34 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ctx.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         self.session.off("agent_state_changed", self._on_user_state_changed)
         self.session.off("agent_state_changed", self._on_agent_state_changed)
+        self._cancel_repeat_instructions_task()
         self._generate_dtmf_reply.cancel()
+
+    def _cancel_repeat_instructions_task(self) -> None:
+        if self._repeat_instructions_task:
+            self._repeat_instructions_task.cancel()
+            self._repeat_instructions_task = None
+
+    async def _generate_instructions_with_repeat(self) -> None:
+        instructions_content: str | None = None
+        handle: SpeechHandle | None = None
+
+        try:
+            for _ in range(self._repeat_instructions):
+                if not instructions_content:
+                    handle = self.session.generate_reply(tool_choice="none")
+                    await handle.wait_for_playout()
+
+                    if len(handle.chat_items) > 0 and isinstance(
+                        handle.chat_items[0].text_content, str
+                    ):
+                        instructions_content = handle.chat_items[0].text_content
+                else:
+                    handle = self.session.say(instructions_content, add_to_chat_ctx=False)
+                    await handle.wait_for_playout()
+
+                if handle.interrupted:
+                    break
+        finally:
+            if handle and not handle.done():
+                handle.interrupt(force=True)
