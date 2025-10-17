@@ -53,6 +53,7 @@ class IVRActivity:
 
     def _on_loop_detected(self, _) -> None:
         logger.info("IVRActivity: speech loop detected; sending notification")
+        self._loop_detector.reset()
         self._session.generate_reply(
             user_input=DEFAULT_LOOP_DETECTED_MESSAGE, allow_interruptions=False
         )
