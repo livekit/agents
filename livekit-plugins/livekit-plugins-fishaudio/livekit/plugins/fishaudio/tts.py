@@ -337,14 +337,16 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError(
                 f"Fish Audio TTS request timed out after {self._conn_options.timeout}s"
             ) from e
+        except (APIConnectionError, APIStatusError, APITimeoutError):
+            # Already logged at lower level - just re-raise
+            raise
         except Exception as e:
+            # Unexpected errors only (shouldn't happen in normal operation)
             logger.error(
-                "Fish Audio TTS synthesis failed",
+                "Unexpected error in Fish Audio TTS synthesis",
                 exc_info=e,
                 extra={"text_length": len(self._input_text)},
             )
-            if isinstance(e, (APIConnectionError, APIStatusError, APITimeoutError)):
-                raise
             raise APIConnectionError("Fish Audio TTS synthesis failed") from e
 
     def _generate_audio_sync(self) -> bytes:
@@ -368,7 +370,15 @@ class ChunkedStream(tts.ChunkedStream):
             for chunk in self._tts_instance.session.tts(request, backend=self._tts_instance.model):
                 audio_data.extend(chunk)
         except Exception as e:
-            logger.error("Fish Audio SDK TTS call failed", exc_info=e)
+            logger.error(
+                "Fish Audio SDK TTS call failed",
+                exc_info=e,
+                extra={
+                    "text_length": len(self._input_text),
+                    "reference_id": self._tts_instance.reference_id,
+                    "format": self._tts_instance.output_format,
+                },
+            )
             raise APIConnectionError("Fish Audio SDK TTS call failed") from e
 
         return bytes(audio_data)
@@ -440,15 +450,32 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._mark_started()
 
             except WebSocketErr as e:
-                logger.error("WebSocket error during streaming", exc_info=e)
+                logger.error(
+                    "Fish Audio WebSocket error during streaming",
+                    exc_info=e,
+                    extra={
+                        "latency_mode": self._opts.latency_mode,
+                        "format": self._opts.output_format,
+                        "reference_id": self._opts.reference_id,
+                    },
+                )
                 raise APIConnectionError(f"Fish Audio WebSocket error: {e}") from e
             except asyncio.TimeoutError as e:
-                logger.error("WebSocket streaming timed out")
+                logger.error(
+                    "Fish Audio WebSocket streaming timed out",
+                    extra={"latency_mode": self._opts.latency_mode},
+                )
                 raise APITimeoutError("Fish Audio WebSocket streaming timed out") from e
+            except (APIConnectionError, APIStatusError, APITimeoutError):
+                # Already logged - just re-raise
+                raise
             except Exception as e:
-                logger.error("Unexpected error during streaming", exc_info=e)
-                if isinstance(e, (APIConnectionError, APIStatusError, APITimeoutError)):
-                    raise
+                # Unexpected errors during streaming
+                logger.error(
+                    "Unexpected error during Fish Audio WebSocket streaming",
+                    exc_info=e,
+                    extra={"latency_mode": self._opts.latency_mode},
+                )
                 raise APIStatusError(f"Fish Audio streaming failed: {e}") from e
 
         finally:
