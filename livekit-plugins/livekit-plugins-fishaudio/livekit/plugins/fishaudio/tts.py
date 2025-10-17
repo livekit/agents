@@ -365,6 +365,7 @@ class ChunkedStream(tts.ChunkedStream):
             text=self._input_text,
             reference_id=self._tts_instance.reference_id,
             format=self._tts_instance.output_format,
+            sample_rate=self._tts_instance.sample_rate,
         )
 
         audio_data = bytearray()
@@ -429,6 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text="",  # Empty for streaming mode
                 reference_id=self._opts.reference_id,
                 format=self._opts.output_format,
+                sample_rate=self._opts.sample_rate,
                 latency=self._opts.latency_mode,
                 # Add prosody settings if needed
             )
