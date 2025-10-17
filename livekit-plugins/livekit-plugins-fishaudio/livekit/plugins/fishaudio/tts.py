@@ -90,7 +90,7 @@ class TTS(tts.TTS):
 
         self._model: TTSBackends = model
         self._output_format: OutputFormat = output_format
-        self._reference_id = reference_id or os.getenv("FISH_AUDIO_REFERENCE_ID")
+        self._reference_id = reference_id
         self._base_url = base_url or "https://api.fish.audio"
         self._latency_mode: LatencyMode = latency_mode
         self._streaming = streaming

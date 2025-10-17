@@ -1,9 +1,8 @@
 # Fish Audio plugin for LiveKit Agents
 
-Support for voice synthesis with Fish Audio's TTS API, featuring real-time WebSocket streaming and chunked synthesis.
+Support for voice synthesis with [Fish Audio](https://fish.audio/).
 
 - Docs: `https://docs.fish.audio/`
-- Models: `https://docs.fish.audio/models`
 
 ## Installation
 
@@ -19,12 +18,6 @@ Set the API key as an environment variable:
 
 ```
 FISH_API_KEY=<your_api_key>
-```
-
-Optionally set a reference voice model ID:
-
-```
-FISH_AUDIO_REFERENCE_ID=<voice_model_id>
 ```
 
 ## Usage
