@@ -32,6 +32,11 @@ class SilenceDetector(EventEmitter[EventTypes]):
         self._session.on("user_state_changed", self._on_user_state_changed)
         self._session.on("agent_state_changed", self._on_agent_state_changed)
 
+    async def aclose(self) -> None:
+        self._debounced_emit.cancel()
+        self._session.off("user_state_changed", self._on_user_state_changed)
+        self._session.off("agent_state_changed", self._on_agent_state_changed)
+
     def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
         self._current_user_state = ev.new_state
         self._schedule_check()
@@ -59,8 +64,3 @@ class SilenceDetector(EventEmitter[EventTypes]):
     async def _emit_silence_detected(self) -> None:
         logger.info("SilenceDetector: emitting silence_detected event")
         self.emit("silence_detected", None)
-
-    async def aclose(self) -> None:
-        self._debounced_emit.cancel()
-        self._session.off("user_state_changed", self._on_user_state_changed)
-        self._session.off("agent_state_changed", self._on_agent_state_changed)
