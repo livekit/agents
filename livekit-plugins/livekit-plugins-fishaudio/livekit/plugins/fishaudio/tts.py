@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, cast
 
 from fish_audio_sdk import (  # type: ignore[import-untyped]
     AsyncWebSocketSession,
@@ -39,9 +38,6 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
 from .models import LatencyMode, OutputFormat, TTSBackends
-
-if TYPE_CHECKING:
-    pass
 
 
 class TTS(tts.TTS):
@@ -154,84 +150,6 @@ class TTS(tts.TTS):
             assert self._api_key is not None, "API key must be set"
             self._ws_session = AsyncWebSocketSession(apikey=self._api_key, base_url=self._base_url)
         return self._ws_session
-
-    def update_options(
-        self,
-        *,
-        model: TTSBackends | None = None,
-        reference_id: str | None = None,
-        latency_mode: LatencyMode | None = None,
-        temperature: float | None = None,
-        top_p: float | None = None,
-    ) -> None:
-        """
-        Update TTS options dynamically.
-
-        Args:
-            model (TTSBackends | None): New TTS model/backend to use.
-            reference_id (str | None): New reference voice model ID.
-            latency_mode (LatencyMode | None): New latency mode.
-            temperature (float | None): New temperature value (0.1-1.0).
-            top_p (float | None): New top_p value (0.1-1.0).
-        """
-        if model is not None:
-            self._model = model
-            logger.debug("Updated TTS model", extra={"model": model})
-
-        if reference_id is not None:
-            self._reference_id = reference_id
-            logger.debug("Updated reference ID", extra={"reference_id": reference_id})
-
-        if latency_mode is not None:
-            self._latency_mode = latency_mode
-            logger.debug("Updated latency mode", extra={"latency_mode": latency_mode})
-
-        if temperature is not None:
-            self._temperature = max(0.1, min(1.0, temperature))
-            logger.debug("Updated temperature", extra={"temperature": self._temperature})
-
-        if top_p is not None:
-            self._top_p = max(0.1, min(1.0, top_p))
-            logger.debug("Updated top_p", extra={"top_p": self._top_p})
-
-    async def list_models(self) -> list[dict[str, Any]]:
-        """
-        List available voice models from Fish Audio.
-
-        Returns:
-            list[dict[str, Any]]: List of available voice models with their metadata.
-
-        Raises:
-            APIConnectionError: If connection to Fish Audio API fails.
-            APIStatusError: If API returns an error status.
-        """
-        try:
-            result = await self._session.list_models.awaitable()
-            return cast(list[dict[str, Any]], result)
-        except Exception as e:
-            logger.error("Failed to list models", exc_info=e)
-            raise APIConnectionError("Failed to retrieve model list from Fish Audio") from e
-
-    async def get_model(self, model_id: str) -> dict[str, Any]:
-        """
-        Get detailed information about a specific voice model.
-
-        Args:
-            model_id (str): The model ID to query.
-
-        Returns:
-            dict[str, Any]: Model information including metadata and capabilities.
-
-        Raises:
-            APIConnectionError: If connection to Fish Audio API fails.
-            APIStatusError: If the model is not found or API returns an error.
-        """
-        try:
-            result = await self._session.get_model.awaitable(model_id)
-            return cast(dict[str, Any], result)
-        except Exception as e:
-            logger.error("Failed to get model info", exc_info=e, extra={"model_id": model_id})
-            raise APIConnectionError(f"Failed to retrieve model {model_id} from Fish Audio") from e
 
     def synthesize(
         self,

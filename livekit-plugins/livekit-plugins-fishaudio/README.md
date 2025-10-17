@@ -85,21 +85,6 @@ tts = fishaudio.TTS(
 )
 ```
 
-#### Listing Available Voice Models
-
-```python
-tts = fishaudio.TTS()
-
-# Get all available models
-models = await tts.list_models()
-for model in models:
-    print(f"Model: {model['title']} - ID: {model['_id']}")
-
-# Get specific model info
-model_info = await tts.get_model("your_model_id")
-print(f"Model details: {model_info}")
-```
-
 #### Using Custom Reference Audio
 
 ```python
@@ -136,23 +121,6 @@ tts = fishaudio.TTS(
     temperature=0.7,  # 0.1-1.0: Lower = more consistent, Higher = more expressive
     top_p=0.9,        # 0.1-1.0: Controls diversity
     streaming=True,
-)
-```
-
-#### Dynamic Voice Switching
-
-Change voice models during runtime:
-
-```python
-# Initial setup
-tts = fishaudio.TTS(reference_id="voice_model_1")
-
-# Later, switch to a different voice
-tts.update_options(
-    model="s1",
-    reference_id="voice_model_2",
-    latency_mode="normal",
-    temperature=0.8,
 )
 ```
 
