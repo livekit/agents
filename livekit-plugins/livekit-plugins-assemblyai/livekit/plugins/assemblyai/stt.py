@@ -336,10 +336,10 @@ class SpeechStream(stt.SpeechStream):
         message_type = data.get("type")
         if message_type == "Turn":
             words = data.get("words", [])
-            end_of_turn = data.get("end_of_turn")
+            end_of_turn = data.get("end_of_turn", False)
             turn_is_formatted = data.get("turn_is_formatted", False)
-            utterance = data.get("utterance")
-            transcript = data.get("transcript")
+            utterance = data.get("utterance", "")
+            transcript = data.get("transcript", "")
 
             if words:
                 interim_text = " ".join(word.get("text", "") for word in words)
