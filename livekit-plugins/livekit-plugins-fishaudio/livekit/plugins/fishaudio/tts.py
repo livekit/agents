@@ -1,17 +1,3 @@
-# Copyright 2023 LiveKit, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +10,7 @@ from fish_audio_sdk import (  # type: ignore[import-untyped]
     TTSRequest,
 )
 from fish_audio_sdk.exceptions import WebSocketErr  # type: ignore[import-untyped]
+from fish_audio_sdk.schemas import Backends  # type: ignore[import-untyped]
 
 from livekit.agents import (
     APIConnectionError,
@@ -36,7 +23,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
-from .models import LatencyMode, OutputFormat, TTSBackends
+from .models import LatencyMode, OutputFormat
 
 
 class TTS(tts.TTS):
@@ -65,7 +52,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSBackends = "speech-1.6",
+        model: Backends = "speech-1.6",
         reference_id: str | None = None,
         output_format: OutputFormat = "pcm",
         sample_rate: int = 24000,
@@ -88,7 +75,7 @@ class TTS(tts.TTS):
                 "Fish Audio API key is required, either as argument or set FISH_API_KEY environment variable"
             )
 
-        self._model: TTSBackends = model
+        self._model: Backends = model
         self._output_format: OutputFormat = output_format
         self._reference_id = reference_id
         self._base_url = base_url or "https://api.fish.audio"
@@ -118,32 +105,26 @@ class TTS(tts.TTS):
         )
 
     @property
-    def model(self) -> TTSBackends:
-        """Get the current TTS model/backend."""
+    def model(self) -> Backends:
         return self._model
 
     @property
     def output_format(self) -> OutputFormat:
-        """Get the current output format."""
         return self._output_format
 
     @property
     def reference_id(self) -> str | None:
-        """Get the current reference voice model ID."""
         return self._reference_id
 
     @property
     def session(self) -> FishAudioSession:
-        """Get the Fish Audio SDK session."""
         return self._session
 
     @property
     def latency_mode(self) -> LatencyMode:
-        """Get the current latency mode."""
         return self._latency_mode
 
     def _ensure_ws_session(self) -> AsyncWebSocketSession:
-        """Ensure WebSocket session is initialized."""
         if self._ws_session is None:
             # _api_key is guaranteed to be str after __init__ validation
             assert self._api_key is not None, "API key must be set"
@@ -352,17 +333,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 format=self._opts.output_format,
                 sample_rate=self._opts.sample_rate,
                 latency=self._opts.latency_mode,
-                # Add prosody settings if needed
             )
 
             async def text_generator() -> AsyncIterator[str]:
-                """Generate text from input channel."""
                 async for data in self._input_ch:
                     if isinstance(data, self._FlushSentinel):
                         continue
                     yield data
 
-            # Start WebSocket streaming
             try:
                 audio_iterator = ws_session.tts(
                     request=request, text_stream=text_generator(), backend=self._opts.model
