@@ -259,8 +259,8 @@ class STT(stt.STT):
             enable_diarization = enable_diarization or config.diarization == "speaker"
             if not is_given(additional_vocab) and config.additional_vocab is not None:
                 additional_vocab = [
-                    AdditionalVocabEntry(content=k, sounds_like=v)
-                    for k, v in config.additional_vocab.items()
+                    AdditionalVocabEntry(content=v.get("content"), sounds_like=v.get("sounds_like"))
+                    for v in config.additional_vocab
                 ]
             if not is_given(punctuation_overrides) and config.punctuation_overrides is not None:
                 punctuation_overrides = config.punctuation_overrides
