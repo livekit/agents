@@ -8,10 +8,8 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RoomOutputOptions,
-    WorkerOptions,
     cli,
     metrics,
 )
@@ -20,6 +18,7 @@ from livekit.agents.beta.workflows.dtmf_inputs import (
 )
 from livekit.agents.llm.tool_context import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
+from livekit.agents.worker import AgentServer
 from livekit.plugins import deepgram, elevenlabs, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -29,6 +28,8 @@ load_dotenv()
 
 
 DTMF_AGENT_DISPATCH_NAME = os.getenv("DTMF_AGENT_DISPATCH_NAME", "my-telephony-agent")
+
+server = AgentServer()
 
 
 class DtmfAgent(Agent):
@@ -74,6 +75,7 @@ class DtmfAgent(Agent):
                         "press 1 to hear details about their current plan, press 2 to enable international data roaming, "
                         "or press 3 to explore upgrade options. Prompt them for a single digit and give them a moment to respond."
                     ),
+                    repeat_instructions=2,
                 )
             except ToolError as e:
                 await self.session.generate_reply(instructions=e.message, allow_interruptions=False)
@@ -110,6 +112,7 @@ class DtmfAgent(Agent):
                         "Provide an example such as 415 555 0199, remind them you're keeping their information secure, "
                         "then capture the digits. Read the number back in grouped segments for confirmation and invite them to confirm or re-enter."
                     ),
+                    repeat_instructions=2,
                 )
             except ToolError as e:
                 await self.session.generate_reply(instructions=e.message, allow_interruptions=False)
@@ -121,17 +124,14 @@ class DtmfAgent(Agent):
         return f"User's phone number is {result.user_input}"
 
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
-
+@server.realtime_session(agent_name=DTMF_AGENT_DISPATCH_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
 
     session: AgentSession = AgentSession(
-        vad=ctx.proc.userdata["vad"],
+        vad=silero.VAD.load(),
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
@@ -159,10 +159,4 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            agent_name=DTMF_AGENT_DISPATCH_NAME,
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
-        )
-    )
+    cli.run_app(server)
