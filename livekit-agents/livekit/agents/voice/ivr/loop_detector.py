@@ -27,3 +27,8 @@ class BaseLoopDetector(ABC, EventEmitter[EventTypes]):
     @abstractmethod
     def reset(self) -> None:
         raise NotImplementedError
+
+
+class TfidfLoopDetector(BaseLoopDetector):
+    def __init__(self, session: AgentSession) -> None:
+        pass
