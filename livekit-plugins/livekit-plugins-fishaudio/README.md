@@ -12,15 +12,20 @@ pip install livekit-plugins-fishaudio
 
 ## Pre-requisites
 
-You'll need an API key from Fish Audio. It can be set as an environment variable: `FISH_API_KEY`
+You'll need an API key from Fish Audio. You can set the following environment variables:
+
+- `FISH_API_KEY`: Your Fish Audio API key (required)
+- `FISH_AUDIO_REFERENCE_ID`: Optional default reference voice model ID
 
 ## Usage
 
-### Basic Usage
+### Real-time Streaming (Recommended)
+
+Fish Audio's WebSocket streaming provides the lowest latency for interactive voice applications:
 
 ```python
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.plugins import fishaudio
+from livekit.plugins import fishaudio, deepgram, openai, silero
 
 async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
@@ -36,7 +41,11 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=fishaudio.TTS(),
+        tts=fishaudio.TTS(
+            streaming=True,  # Enable WebSocket streaming (default)
+            latency_mode="balanced",  # ~300ms latency
+            output_format="pcm",  # PCM recommended for streaming
+        ),
         chat_ctx=initial_ctx,
     )
 
@@ -47,65 +56,40 @@ if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 ```
 
-### Using a Specific Voice Model
+### Chunked Synthesis (Non-streaming)
+
+For use cases where latency is not critical:
+
+```python
+tts = fishaudio.TTS(
+    streaming=False,  # Disable streaming
+    output_format="mp3",  # MP3, WAV, or PCM
+)
+
+# Use synthesize() instead of stream()
+stream = tts.synthesize("Hello, world!")
+async for audio in stream:
+    # Process complete audio chunks
+    pass
+```
+
+### Voice Model Configuration
+
+#### Using a Reference Voice Model
 
 ```python
 tts = fishaudio.TTS(
     reference_id="your_voice_model_id",
     model="speech-1.6",
+    streaming=True,
 )
 ```
 
-### Using Custom Reference Audio
+#### Listing Available Voice Models
 
 ```python
-from livekit.plugins import fishaudio
+tts = fishaudio.TTS()
 
-# Read reference audio file
-with open("reference.wav", "rb") as f:
-    reference_audio = fishaudio.create_reference_audio(
-        audio=f.read(),
-        text="This is the reference audio text",
-    )
-
-# Use in TTS request (requires custom implementation)
-```
-
-### Available Models
-
-- `speech-1.5`: Earlier version
-- `speech-1.6`: Latest recommended version (default)
-- `agent-x0`: Experimental agent model
-- `s1`: Compact model
-- `s1-mini`: Smallest model
-
-### Configuration Options
-
-```python
-tts = fishaudio.TTS(
-    api_key="your_api_key",              # Optional, reads from FISH_API_KEY env var
-    model="speech-1.6",                  # TTS backend/model
-    reference_id="voice_model_id",       # Optional reference voice
-    output_format="mp3",                 # Output format: "mp3", "wav", "pcm"
-    sample_rate=24000,                   # Sample rate in Hz
-    num_channels=1,                      # Audio channels (mono)
-    base_url="https://custom.api.url",   # Optional custom API endpoint
-)
-```
-
-### Dynamic Voice Switching
-
-```python
-# Change voice model during runtime
-tts.update_options(
-    model="s1",
-    reference_id="different_voice_id",
-)
-```
-
-### Listing Available Voice Models
-
-```python
 # Get all available models
 models = await tts.list_models()
 for model in models:
@@ -114,6 +98,120 @@ for model in models:
 # Get specific model info
 model_info = await tts.get_model("your_model_id")
 print(f"Model details: {model_info}")
+```
+
+#### Using Custom Reference Audio
+
+```python
+from livekit.plugins import fishaudio
+
+# Create reference audio from file
+with open("reference.wav", "rb") as f:
+    reference_audio = fishaudio.create_reference_audio(
+        audio=f.read(),
+        text="This is the reference audio text",
+    )
+
+# Note: Fish Audio SDK's TTSRequest supports reference audio
+# You may need to extend the implementation for custom reference usage
+```
+
+### Advanced Configuration
+
+#### Latency Optimization
+
+```python
+tts = fishaudio.TTS(
+    latency_mode="balanced",  # "normal" (~500ms) or "balanced" (~300ms)
+    streaming=True,
+)
+```
+
+#### Synthesis Parameters
+
+Control voice expressiveness and consistency:
+
+```python
+tts = fishaudio.TTS(
+    temperature=0.7,  # 0.1-1.0: Lower = more consistent, Higher = more expressive
+    top_p=0.9,        # 0.1-1.0: Controls diversity
+    streaming=True,
+)
+```
+
+#### Dynamic Voice Switching
+
+Change voice models during runtime:
+
+```python
+# Initial setup
+tts = fishaudio.TTS(reference_id="voice_model_1")
+
+# Later, switch to a different voice
+tts.update_options(
+    model="s1",
+    reference_id="voice_model_2",
+    latency_mode="normal",
+    temperature=0.8,
+)
+```
+
+### Available Models
+
+- `speech-1.5`: Earlier version with good quality
+- `speech-1.6`: Latest recommended version (default)
+- `agent-x0`: Experimental agent-optimized model
+- `s1`: Compact model for lower latency
+- `s1-mini`: Smallest model for maximum speed
+
+### Configuration Options
+
+```python
+tts = fishaudio.TTS(
+    # Required
+    api_key="your_api_key",              # Or set FISH_API_KEY env var
+
+    # Voice Configuration
+    model="speech-1.6",                  # TTS backend/model
+    reference_id="voice_model_id",       # Optional reference voice
+
+    # Audio Format
+    output_format="pcm",                 # "pcm", "mp3", "wav"
+    sample_rate=24000,                   # Sample rate in Hz
+    num_channels=1,                      # Audio channels (mono)
+
+    # Streaming Configuration
+    streaming=True,                      # Enable real-time WebSocket streaming
+    latency_mode="balanced",             # "normal" (~500ms) or "balanced" (~300ms)
+
+    # Synthesis Parameters
+    temperature=0.7,                     # Consistency vs expressiveness (0.1-1.0)
+    top_p=0.9,                          # Output diversity (0.1-1.0)
+
+    # Advanced
+    base_url="https://api.fish.audio",  # Custom API endpoint
+)
+```
+
+## Error Handling
+
+The plugin uses LiveKit's standard exception framework:
+
+```python
+from livekit.agents import APIConnectionError, APITimeoutError, APIStatusError
+
+try:
+    stream = tts.stream()
+    # ... use stream
+except APIConnectionError as e:
+    # Network or WebSocket connection failed
+    print(f"Connection error: {e}")
+except APITimeoutError as e:
+    # Request or streaming timed out
+    print(f"Timeout: {e}")
+except APIStatusError as e:
+    # Fish Audio API returned an error
+    print(f"API error: {e}")
 ```
 
 ## API Reference

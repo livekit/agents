@@ -20,7 +20,7 @@ See https://docs.livekit.io/agents for more information.
 from livekit.agents import Plugin
 
 from .log import logger
-from .models import OutputFormat, TTSBackends
+from .models import LatencyMode, OutputFormat, TTSBackends
 from .tts import TTS, create_reference_audio
 from .version import __version__
 
@@ -28,6 +28,7 @@ __all__ = [
     "TTS",
     "TTSBackends",
     "OutputFormat",
+    "LatencyMode",
     "create_reference_audio",
     "__version__",
 ]
