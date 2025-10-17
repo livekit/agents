@@ -250,37 +250,10 @@ class STT(stt.STT):
                 "`transcription_config` is deprecated. Use individual arguments instead (which override this argument)."
             )
 
-            config: TranscriptionConfig = transcription_config
-            language = language if is_given(language) else config.language
-            if not is_given(output_locale) and config.output_locale is not None:
-                output_locale = config.output_locale
-            if not is_given(domain) and config.domain is not None:
-                domain = config.domain
-            enable_diarization = enable_diarization or config.diarization == "speaker"
-            if not is_given(additional_vocab) and config.additional_vocab is not None:
-                additional_vocab = [
-                    AdditionalVocabEntry(content=v.get("content"), sounds_like=v.get("sounds_like"))
-                    for v in config.additional_vocab
-                ]
-            if not is_given(punctuation_overrides) and config.punctuation_overrides is not None:
-                punctuation_overrides = config.punctuation_overrides
-            # Extract max_speakers from speaker_diarization_config if present
-            if (
-                not is_given(max_speakers)
-                and (dz_cfg := config.speaker_diarization_config)
-                and hasattr(dz_cfg, "max_speakers")
-                and dz_cfg.max_speakers is not None
-            ):
-                max_speakers = dz_cfg.max_speakers
-
         if is_given(audio_settings):
             logger.warning(
                 "`audio_settings` is deprecated. Use individual arguments instead (which override this argument)."
             )
-
-            audio: AudioSettings = audio_settings
-            sample_rate = sample_rate or audio.sample_rate
-            audio_encoding = audio_encoding or AudioEncoding(audio.encoding)
 
         self._stt_options = STTOptions(
             operating_point=operating_point,
