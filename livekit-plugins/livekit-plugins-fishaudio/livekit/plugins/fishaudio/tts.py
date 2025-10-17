@@ -20,7 +20,6 @@ from collections.abc import AsyncIterator
 
 from fish_audio_sdk import (  # type: ignore[import-untyped]
     AsyncWebSocketSession,
-    ReferenceAudio,
     Session as FishAudioSession,
     TTSRequest,
 )
@@ -408,17 +407,3 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         finally:
             output_emitter.end_segment()
-
-
-def create_reference_audio(audio: bytes, text: str) -> ReferenceAudio:
-    """
-    Helper function to create a ReferenceAudio object.
-
-    Args:
-        audio (bytes): The reference audio file data.
-        text (str): The transcript text of the reference audio.
-
-    Returns:
-        ReferenceAudio: A reference audio object for use in TTS requests.
-    """
-    return ReferenceAudio(audio=audio, text=text)
