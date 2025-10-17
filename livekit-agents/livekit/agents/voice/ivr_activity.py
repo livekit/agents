@@ -8,7 +8,13 @@ from ..utils.aio.debounce import Debounced
 if TYPE_CHECKING:
     from .agent import Agent
     from .agent_session import AgentSession
-    from .events import AgentState, AgentStateChangedEvent, UserState, UserStateChangedEvent
+    from .events import (
+        AgentState,
+        AgentStateChangedEvent,
+        UserInputTranscribedEvent,
+        UserState,
+        UserStateChangedEvent,
+    )
 
 
 DEFAULT_SILENCE_REMINDER_MESSAGE = (
@@ -36,6 +42,7 @@ class IVRActivity:
     async def start(self) -> None:
         self._session.on("user_state_changed", self._on_user_state_changed)
         self._session.on("agent_state_changed", self._on_agent_state_changed)
+        self._session.on("user_input_transcribed", self._on_user_input_transcribed)
 
     async def update_agent(self, agent: Agent) -> None:
         from ..beta.tools.send_dtmf import send_dtmf_events
@@ -49,6 +56,9 @@ class IVRActivity:
     def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         self._current_agent_state = ev.new_state
         self._schedule_silence_check()
+
+    def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        logger.info(f"=== {ev.transcript}")
 
     def _schedule_silence_check(self) -> None:
         if self._current_agent_state == self._current_user_state == "listening":

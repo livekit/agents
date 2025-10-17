@@ -82,6 +82,7 @@ async def collect_digits(
             result = await GetDtmfTask(
                 num_digits=num_digits,
                 ask_for_confirmation=confirmation,
+                repeat_instructions=10,  # test agent behavior when instructions are repeated possibly forever
                 chat_ctx=agent.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
                 extra_instructions=(
                     "You are gathering keypad digits from a bank customer. "
