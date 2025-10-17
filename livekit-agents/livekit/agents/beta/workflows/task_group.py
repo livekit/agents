@@ -19,6 +19,7 @@ class _FactoryInfo:
     id: str
     description: str
 
+
 @dataclass
 class TaskGroupResult:
     task_results: dict[str, Any]
@@ -81,7 +82,9 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             if self._summarize_chat_ctx:
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
-                summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(keep_last_turns=0)
+                summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(
+                    keep_last_turns=0
+                )
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
@@ -109,11 +112,14 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 str,
                 Field(
                     description="The ID of the task requested",
-                    json_schema_extra={"enum": list(task_ids)}
-                )
+                    json_schema_extra={"enum": list(task_ids)},
+                ),
             ],
         ):
-            if task_id not in self._registered_factories or task_id not in self._visited_tasks.keys():
+            if (
+                task_id not in self._registered_factories
+                or task_id not in self._visited_tasks.keys()
+            ):
                 raise ToolError("unable to regress, invalid task id")
 
             if not self._current_task.done():
