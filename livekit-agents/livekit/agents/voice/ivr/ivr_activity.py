@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ..log import logger
-from ..utils.aio.debounce import Debounced
+from ...log import logger
+from ...utils.aio.debounce import Debounced
 
 if TYPE_CHECKING:
-    from .agent import Agent
-    from .agent_session import AgentSession
-    from .events import (
+    from ..agent import Agent
+    from ..agent_session import AgentSession
+    from ..events import (
         AgentState,
         AgentStateChangedEvent,
         UserInputTranscribedEvent,
@@ -45,7 +45,7 @@ class IVRActivity:
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
 
     async def update_agent(self, agent: Agent) -> None:
-        from ..beta.tools.send_dtmf import send_dtmf_events
+        from ...beta.tools.send_dtmf import send_dtmf_events
 
         agent._tools.append(send_dtmf_events)
 
@@ -58,7 +58,7 @@ class IVRActivity:
         self._schedule_silence_check()
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        logger.info(f"=== {ev.transcript}")
+        pass
 
     def _schedule_silence_check(self) -> None:
         if self._current_agent_state == self._current_user_state == "listening":

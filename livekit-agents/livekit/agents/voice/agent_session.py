@@ -49,7 +49,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
-from .ivr_activity import IVRActivity
+from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
