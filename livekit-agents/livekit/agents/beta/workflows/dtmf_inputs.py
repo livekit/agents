@@ -59,7 +59,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         self._curr_dtmf_inputs: list[DtmfEvent] = []
         self._dtmf_reply_running: bool = False
-        self._external_audio_enabled: bool = True
 
         @function_tool
         async def confirm_inputs(inputs: list[DtmfEvent]) -> None:
@@ -113,7 +112,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         @debounced(delay=dtmf_input_timeout)
         async def _generate_dtmf_reply() -> None:
-            self._dtmg_reply_running = True
+            self._dtmf_reply_running = True
 
             try:
                 self.session.interrupt()
@@ -146,7 +145,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
                 await self.session.generate_reply(user_input=instructions)
             finally:
-                self._dtmg_reply_running = False
+                self._dtmf_reply_running = False
                 self._curr_dtmf_inputs.clear()
 
         def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
@@ -185,14 +184,11 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
     async def on_enter(self) -> None:
         ctx = get_job_context()
-        self._external_audio_enabled = self.session.input.audio_enabled
 
         ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         self.session.on("agent_state_changed", self._on_user_state_changed)
         self.session.on("agent_state_changed", self._on_agent_state_changed)
-
-        handle = self.session.generate_reply()
-        handle.add_done_callback(lambda _: self.session.input.set_audio_enabled(True))
+        self.session.generate_reply(tool_choice="none")
 
     async def on_exit(self) -> None:
         ctx = get_job_context()
@@ -200,5 +196,4 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ctx.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         self.session.off("agent_state_changed", self._on_user_state_changed)
         self.session.off("agent_state_changed", self._on_agent_state_changed)
-        self.session.input.set_audio_enabled(self._external_audio_enabled)
         self._generate_dtmf_reply.cancel()
