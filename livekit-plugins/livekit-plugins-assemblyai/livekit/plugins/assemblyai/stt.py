@@ -21,6 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -45,7 +46,8 @@ from .log import logger
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
-    encoding: str = "pcm_s16le"
+    encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
+    speech_model: Literal["universal-streaming-english", "universal-streaming-multilingual"] = "universal-streaming-english"
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -59,7 +61,8 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
-        encoding: str = "pcm_s16le",
+        encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le",
+        speech_model: Literal["universal-streaming-english", "universal-streaming-multilingual"] = "universal-streaming-english",
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -83,6 +86,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
             encoding=encoding,
+            speech_model=speech_model,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
@@ -301,6 +305,7 @@ class SpeechStream(stt.SpeechStream):
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "encoding": self._opts.encoding,
+            "speech_model": self._opts.speech_model,
             "format_turns": self._opts.format_turns if is_given(self._opts.format_turns) else None,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
