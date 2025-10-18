@@ -806,6 +806,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        ignore_agent_instructions: bool = False,
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
 
@@ -839,6 +840,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
+                ignore_agent_instructions=ignore_agent_instructions,
             )
             if run_state:
                 run_state._watch_handle(handle)
@@ -850,6 +852,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             instructions=instructions,
             tool_choice=tool_choice,
             allow_interruptions=allow_interruptions,
+            ignore_agent_instructions=ignore_agent_instructions,
         )
         if run_state:
             run_state._watch_handle(handle)
