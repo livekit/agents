@@ -100,6 +100,7 @@ class TTS(tts.TTS):
 
         # WebSocket session for streaming (lazy initialized)
         self._ws_session: AsyncWebSocketSession | None = None
+        self._ws_session_lock = asyncio.Lock()
 
         # Track active streams
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -134,12 +135,14 @@ class TTS(tts.TTS):
     def latency_mode(self) -> LatencyMode:
         return self._opts.latency_mode
 
-    def _ensure_ws_session(self) -> AsyncWebSocketSession:
-        if self._ws_session is None:
-            self._ws_session = AsyncWebSocketSession(
-                apikey=self._opts.api_key, base_url=self._opts.base_url
-            )
-        return self._ws_session
+    async def _ensure_ws_session(self) -> AsyncWebSocketSession:
+        """Get the current WebSocket session, creating one if needed"""
+        async with self._ws_session_lock:
+            if self._ws_session is None:
+                self._ws_session = AsyncWebSocketSession(
+                    apikey=self._opts.api_key, base_url=self._opts.base_url
+                )
+            return self._ws_session
 
     def synthesize(
         self,
@@ -378,7 +381,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             APIConnectionError: If WebSocket connection fails.
             WebSocketErr: If Fish Audio WebSocket returns an error.
         """
-        ws_session = self._tts._ensure_ws_session()
+        ws_session = await self._tts._ensure_ws_session()
 
         # Create TTS request for streaming
         request = TTSRequest(
