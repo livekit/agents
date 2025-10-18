@@ -360,41 +360,41 @@ class SynthesizeStream(tts.SynthesizeStream):
             APIConnectionError: If WebSocket connection fails.
             WebSocketErr: If Fish Audio WebSocket returns an error.
         """
-            ws_session = self._tts._ensure_ws_session()
+        ws_session = self._tts._ensure_ws_session()
 
-            # Create TTS request for streaming
-            request = TTSRequest(
-                text="",  # Empty for streaming mode
-                reference_id=self._tts.reference_id,
-                format=self._tts.output_format,
-                sample_rate=self._tts.sample_rate,
-                latency=self._tts.latency_mode,
+        # Create TTS request for streaming
+        request = TTSRequest(
+            text="",  # Empty for streaming mode
+            reference_id=self._tts.reference_id,
+            format=self._tts.output_format,
+            sample_rate=self._tts.sample_rate,
+            latency=self._tts.latency_mode,
+        )
+
+        async def text_generator() -> AsyncIterator[str]:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    continue
+                yield data
+
+        try:
+            audio_iterator = ws_session.tts(
+                request=request, text_stream=text_generator(), backend=self._tts.model
             )
 
-            async def text_generator() -> AsyncIterator[str]:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
-                        continue
-                    yield data
+            async for audio_chunk in audio_iterator:
+                if audio_chunk:
+                    output_emitter.push(audio_chunk)
+                    self._mark_started()
 
-            try:
-                audio_iterator = ws_session.tts(
-                    request=request, text_stream=text_generator(), backend=self._tts.model
-                )
-
-                async for audio_chunk in audio_iterator:
-                    if audio_chunk:
-                        output_emitter.push(audio_chunk)
-                        self._mark_started()
-
-            except WebSocketErr as e:
-                logger.error(
-                    "Fish Audio WebSocket error during streaming",
-                    exc_info=e,
-                    extra={
-                        "latency_mode": self._tts.latency_mode,
-                        "format": self._tts.output_format,
-                        "reference_id": self._tts.reference_id,
-                    },
-                )
-                raise APIConnectionError(f"Fish Audio WebSocket error: {e}") from e
+        except WebSocketErr as e:
+            logger.error(
+                "Fish Audio WebSocket error during streaming",
+                exc_info=e,
+                extra={
+                    "latency_mode": self._tts.latency_mode,
+                    "format": self._tts.output_format,
+                    "reference_id": self._tts.reference_id,
+                },
+            )
+            raise APIConnectionError(f"Fish Audio WebSocket error: {e}") from e
