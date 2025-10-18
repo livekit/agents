@@ -35,6 +35,18 @@ class BaseLoopDetector(ABC, EventEmitter[EventTypes]):
 
 
 class TfidfLoopDetector(BaseLoopDetector):
+    """TF-IDF based loop detector.
+
+    This detector uses TF-IDF to detect loops in the user's input by comparing
+    the similarity of the last N - 1 chunks of transcribed text to the last chunk.
+
+    Args:
+        session: The agent session.
+        window_size: The number of chunks to compare. Default ``20``.
+        similarity_threshold: The similarity threshold for a chunk to be considered similar to the last chunk. Default ``0.9``.
+        consecutive_threshold: The number of consecutive chunks that must be similar to trigger a loop detection. Default ``3``.
+    """
+
     def __init__(
         self,
         session: AgentSession,

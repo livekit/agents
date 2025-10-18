@@ -15,6 +15,15 @@ EventTypes = Literal["silence_detected"]
 
 
 class SilenceDetector(EventEmitter[EventTypes]):
+    """Silence detector.
+
+    This detector checks for silence in the user / agent interaction.
+
+    Args:
+        session: The agent session.
+        max_silence_duration: The maximum duration of silence to detect in seconds. Default ``5.0`` seconds.
+    """
+
     def __init__(
         self,
         session: AgentSession,
