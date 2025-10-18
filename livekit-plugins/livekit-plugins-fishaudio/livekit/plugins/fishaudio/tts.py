@@ -21,7 +21,8 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import LatencyMode, OutputFormat
@@ -33,7 +34,7 @@ class _TTSOptions:
     output_format: OutputFormat
     sample_rate: int
     num_channels: int
-    reference_id: str | None
+    reference_id: NotGivenOr[str]
     base_url: str
     api_key: str
     latency_mode: LatencyMode
@@ -49,13 +50,13 @@ class TTS(tts.TTS):
     as well as reference ID-based and custom reference audio-based synthesis.
 
     Args:
-        api_key (str | None): Fish Audio API key. Can be set via argument or `FISH_API_KEY` environment variable.
+        api_key (NotGivenOr[str]): Fish Audio API key. Can be set via argument or `FISH_API_KEY` environment variable.
         model (Backends): TTS model/backend to use. Defaults to "speech-1.6".
-        reference_id (str | None): Optional reference voice model ID.
+        reference_id (NotGivenOr[str]): Optional reference voice model ID.
         output_format (OutputFormat): Audio output format. Defaults to "pcm" for streaming.
         sample_rate (int): Audio sample rate in Hz. Defaults to 24000.
         num_channels (int): Number of audio channels. Defaults to 1 (mono).
-        base_url (str | None): Custom base URL for the Fish Audio API. Optional.
+        base_url (NotGivenOr[str]): Custom base URL for the Fish Audio API. Optional.
         latency_mode (LatencyMode): Streaming latency mode. "normal" (~500ms) or "balanced" (~300ms). Defaults to "balanced".
         streaming (bool): Enable real-time WebSocket streaming. Defaults to True.
     """
@@ -63,13 +64,13 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         model: Backends = "speech-1.6",
-        reference_id: str | None = None,
+        reference_id: NotGivenOr[str] = NOT_GIVEN,
         output_format: OutputFormat = "pcm",
         sample_rate: int = 24000,
         num_channels: int = 1,
-        base_url: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: LatencyMode = "balanced",
         streaming: bool = True,
     ) -> None:
@@ -79,8 +80,8 @@ class TTS(tts.TTS):
             num_channels=num_channels,
         )
 
-        api_key = api_key or os.getenv("FISH_API_KEY")
-        if not api_key:
+        fish_api_key = api_key if is_given(api_key) else os.getenv("FISH_API_KEY")
+        if not fish_api_key:
             raise ValueError(
                 "Fish Audio API key is required, either as argument or set FISH_API_KEY environment variable"
             )
@@ -91,8 +92,8 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=num_channels,
             reference_id=reference_id,
-            base_url=base_url or "https://api.fish.audio",
-            api_key=api_key,
+            base_url=base_url if is_given(base_url) else "https://api.fish.audio",
+            api_key=fish_api_key,
             latency_mode=latency_mode,
             streaming=streaming,
         )
@@ -123,7 +124,7 @@ class TTS(tts.TTS):
         return self._opts.output_format
 
     @property
-    def reference_id(self) -> str | None:
+    def reference_id(self) -> NotGivenOr[str]:
         return self._opts.reference_id
 
     @property
@@ -273,7 +274,7 @@ class ChunkedStream(tts.ChunkedStream):
         """
         request = TTSRequest(
             text=self._input_text,
-            reference_id=self._opts.reference_id,
+            reference_id=self._opts.reference_id if is_given(self._opts.reference_id) else None,
             format=self._opts.output_format,
             sample_rate=self._opts.sample_rate,
         )
@@ -381,7 +382,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Create TTS request for streaming
         request = TTSRequest(
             text="",  # Empty for streaming mode
-            reference_id=self._opts.reference_id,
+            reference_id=self._opts.reference_id if is_given(self._opts.reference_id) else None,
             format=self._opts.output_format,
             sample_rate=self._opts.sample_rate,
             latency=self._opts.latency_mode,
