@@ -106,7 +106,7 @@ class ExpandProjectTask(AgentTask[dict]):
             instructions="Express interest in seeing the candidate scale their project as they described in the future."
         )
         self._result["new_features"] = (
-            new_features  # MIGHT OMIT THIS AND BELOW BECAUSE WE JUST WANTED LLM TO PROMPT THE CANDIDATE AS WELL. IDK
+            new_features 
         )
         self._result["scale_plan"] = scale_plan
         self._result["overall_response"] = overall_response
