@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 
@@ -38,7 +39,6 @@ class _TTSOptions:
     base_url: str
     api_key: str
     latency_mode: LatencyMode
-    streaming: bool
 
 
 class TTS(tts.TTS):
@@ -57,8 +57,7 @@ class TTS(tts.TTS):
         sample_rate (int): Audio sample rate in Hz. Defaults to 24000.
         num_channels (int): Number of audio channels. Defaults to 1 (mono).
         base_url (NotGivenOr[str]): Custom base URL for the Fish Audio API. Optional.
-        latency_mode (LatencyMode): Streaming latency mode. "normal" (~500ms) or "balanced" (~300ms). Defaults to "balanced".
-        streaming (bool): Enable real-time WebSocket streaming. Defaults to True.
+        latency_mode (LatencyMode): Streaming latency mode for WebSocket. "normal" (~500ms) or "balanced" (~300ms). Defaults to "balanced".
     """
 
     def __init__(
@@ -72,10 +71,9 @@ class TTS(tts.TTS):
         num_channels: int = 1,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: LatencyMode = "balanced",
-        streaming: bool = True,
     ) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=streaming),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
@@ -95,7 +93,6 @@ class TTS(tts.TTS):
             base_url=base_url if is_given(base_url) else "https://api.fish.audio",
             api_key=fish_api_key,
             latency_mode=latency_mode,
-            streaming=streaming,
         )
 
         # Initialize Fish Audio sessions
@@ -104,13 +101,15 @@ class TTS(tts.TTS):
         # WebSocket session for streaming (lazy initialized)
         self._ws_session: AsyncWebSocketSession | None = None
 
+        # Track active streams
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+
         logger.info(
             "FishAudioTTS initialized",
             extra={
                 "model": self._opts.model,
                 "format": self._opts.output_format,
                 "sample_rate": self._opts.sample_rate,
-                "streaming": self._opts.streaming,
                 "latency_mode": self._opts.latency_mode,
             },
         )
@@ -172,16 +171,18 @@ class TTS(tts.TTS):
         Returns:
             SynthesizeStream: A streaming object for real-time text-to-speech.
         """
-        if not self._opts.streaming:
-            logger.warning(
-                "Streaming is disabled but stream() was called. Enable streaming in constructor."
-            )
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     async def aclose(self) -> None:
         """
         Close TTS resources and WebSocket sessions.
         """
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+
         if self._ws_session is not None:
             # AsyncWebSocketSession doesn't require explicit cleanup
             self._ws_session = None

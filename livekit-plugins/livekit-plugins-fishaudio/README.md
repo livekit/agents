@@ -22,35 +22,15 @@ FISH_API_KEY=<your_api_key>
 
 ## Usage
 
-### Real-time Streaming (WebSocket)
-
 ```python
+from livekit.agents import AgentSession
 from livekit.plugins import fishaudio
 
-tts = fishaudio.TTS(
-    streaming=True,          # Enable WebSocket streaming
-    latency_mode="balanced", # "normal" (~500ms) or "balanced" (~300ms)
-    output_format="pcm",     # PCM recommended for streaming
-)
-```
+# Basic usage with env-based credentials
+tts = fishaudio.TTS()
 
-### Chunked Synthesis (Non-streaming)
-
-```python
-tts = fishaudio.TTS(
-    streaming=False,
-    output_format="mp3",  # MP3, WAV, or PCM
-)
-```
-
-## Configuration Options
-
-```python
-tts = fishaudio.TTS(
-    api_key="your_api_key",       # Or set FISH_API_KEY
-    model="speech-1.6",           # See Fish Audio docs for available models
-    reference_id="voice_id",      # Optional voice model
-    sample_rate=24000,            # Audio sample rate (Hz)
-    latency_mode="balanced",      # Streaming latency optimization
+session = AgentSession(
+    tts=tts,
+    # ... stt, llm, etc.
 )
 ```
