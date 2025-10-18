@@ -26,14 +26,13 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from .log import logger
 from .models import LatencyMode, OutputFormat
 
-NUM_CHANNELS = 1
-
 
 @dataclass
 class _TTSOptions:
     model: Backends
     output_format: OutputFormat
     sample_rate: int
+    num_channels: int
     reference_id: str | None
     base_url: str
     api_key: str
@@ -77,7 +76,7 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=streaming),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=num_channels,
         )
 
         api_key = api_key or os.getenv("FISH_API_KEY")
@@ -90,6 +89,7 @@ class TTS(tts.TTS):
             model=model,
             output_format=output_format,
             sample_rate=sample_rate,
+            num_channels=num_channels,
             reference_id=reference_id,
             base_url=base_url or "https://api.fish.audio",
             api_key=api_key,
@@ -229,7 +229,7 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.initialize(
                 request_id=utils.shortuuid(),
                 sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
+                num_channels=self._opts.num_channels,
                 mime_type=f"audio/{self._opts.output_format}",
             )
             output_emitter.push(audio_data)
@@ -326,7 +326,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.initialize(
             request_id=self._request_id,
             sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=self._opts.num_channels,
             stream=True,
             mime_type=f"audio/{self._opts.output_format}",
         )
