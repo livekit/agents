@@ -1666,7 +1666,9 @@ class AgentActivity(RecognitionHooks):
         if audio_output is not None:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node, input=tts_text_input, model_settings=model_settings,
+                node=self._agent.tts_node,
+                input=tts_text_input,
+                model_settings=model_settings,
                 text_transforms=self._session.options.tts_text_transforms,
             )
             tasks.append(tts_task)

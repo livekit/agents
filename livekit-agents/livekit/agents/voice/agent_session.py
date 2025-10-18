@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import time
 from collections.abc import AsyncIterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -22,10 +21,9 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import cli, llm, stt, tts, utils, vad
-from .. import inference, llm, stt, tts, utils, vad
+from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import get_job_context
-from ..llm import ChatContext, AgentHandoff
+from ..llm import AgentHandoff, ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -41,7 +39,6 @@ from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
-    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -52,10 +49,10 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .ivr import IVRActivity
+from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
-from .recorder_io import RecorderIO
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -87,6 +84,8 @@ class AgentSessionOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
+    dial_to_phone_ivr: bool
+    max_ivr_silence_duration: float
     tts_text_transforms: Sequence[TextTransforms] | None
 
 
@@ -172,6 +171,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        dial_to_phone_ivr: bool = False,
+        max_ivr_silence_duration: float = 15.0,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -256,6 +257,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            dial_to_phone_ivr (bool): Indicates the participant that the agent interacts with is a phone number
+                which could potentially be an IVR system. Defaults to ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -295,6 +298,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
+            dial_to_phone_ivr=dial_to_phone_ivr,
+            max_ivr_silence_duration=max_ivr_silence_duration,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -360,6 +365,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._root_span_context: otel_context.Context | None = None
 
         self._recorded_events: list[AgentEvent] = []
+
+        # ivr activity
+        self._ivr_activity: IVRActivity | None = None
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
@@ -553,10 +561,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                         if (c.enabled and c.record) or not c.enabled:
                             task = asyncio.create_task(
-                                self._recorder_io.start(output_path=job_ctx.session_directory / "audio.ogg")
+                                self._recorder_io.start(
+                                    output_path=job_ctx.session_directory / "audio.ogg"
+                                )
                             )
                             tasks.append(task)
-
 
                 if record:
                     if job_ctx._primary_agent_session is None:
@@ -566,6 +575,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             "Only one `AgentSession` can be the primary at a time. "
                             "If you want to ignore primary designation, use session.start(record=False)."
                         )
+
+                if self.options.dial_to_phone_ivr:
+                    self._ivr_activity = IVRActivity(
+                        self, max_silence_duration=self.options.max_ivr_silence_duration
+                    )
+                    tasks.append(
+                        asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
+                    )
 
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
                 current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
@@ -759,6 +776,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._recorder_io:
                 await self._recorder_io.aclose()
+
+            if self._ivr_activity is not None:
+                await self._ivr_activity.aclose()
 
             self._started = False
             if self._session_span:
@@ -955,6 +975,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._activity_lock:
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
+
+            if self._ivr_activity is not None:
+                await self._ivr_activity.update_agent(agent)
 
             if new_activity == "start":
                 if agent._activity is not None:

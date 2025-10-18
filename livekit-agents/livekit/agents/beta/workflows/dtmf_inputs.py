@@ -45,7 +45,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         num_digits: int,
         ask_for_confirmation: bool = False,
         repeat_instructions: int = 1,
-        dtmf_input_timeout: float = 5.0,
+        dtmf_input_timeout: float = 4.0,
         dtmf_stop_event: DtmfEvent = DtmfEvent.POUND,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         extra_instructions: NotGivenOr[str] = NOT_GIVEN,
