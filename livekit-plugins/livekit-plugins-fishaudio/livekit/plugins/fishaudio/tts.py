@@ -187,7 +187,7 @@ class TTS(tts.TTS):
         self._streams.clear()
 
         if self._ws_session is not None:
-            # AsyncWebSocketSession doesn't require explicit cleanup
+            await self._ws_session.close()
             self._ws_session = None
 
 
