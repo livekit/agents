@@ -36,6 +36,7 @@ from livekit.plugins import (
     rime,
     speechify,
     spitch,
+    typecast,
 )
 
 from .fake_tts import FakeTTS
@@ -256,6 +257,15 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": typecast.TTS(
+                voice=os.getenv("TYPECAST_VOICE_ID", "tc_62a8975e695ad26f7fb514d1")
+            ),
+            "proxy-upstream": "api.typecast.ai:443",
+        },
+        id="typecast",
     ),
 ]
 
