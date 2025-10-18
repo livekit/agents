@@ -10,8 +10,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from google.genai import Client as GenAIClient, types
 from google.auth._default_async import default_async
+from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
