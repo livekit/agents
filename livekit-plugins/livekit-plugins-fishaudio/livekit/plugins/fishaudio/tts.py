@@ -36,7 +36,7 @@ class TTS(tts.TTS):
 
     Args:
         api_key (str | None): Fish Audio API key. Can be set via argument or `FISH_API_KEY` environment variable.
-        model (TTSBackends): TTS model/backend to use. Defaults to "speech-1.6".
+        model (Backends): TTS model/backend to use. Defaults to "speech-1.6".
         reference_id (str | None): Optional reference voice model ID.
         output_format (OutputFormat): Audio output format. Defaults to "pcm" for streaming.
         sample_rate (int): Audio sample rate in Hz. Defaults to 24000.
@@ -44,8 +44,6 @@ class TTS(tts.TTS):
         base_url (str | None): Custom base URL for the Fish Audio API. Optional.
         latency_mode (LatencyMode): Streaming latency mode. "normal" (~500ms) or "balanced" (~300ms). Defaults to "balanced".
         streaming (bool): Enable real-time WebSocket streaming. Defaults to True.
-        temperature (float): Controls consistency vs expressiveness (0.1-1.0). Defaults to 0.7.
-        top_p (float): Controls output diversity (0.1-1.0). Defaults to 0.9.
     """
 
     def __init__(
@@ -60,8 +58,6 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         latency_mode: LatencyMode = "balanced",
         streaming: bool = True,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=streaming),
@@ -81,8 +77,6 @@ class TTS(tts.TTS):
         self._base_url = base_url or "https://api.fish.audio"
         self._latency_mode: LatencyMode = latency_mode
         self._streaming = streaming
-        self._temperature = temperature
-        self._top_p = top_p
 
         # Initialize Fish Audio sessions
         if base_url:
@@ -324,6 +318,49 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=self._request_id)
 
         try:
+            # Wrap entire streaming operation with timeout
+            await asyncio.wait_for(
+                self._stream_audio(output_emitter), timeout=self._conn_options.timeout
+            )
+        except asyncio.TimeoutError as e:
+            logger.error(
+                "Fish Audio WebSocket streaming timed out",
+                extra={
+                    "timeout": self._conn_options.timeout,
+                    "latency_mode": self._opts.latency_mode,
+                },
+            )
+            raise APITimeoutError(
+                f"Fish Audio WebSocket streaming timed out after {self._conn_options.timeout}s"
+            ) from e
+        except APITimeoutError:
+            # Already logged - re-raise without wrapping
+            raise
+        except (APIConnectionError, APIStatusError):
+            # Already logged - re-raise without wrapping
+            raise
+        except Exception as e:
+            # Unexpected errors
+            logger.error(
+                "Unexpected error during Fish Audio WebSocket streaming",
+                exc_info=e,
+                extra={"latency_mode": self._opts.latency_mode},
+            )
+            raise APIStatusError(f"Fish Audio streaming failed: {e}") from e
+        finally:
+            output_emitter.end_segment()
+
+    async def _stream_audio(self, output_emitter: tts.AudioEmitter) -> None:
+        """
+        Internal method to handle the actual WebSocket streaming.
+
+        Args:
+            output_emitter (tts.AudioEmitter): The emitter to receive audio chunks.
+
+        Raises:
+            APIConnectionError: If WebSocket connection fails.
+            WebSocketErr: If Fish Audio WebSocket returns an error.
+        """
             ws_session = self._opts._ensure_ws_session()
 
             # Create TTS request for streaming
@@ -362,26 +399,3 @@ class SynthesizeStream(tts.SynthesizeStream):
                     },
                 )
                 raise APIConnectionError(f"Fish Audio WebSocket error: {e}") from e
-            except asyncio.TimeoutError as e:
-                logger.error(
-                    "Fish Audio WebSocket streaming timed out",
-                    extra={"latency_mode": self._opts.latency_mode},
-                )
-                raise APITimeoutError("Fish Audio WebSocket streaming timed out") from e
-            except APITimeoutError:
-                # Already logged - re-raise without wrapping
-                raise
-            except (APIConnectionError, APIStatusError):
-                # Already logged - re-raise without wrapping
-                raise
-            except Exception as e:
-                # Unexpected errors during streaming
-                logger.error(
-                    "Unexpected error during Fish Audio WebSocket streaming",
-                    exc_info=e,
-                    extra={"latency_mode": self._opts.latency_mode},
-                )
-                raise APIStatusError(f"Fish Audio streaming failed: {e}") from e
-
-        finally:
-            output_emitter.end_segment()

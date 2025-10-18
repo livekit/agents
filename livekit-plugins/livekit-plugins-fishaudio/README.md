@@ -52,7 +52,5 @@ tts = fishaudio.TTS(
     reference_id="voice_id",      # Optional voice model
     sample_rate=24000,            # Audio sample rate (Hz)
     latency_mode="balanced",      # Streaming latency optimization
-    temperature=0.7,              # Consistency vs expressiveness (0.1-1.0)
-    top_p=0.9,                    # Output diversity (0.1-1.0)
 )
 ```
