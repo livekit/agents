@@ -79,7 +79,6 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
     -p livekit.plugins.minimal \
     -p livekit.plugins.neuphonic \
     -p livekit.plugins.nltk \
-    -p livekit.plugins.playai \
     -p livekit.plugins.resemble \
     -p livekit.plugins.rime \
     -p livekit.plugins.silero \

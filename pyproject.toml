@@ -25,12 +25,11 @@ livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
-livekit-plugins-minimax = { workspace = true }
+livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
-livekit-plugins-playai = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }

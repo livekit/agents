@@ -31,7 +31,6 @@ from livekit.plugins import (
     lmnt,
     neuphonic,
     openai,
-    playai,
     resemble,
     rime,
     speechify,
@@ -207,13 +206,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.openai.com:443",
         },
         id="openai",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": playai.TTS(),
-            "proxy-upstream": "api.play.ht:443",
-        },
-        id="playai",
     ),
     pytest.param(
         lambda: {
@@ -441,13 +433,6 @@ STREAM_TTS = [
             "proxy-upstream": "texttospeech.googleapis.com:443",
         },
         id="google",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": playai.TTS(),
-            "proxy-upstream": "api.play.ht:443",
-        },
-        id="playai",
     ),
     pytest.param(
         lambda: {
