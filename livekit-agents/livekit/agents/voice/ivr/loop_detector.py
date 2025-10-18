@@ -39,11 +39,22 @@ class TfidfLoopDetector(BaseLoopDetector):
         self,
         session: AgentSession,
         *,
+        window_size: int = 20,
         similarity_threshold: float = 0.9,
         consecutive_threshold: int = 3,
     ) -> None:
         super().__init__(session)
 
+        if window_size <= 0:
+            raise ValueError("window_size must be greater than 0")
+
+        if similarity_threshold < 0.0 or similarity_threshold > 1.0:
+            raise ValueError("similarity_threshold must be between 0.0 and 1.0")
+
+        if consecutive_threshold <= 0:
+            raise ValueError("consecutive_threshold must be greater than 0")
+
+        self._window_size = window_size
         self._similarity_threshold = similarity_threshold
         self._consecutive_threshold = consecutive_threshold
         self._vectorizer = TfidfVectorizer()
@@ -70,6 +81,8 @@ class TfidfLoopDetector(BaseLoopDetector):
             return
 
         self._transcribed_chunks.append(ev.transcript)
+        if len(self._transcribed_chunks) > self._window_size:
+            self._transcribed_chunks = self._transcribed_chunks[-self._window_size :]
 
         doc_matrix = self._vectorizer.fit_transform(self._transcribed_chunks)
         doc_similarity = cosine_similarity(doc_matrix)
