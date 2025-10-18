@@ -11,7 +11,8 @@ license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "support@livekit.io" }]
 keywords = [
-    "webrtc",
+    "voice",
+    "ai",
     "realtime",
     "audio",
     "video",
