@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from livekit.agents.voice.ivr.loop_detector import TfidfLoopDetector
-
 from ...log import logger
+from .loop_detector import TfidfLoopDetector
 from .silence_detector import SilenceDetector
 
 if TYPE_CHECKING:
