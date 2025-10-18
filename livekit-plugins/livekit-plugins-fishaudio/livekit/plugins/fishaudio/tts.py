@@ -293,7 +293,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = tts
         self._request_id = utils.shortuuid()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -310,10 +309,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         """
         output_emitter.initialize(
             request_id=self._request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=self._opts.num_channels,
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
             stream=True,
-            mime_type=f"audio/{self._opts.output_format}",
+            mime_type=f"audio/{self._tts.output_format}",
         )
         output_emitter.start_segment(segment_id=self._request_id)
 
@@ -327,7 +326,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "Fish Audio WebSocket streaming timed out",
                 extra={
                     "timeout": self._conn_options.timeout,
-                    "latency_mode": self._opts.latency_mode,
+                    "latency_mode": self._tts.latency_mode,
                 },
             )
             raise APITimeoutError(
@@ -344,7 +343,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             logger.error(
                 "Unexpected error during Fish Audio WebSocket streaming",
                 exc_info=e,
-                extra={"latency_mode": self._opts.latency_mode},
+                extra={"latency_mode": self._tts.latency_mode},
             )
             raise APIStatusError(f"Fish Audio streaming failed: {e}") from e
         finally:
@@ -361,15 +360,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             APIConnectionError: If WebSocket connection fails.
             WebSocketErr: If Fish Audio WebSocket returns an error.
         """
-            ws_session = self._opts._ensure_ws_session()
+            ws_session = self._tts._ensure_ws_session()
 
             # Create TTS request for streaming
             request = TTSRequest(
                 text="",  # Empty for streaming mode
-                reference_id=self._opts.reference_id,
-                format=self._opts.output_format,
-                sample_rate=self._opts.sample_rate,
-                latency=self._opts.latency_mode,
+                reference_id=self._tts.reference_id,
+                format=self._tts.output_format,
+                sample_rate=self._tts.sample_rate,
+                latency=self._tts.latency_mode,
             )
 
             async def text_generator() -> AsyncIterator[str]:
@@ -380,7 +379,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             try:
                 audio_iterator = ws_session.tts(
-                    request=request, text_stream=text_generator(), backend=self._opts.model
+                    request=request, text_stream=text_generator(), backend=self._tts.model
                 )
 
                 async for audio_chunk in audio_iterator:
@@ -393,9 +392,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "Fish Audio WebSocket error during streaming",
                     exc_info=e,
                     extra={
-                        "latency_mode": self._opts.latency_mode,
-                        "format": self._opts.output_format,
-                        "reference_id": self._opts.reference_id,
+                        "latency_mode": self._tts.latency_mode,
+                        "format": self._tts.output_format,
+                        "reference_id": self._tts.reference_id,
                     },
                 )
                 raise APIConnectionError(f"Fish Audio WebSocket error: {e}") from e
