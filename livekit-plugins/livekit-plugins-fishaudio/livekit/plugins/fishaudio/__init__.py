@@ -1,4 +1,10 @@
-"""Fish Audio plugin for LiveKit Agents"""
+"""Fish Audio plugin for LiveKit Agents
+
+See https://docs.fish.audio for more information.
+
+Environment variables used:
+- `FISH_API_KEY` for authentication (required)
+"""
 
 from fish_audio_sdk.schemas import Backends  # type: ignore[import-untyped]
 
