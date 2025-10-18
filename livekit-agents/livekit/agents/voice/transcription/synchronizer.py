@@ -513,25 +513,31 @@ class _SyncedAudioOutput(io.AudioOutput):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         # using barrier() on capture should be sufficient, flush() must not be called if
         # capture_frame isn't completed
-        await self._synchronizer.barrier()
+        import traceback
+        # print(f"🔒 SYNC: About to wait for barrier, {len(frame.data)} bytes")
+        # print(f"📍 CALL STACK:\n{''.join(traceback.format_stack())}")
+        # await self._synchronizer.barrier()
+        # print(f"✅ SYNC: Barrier passed, calling next_in_chain")
 
         self._capturing = True
         await super().capture_frame(frame)
         await self._next_in_chain.capture_frame(frame)  # passthrough audio
         self._pushed_duration += frame.duration
 
-        if not self._synchronizer.enabled:
-            return
+        return 
 
-        if self._synchronizer._impl.audio_input_ended:
-            # this should not happen if `on_playback_finished` is called after each flush
-            logger.warning(
-                "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment"
-            )
-            self._synchronizer.rotate_segment()
-            await self._synchronizer.barrier()
+        # if not self._synchronizer.enabled:
+        #     return
 
-        self._synchronizer._impl.push_audio(frame)
+        # if self._synchronizer._impl.audio_input_ended:
+        #     # this should not happen if `on_playback_finished` is called after each flush
+        #     logger.warning(
+        #         "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment"
+        #     )
+        #     self._synchronizer.rotate_segment()
+        #     # await self._synchronizer.barrier()
+
+        # self._synchronizer._impl.push_audio(frame)
 
     def flush(self) -> None:
         super().flush()
@@ -607,7 +613,7 @@ class _SyncedTextOutput(io.TextOutput):
         self._capturing = False
 
     async def capture_text(self, text: str) -> None:
-        await self._synchronizer.barrier()
+        # await self._synchronizer.barrier()
 
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
             await self._next_in_chain.capture_text(text)
@@ -620,7 +626,7 @@ class _SyncedTextOutput(io.TextOutput):
                 "_SegmentSynchronizerImpl text marked as ended in capture text, rotating segment"
             )
             self._synchronizer.rotate_segment()
-            await self._synchronizer.barrier()
+            # await self._synchronizer.barrier()
 
         self._synchronizer._impl.push_text(text)
 
