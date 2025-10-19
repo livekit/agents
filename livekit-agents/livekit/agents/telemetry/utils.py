@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -26,6 +27,7 @@ def record_exception(span: trace.Span, exception: Exception) -> None:
 
 def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
     model_name = ev.metadata.model_name if ev.metadata else None
+
     attrs: dict[str, str | int] = {
         trace_types.ATTR_GEN_AI_REQUEST_MODEL: model_name or "unknown",
         trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
@@ -37,7 +39,16 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
     }
-
+    if ev.ttft != -1:
+        completion_start_time = ev.timestamp + ev.ttft
+        # This attribute is used by LangFuse to calculate "time to first token metric"
+        # in same way we calculate in livekit (ttft = first_token_timestamp - ev.timestamp)
+        # So providing it explicitly here so we can graph and search by ttft.
+        # Must be provided as UTC isoformat string for LangFuse
+        completion_start_time_utc = datetime.fromtimestamp(
+            completion_start_time, tz=timezone.utc
+        ).isoformat()
+        attrs[trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME] = completion_start_time_utc
     if span.is_recording():
         span.set_attributes(attrs)
     else:

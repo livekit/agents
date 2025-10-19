@@ -56,6 +56,7 @@ members = [
     "livekit-plugins-playai",
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
+    "livekit-plugins-rtzr",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
     "livekit-plugins-simli",
@@ -598,11 +599,11 @@ wheels = [
 
 [[package]]
 name = "certifi"
-version = "2025.1.31"
+version = "2025.10.5"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1c/ab/c9f1e32b7b1bf505bf26f0ef697775960db7932abeb7b516de930ba2705f/certifi-2025.1.31.tar.gz", hash = "sha256:3d5da6925056f6f18f119200434a4780a94263f10d1c21d032a6f6b2baa20651", size = 167577, upload-time = "2025-01-31T02:16:47.166Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/5b/b6ce21586237c77ce67d01dc5507039d444b630dd76611bbca2d8e5dcd91/certifi-2025.10.5.tar.gz", hash = "sha256:47c09d31ccf2acf0be3f701ea53595ee7e0b8fa08801c6624be771df09ae7b43", size = 164519, upload-time = "2025-10-05T04:12:15.808Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/fc/bce832fd4fd99766c04d1ee0eead6b0ec6486fb100ae5e74c1d91292b982/certifi-2025.1.31-py3-none-any.whl", hash = "sha256:ca78db4565a652026a4db2bcdf68f2fb589ea80d0be70e03929ed730746b84fe", size = 166393, upload-time = "2025-01-31T02:16:45.015Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/37/af0d2ef3967ac0d6113837b44a4f0bfe1328c2b9763bd5b1744520e5cfed/certifi-2025.10.5-py3-none-any.whl", hash = "sha256:0f212c2744a9bb6de0c56639a6f68afe01ecd92d91f14ae897c4fe7bbeeef0de", size = 163286, upload-time = "2025-10-05T04:12:14.03Z" },
 ]
 
 [[package]]
@@ -1716,6 +1717,7 @@ source = { editable = "livekit-agents" }
 dependencies = [
     { name = "aiohttp" },
     { name = "av" },
+    { name = "certifi" },
     { name = "click" },
     { name = "colorama" },
     { name = "docstring-parser" },
@@ -1884,8 +1886,9 @@ upliftai = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.10" },
-    { name = "av", specifier = ">=14.0.0" },
+    { name = "av", specifier = ">=14.0.0,<16" },
     { name = "av", marker = "extra == 'codecs'", specifier = ">=12.0.0" },
+    { name = "certifi", specifier = ">=2025.6.15" },
     { name = "click", specifier = "~=8.1" },
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
@@ -2053,6 +2056,7 @@ dependencies = [
 [package.optional-dependencies]
 realtime = [
     { name = "aws-sdk-bedrock-runtime", marker = "python_full_version >= '3.12'" },
+    { name = "aws-sdk-signers", marker = "python_full_version >= '3.12'" },
     { name = "boto3" },
 ]
 
@@ -2061,6 +2065,7 @@ requires-dist = [
     { name = "aioboto3", specifier = ">=14.1.0" },
     { name = "amazon-transcribe", specifier = ">=0.6.4" },
     { name = "aws-sdk-bedrock-runtime", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = "==0.0.2" },
+    { name = "aws-sdk-signers", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = "==0.0.3" },
     { name = "boto3", marker = "extra == 'realtime'", specifier = ">1.35.10" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
@@ -2424,6 +2429,22 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-rtzr"
+source = { editable = "livekit-plugins/livekit-plugins-rtzr" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "httpx" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "httpx", specifier = ">=0.24.0" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+]
 
 [[package]]
 name = "livekit-plugins-sarvam"

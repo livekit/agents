@@ -188,7 +188,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str): TTS model to use, in "provider/model[:voice_id]" format
+            model (TTSModels | str): TTS model to use, in "provider/model" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -232,17 +232,6 @@ class TTS(tts.TTS):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
-        # read voice id from the model if provided: "provider/model:voice_id"
-        if is_given(model) and (idx := model.rfind(":")) != -1:
-            if is_given(voice) and voice != model[idx + 1 :]:
-                logger.warning(
-                    "`voice` is provided via both argument and model, using the one from the argument",
-                    extra={"voice": voice, "model": model},
-                )
-            else:
-                voice = model[idx + 1 :]
-            model = model[:idx]
-
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
@@ -263,13 +252,29 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    @classmethod
+    def from_model_string(cls, model: str) -> TTS:
+        """Create a TTS instance from a model string
+
+        Args:
+            model (str): TTS model to use, in "provider/model[:voice_id]" format
+
+        Returns:
+            TTS: TTS instance
+        """
+        voice: NotGivenOr[str] = NOT_GIVEN
+        if (idx := model.rfind(":")) != -1:
+            voice = model[idx + 1 :]
+            model = model[:idx]
+        return cls(model, voice=voice)
+
     @property
     def model(self) -> str:
         return self._opts.model
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

@@ -380,6 +380,7 @@ class LLM(llm.LLM):
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
     ) -> LLM:
         """
         Create a new instance of OpenRouter LLM.
@@ -428,6 +429,7 @@ class LLM(llm.LLM):
             top_p=top_p,
             extra_body=or_body,
             extra_headers=default_headers,
+            timeout=timeout,
         )
 
     @staticmethod

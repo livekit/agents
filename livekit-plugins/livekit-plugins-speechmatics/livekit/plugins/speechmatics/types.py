@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 
 from livekit.agents.stt import SpeechData
-from speechmatics.rt import TranscriptionConfig  # type: ignore
+from speechmatics.rt import TranscriptionConfig
 
 __all__ = ["TranscriptionConfig"]
 
@@ -35,7 +35,7 @@ class AdditionalVocabEntry:
     """
 
     content: str
-    sounds_like: list[str] = field(default_factory=list)
+    sounds_like: list[str] | None = None
 
 
 @dataclass

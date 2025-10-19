@@ -1,7 +1,7 @@
-from . import realtime
+from .. import realtime
 from .gemini_tts import TTS as GeminiTTS
 
-__all__ = ["realtime", "GeminiTTS"]
+__all__ = ["GeminiTTS", "realtime"]
 
 # Cleanup docs of unexported modules
 _module = dir()

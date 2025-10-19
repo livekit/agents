@@ -264,7 +264,8 @@ class LLMStream(ABC):
 
         duration = time.perf_counter() - start_time
 
-        if self._current_attempt_has_error:
+        # if generation is aborted before any tokens are received, it doesn't make sense to report -1 ttft
+        if self._current_attempt_has_error or ttft < 0:
             return
 
         metrics = LLMMetrics(

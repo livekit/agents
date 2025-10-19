@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
@@ -23,11 +24,11 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import audio as audio_utils, images, is_given
-from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
+from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
-from ...log import logger
-from ...tools import _LLMTool
-from ...utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
+from ..log import logger
+from ..tools import _LLMTool
+from ..utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -78,6 +79,7 @@ class _RealtimeOptions:
     gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
+    thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
 
 
 @dataclass
@@ -144,6 +146,7 @@ class RealtimeModel(llm.RealtimeModel):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
+        thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -180,6 +183,7 @@ class RealtimeModel(llm.RealtimeModel):
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
             tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
             _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
 
@@ -232,6 +236,10 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
         if use_vertexai:
+            if not gcp_project:
+                _, gcp_project = default_async(  # type: ignore
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
             if not gcp_project or not gcp_location:
                 raise ValueError(
                     "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
@@ -274,6 +282,7 @@ class RealtimeModel(llm.RealtimeModel):
             tool_behavior=tool_behavior,
             conn_options=conn_options,
             http_options=http_options,
+            thinking_config=thinking_config,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -510,7 +519,12 @@ class RealtimeSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
-                    media_chunks=[types.Blob(data=nf.data.tobytes(), mime_type="audio/pcm")]
+                    media_chunks=[
+                        types.Blob(
+                            data=nf.data.tobytes(),
+                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                        )
+                    ]
                 )
                 self._send_client_event(realtime_input)
 
@@ -813,6 +827,9 @@ class RealtimeSession(llm.RealtimeSession):
                 else None,
                 frequency_penalty=self._opts.frequency_penalty
                 if is_given(self._opts.frequency_penalty)
+                else None,
+                thinking_config=self._opts.thinking_config
+                if is_given(self._opts.thinking_config)
                 else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
