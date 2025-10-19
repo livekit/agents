@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations # noqa: I001
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import base64
@@ -282,8 +282,7 @@ def _parse_sse_message(message: str) -> dict | None:
 
     if message_dict.get("errors") is not None:
         raise Exception(
-            f"received error status {message_dict['status_code']}:"
-            f"{message_dict['errors']}"
+            f"received error status {message_dict['status_code']}:{message_dict['errors']}"
         )
 
     return message_dict
@@ -369,9 +368,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError(
-                        "NeuPhonic websocket connection closed unexpectedly"
-                    )
+                    raise APIStatusError("NeuPhonic websocket connection closed unexpectedly")
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
@@ -391,9 +388,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             if b64data:
                                 output_emitter.push(b64data)
                         except Exception as e:
-                            logger.warning(
-                                "Failed to decode NeuPhonic audio data: %s", e
-                            )
+                            logger.warning("Failed to decode NeuPhonic audio data: %s", e)
 
                     if data.get("stop"):
                         output_emitter.end_segment()
