@@ -17,9 +17,9 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.agents.beta.workflows import GetEmailTask, Task, TaskOrchestrator
+from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 
 @dataclass
@@ -47,7 +47,6 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     context.session.generate_reply(
         instructions=f"The interview is ending now, inform the candidate that the reason was {disqualification_reason}"
     )
-    # in this scenario, disqualified candidates do not get recorded into the csv file, is that ideal?
     context.session.shutdown()
 
 
@@ -105,9 +104,7 @@ class ExpandProjectTask(AgentTask[dict]):
         self.session.generate_reply(
             instructions="Express interest in seeing the candidate scale their project as they described in the future."
         )
-        self._result["new_features"] = (
-            new_features 
-        )
+        self._result["new_features"] = new_features
         self._result["scale_plan"] = scale_plan
         self._result["overall_response"] = overall_response
         self.complete(self._result)
@@ -136,7 +133,7 @@ class ProjectTask(AgentTask[dict]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
-                         Gather information about the most technical project the candidate has attempted and probe for their thinking process. Note specificities such as if they worked solo or in a team, and the technology stack they used 
+                         Gather information about the most technical project the candidate has attempted and probe for their thinking process. Note specificities such as if they worked solo or in a team, and the technology stack they used
                          if applicable. If they have no projects to dissect, call disqualify(). Do not mention any prerequisites for this position.""",
             tools=[disqualify],
         )
@@ -156,21 +153,20 @@ class ProjectTask(AgentTask[dict]):
             team_size (int): The size of the project team, minimum of 1
             project_description (str): A description of the project, including the type of project being described, such as "full stack application." Include the technology stack they used and their reasoning behind it.
         """
-        tasks = [
-            Task(
-                lambda: WorkDistributionTask(team_size=team_size),
-                id="work_distribution_task",
-                description="Collects the candidate's perspective on work distribution regarding their project",
-            ),
-            Task(
-                lambda: ExpandProjectTask(),
-                id="expand_project_task",
-                description="Collects the candidate's response on either scaling a previous project or creating a new one",
-            ),
-        ]
-        task_group = TaskOrchestrator(tasks=tasks)
+        task_group = TaskGroup()
+        task_group.add(
+            lambda: WorkDistributionTask(team_size=team_size),
+            id="work_distribution_task",
+            description="Collects the candidate's perspective on work distribution regarding their project",
+        )
+        task_group.add(
+            lambda: ExpandProjectTask(),
+            id="expand_project_task",
+            description="Collects the candidate's response on either scaling a previous project or creating a new one",
+        )
+
         results = await task_group
-        self.complete(results)
+        self.complete(results.task_results)
 
 
 class ExperienceTask(AgentTask[dict]):
@@ -300,25 +296,30 @@ class SurveyAgent(Agent):
         )
 
     async def on_enter(self) -> AgentTask:
-        tasks = [
-            Task(
-                lambda: ProjectTask(),
-                id="project_task",
-                description="Probes the user about their thought process on projects",
-            ),
-            Task(
-                lambda: ExperienceTask(),
-                id="experience_task",
-                description="Collects years of experience",
-            ),
-            Task(lambda: CommuteTask(), id="commute_task", description="Asks about commute"),
-            Task(lambda: GetEmailTask(), id="get_email_task", description="Collects email"),
-            Task(lambda: IntroTask(), id="get_name_intro_task", description="Collects name"),
-        ]
-        results = await TaskOrchestrator(tasks)
-        # TaskOrchestrator returns a dictionary with Task IDs as the keys and the results as the values
-        r = await self.chat_ctx.copy().summarize(llm_v=self.session.llm)
-        results["summary"] = r.content[0]
+        task_group = TaskGroup()
+        task_group.add(
+            lambda: IntroTask(),
+            id="get_name_intro_task",
+            description="Collects name and introduction",
+        )
+        task_group.add(lambda: GetEmailTask(), id="get_email_task", description="Collects email")
+        task_group.add(lambda: CommuteTask(), id="commute_task", description="Asks about commute")
+        task_group.add(
+            lambda: ExperienceTask(),
+            id="experience_task",
+            description="Collects years of experience",
+        )
+        task_group.add(
+            lambda: ProjectTask(),
+            id="project_task",
+            description="Probes the user about their thought process on projects",
+        )
+
+        results = await task_group
+        results = results.task_results
+        # TaskGroup returns a TaskGroupResult object. The task_results field holds a dictionary with Task IDs as the keys and the results as the values
+        summary = self.chat_ctx.items[-1]
+        results["summary"] = summary.content
         self.session.userdata = results
         write_to_csv(filename="results.csv", data=results)
 
@@ -342,7 +343,7 @@ async def entrypoint(ctx: JobContext):
         userdata=Userdata(task_results={}),
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(),
+        tts=cartesia.TTS(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
