@@ -310,6 +310,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(flush_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            await input_sent_event.wait()
             while True:
                 msg = await ws.receive()
                 if msg.type in (
