@@ -296,12 +296,14 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
+        input_sent_event = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for word in word_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
                 self._mark_started()
                 await ws.send_str(json.dumps(speak_msg))
+                input_sent_event.set()
 
             # Always flush after a segment
             flush_msg = {"type": "Flush"}
@@ -341,4 +343,5 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
+                input_sent_event.set()
                 await utils.aio.gracefully_cancel(*tasks)
