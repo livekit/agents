@@ -1,9 +1,8 @@
 import json
-from collections.abc import Callable
-from typing import Annotated, Any, TypeAlias, Self
-from dataclasses import dataclass
-
 from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Annotated, Any, Self
 
 from pydantic import Field
 
@@ -37,7 +36,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         summarize_chat_ctx: bool = True,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
     ):
-        """Creates a TaskOrchestrator instance."""
+        """Creates a TaskGroup instance."""
         super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
 
         self._summarize_chat_ctx = summarize_chat_ctx
@@ -58,18 +57,19 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             task_id = task_stack.pop(0)
             factory_info = self._registered_factories[task_id]
 
-            shared_chat_ctx = self.chat_ctx.copy()
-            await self._current_task.update_chat_ctx(shared_chat_ctx)
             self._current_task = factory_info.task_factory()
 
-            current_tools = self._current_agent_task.tools
+            shared_chat_ctx = self.chat_ctx.copy()
+            await self._current_task.update_chat_ctx(shared_chat_ctx)
+
+            current_tools = self._current_task.tools
             current_tools.append(self._build_out_of_scope_tool(active_task_id=task_id))
             await self._current_task.update_tools(current_tools)
 
             try:
                 self._visited_tasks.add(task_id)
                 res = await self._current_task
-                task_results[id] = res
+                task_results[task_id] = res
             except _OutOfScopeError as e:
                 task_stack.insert(0, task_id)
                 task_stack.insert(0, e.target_task_id)
@@ -83,7 +83,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
                 summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(
-                    keep_last_turns=0
+                    llm_v=self.session.llm, keep_last_turns=0
                 )
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
@@ -98,7 +98,9 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         # Only allow to regress to already visited tasks
         task_ids = self._visited_tasks.copy()
         task_ids.discard(active_task_id)
-        task_repr = {f.id: f.description for f in self._registered_factories if f.id in task_ids}
+        task_repr = {
+            f.id: f.description for f in self._registered_factories.values() if f.id in task_ids
+        }
 
         description = (
             "Call to regress to another task according to what the user requested to modify, return the corresponding task id, "

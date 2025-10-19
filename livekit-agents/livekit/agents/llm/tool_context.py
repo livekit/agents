@@ -80,6 +80,7 @@ class StopResponse(Exception):
 class _FunctionToolInfo:
     name: str
     description: str | None
+    flags: ToolFlag
 
 
 @runtime_checkable

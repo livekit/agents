@@ -164,6 +164,7 @@ class Agent:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
         if self._activity is None:
+            tools = [tool for tool in tools if tool is not None]
             self._tools = list(set(tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
