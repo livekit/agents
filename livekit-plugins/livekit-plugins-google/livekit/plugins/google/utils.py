@@ -105,17 +105,25 @@ def get_tool_results_for_realtime(
     function_responses: list[types.FunctionResponse] = []
     for msg in chat_ctx.items:
         if msg.type == "function_call_output":
-            res = types.FunctionResponse(
-                name=msg.name,
-                response={"output": msg.output},
-                scheduling=tool_response_scheduling
-                if is_given(tool_response_scheduling)
-                else types.FunctionResponseScheduling.WHEN_IDLE,
-            )
+            # Build kwargs for FunctionResponse
+            res_kwargs = {
+                "name": msg.name,
+                "response": {"output": msg.output},
+            }
+
+            # Only set scheduling and id for non-Vertex AI
             if not vertexai:
+                # Vertex AI does not support the scheduling parameter
+                res_kwargs["scheduling"] = (
+                    tool_response_scheduling
+                    if is_given(tool_response_scheduling)
+                    else types.FunctionResponseScheduling.WHEN_IDLE
+                )
                 # vertexai does not support id in FunctionResponse
                 # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
-                res.id = msg.call_id
+                res_kwargs["id"] = msg.call_id
+
+            res = types.FunctionResponse(**res_kwargs)
             function_responses.append(res)
     return (
         types.LiveClientToolResponse(function_responses=function_responses)
