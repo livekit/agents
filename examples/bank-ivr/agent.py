@@ -634,7 +634,7 @@ async def bank_ivr_session(ctx: JobContext) -> None:
 
     session: AgentSession[SessionState] = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-5"),
+        llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
         turn_detection=MultilingualModel(),

@@ -97,6 +97,8 @@ class TfidfLoopDetector(BaseLoopDetector):
         if len(self._transcribed_chunks) > self._window_size:
             self._transcribed_chunks = self._transcribed_chunks[-self._window_size :]
 
+        # NOTE: currently this is O(n^2) in the number of chunks, let's figure out a more efficient
+        # way if this become a bottleneck later.
         doc_matrix = self._vectorizer.fit_transform(self._transcribed_chunks)
         doc_similarity = cosine_similarity(doc_matrix)
 
