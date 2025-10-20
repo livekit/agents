@@ -30,12 +30,8 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
     ):
         self._avatartalk_api = AvatarTalkAPI(api_url, api_secret)
-        self._avatar = avatar or (
-            os.getenv("AVATARTALK_AVATAR") or DEFAULT_AVATAR_NAME
-        )
-        self._emotion = emotion or (
-            os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION
-        )
+        self._avatar = avatar or (os.getenv("AVATARTALK_AVATAR") or DEFAULT_AVATAR_NAME)
+        self._emotion = emotion or (os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION)
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._agent_track = None
