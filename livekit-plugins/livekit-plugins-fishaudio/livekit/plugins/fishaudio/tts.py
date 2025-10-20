@@ -325,7 +325,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         Raises:
             APIConnectionError: If WebSocket connection fails.
-            APITimeoutError: If connection or streaming times out.
+            APITimeoutError: If WebSocket connection times out.
             APIStatusError: If Fish Audio returns an error.
         """
         output_emitter.initialize(
@@ -338,20 +338,22 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=self._request_id)
 
         try:
-            # Wrap entire streaming operation with timeout
-            await asyncio.wait_for(
-                self._stream_audio(output_emitter), timeout=self._conn_options.timeout
+            ws_session = await asyncio.wait_for(
+                self._tts._ensure_ws_session(), timeout=self._conn_options.timeout
             )
+
+            await self._stream_audio(ws_session, output_emitter)
+
         except asyncio.TimeoutError as e:
             logger.error(
-                "Fish Audio WebSocket streaming timed out",
+                "Failed to connect to Fish Audio WebSocket",
                 extra={
                     "timeout": self._conn_options.timeout,
                     "latency_mode": self._opts.latency_mode,
                 },
             )
             raise APITimeoutError(
-                f"Fish Audio WebSocket streaming timed out after {self._conn_options.timeout}s"
+                f"Fish Audio WebSocket connection timed out after {self._conn_options.timeout}s"
             ) from e
         except APITimeoutError:
             # Already logged - re-raise without wrapping
@@ -370,18 +372,20 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             output_emitter.end_segment()
 
-    async def _stream_audio(self, output_emitter: tts.AudioEmitter) -> None:
+    async def _stream_audio(
+        self, ws_session: AsyncWebSocketSession, output_emitter: tts.AudioEmitter
+    ) -> None:
         """
         Internal method to handle the actual WebSocket streaming.
 
         Args:
+            ws_session (AsyncWebSocketSession): Connected WebSocket session.
             output_emitter (tts.AudioEmitter): The emitter to receive audio chunks.
 
         Raises:
             APIConnectionError: If WebSocket connection fails.
             WebSocketErr: If Fish Audio WebSocket returns an error.
         """
-        ws_session = await self._tts._ensure_ws_session()
 
         # Create TTS request for streaming
         request = TTSRequest(
