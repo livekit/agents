@@ -837,6 +837,8 @@ class AgentActivity(RecognitionHooks):
 
                     filtered_tools.append(tool)
 
+                tools = filtered_tools
+
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
