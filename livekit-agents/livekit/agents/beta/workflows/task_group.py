@@ -62,9 +62,10 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             shared_chat_ctx = self.chat_ctx.copy()
             await self._current_task.update_chat_ctx(shared_chat_ctx)
 
-            current_tools = self._current_task.tools
-            current_tools.append(self._build_out_of_scope_tool(active_task_id=task_id))
-            await self._current_task.update_tools(current_tools)
+            if out_of_scope_tool := self._build_out_of_scope_tool(active_task_id=task_id):
+                current_tools = self._current_task.tools
+                current_tools.append(out_of_scope_tool)
+                await self._current_task.update_tools(current_tools)
 
             try:
                 self._visited_tasks.add(task_id)
