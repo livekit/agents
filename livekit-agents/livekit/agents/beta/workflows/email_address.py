@@ -75,7 +75,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self._email_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions=("Ask the user to provide an email address."))
+        self.session.generate_reply(instructions="Ask the user to provide an email address.")
 
     @function_tool
     async def update_email_address(self, email: str, ctx: RunContext) -> str:
