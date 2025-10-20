@@ -19,6 +19,7 @@ EventTypes = Literal["loop_detected"]
 
 class BaseLoopDetector(ABC, EventEmitter[EventTypes]):
     def __init__(self, session: AgentSession) -> None:
+        super().__init__()
         self._session = session
 
     @abstractmethod
