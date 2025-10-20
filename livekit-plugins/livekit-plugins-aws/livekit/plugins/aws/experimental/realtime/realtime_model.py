@@ -26,6 +26,7 @@ from aws_sdk_bedrock_runtime.models import (
     InvokeModelWithBidirectionalStreamInputChunk,
     ModelErrorException,
     ModelNotReadyException,
+    ModelStreamErrorException,
     ModelTimeoutException,
     ThrottlingException,
     ValidationException,
@@ -281,10 +282,6 @@ class RealtimeModel(llm.RealtimeModel):
         # stub b/c RealtimeSession.aclose() is invoked directly
         async def aclose(self) -> None:
             pass
-
-    @property
-    def model(self) -> str:
-        return self.model_id
 
 
 class RealtimeSession(  # noqa: F811
@@ -880,7 +877,6 @@ class RealtimeSession(  # noqa: F811
         # Q: should we be counting per turn or utterance?
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
-            model=self._realtime_model.model,
             # TODO: pass in the correct request_id
             request_id=event_data["event"]["usageEvent"]["completionId"],
             timestamp=time.monotonic(),
@@ -968,7 +964,12 @@ class RealtimeSession(  # noqa: F811
                             ),
                         )
                         raise
-                except (ThrottlingException, ModelNotReadyException, ModelErrorException) as re:
+                except (
+                    ThrottlingException,
+                    ModelNotReadyException,
+                    ModelErrorException,
+                    ModelStreamErrorException,
+                ) as re:
                     logger.warning(f"Retryable error: {re}\nAttempting to recover...")
                     await self._restart_session(re)
                     break

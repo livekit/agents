@@ -264,7 +264,8 @@ class LLMStream(ABC):
 
         duration = time.perf_counter() - start_time
 
-        if self._current_attempt_has_error:
+        # if generation is aborted before any tokens are received, it doesn't make sense to report -1 ttft
+        if self._current_attempt_has_error or ttft < 0:
             return
 
         metrics = LLMMetrics(
@@ -283,7 +284,6 @@ class LLMStream(ABC):
                 model_name=self._llm.model,
                 model_provider=self._llm.provider,
             ),
-            model=self._llm.model,  # TODO: remove it
         )
         if self._llm_request_span:
             # livekit metrics attribute

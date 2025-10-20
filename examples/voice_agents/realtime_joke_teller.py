@@ -35,6 +35,8 @@ from livekit.agents import (
     RoomOutputOptions,
     RunContext,
     ToolError,
+    WorkerOptions,
+    cli,
     llm,
 )
 from livekit.agents.llm import function_tool
@@ -260,4 +262,4 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
