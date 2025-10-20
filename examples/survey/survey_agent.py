@@ -19,11 +19,12 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import deepgram, openai, silero
 
 
 @dataclass
 class Userdata:
+    filename: str
     task_results: dict
 
 
@@ -38,8 +39,8 @@ def write_to_csv(filename: str, data: dict):
 
 @function_tool()
 async def disqualify(context: RunContext, disqualification_reason: str) -> None:
-    """Call if the candidate refuses to explicitly answer or if they do not meet the prerequisites for the position.
-    This function will terminate the interview and hang up.
+    """Call if the candidate refuses to cooperate, provides an unsatisfactory or inappropriate answer, or do not meet the prerequisites for the position.
+    This function will terminate the interview, record their disqualification, and hang up.
 
     Args:
         disqualification_reason (str): The justification for ending the interview (ex. Refuses to answer question)
@@ -47,6 +48,12 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     context.session.generate_reply(
         instructions=f"The interview is ending now, inform the candidate that the reason was {disqualification_reason}"
     )
+    disqualification_reason = "[DISQUALIFIED] " + disqualification_reason
+    data = {
+        "name": context.session.userdata.task_results["name"],
+        "disqualification reason": disqualification_reason,
+    }
+    write_to_csv(context.session.userdata.filename, data)
     context.session.shutdown()
 
 
@@ -183,7 +190,6 @@ class ExperienceTask(AgentTask[dict]):
     async def on_enter(self) -> None:
         await self.session.generate_reply(
             instructions="Gather the candidate's work experience including how many years of experience they have and a general overview of their career.",
-            tool_choice="none",
         )
 
     @function_tool()
@@ -201,7 +207,7 @@ class CommuteTask(AgentTask[dict]):
         super().__init__(
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
-            Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week.
+            Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week. Disqualify the candidate if they cannot commute at all.
             """,
             tools=[disqualify],
         )
@@ -209,52 +215,27 @@ class CommuteTask(AgentTask[dict]):
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Gather the candidate's commute flexibility, specfically whether or not they are able to commute to the office. Be brief and to the point.",
-            tool_choice="none",
+            instructions="Gather the candidate's commute flexibility, specfically whether or not they are able to commute to the office. If they are able to commute, collect their commute method. Be brief and to the point.",
         )
 
     @function_tool()
-    async def record_commute_flexibility(self, context: RunContext, can_commute: bool) -> None:
-        """Call to record whether or not the candidate can commute to the office.
+    async def record_commute_flexibility(
+        self, context: RunContext, office_flexibility: str, commute_method: str
+    ) -> None:
+        """Call to record the candidate's flexibility of going into office and notes about their commute. If they are able to commute, record their method of transportation.
 
         Args:
-            can_commute (bool): If the candidate can commute or not
+            office_flexibility (str): How often the candidate can commute to the office
+            commute_method (str): The method of transportation the candidate will take to commute (e.g. personal car, bus, subway)
         """
-        self._result["can_commute"] = can_commute
-        if can_commute:
-            commute_method = await CommuteMethodTask(commute_task=self)
-            self._result["commute_method"] = commute_method
+        self._result["office_flexibility"] = office_flexibility
+        self._result["commute_method"] = commute_method
+        if commute_method.lower() == "personal car":
+            self.session.generate_reply(
+                instructions="The candidate noted that they will drive to work. Inform them that there is no designated parking lot for the office, but there is metered street parking."
+            )
 
         self.complete(self._result)
-
-
-class CommuteMethodTask(AgentTask[str]):
-    def __init__(self, commute_task: CommuteTask) -> None:
-        out_of_scope_tool = None
-        for tool in commute_task.tools:
-            if tool.__name__ == "out_of_scope":
-                out_of_scope_tool = tool
-        super().__init__(
-            instructions="You will now be collecting the candidate's method of transportation.",
-            chat_ctx=commute_task.chat_ctx,
-            tools=[disqualify, out_of_scope_tool],
-        )
-        self._commute_task = commute_task
-
-    async def on_enter(self) -> None:
-        await self.session.generate_reply(
-            instructions="Gather their transportation method.",
-            tool_choice="none",
-        )
-
-    @function_tool()
-    async def record_commute_method(self, context: RunContext, commute_method: str) -> None:
-        """Call to record the candidate's method of transportation for their commute.
-
-        Args:
-            commute_method (str): The candidate's method of transportation for their commute.
-        """
-        self.complete(commute_method)
 
 
 class IntroTask(AgentTask[dict]):
@@ -271,7 +252,6 @@ class IntroTask(AgentTask[dict]):
     async def on_enter(self) -> None:
         await self.session.generate_reply(
             instructions="Welcome the candidate by introducing yourself and gather their name after their introduction.",
-            tool_choice="none",
         )
 
     @function_tool()
@@ -282,6 +262,7 @@ class IntroTask(AgentTask[dict]):
             name (str): The candidate's name
             intro_notes (str): The candidate's introduction and any additional notes
         """
+        self.session.userdata.task_results["name"] = name
         self._results["name"] = name
         self._results["intro_notes"] = intro_notes
         self.complete(self._results)
@@ -321,7 +302,7 @@ class SurveyAgent(Agent):
         summary = self.chat_ctx.items[-1]
         results["summary"] = summary.content
         self.session.userdata = results
-        write_to_csv(filename="results.csv", data=results)
+        write_to_csv(filename=self.session.userdata.filename, data=results)
 
     async def on_exit(self) -> None:
         await self.session.generate_reply(
@@ -340,10 +321,10 @@ def prewarm(proc: JobProcess):
 
 async def entrypoint(ctx: JobContext):
     session = AgentSession[Userdata](
-        userdata=Userdata(task_results={}),
+        userdata=Userdata(filename="results.csv", task_results={}),
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=cartesia.TTS(),
+        tts=openai.TTS(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
