@@ -1603,7 +1603,7 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
-    @tracer.start_as_current_span("assistant_turn")
+    @tracer.start_as_current_span("agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -2013,7 +2013,7 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)
 
-    @tracer.start_as_current_span("realtime_assistant_turn")
+    @tracer.start_as_current_span("realtime_agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
