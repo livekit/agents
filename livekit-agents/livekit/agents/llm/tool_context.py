@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable
 from dataclasses import dataclass
+from enum import Flag, auto
 from typing import (
     Any,
     Callable,
@@ -79,6 +80,7 @@ class StopResponse(Exception):
 class _FunctionToolInfo:
     name: str
     description: str | None
+    flags: ToolFlag
 
 
 @runtime_checkable
@@ -86,6 +88,11 @@ class FunctionTool(Protocol):
     __livekit_tool_info: _FunctionToolInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class ToolFlag(Flag):
+    NONE = 0
+    IGNORE_ON_ENTER = auto()
 
 
 class RawFunctionDescription(TypedDict):
@@ -102,12 +109,14 @@ class RawFunctionDescription(TypedDict):
     name: str
     description: NotRequired[str | None]
     parameters: dict[str, object]
+    flags: ToolFlag
 
 
 @dataclass
 class _RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
+    flags: ToolFlag
 
 
 @runtime_checkable
@@ -123,25 +132,39 @@ Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
 
 @overload
 def function_tool(
-    f: Raw_F, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: Raw_F,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> RawFunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: None = None,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
 @overload
 def function_tool(
-    f: F, *, name: str | None = None, description: str | None = None
+    f: F,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> FunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, name: str | None = None, description: str | None = None
+    f: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> Callable[[F], FunctionTool]: ...
 
 
@@ -151,6 +174,7 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> (
     FunctionTool
     | RawFunctionTool
@@ -167,7 +191,7 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
+        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
         setattr(func, "__livekit_raw_tool_info", info)
         return cast(RawFunctionTool, func)
 
@@ -178,6 +202,7 @@ def function_tool(
         info = _FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
+            flags=flags,
         )
         setattr(func, "__livekit_tool_info", info)
         return cast(FunctionTool, func)

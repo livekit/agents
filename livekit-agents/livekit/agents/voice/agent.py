@@ -163,6 +163,13 @@ class Agent:
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
+        invalid = [t for t in tools if not isinstance(t, (llm.FunctionTool, llm.RawFunctionTool))]
+        if invalid:
+            kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
+            raise TypeError(
+                f"Invalid tool type(s): {kinds}. Expected FunctionTool or RawFunctionTool."
+            )
+
         if self._activity is None:
             self._tools = list(set(tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
