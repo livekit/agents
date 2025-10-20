@@ -1,7 +1,7 @@
 ---
 name: Bug Report
 about: Create a report to help us improve
-title: "[BUG]"
+title: ""
 labels: bug
 assignees: ''
 
@@ -40,8 +40,8 @@ Related IDs to track particular sessions or SIP calls.
 **Proposed Fix**
 Suggest a solution to the bug if applicable.
 
-**Additional context**
-Add any other context about the problem.
+**Additional context / Use Case**
+Add any other context about the problem, including your use case.
 
 **Screenshots/Recordings**
 If applicable, add screenshots or recording links to help explain your problem.

@@ -1,22 +1,17 @@
 ---
 name: Question
-about: Ask for help with an issue you're facing
-title: ''
+about: Ask a question or request further documentation
+title: ""
 labels: question
 assignees: ''
 
 ---
 
-<!--
-Hello! Thanks for taking the time to ask a question.
+**Question or Area of Confusion**
+Ask your question here and describe how we can help you.
 
-Before creating this issue, we kindly ask that you use the search functionality
-to see if anyone else has already asked this question.
-Please include details such as environment, package versions, minimal examples,
-and error logs, if applicable.
+**Documentation Improvement**
+Add the relevant documentation you referenced and suggest what to add for clarity.
 
-Feel free to join us in the #agents channel on our Slack, and ask your question
-there to get quicker help from us and the community:
-
-https://livekit.io/join-slack
--->
+**Additional context / Use Case**
+Provide any additional context or elaborate on your use case.
