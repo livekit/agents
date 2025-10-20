@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
-from ...llm.tool_context import ToolError, function_tool
+from ...llm.tool_context import ToolError, function_tool, ToolFlag
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
@@ -75,12 +75,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self._email_update_speech_handle: SpeechHandle | None = None
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(
-            instructions=(
-                "Ask the user to provide an email address. If you already have it, ask for confirmation.\n"
-                "Do not call `decline_email_capture`"
-            )
-        )
+        self.session.generate_reply(instructions=("Ask the user to provide an email address."))
 
     @function_tool
     async def update_email_address(self, email: str, ctx: RunContext) -> str:
@@ -104,7 +99,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
-    @function_tool
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def confirm_email_address(self, ctx: RunContext) -> None:
         """Validates/confirms the email address provided by the user."""
         await ctx.wait_for_playout()
@@ -120,7 +115,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         if not self.done():
             self.complete(GetEmailResult(email_address=self._current_email))
 
-    @function_tool
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_email_capture(self, reason: str) -> None:
         """Handles the case when the user explicitly declines to provide an email address.
 
