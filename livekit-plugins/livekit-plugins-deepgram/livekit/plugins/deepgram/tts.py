@@ -305,9 +305,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(json.dumps(speak_msg))
                 input_sent_event.set()
 
-            # Always flush after a segment
+            # always flush after a segment
             flush_msg = {"type": "Flush"}
             await ws.send_str(json.dumps(flush_msg))
+            input_sent_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             await input_sent_event.wait()

@@ -250,7 +250,9 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
@@ -346,6 +348,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
+            input_sent_event.set()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -354,7 +357,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 sent_tokenizer_stream.push_text(data)
-
             sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

@@ -415,6 +415,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "type": "session.flush",
             }
             await ws.send_str(json.dumps(end_pkt))
+            # needed in case empty input is sent
+            input_sent_event.set()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_session_id: str | None = None
