@@ -40,6 +40,7 @@ from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_cr
 from .models import (
     CerebrasChatModels,
     ChatModels,
+    CometAPIChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
@@ -459,6 +460,56 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
+    @staticmethod
+    def with_cometapi(
+        *,
+        model: str | CometAPIChatModels = "gpt-5-chat-latest",
+        api_key: str | None = None,
+        base_url: str = "https://api.cometapi.com/v1/",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of CometAPI LLM.
+
+        ``api_key`` must be set to your CometAPI API key, either using the argument or by setting
+        the ``COMETAPI_API_KEY`` environmental variable.
+
+        CometAPI provides access to 500+ AI models from multiple providers including OpenAI,
+        Anthropic, Google, xAI, DeepSeek, and Qwen through a unified API.
+
+        Get your API key at: https://api.cometapi.com/console/token
+        Learn more: https://www.cometapi.com/?utm_source=livekit&utm_campaign=integration&utm_medium=integration&utm_content=integration
+        """
+
+        api_key = api_key or os.environ.get("COMETAPI_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
