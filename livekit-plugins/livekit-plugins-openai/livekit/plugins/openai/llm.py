@@ -497,7 +497,7 @@ class LLM(llm.LLM):
         Create a new instance of CometAPI LLM.
 
         ``api_key`` must be set to your CometAPI API key, either using the argument or by setting
-        the ``COMETAPI_KEY`` environmental variable.
+        the ``COMETAPI_API_KEY`` environmental variable.
 
         CometAPI provides access to 500+ AI models from multiple providers including OpenAI,
         Anthropic, Google, xAI, DeepSeek, and Qwen through a unified API.
@@ -506,10 +506,10 @@ class LLM(llm.LLM):
         Learn more: https://www.cometapi.com/?utm_source=livekit&utm_campaign=integration&utm_medium=integration&utm_content=integration
         """
 
-        api_key = api_key or os.environ.get("COMETAPI_KEY")
+        api_key = api_key or os.environ.get("COMETAPI_API_KEY")
         if api_key is None:
             raise ValueError(
-                "CometAPI API key is required, either as argument or set COMETAPI_KEY environmental variable"  # noqa: E501
+                "CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
