@@ -159,7 +159,7 @@ class JobContext:
     def _on_setup(self) -> None:
         is_cloud = misc.is_cloud(self._info.url)
 
-        if is_cloud and not self.is_fake_job():#  and self.job.enable_recording:
+        if is_cloud and not self.is_fake_job():  #  and self.job.enable_recording:
             cloud_hostname = urlparse(self._info.url).hostname
             _setup_cloud_tracer(
                 room_id=self._info.job.room.sid,
@@ -202,7 +202,6 @@ class JobContext:
             )
         except Exception:
             logger.exception("failed to upload the session report to LiveKit Cloud")
-
 
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
@@ -261,8 +260,9 @@ class JobContext:
             room=self.job.room.name,
             options=session.options,
             audio_recording_path=recorder_io.output_path,
+            audio_recording_started_at=recorder_io.recording_started_at,
             events=session._recorded_events,
-            enable_user_data_training=True, # TODO
+            enable_user_data_training=True,  # TODO
             chat_history=session.history.copy(),
         )
 
