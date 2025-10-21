@@ -11,9 +11,11 @@ from livekit.agents import (
     AgentSession,
     AgentTask,
     JobContext,
+    JobProcess,
     RoomInputOptions,
     RunContext,
     cli,
+    metrics,
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
@@ -55,85 +57,6 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     context.session.shutdown()
 
 
-class WorkDistributionTask(AgentTask[str]):
-    def __init__(self, team_size: int) -> None:
-        super().__init__(
-            instructions="""You will be asking the candidate about their project in relation to their team size."""
-        )
-        self._team_size = team_size
-
-    async def on_enter(self) -> None:
-        if self._team_size == 1:
-            self.session.generate_reply(
-                instructions="Have the candidate walk you through their thought process on splitting the project work between a team of four. If unspecified, probe further on why they made their decisions."
-            )
-
-        else:
-            self.session.generate_reply(
-                instructions="Inquire how the work was divided up between the team. If the candidate believes that there was a better way to distribute work, probe further on what they would change."
-            )
-
-    @function_tool()
-    async def record_work_division_response(self, overall_response: str):
-        """Call once the candidate has provided a complete overview to their perspective on work division.
-
-        Args:
-            overall_response (str): The candidate's response to approaching work division, especially regarding their aforementioned project
-        """
-        self.complete(overall_response)
-
-
-class ExpandProjectTask(AgentTask[dict]):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You will be asking the candidate to expand upon their project intentions, whether it be to scale their current one or to create a new one."
-        )
-        self._result = {}
-
-    async def on_enter(self) -> None:
-        self.session.generate_reply(
-            instructions="Allow the candidate to choose a scenario between expanding upon the project they are currently speaking of or creating a new project entirely. Dissect their thought process and decisions."
-        )
-
-    @function_tool()
-    async def record_old_project_expansion_response(
-        self, new_features: str, scale_plan: str, overall_response: str
-    ):
-        """Call if the candidate decides to scale their previous project.
-
-        Args:
-            new_features (str): Record any new features the candidate expressed adding, such as improving GUI or adding an AI component.
-            scale_plan (str): Record how the candidate expressed scaling their project, such as deploying it if not already
-            overall_response (str): An overview of the candidate's response
-        """
-        self.session.generate_reply(
-            instructions="Express interest in seeing the candidate scale their project as they described in the future."
-        )
-        self._result["new_features"] = new_features
-        self._result["scale_plan"] = scale_plan
-        self._result["overall_response"] = overall_response
-        self.complete(self._result)
-
-    @function_tool()
-    async def record_new_project_creation_response(
-        self, new_project_type: str, development_plan: str, overall_response: str
-    ):
-        """Call if the candidate decides to create a new project entirely.
-
-        Args:
-            new_project_type (str): The type of project, such as mobile app or AI program
-            development_plan (str): Record how the candidate plans to develop this project from start to finish with detail
-            overall_response (str): An overview of the candidate's response
-        """
-        self.session.generate_reply(
-            instructions="Respond to the candidate's project idea and express support for pursuing it in the future."
-        )
-        self._result["new_project_type"] = new_project_type
-        self._result["development_plan"] = development_plan
-        self._result["overall_response"] = overall_response
-        self.complete(self._result)
-
-
 class ProjectTask(AgentTask[dict]):
     def __init__(self) -> None:
         super().__init__(
@@ -142,6 +65,7 @@ class ProjectTask(AgentTask[dict]):
                          if applicable. If they have no projects to dissect, call disqualify(). Do not mention any prerequisites for this position.""",
             tools=[disqualify],
         )
+        self._results = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -149,29 +73,52 @@ class ProjectTask(AgentTask[dict]):
         )
 
     @function_tool()
-    async def record_project_details(
-        self, context: RunContext, team_size: int, project_description: str
-    ) -> None:
-        """Call to record team size, a categorization of the project, and any additional notes before another round of questions.
+    async def record_project_details(self, context: RunContext, project_description: str) -> None:
+        """Call to record and gradually update the description of their project as they anwer more questions.
 
         Args:
-            team_size (int): The size of the project team, minimum of 1
             project_description (str): A description of the project, including the type of project being described, such as "full stack application." Include the technology stack they used and their reasoning behind it.
         """
-        task_group = TaskGroup()
-        task_group.add(
-            lambda: WorkDistributionTask(team_size=team_size),
-            id="work_distribution_task",
-            description="Collects the candidate's perspective on work distribution regarding their project",
-        )
-        task_group.add(
-            lambda: ExpandProjectTask(),
-            id="expand_project_task",
-            description="Collects the candidate's response on either scaling a previous project or creating a new one",
-        )
 
-        results = await task_group
-        self.complete(results.task_results)
+        self._results["project_description"] = project_description
+        if not self._results["work_division_response"]:
+            self.session.generate_reply(
+                instructions="Have the candidate walk you through their thought process on splitting the project work. If they already worked in a team for that project, gather their thoughts on what they would do differently."
+            )
+
+        elif (
+            self._results["work_division_response"]
+            and not self._results["scaling_project_response"]
+        ):
+            self.session.generate_reply(
+                instructions="Allow the candidate to choose a scenario between expanding upon the project they are currently speaking of or creating a new project entirely. Dissect their thought process and decisions."
+            )
+
+        else:
+            self.complete(self._results)
+
+    @function_tool()
+    async def record_work_division_response(self, work_division_response: str):
+        """Call once the candidate has provided a complete overview to their perspective on work division.
+
+        Args:
+            work_division_response (str): The candidate's response to approaching work division, especially regarding their aforementioned project
+        """
+        self._results["work_division_response"] = work_division_response
+
+    @function_tool()
+    async def record_project_scale_response(self, chosen_scenario: str, scale_response: str):
+        """Call to record the candidate's response to scaling their project, either the aforementioned or a new one
+
+        Args:
+            chosen_scenario (str): The scenario the candidate chose, either 'old_project' or 'new_project'
+            old_project_scale_response (str): An overview of the candidate's response
+        """
+        self.session.generate_reply(
+            instructions="Express interest in seeing the candidate scale their project as they described in the future."
+        )
+        results = {"scenario": chosen_scenario, "response": scale_response}
+        self._result["scaling_project_response"] = results
 
 
 class ExperienceTask(AgentTask[dict]):
@@ -180,10 +127,11 @@ class ExperienceTask(AgentTask[dict]):
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             Record how many years of experience the candidate has and the descriptions of their previous jobs if any. There is no set required amount for this position.
-            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details. If the candidate wishes to change a previous answer, call out_of_scope.
+            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details.
             """,
             tools=[disqualify],
         )
+        self._results = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -191,13 +139,18 @@ class ExperienceTask(AgentTask[dict]):
         )
 
     @function_tool()
-    async def record_experience(self, context: RunContext, experience_description: str) -> None:
-        """Call to record the years of experience the candidate has and its descriptions.
+    async def record_experience(
+        self, context: RunContext, years_of_experience: int, experience_description: str
+    ) -> None:
+        """Call to record the work experience the candidate has and a description of each role with a clear timeline.
 
         Args:
-            experience_description (str): The years of experience the candidate has and a description of each role they previously held. Take note of the corresponding companies as well.
+            years_of_experience (int): The years of experience the candidate has
+            experience_description (str): A description of each role they previously held. Take note of the corresponding companies as well.
         """
-        self.complete(experience_description)
+        self._results["years_of_experience"] = years_of_experience
+        self._results["experience_description"] = experience_description
+        self.complete(self._results)
 
 
 class CommuteTask(AgentTask[dict]):
@@ -312,11 +265,16 @@ logger = logging.getLogger("SurveyAgent")
 
 load_dotenv(".env.local")
 
+
+def prewarm(proc: JobProcess):
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 server = AgentServer()
 
 
 @server.realtime_session()
-async def survey_agent(ctx: JobContext) -> None:
+async def entrypoint(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=Userdata(filename="results.csv", task_results={}),
         llm=openai.LLM(model="gpt-4.1"),
@@ -326,6 +284,14 @@ async def survey_agent(ctx: JobContext) -> None:
         preemptive_generation=True,
     )
 
+    usage_collector = metrics.UsageCollector()
+
+    async def log_usage():
+        summary = usage_collector.get_summary()
+        logger.info(f"Usage: {summary}")
+
+    ctx.add_shutdown_callback(log_usage)
+
     await session.start(
         agent=SurveyAgent(),
         room=ctx.room,
@@ -333,7 +299,8 @@ async def survey_agent(ctx: JobContext) -> None:
             delete_room_on_close=True,
         ),
     )
-    ctx.connect()
+
+    await ctx.connect()
 
 
 if __name__ == "__main__":
