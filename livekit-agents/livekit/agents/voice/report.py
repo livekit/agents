@@ -1,4 +1,3 @@
-
 from livekit.protocol import agent_pb
 
 import time
@@ -21,6 +20,7 @@ class SessionReport:
     room: str
     options: AgentSessionOptions
     audio_recording_path: Path | None
+    audio_recording_started_at: float | None
     events: list[AgentEvent]
     chat_history: ChatContext
     enable_user_data_training: bool
@@ -43,6 +43,7 @@ class SessionReport:
             "audio_recording_path": (
                 str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
             ),
+            "audio_recording_started_at": self.audio_recording_started_at,
             "options": {
                 "allow_interruptions": self.options.allow_interruptions,
                 "discard_audio_if_uninterruptible": self.options.discard_audio_if_uninterruptible,
