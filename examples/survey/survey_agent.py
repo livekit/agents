@@ -7,15 +7,13 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AgentTask,
     JobContext,
-    JobProcess,
     RoomInputOptions,
     RunContext,
-    WorkerOptions,
     cli,
-    metrics,
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
@@ -314,28 +312,19 @@ logger = logging.getLogger("SurveyAgent")
 
 load_dotenv(".env.local")
 
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
+server = AgentServer()
 
 
-async def entrypoint(ctx: JobContext):
+@server.realtime_session()
+async def survey_agent(ctx: JobContext) -> None:
     session = AgentSession[Userdata](
         userdata=Userdata(filename="results.csv", task_results={}),
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=openai.TTS(),
-        vad=ctx.proc.userdata["vad"],
+        vad=silero.VAD.load(),
         preemptive_generation=True,
     )
-
-    usage_collector = metrics.UsageCollector()
-
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
-
-    ctx.add_shutdown_callback(log_usage)
 
     await session.start(
         agent=SurveyAgent(),
@@ -344,9 +333,8 @@ async def entrypoint(ctx: JobContext):
             delete_room_on_close=True,
         ),
     )
-
-    await ctx.connect()
+    ctx.connect()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)
