@@ -85,7 +85,7 @@ class IntroAgent(Agent):
         story_agent = StoryAgent(name, location)
         # by default, StoryAgent will start with a new context, to carry through the current
         # chat history, pass in the chat_ctx
-        # story_agent = StoryAgent(name, location, chat_ctx=context.chat_ctx)
+        # story_agent = StoryAgent(name, location, chat_ctx=self.chat_ctx)
 
         logger.info(
             "switching to the story agent with the provided user data: %s", context.userdata

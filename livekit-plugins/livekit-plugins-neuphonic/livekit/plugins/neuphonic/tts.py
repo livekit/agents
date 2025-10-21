@@ -12,89 +12,131 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import asyncio
 import base64
 import json
 import os
+import weakref
 from dataclasses import dataclass, replace
 
 import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .models import TTSLangCodes
+from .log import logger  # noqa: I001
+from .models import TTSLangCodes  # noqa: I001
 
-API_BASE_URL = "api.neuphonic.com"
-AUTHORIZATION_HEADER = "X-API-KEY"
+API_AUTH_HEADER = "x-api-key"
 
 
 @dataclass
 class _TTSOptions:
-    base_url: str
     lang_code: TTSLangCodes | str
-    api_key: str
+    encoding: str
     sample_rate: int
-    speed: float
-    voice_id: str | None
+    voice_id: str
+    speed: float | None
+    api_key: str
+    base_url: str
+    word_tokenizer: tokenize.WordTokenizer
+
+    def get_http_url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
+
+    def get_ws_url(self, path: str) -> str:
+        return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice_id: str = "8e9c4bc8-3979-48ab-8626-df53befc2090",
         api_key: str | None = None,
         lang_code: TTSLangCodes | str = "en",
-        speed: float = 1.0,
+        encoding: str = "pcm_linear",
+        voice_id: str = "8e9c4bc8-3979-48ab-8626-df53befc2090",
+        speed: float | None = 1.0,
         sample_rate: int = 22050,
         http_session: aiohttp.ClientSession | None = None,
-        base_url: str = API_BASE_URL,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        base_url: str = "https://api.neuphonic.com",
     ) -> None:
         """
-        Create a new instance of the Neuphonic TTS.
+        Create a new instance of NeuPhonic TTS.
 
-        See https://docs.neuphonic.com for more documentation on all of these options, or go to https://app.neuphonic.com/ to test out different options.
+        See https://docs.neuphonic.com for more details on the NeuPhonic API.
 
         Args:
-            voice_id (str, optional): The voice ID for the desired voice. Defaults to None.
-            lang_code (TTSLanguages | str, optional): The language code for synthesis. Defaults to "en".
-            encoding (TTSEncodings | str, optional): The audio encoding format. Defaults to "pcm_mulaw".
+            lang_code (TTSLangCodes | str, optional): The language code for synthesis. Defaults to "en".
+            encoding (str, optional): The audio encoding format. Defaults to "pcm_linear".
+            voice_id (str, optional): The voice ID for the desired voice.
             speed (float, optional): The audio playback speed. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 22050.
-            api_key (str | None, optional): The Neuphonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
+            api_key (str, optional): The NeuPhonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
-            base_url (str, optional): The base URL for the Neuphonic API. Defaults to "api.neuphonic.com".
+            word_tokenizer (tokenize.WordTokenizer, optional): The word tokenizer to use. Defaults to tokenize.basic.WordTokenizer().
+            tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer().
+            base_url (str, optional): The base URL for the NeuPhonic API. Defaults to "https://api.neuphonic.com".
         """  # noqa: E501
+
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=1,
         )
+        neuphonic_api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
+        if not neuphonic_api_key:
+            raise ValueError("NEUPHONIC_API_KEY must be set")
 
-        api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
-        if not api_key:
-            raise ValueError("API key must be provided or set in NEUPHONIC_API_KEY")
+        if not is_given(word_tokenizer):
+            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
-            voice_id=voice_id,
             lang_code=lang_code,
-            api_key=api_key,
-            speed=speed,
+            encoding=encoding,
             sample_rate=sample_rate,
+            voice_id=voice_id,
+            speed=speed,
+            api_key=neuphonic_api_key,
             base_url=base_url,
+            word_tokenizer=word_tokenizer,
         )
         self._session = http_session
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=300,
+            mark_refreshed_on_get=True,
+        )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        url = self._opts.get_ws_url(
+            f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
+        )
+
+        headers = {API_AUTH_HEADER: self._opts.api_key}
+        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
 
     @property
     def model(self) -> str:
@@ -110,42 +152,55 @@ class TTS(tts.TTS):
 
         return self._session
 
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
     def update_options(
         self,
         *,
+        lang_code: NotGivenOr[TTSLangCodes | str] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
-        lang_code: NotGivenOr[TTSLangCodes] = NOT_GIVEN,
-        speed: NotGivenOr[float] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
 
-        This method allows updating the TTS settings, including model type, voice_id, lang_code,
-        encoding, speed and sample_rate. If any parameter is not provided, the existing value will be
-        retained.
+        This allows updating the TTS settings, including lang_code, voice_id, and speed.
+        If any parameter is not provided, the existing value will be retained.
 
         Args:
-            model (TTSModels | str, optional): The Neuphonic model to use.
+            lang_code (TTSLangCodes | str, optional): The language code for synthesis.
             voice_id (str, optional): The voice ID for the desired voice.
-            lang_code (TTSLanguages | str, optional): The language code for synthesis..
-            encoding (TTSEncodings | str, optional): The audio encoding format.
             speed (float, optional): The audio playback speed.
-            sample_rate (int, optional): The audio sample rate in Hz.
-        """  # noqa: E501
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
+        """
         if is_given(lang_code):
             self._opts.lang_code = lang_code
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
         if is_given(speed):
             self._opts.speed = speed
-        if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate
 
     def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+
+        self._streams.clear()
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -165,8 +220,8 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
-                f"https://{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
-                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                f"{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
+                headers={API_AUTH_HEADER: self._opts.api_key},
                 json={
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
@@ -235,7 +290,130 @@ def _parse_sse_message(message: str) -> dict | None:
 
     if message_dict.get("errors") is not None:
         raise Exception(
-            f"received error status {message_dict['status_code']}: {message_dict['errors']}"
+            f"received error status {message_dict['status_code']}:{message_dict['errors']}"
         )
 
     return message_dict
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+
+        async def _tokenize_input() -> None:
+            word_stream = None
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    if word_stream is None:
+                        word_stream = self._opts.word_tokenizer.stream()
+                        self._segments_ch.send_nowait(word_stream)
+                    word_stream.push_text(input)
+                elif isinstance(input, self._FlushSentinel):
+                    if word_stream:
+                        word_stream.end_input()
+                    word_stream = None
+
+            self._segments_ch.close()
+
+        async def _run_segments() -> None:
+            async for word_stream in self._segments_ch:
+                await self._run_ws(word_stream, output_emitter)
+
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run_segments()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=request_id,
+                body=None,
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
+
+    async def _run_ws(
+        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
+    ) -> None:
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
+
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            async for word in word_stream:
+                text_msg = {"text": f"{word.token} "}
+                self._mark_started()
+                await ws.send_str(json.dumps(text_msg))
+
+            stop_msg = {"text": "<STOP>"}
+            await ws.send_str(json.dumps(stop_msg))
+
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            while True:
+                msg = await ws.receive()
+
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError("NeuPhonic websocket connection closed unexpectedly")
+
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        resp = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        logger.warning("Invalid JSON from NeuPhonic")
+                        continue
+
+                    if resp.get("type") == "error":
+                        raise APIError(f"NeuPhonic returned error: {resp}")
+
+                    data = resp.get("data", {})
+                    audio_data = data.get("audio")
+                    if audio_data and audio_data != "":
+                        try:
+                            b64data = base64.b64decode(audio_data)
+                            if b64data:
+                                output_emitter.push(b64data)
+                        except Exception as e:
+                            logger.warning("Failed to decode NeuPhonic audio data: %s", e)
+
+                    if data.get("stop"):
+                        output_emitter.end_segment()
+                        break
+
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    pass
+                else:
+                    logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
+
+        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
+
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
