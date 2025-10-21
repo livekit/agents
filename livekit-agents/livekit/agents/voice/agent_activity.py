@@ -16,7 +16,14 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
-from ..llm.tool_context import StopResponse
+from ..llm.tool_context import (
+    ToolFlag,
+    StopResponse,
+    get_raw_function_info,
+    get_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -72,6 +79,15 @@ if TYPE_CHECKING:
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
+
+
+@dataclass
+class _OnEnterData:
+    session: AgentSession
+    agent: Agent
+
+
+_OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_enter")
 
 
 @dataclass
@@ -314,7 +330,6 @@ class AgentActivity(RecognitionHooks):
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
         chat_ctx = chat_ctx.copy(tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN)
-
         self._agent._chat_ctx = chat_ctx
 
         if self._rt_session is not None:
@@ -432,7 +447,12 @@ class AgentActivity(RecognitionHooks):
                 )
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
-                    await self._agent.on_enter()
+                    data = _OnEnterData(session=self._session, agent=self._agent)
+                    try:
+                        tk = _OnEnterContextVar.set(data)
+                        await self._agent.on_enter()
+                    finally:
+                        _OnEnterContextVar.reset(tk)
 
                 self._on_enter_task = task = self._create_speech_task(
                     _traceable_on_enter(), name="AgentTask_on_enter"
@@ -800,6 +820,25 @@ class AgentActivity(RecognitionHooks):
                     # when generate_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
                     tool_choice = "none"
 
+        tools = self.tools
+
+        # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
+        if on_enter_data := _OnEnterContextVar.get(None):
+            if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
+                filtered_tools = []
+                for tool in tools:
+                    if is_raw_function_tool(tool):
+                        info = get_raw_function_info(tool)
+                    elif is_function_tool(tool):
+                        info = get_function_info(tool)
+
+                    if info.flags & ToolFlag.IGNORE_ON_ENTER:
+                        continue
+
+                    filtered_tools.append(tool)
+
+                tools = filtered_tools
+
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
@@ -817,6 +856,7 @@ class AgentActivity(RecognitionHooks):
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
+                    # TODO(theomonnom): the list of tools should always be passed here
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
                 speech_handle=handle,
@@ -834,7 +874,7 @@ class AgentActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
-                    tools=self.tools,
+                    tools=tools,
                     new_message=user_message.model_copy() if user_message else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
@@ -1603,7 +1643,7 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
-    @tracer.start_as_current_span("assistant_turn")
+    @tracer.start_as_current_span("agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
@@ -2015,7 +2055,7 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)
 
-    @tracer.start_as_current_span("realtime_assistant_turn")
+    @tracer.start_as_current_span("realtime_agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
