@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import time
 import asyncio
 import contextlib
 import queue
@@ -64,7 +65,9 @@ class RecorderIO:
             self._close_fut = self._loop.create_future()
             self._forward_atask = asyncio.create_task(self._forward_task())
 
-            thread = threading.Thread(target=self._encode_thread, daemon=True, name="recorder_io_encode_thread")
+            thread = threading.Thread(
+                target=self._encode_thread, daemon=True, name="recorder_io_encode_thread"
+            )
             thread.start()
 
     async def aclose(self) -> None:
@@ -88,12 +91,25 @@ class RecorderIO:
         return self._out_record
 
     @property
+    def recording(self) -> bool:
+        return self._started
+
+    @property
     def output_path(self) -> Path | None:
         return self._output_path
 
     @property
-    def recording(self) -> bool:
-        return self._started
+    def recording_started_at(self) -> float | None:
+        in_t = self._in_record.started_wall_time if self._in_record else None
+        out_t = self._out_record.started_wall_time if self._out_record else None
+
+        if in_t is None:
+            return out_t
+
+        if out_t is None:
+            return in_t
+
+        return min(in_t, out_t)
 
     def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
         assert self._in_record is not None
@@ -241,7 +257,12 @@ class RecorderAudioInput(io.AudioInput):
         self.__audio_input = source
         self.__recording_io = recording_io
         self.__acc_frames: list[rtc.AudioFrame] = []
+        self.__started_time: None | float = None
 
+    @property
+    def started_wall_time(self) -> float | None:
+        return self.__started_time
+    
     def take_buf(self) -> list[rtc.AudioFrame]:
         frames = self.__acc_frames
         self.__acc_frames = []
@@ -254,6 +275,9 @@ class RecorderAudioInput(io.AudioInput):
         frame = await self.__audio_input.__anext__()
 
         if self.__recording_io.recording:
+            if self.__started_time is None:
+                self.__started_time = time.time()
+
             self.__acc_frames.append(frame)
 
         return frame
@@ -276,7 +300,12 @@ class RecorderAudioOutput(io.AudioOutput):
         self.__recording_io = recording_io
         self.__write = write_fnc
         self.__acc_frames: list[rtc.AudioFrame] = []
+        self.__started_time: None | float = None
 
+    @property
+    def started_wall_time(self) -> float | None:
+        return self.__started_time
+    
     @property
     def recorder_io(self) -> RecorderIO:
         return self.__recording_io
@@ -306,9 +335,9 @@ class RecorderAudioOutput(io.AudioOutput):
         for frame in self.__acc_frames:
             if frame.duration + acc_dur > playback_position:
                 duration_needed = playback_position - acc_dur
-                samples_needed = int(duration_needed * frame.sample_rate)#  * frame.num_channels
+                samples_needed = int(duration_needed * frame.sample_rate)  #  * frame.num_channels
                 truncated_frame = rtc.AudioFrame(
-                    data=frame.data[:samples_needed * frame.num_channels],
+                    data=frame.data[: samples_needed * frame.num_channels],
                     num_channels=frame.num_channels,
                     samples_per_channel=samples_needed,
                     sample_rate=frame.sample_rate,
@@ -328,6 +357,9 @@ class RecorderAudioOutput(io.AudioOutput):
         await super().capture_frame(frame)
 
         if self.__recording_io.recording:
+            if self.__started_time is None:
+                self.__started_time = time.time()
+
             self.__acc_frames.append(frame)
 
         if self.next_in_chain:

@@ -5,10 +5,10 @@ import logging
 import json
 import aiohttp
 from collections.abc import Iterator
-import datetime
+from datetime import datetime, timezone, timedelta
 from livekit import api
 from livekit.protocol import metrics as proto_metrics, agent_pb
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Union
 
 from urllib.parse import urlparse
 
@@ -240,6 +240,18 @@ def _to_proto_chat_ctx(chat_ctx: ChatContext) -> agent_pb.agent_session.ChatCont
     return ctx_pb
 
 
+def _to_rfc3339(value: int | float | datetime) -> str:
+    if isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(value, tz=timezone.utc)
+    elif isinstance(value, datetime):
+        dt = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    else:
+        raise TypeError(f"Unsupported type for RFC3339 conversion: {type(value)!r}")
+
+    dt = dt.replace(microsecond=(dt.microsecond // 1000) * 1000)
+    return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 async def _upload_session_report(
     *,
     room_id: str,
@@ -278,16 +290,19 @@ async def _upload_session_report(
         part.headers["Content-Type"] = "application/protobuf"
         part.headers["Content-Length"] = str(len(chat_history_bytes))
 
-    if report.audio_recording_path:
+    if report.audio_recording_path and report.audio_recording_started_at:
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()
         except Exception:
             audio_bytes = b""
-        part = mp.append(audio_bytes)
-        part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
-        part.headers["Content-Type"] = "audio/ogg"
-        part.headers["Content-Length"] = str(len(audio_bytes))
+
+        if audio_bytes:
+            part = mp.append(audio_bytes)
+            part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
+            part.headers["Content-Type"] = "audio/ogg"
+            part.headers["Content-Length"] = str(len(audio_bytes))
+            part.headers["Created-At"] = _to_rfc3339(report.audio_recording_started_at)
 
     url = f"https://{cloud_hostname}/observability/recordings/v0"
     headers = {
