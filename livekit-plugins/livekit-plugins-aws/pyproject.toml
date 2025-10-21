@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "aws", "nova", "sonic"]
+keywords = ["aws", "nova", "sonic", "voice", "ai", "realtime", "audio", "video", "livekit"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
