@@ -93,10 +93,10 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
         session: AgentSession,
         *,
         window_size: int = 20,
-        similarity_threshold: float = 0.9,
+        similarity_threshold: float = 0.85,
         consecutive_threshold: int = 3,
     ) -> None:
-        super().__init__(session)
+        super().__init__()
 
         if window_size <= 0:
             raise ValueError("window_size must be greater than 0")
@@ -107,6 +107,7 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
         if consecutive_threshold <= 0:
             raise ValueError("consecutive_threshold must be greater than 0")
 
+        self._session = session
         self._window_size = window_size
         self._similarity_threshold = similarity_threshold
         self._consecutive_threshold = consecutive_threshold
@@ -141,8 +142,9 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
         # way if this become a bottleneck later.
         doc_matrix = self._vectorizer.fit_transform(self._transcribed_chunks)
         doc_similarity = cosine_similarity(doc_matrix)
+        last_chunk_similarity = doc_similarity[-1][:-1]
 
-        if np.max(doc_similarity[-1]) > self._similarity_threshold:
+        if np.max(last_chunk_similarity) > self._similarity_threshold:
             self._num_consecutive_similar_chunks += 1
         else:
             self._num_consecutive_similar_chunks = 0
