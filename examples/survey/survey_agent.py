@@ -15,6 +15,7 @@ from livekit.agents import (
     RoomInputOptions,
     RunContext,
     cli,
+    llm,
     metrics,
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
@@ -37,6 +38,31 @@ def write_to_csv(filename: str, data: dict):
         csv_writer.writerow(data)
 
 
+async def evaluate_candidate(llm_model, summary) -> str:
+    """Analyzes the full conversation to determine if the candidate is a good fit for the role and position"""
+    conversation_text = summary.content
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(
+        role="system",
+        content=(
+            "Evaluate whether or not this candidate is a good fit for the company and role based on the conversation summary provided.\n"
+            "Take into account their holistic and professional profile and the quality of their responses.\n"
+            "Be concise and firm in the evaluation."
+        ),
+    )
+    chat_ctx.add_message(
+        role="user",
+        content=f"Conversation to evaluate:\n\n{conversation_text}",
+    )
+
+    chunks: list[str] = []
+    async for chunk in llm_model.chat(chat_ctx=chat_ctx):
+        if chunk.delta and chunk.delta.content:
+            chunks.append(chunk.delta.content)
+    evaluation = "".join(chunks).strip()
+    return evaluation
+
+
 @function_tool()
 async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     """Call if the candidate refuses to cooperate, provides an unsatisfactory or inappropriate answer, or do not meet the prerequisites for the position.
@@ -57,6 +83,57 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     context.session.shutdown()
 
 
+class BehaviorialTask(AgentTask[dict]):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
+            You will now be learning more about the candidate holistically. This includes their strengths, weaknesses, and work and communication style. You are testing the candidate for a good fit in the company.
+            The ideal candidate would be well spoken, energetic, and thorough in their answers. Do not mention the prerequisites. If the candidate does not fulfill the description or refuses to answer, call disqualify().
+            """,
+            tools=[disqualify],
+        )
+        self._results = {}
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="Approach this task in a natural conversational manner and incrementally gather the candidate's strengths, weaknesses, and work style in no particular order."
+        )
+
+    @function_tool()
+    async def record_strengths(self, strengths_summary: str):
+        """Call to record a summary of the candidate's strengths.
+
+        Args:
+            strengths_summary (str): A summary of the candidate's strengths
+        """
+        self._results["strengths"] = strengths_summary
+        self._check_completion()
+
+    @function_tool()
+    async def record_weaknesses(self, weaknesses_summary):
+        """Call to record a summary of the candidate's weaknesses.
+
+        Args:
+            weaknesses_summary (str): A summary of the candidate's weaknesses
+        """
+        self._results["weaknesses"] = weaknesses_summary
+        self._check_completion()
+
+    @function_tool()
+    async def record_work_style(self, work_style: str):
+        """Call to record a summary of the candidate's work and communication style.
+
+        Args:
+            work_style (str): The candidate's work and communication style
+        """
+        self._results["work_style"] = work_style
+        self._check_completion()
+
+    def _check_completion(self):
+        if self._results.keys() == {"strengths", "weaknesses", "work_style"}:
+            self.complete(self._results)
+
+
 class ProjectTask(AgentTask[dict]):
     def __init__(self) -> None:
         super().__init__(
@@ -74,7 +151,7 @@ class ProjectTask(AgentTask[dict]):
 
     @function_tool()
     async def record_project_details(self, context: RunContext, project_description: str) -> None:
-        """Call to record and gradually update the description of their project as they anwer more questions.
+        """Call to record and gradually update the description of their project as they answer more questions.
 
         Args:
             project_description (str): A description of the project, including the type of project being described, such as "full stack application." Include the technology stack they used and their reasoning behind it.
@@ -242,6 +319,11 @@ class SurveyAgent(Agent):
             description="Collects years of experience",
         )
         task_group.add(
+            lambda: BehaviorialTask(),
+            id="behavorial_task",
+            description="Gathers a holistic view of the candidate, including their strengths, weaknesses, and work style",
+        )
+        task_group.add(
             lambda: ProjectTask(),
             id="project_task",
             description="Probes the user about their thought process on projects",
@@ -251,8 +333,11 @@ class SurveyAgent(Agent):
         results = results.task_results
         # TaskGroup returns a TaskGroupResult object. The task_results field holds a dictionary with Task IDs as the keys and the results as the values
         summary = self.chat_ctx.items[-1]
+        evaluation = await evaluate_candidate(llm_model=self.session.llm, summary=summary)
         results["summary"] = summary.content
-        self.session.userdata = results
+        results["evaluation"] = evaluation
+
+        self.session.userdata.task_results = results
         write_to_csv(filename=self.session.userdata.filename, data=results)
 
     async def on_exit(self) -> None:
