@@ -71,9 +71,25 @@ async def main() -> None:
             "(default: 'check balance for all accounts I have')"
         ),
     )
+    parser.add_argument(
+        "--id",
+        dest="customer_id",
+        default="10000001",
+        help="Customer ID to use for authentication (default: 10000001)",
+    )
+    parser.add_argument(
+        "--pin",
+        dest="pin",
+        default="0000",
+        help="PIN to use for authentication (default: 0000)",
+    )
     args = parser.parse_args()
 
-    await call_ivr_system(args.phone_number, args.user_request)
+    await call_ivr_system(
+        args.phone_number,
+        args.user_request
+        + f"Use account number {args.customer_id} and PIN {args.pin} to authenticate and navigate the IVR.",
+    )
 
 
 if __name__ == "__main__":

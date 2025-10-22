@@ -48,7 +48,6 @@ class DtmfAgent(Agent):
 
                     Once complete with the task, call `record_task_result_and_hang_up` with the result.
 
-                    - You will use account number 10000001 and PIN 0000 to authenticate and navigate the IVR.
                     - Carefully listen to each IVR prompt and select the most appropriate option.
                     - Use only the DTMF tool to follow the IVR instructions; if an unavailable action is required, note the limitation and propose alternatives.
                     - You should NEVER enter a single '#' or '*' key alone, always make sure the key is appended to the end of some non-empty number sequence.
