@@ -110,7 +110,7 @@ class BehaviorialTask(AgentTask[dict]):
         self._check_completion()
 
     @function_tool()
-    async def record_weaknesses(self, weaknesses_summary):
+    async def record_weaknesses(self, weaknesses_summary: str):
         """Call to record a summary of the candidate's weaknesses.
 
         Args:
