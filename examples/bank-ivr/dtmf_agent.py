@@ -80,7 +80,7 @@ async def dtmf_session(ctx: JobContext) -> None:
         llm=openai.LLM(model="gpt-5"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
-        dial_to_phone_ivr=True,
+        ivr_detection=True,
         min_endpointing_delay=3,
     )
 

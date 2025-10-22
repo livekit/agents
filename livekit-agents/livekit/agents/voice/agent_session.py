@@ -84,7 +84,7 @@ class AgentSessionOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
-    dial_to_phone_ivr: bool
+    ivr_detection: bool
     max_ivr_silence_duration: float
     tts_text_transforms: Sequence[TextTransforms] | None
 
@@ -171,7 +171,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
-        dial_to_phone_ivr: bool = False,
+        ivr_detection: bool = False,
         max_ivr_silence_duration: float = 15.0,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -257,7 +257,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
-            dial_to_phone_ivr (bool): Indicates the participant that the agent interacts with is a phone number
+            ivr_detection (bool): Indicates the participant that the agent interacts with is a phone number
                 which could potentially be an IVR system. Defaults to ``False``.
             max_ivr_silence_duration (float): The maximum duration of silence in the IVR system before auto
                 triggering a notification to the agent. Defaults to ``15.0`` seconds.
@@ -300,7 +300,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
-            dial_to_phone_ivr=dial_to_phone_ivr,
+            ivr_detection=ivr_detection,
             max_ivr_silence_duration=max_ivr_silence_duration,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
@@ -578,7 +578,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             "If you want to ignore primary designation, use session.start(record=False)."
                         )
 
-                if self.options.dial_to_phone_ivr:
+                if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(
                         self, max_silence_duration=self.options.max_ivr_silence_duration
                     )
