@@ -20,8 +20,11 @@ from typing import (
     overload,
 )
 
+from opentelemetry import trace
+
 from .. import llm
 from ..llm import function_tool, utils as llm_utils
+from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .speech_handle import SpeechHandle
@@ -823,6 +826,7 @@ class ChatMessageAssert:
     def event(self) -> ChatMessageEvent:
         return self._event
 
+    @tracer.start_as_current_span("judge_evaluation")
     async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
         """
         Evaluate whether the message fulfills the given intent.
@@ -839,7 +843,16 @@ class ChatMessageAssert:
         """
         __tracebackhide__ = True
 
+        current_span = trace.get_current_span()
         msg_content = self._event.item.text_content
+
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_OPERATION_NAME, "judge")
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, llm_v.model)
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, "judge_evaluation")
+        current_span.set_attribute(
+            trace_types.ATTR_FUNCTION_TOOL_ARGS,
+            json.dumps({"intent": intent, "message": msg_content}),
+        )
 
         if not msg_content:
             self._raise("The chat message is empty.")
@@ -880,14 +893,24 @@ class ChatMessageAssert:
         )
 
         arguments: str | None = None
+        usage: llm.CompletionUsage | None = None
+
+        extra_kwargs = {}
+        excluded_models_temperature = ["gpt-5"]  # Add model names here to exclude temperature
+
+        if not any(excluded_model in llm_v.model for excluded_model in excluded_models_temperature):
+            extra_kwargs["temperature"] = 0.0
 
         # TODO(theomonnom): LLMStream should provide utilities to make function calling easier.
         async for chunk in llm_v.chat(
             chat_ctx=chat_ctx,
             tools=[check_intent],
             tool_choice={"type": "function", "function": {"name": "check_intent"}},
-            extra_kwargs={"temperature": 0.0},
+            extra_kwargs=extra_kwargs,
         ):
+            if chunk.usage is not None:
+                usage = chunk.usage
+
             if not chunk.delta:
                 continue
 
@@ -905,6 +928,20 @@ class ChatMessageAssert:
         )
 
         success, reason = await check_intent(*fnc_args, **fnc_kwargs)
+
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, not success)
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_OUTPUT, reason)
+
+        if usage:
+            current_span.set_attributes(
+                {
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.prompt_cached_tokens,
+                }
+            )
 
         if not success:
             self._raise(f"Judgement failed: {reason}")

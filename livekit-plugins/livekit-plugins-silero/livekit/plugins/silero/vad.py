@@ -60,7 +60,7 @@ class VAD(agents.vad.VAD):
         cls,
         *,
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.4,
+        min_silence_duration: float = 0.55,
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
@@ -141,6 +141,14 @@ class VAD(agents.vad.VAD):
         self._onnx_session = session
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
+
+    @property
+    def model(self) -> str:
+        return "silero"
+
+    @property
+    def provider(self) -> str:
+        return "ONNX"
 
     def stream(self) -> VADStream:
         """
@@ -378,7 +386,7 @@ class VADStream(agents.vad.VADStream):
                     speech_buffer_index += to_copy_buffer
                 elif not self._speech_buffer_max_reached:
                     # reached self._opts.max_buffered_speech (padding is included)
-                    speech_buffer_max_reached = True
+                    self._speech_buffer_max_reached = True
                     logger.warning(
                         "max_buffered_speech reached, ignoring further data for the current speech input"  # noqa: E501
                     )
@@ -395,7 +403,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index, speech_buffer_max_reached
+                    nonlocal speech_buffer_index
                     assert self._speech_buffer is not None
 
                     if speech_buffer_index <= self._prefix_padding_samples:

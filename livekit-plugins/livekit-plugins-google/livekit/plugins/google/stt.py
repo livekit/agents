@@ -20,6 +20,7 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Callable, Union, cast
 
 from google.api_core.client_options import ClientOptions
@@ -28,6 +29,7 @@ from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
+from google.protobuf.duration_pb2 import Duration
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -68,6 +70,7 @@ class STTOptions:
     spoken_punctuation: bool
     enable_word_time_offsets: bool
     enable_word_confidence: bool
+    enable_voice_activity_events: bool
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
@@ -101,6 +104,7 @@ class STT(stt.STT):
         spoken_punctuation: bool = False,
         enable_word_time_offsets: bool = True,
         enable_word_confidence: bool = False,
+        enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
         sample_rate: int = 16000,
@@ -125,6 +129,7 @@ class STT(stt.STT):
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
             enable_word_time_offsets(bool): whether to enable word time offsets (default: True)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
+            enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
@@ -166,6 +171,7 @@ class STT(stt.STT):
             spoken_punctuation=spoken_punctuation,
             enable_word_time_offsets=enable_word_time_offsets,
             enable_word_confidence=enable_word_confidence,
+            enable_voice_activity_events=enable_voice_activity_events,
             model=model,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
@@ -176,6 +182,14 @@ class STT(stt.STT):
             max_session_duration=_max_session_duration,
             connect_cb=self._create_client,
         )
+
+    @property
+    def model(self) -> str:
+        return self._config.model
+
+    @property
+    def provider(self) -> str:
+        return "Google Cloud Platform"
 
     async def _create_client(self, timeout: float) -> SpeechAsyncClient:
         # Add support for passing a specific location that matches recognizer
@@ -505,6 +519,7 @@ class SpeechStream(stt.SpeechStream):
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
                             interim_results=self._config.interim_results,
+                            enable_voice_activity_events=self._config.enable_voice_activity_events,
                         ),
                     )
 
@@ -552,6 +567,14 @@ class SpeechStream(stt.SpeechStream):
                 raise APIConnectionError() from e
 
 
+def _duration_to_seconds(duration: Duration | timedelta) -> float:
+    # Proto Plus may auto-convert Duration to timedelta; handle both.
+    # https://proto-plus-python.readthedocs.io/en/latest/marshal.html
+    if isinstance(duration, timedelta):
+        return duration.total_seconds()
+    return duration.seconds + duration.nanos / 1e9
+
+
 def _recognize_response_to_speech_event(
     resp: cloud_speech.RecognizeResponse,
 ) -> stt.SpeechEvent:
@@ -561,24 +584,31 @@ def _recognize_response_to_speech_event(
         text += result.alternatives[0].transcript
         confidence += result.alternatives[0].confidence
 
-    # not sure why start_offset and end_offset returns a timedelta
-    start_offset = resp.results[0].alternatives[0].words[0].start_offset
-    end_offset = resp.results[-1].alternatives[0].words[-1].end_offset
+    alternatives = []
 
-    confidence /= len(resp.results)
-    lg = resp.results[0].language_code
-    return stt.SpeechEvent(
-        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[
+    # Google STT may return empty results when spoken_lang != stt_lang
+    if resp.results:
+        try:
+            start_time = _duration_to_seconds(resp.results[0].alternatives[0].words[0].start_offset)
+            end_time = _duration_to_seconds(resp.results[-1].alternatives[0].words[-1].end_offset)
+        except IndexError:
+            # When enable_word_time_offsets=False, there are no "words" to access
+            start_time = end_time = 0
+
+        confidence /= len(resp.results)
+        lg = resp.results[0].language_code
+
+        alternatives = [
             stt.SpeechData(
                 language=lg,
-                start_time=start_offset.total_seconds(),  # type: ignore
-                end_time=end_offset.total_seconds(),  # type: ignore
+                start_time=start_time,
+                end_time=end_time,
                 confidence=confidence,
                 text=text,
             )
-        ],
-    )
+        ]
+
+    return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=alternatives)
 
 
 def _streaming_recognize_response_to_speech_data(
@@ -588,17 +618,28 @@ def _streaming_recognize_response_to_speech_data(
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
+    final_result = None
     for result in resp.results:
         if len(result.alternatives) == 0:
             continue
-        text += result.alternatives[0].transcript
-        confidence += result.alternatives[0].confidence
+        else:
+            if result.is_final:
+                final_result = result
+                break
+            else:
+                text += result.alternatives[0].transcript
+                confidence += result.alternatives[0].confidence
 
-    confidence /= len(resp.results)
-    lg = resp.results[0].language_code
+    if final_result is not None:
+        text = final_result.alternatives[0].transcript
+        confidence = final_result.alternatives[0].confidence
+        lg = final_result.language_code
+    else:
+        confidence /= len(resp.results)
+        if confidence < min_confidence_threshold:
+            return None
+        lg = resp.results[0].language_code
 
-    if confidence < min_confidence_threshold:
-        return None
     if text == "":
         return None
 

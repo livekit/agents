@@ -7,7 +7,7 @@ from typing import Literal, Union
 from livekit import rtc
 
 from ... import utils
-from ..io import AudioOutput
+from ..io import AudioOutput, AudioOutputCapabilities
 from ._types import AudioReceiver, AudioSegmentEnd
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,12 @@ class QueueAudioOutput(
     """
 
     def __init__(self, *, sample_rate: int | None = None):
-        super().__init__(label="DebugQueueIO", next_in_chain=None, sample_rate=sample_rate)
+        super().__init__(
+            label="DebugQueueIO",
+            next_in_chain=None,
+            sample_rate=sample_rate,
+            capabilities=AudioOutputCapabilities(pause=False),
+        )
         self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
         self._capturing = False
 

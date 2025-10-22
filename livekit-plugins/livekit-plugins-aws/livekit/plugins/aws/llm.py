@@ -51,6 +51,8 @@ class _LLMOptions:
     max_output_tokens: NotGivenOr[int]
     top_p: NotGivenOr[float]
     additional_request_fields: NotGivenOr[dict[str, Any]]
+    cache_system: bool
+    cache_tools: bool
 
 
 class LLM(llm.LLM):
@@ -66,6 +68,8 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        cache_system: bool = False,
+        cache_tools: bool = False,
         session: aioboto3.Session | None = None,
     ) -> None:
         """
@@ -87,6 +91,8 @@ class LLM(llm.LLM):
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
+            cache_system (bool, optional): Caches system messages to reduce token usage. Defaults to False.
+            cache_tools (bool, optional): Caches tool definitions to reduce token usage. Defaults to False.
             session (aioboto3.Session, optional): Optional aioboto3 session to use.
         """  # noqa: E501
         super().__init__()
@@ -111,11 +117,17 @@ class LLM(llm.LLM):
             max_output_tokens=max_output_tokens,
             top_p=top_p,
             additional_request_fields=additional_request_fields,
+            cache_system=cache_system,
+            cache_tools=cache_tools,
         )
 
     @property
     def model(self) -> str:
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "AWS Bedrock"
 
     def chat(
         self,
@@ -140,7 +152,11 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
+            tools_list = to_fnc_ctx(tools)
+            if self._opts.cache_tools:
+                tools_list.append({"cachePoint": {"type": "default"}})
+
+            tool_config: dict[str, Any] = {"tools": tools_list}
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -162,7 +178,12 @@ class LLM(llm.LLM):
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
-            opts["system"] = [{"text": content} for content in extra_data.system_messages]
+            system_messages: list[dict[str, str | dict]] = [
+                {"text": content} for content in extra_data.system_messages
+            ]
+            if self._opts.cache_system:
+                system_messages.append({"cachePoint": {"type": "default"}})
+            opts["system"] = system_messages
 
         inference_config: dict[str, Any] = {}
         if is_given(self._opts.max_output_tokens):

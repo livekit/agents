@@ -136,6 +136,10 @@ class LLM(llm.LLM):
                 _, gcp_project = default_async(  # type: ignore
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
+            if not gcp_project or not gcp_location:
+                raise ValueError(
+                    "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
+                )
             gemini_api_key = None  # VertexAI does not require an API key
 
         else:
@@ -157,10 +161,6 @@ class LLM(llm.LLM):
             if _thinking_budget is not None:
                 if not isinstance(_thinking_budget, int):
                     raise ValueError("thinking_budget inside thinking_config must be an integer")
-                if not (0 <= _thinking_budget <= 24576):
-                    raise ValueError(
-                        "thinking_budget inside thinking_config must be between 0 and 24576"
-                    )
 
         self._opts = _LLMOptions(
             model=model,
@@ -190,6 +190,13 @@ class LLM(llm.LLM):
     @property
     def model(self) -> str:
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        if self._client.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
 
     def chat(
         self,
@@ -427,7 +434,7 @@ class LLMStream(llm.LLMStream):
                     tool_calls=[
                         llm.FunctionToolCall(
                             arguments=json.dumps(part.function_call.args),
-                            name=part.function_call.name,  # type: ignore
+                            name=part.function_call.name,
                             call_id=part.function_call.id or utils.shortuuid("function_call_"),
                         )
                     ],

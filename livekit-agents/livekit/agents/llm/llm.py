@@ -14,6 +14,7 @@ from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
+from livekit.agents.metrics.base import Metadata
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
@@ -100,6 +101,18 @@ class LLM(
 
         Note:
             Plugins should override this property to provide their model information.
+        """
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """Get the provider name/identifier for this LLM instance.
+
+        Returns:
+            The provider name if available, "unknown" otherwise.
+
+        Note:
+            Plugins should override this property to provide their provider information.
         """
         return "unknown"
 
@@ -251,7 +264,8 @@ class LLMStream(ABC):
 
         duration = time.perf_counter() - start_time
 
-        if self._current_attempt_has_error:
+        # if generation is aborted before any tokens are received, it doesn't make sense to report -1 ttft
+        if self._current_attempt_has_error or ttft < 0:
             return
 
         metrics = LLMMetrics(
@@ -266,6 +280,10 @@ class LLMStream(ABC):
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
+            metadata=Metadata(
+                model_name=self._llm.model,
+                model_provider=self._llm.provider,
+            ),
         )
         if self._llm_request_span:
             # livekit metrics attribute

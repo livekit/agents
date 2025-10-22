@@ -83,7 +83,6 @@ jobs:
               -p livekit.plugins.minimal
               -p livekit.plugins.neuphonic
               -p livekit.plugins.nltk
-              -p livekit.plugins.playai
               -p livekit.plugins.resemble
               -p livekit.plugins.rime
               -p livekit.plugins.silero
@@ -98,3 +97,6 @@ jobs:
               -p livekit.plugins.inworld
               -p livekit.plugins.simli
               -p livekit.plugins.anam
+              -p livekit.plugins.ultravox
+              -p livekit.plugins.fireworksai
+              -p livekit.plugins.minimax

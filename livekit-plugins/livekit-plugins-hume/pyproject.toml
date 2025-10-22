@@ -12,7 +12,7 @@ requires-python = ">=3.9.0"
 authors = [
     {name = "LiveKit", email = "info@livekit.io"}
 ]
-keywords = ["webrtc", "realtime", "audio", "livekit", "HumeAI", "Hume", "Octave"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "HumeAI", "Hume", "Octave"]
 classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Multimedia :: Sound/Audio",
@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.8.0",
-    "livekit-agents>=1.2.6",
+    "livekit-agents>=1.2.15",
 ]
 
 [project.urls]
