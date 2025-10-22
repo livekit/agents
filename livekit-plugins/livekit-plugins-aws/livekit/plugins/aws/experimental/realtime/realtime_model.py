@@ -613,11 +613,15 @@ class RealtimeSession(  # noqa: F811
             )
             generation_created = True
         else:
-            logger.debug(f"Generation already exists: response_id={self._current_generation.response_id}")
+            logger.debug(
+                f"Generation already exists: response_id={self._current_generation.response_id}"
+            )
 
         # Always ensure message structure exists (even if generation already exists)
         if self._current_generation.message_gen is None:
-            logger.debug(f"Creating message structure for response_id={self._current_generation.response_id}")
+            logger.debug(
+                f"Creating message structure for response_id={self._current_generation.response_id}"
+            )
             msg_gen = _MessageGeneration(
                 message_id=self._current_generation.response_id,
                 text_ch=utils.aio.Chan(),
@@ -638,7 +642,9 @@ class RealtimeSession(  # noqa: F811
                 )
             )
         else:
-            logger.debug(f"Message structure already exists for response_id={self._current_generation.response_id}")
+            logger.debug(
+                f"Message structure already exists for response_id={self._current_generation.response_id}"
+            )
 
         # Only emit generation event if we created a new generation
         if generation_created:
@@ -767,6 +773,9 @@ class RealtimeSession(  # noqa: F811
         # Ensure generation exists
         self._create_response_generation()
 
+        if self._current_generation is None:
+            return
+
         content_id = event_data["event"]["contentStart"]["contentId"]
         self._current_generation.content_id_map[content_id] = "TOOL"
 
@@ -854,7 +863,9 @@ class RealtimeSession(  # noqa: F811
         if not self._current_generation.function_ch.closed:
             self._current_generation.function_ch.close()
 
-        logger.debug(f"Closed generation for completion_id={self._current_generation.completion_id}")
+        logger.debug(
+            f"Closed generation for completion_id={self._current_generation.completion_id}"
+        )
         self._current_generation = None
 
     async def _handle_completion_end_event(self, event_data: dict) -> None:
@@ -1118,12 +1129,16 @@ class RealtimeSession(  # noqa: F811
             self._chat_ctx_ready.set_result(True)
 
         # for each function tool, send the result to aws
-        logger.debug(f"update_chat_ctx called with {len(chat_ctx.items)} items, pending_tools: {self._pending_tools}")
+        logger.debug(
+            f"update_chat_ctx called with {len(chat_ctx.items)} items, pending_tools: {self._pending_tools}"
+        )
         for item in chat_ctx.items:
             if item.type != "function_call_output":
                 continue
 
-            logger.debug(f"Found function_call_output: call_id={item.call_id}, in_pending={item.call_id in self._pending_tools}")
+            logger.debug(
+                f"Found function_call_output: call_id={item.call_id}, in_pending={item.call_id in self._pending_tools}"
+            )
 
             if item.call_id not in self._pending_tools:
                 continue
@@ -1221,14 +1236,12 @@ class RealtimeSession(  # noqa: F811
 
         while self._is_sess_active.is_set():
             try:
-                done, pending = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
 
                 for task in done:
                     if task == audio_task:
                         try:
-                            audio_bytes = task.result()
+                            audio_bytes = cast(bytes, task.result())
                             blob = base64.b64encode(audio_bytes)
                             audio_event = self._event_builder.create_audio_input_event(
                                 audio_content=blob.decode("utf-8"),
