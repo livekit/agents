@@ -17,7 +17,6 @@ from typing import (
     runtime_checkable,
 )
 
-from attr import field
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
@@ -91,9 +90,9 @@ class AgentSessionOptions:
 
 @dataclass
 class TelephonyOptions:
-    ivr_detection: bool = field(default=False)
+    ivr_detection: bool = False
     """Whether to detect if the agent is interacting with an IVR system."""
-    max_ivr_silence_duration: float = field(default=15.0)
+    max_ivr_silence_duration: float = 15.0
     """The maximum duration of silence in the IVR system before auto triggering a notification to the agent."""
 
 

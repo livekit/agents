@@ -85,7 +85,7 @@ async def dtmf_session(ctx: JobContext) -> None:
             ivr_detection=True,
             max_ivr_silence_duration=15.0,
         ),
-        min_endpointing_delay=3,
+        min_endpointing_delay=5.0,
     )
 
     tasks = [

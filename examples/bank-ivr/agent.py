@@ -62,11 +62,11 @@ class SessionState:
     audit_log: list[str] = field(default_factory=list)
 
 
-def speak(agent: Agent, instructions: str, *, allow_interruptions: bool = False) -> None:
+def speak(agent: Agent, instructions: str) -> None:
     logger.debug("prompt: %s", instructions)
     agent.session.generate_reply(
         instructions=f"Agent instructions - Speak exactly the following message (nothing more and nothing less): <message>{instructions}</message>",
-        allow_interruptions=allow_interruptions,
+        allow_interruptions=False,
     )
 
 
@@ -216,7 +216,7 @@ class RootBankIVRAgent(Agent):
         while True:
             prompt = (
                 f"Main menu for {self._state.customer_name}. "
-                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, or 5 to switch profile."
+                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, or 5 to switch profile. Always say out loud the menu options to user first before asking for selection."
             )
             choice = await run_menu(self, prompt=prompt, options=options)
 
@@ -304,7 +304,6 @@ class RootBankIVRAgent(Agent):
         speak(
             self,
             "Thanks for banking with Horizon Federal Bank. Goodbye!",
-            allow_interruptions=False,
         )
 
 

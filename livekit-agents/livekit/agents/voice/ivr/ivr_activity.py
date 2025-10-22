@@ -182,6 +182,7 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
         self._current_user_state: Optional[str] = None  # noqa: UP007
         self._current_agent_state: Optional[str] = None  # noqa: UP007
         self._debounced_emit = Debounced(self._emit_silence_detected, self._max_silence_duration)
+        self._last_should_schedule_check: bool | None = None
 
     async def start(self) -> None:
         self._session.on("user_state_changed", self._on_user_state_changed)
@@ -201,13 +202,17 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
         self._schedule_check()
 
     def _schedule_check(self) -> None:
-        if self._current_user_state == self._current_agent_state == "listening":
+        if self._should_schedule_check():
+            if self._last_should_schedule_check:
+                return
+
             logger.debug(
                 "SilenceDetector: user_state=%s, agent_state=%s, scheduling silence check",
                 self._current_user_state,
                 self._current_agent_state,
             )
             self._debounced_emit.schedule()
+            self._last_should_schedule_check = True
         else:
             logger.debug(
                 "SilenceDetector: user_state=%s, agent_state=%s, canceling silence check",
@@ -215,6 +220,12 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
                 self._current_agent_state,
             )
             self._debounced_emit.cancel()
+            self._last_should_schedule_check = False
+
+    def _should_schedule_check(self) -> bool:
+        is_user_silent = self._current_user_state in ["listening", "away"]
+        is_agent_silent = self._current_agent_state in ["idle", "listening"]
+        return is_user_silent and is_agent_silent
 
     async def _emit_silence_detected(self) -> None:
         logger.debug("SilenceDetector: emitting silence_detected event")
