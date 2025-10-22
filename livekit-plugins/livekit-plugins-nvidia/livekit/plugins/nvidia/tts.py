@@ -72,7 +72,7 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
-            metadata_args = None
+            metadata_args = []
             if is_given(self.nvidia_api_key):
                 metadata_args.append(["authorization", f"Bearer {self.nvidia_api_key}"])
 
