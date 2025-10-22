@@ -11,6 +11,7 @@ from livekit.agents import (
     JobContext,
     MetricsCollectedEvent,
     RoomOutputOptions,
+    TelephonyOptions,
     cli,
     metrics,
 )
@@ -80,7 +81,10 @@ async def dtmf_session(ctx: JobContext) -> None:
         llm=openai.LLM(model="gpt-5"),
         stt=deepgram.STT(model="nova-3"),
         tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
-        ivr_detection=True,
+        telephony_options=TelephonyOptions(
+            ivr_detection=True,
+            max_ivr_silence_duration=15.0,
+        ),
         min_endpointing_delay=3,
     )
 

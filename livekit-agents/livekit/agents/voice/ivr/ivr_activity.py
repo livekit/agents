@@ -138,13 +138,20 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
         if len(self._transcribed_chunks) > self._window_size:
             self._transcribed_chunks = self._transcribed_chunks[-self._window_size :]
 
+        # Need at least two chunks to compute similarity against the last chunk
+        if len(self._transcribed_chunks) < 2:
+            return
+
         # NOTE: currently this is O(n^2) in the number of chunks, let's figure out a more efficient
         # way if this become a bottleneck later.
         doc_matrix = self._vectorizer.fit_transform(self._transcribed_chunks)
         doc_similarity = cosine_similarity(doc_matrix)
         last_chunk_similarity = doc_similarity[-1][:-1]
 
-        if np.max(last_chunk_similarity) > self._similarity_threshold:
+        if (
+            last_chunk_similarity.size > 0
+            and np.max(last_chunk_similarity) > self._similarity_threshold
+        ):
             self._num_consecutive_similar_chunks += 1
         else:
             self._num_consecutive_similar_chunks = 0
@@ -174,9 +181,7 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
         self._max_silence_duration = max_silence_duration
         self._current_user_state: Optional[str] = None  # noqa: UP007
         self._current_agent_state: Optional[str] = None  # noqa: UP007
-        self._debounced_emit = Debounced(
-            lambda: self.emit("silence_detected", None), self._max_silence_duration
-        )
+        self._debounced_emit = Debounced(self._emit_silence_detected, self._max_silence_duration)
 
     async def start(self) -> None:
         self._session.on("user_state_changed", self._on_user_state_changed)
@@ -210,3 +215,7 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
                 self._current_agent_state,
             )
             self._debounced_emit.cancel()
+
+    async def _emit_silence_detected(self) -> None:
+        logger.debug("SilenceDetector: emitting silence_detected event")
+        self.emit("silence_detected", None)

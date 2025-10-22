@@ -75,14 +75,13 @@ async def collect_digits(
     *,
     prompt: str,
     num_digits: int,
-    confirmation: bool = True,
+    confirmation: bool = False,
 ) -> str:
     while True:
         try:
             result = await GetDtmfTask(
                 num_digits=num_digits,
                 ask_for_confirmation=confirmation,
-                repeat_instructions=10,  # test agent behavior when instructions are repeated possibly forever
                 chat_ctx=agent.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
                 extra_instructions=(
                     "You are gathering keypad digits from a bank customer. "
@@ -159,7 +158,7 @@ class RootBankIVRAgent(Agent):
                 self,
                 prompt="Please enter your eight digit customer ID",
                 num_digits=8,
-                confirmation=True,
+                confirmation=False,
             )
             # customer_id = "10000001"
             await add_event_message(self, content=f"User entered customer ID: {customer_id}")
@@ -167,7 +166,7 @@ class RootBankIVRAgent(Agent):
                 self,
                 prompt="Now enter your four digit telephone banking PIN",
                 num_digits=4,
-                confirmation=True,
+                confirmation=False,
             )
             # pin = "0000"
             await add_event_message(self, content=f"User entered PIN: {pin}")
