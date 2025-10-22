@@ -259,6 +259,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``False``.
             dial_to_phone_ivr (bool): Indicates the participant that the agent interacts with is a phone number
                 which could potentially be an IVR system. Defaults to ``False``.
+            max_ivr_silence_duration (float): The maximum duration of silence in the IVR system before auto
+                triggering a notification to the agent. Defaults to ``15.0`` seconds.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
