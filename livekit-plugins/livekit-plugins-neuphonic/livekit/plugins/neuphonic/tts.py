@@ -352,11 +352,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for word in word_stream:
-                text_msg = {"text": f"{word.token} "}
+                text_msg = {"text": f"{word.token} ", "context_id": segment_id}
                 self._mark_started()
                 await ws.send_str(json.dumps(text_msg))
 
-            stop_msg = {"text": "<STOP>"}
+            stop_msg = {"text": "<STOP>", "context_id": segment_id}
             await ws.send_str(json.dumps(stop_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -382,7 +382,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data = resp.get("data", {})
                     audio_data = data.get("audio")
-                    if audio_data and audio_data != "":
+                    if audio_data and audio_data != "" and data.get("context_id") == segment_id:
                         try:
                             b64data = base64.b64decode(audio_data)
                             if b64data:
@@ -390,7 +390,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         except Exception as e:
                             logger.warning("Failed to decode NeuPhonic audio data: %s", e)
 
-                    if data.get("stop"):
+                    if data.get("stop") or data.get("context_id") != segment_id:
                         output_emitter.end_segment()
                         break
 
