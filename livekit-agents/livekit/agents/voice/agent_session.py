@@ -17,6 +17,7 @@ from typing import (
     runtime_checkable,
 )
 
+from attr import field
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
@@ -84,9 +85,16 @@ class AgentSessionOptions:
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
-    ivr_detection: bool
-    max_ivr_silence_duration: float
     tts_text_transforms: Sequence[TextTransforms] | None
+    telephony_options: TelephonyOptions
+
+
+@dataclass
+class TelephonyOptions:
+    ivr_detection: bool = field(default=False)
+    """Whether to detect if the agent is interacting with an IVR system."""
+    max_ivr_silence_duration: float = field(default=15.0)
+    """The maximum duration of silence in the IVR system before auto triggering a notification to the agent."""
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -143,6 +151,7 @@ class VoiceActivityVideoSampler:
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
+DEFAULT_TELEPHONY_OPTIONS: TelephonyOptions = TelephonyOptions()
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
@@ -171,8 +180,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
-        ivr_detection: bool = False,
-        max_ivr_silence_duration: float = 15.0,
+        telephony_options: NotGivenOr[TelephonyOptions] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -257,10 +265,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
-            ivr_detection (bool): Indicates the participant that the agent interacts with is a phone number
-                which could potentially be an IVR system. Defaults to ``False``.
-            max_ivr_silence_duration (float): The maximum duration of silence in the IVR system before auto
-                triggering a notification to the agent. Defaults to ``15.0`` seconds.
+            telephony_options (TelephonyOptions, optional): Options for telephony.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -300,8 +305,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
-            ivr_detection=ivr_detection,
-            max_ivr_silence_duration=max_ivr_silence_duration,
+            telephony_options=telephony_options
+            if is_given(telephony_options)
+            else DEFAULT_TELEPHONY_OPTIONS,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -578,9 +584,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             "If you want to ignore primary designation, use session.start(record=False)."
                         )
 
-                if self.options.ivr_detection:
+                telephony_options = self.options.telephony_options
+                if telephony_options.ivr_detection:
                     self._ivr_activity = IVRActivity(
-                        self, max_silence_duration=self.options.max_ivr_silence_duration
+                        self,
+                        max_silence_duration=telephony_options.max_ivr_silence_duration,
                     )
                     tasks.append(
                         asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
