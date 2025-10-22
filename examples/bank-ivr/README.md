@@ -1,6 +1,6 @@
-# Horizon Bank IVR Example
+# Bank IVR Example
 
-This example mirrors the telecom IVR demo but shifts the narrative to a retail banking assistant. It showcases:
+This example mirrors the telecom IVR demo but shifts the narrative to a banking assistant. It showcases:
 
 - A `MockBankService` that exposes read-only customer data for checking/savings accounts, credit cards, loans, and rewards.
 - A multi-agent IVR tree where the root agent authenticates callers and hands off to submenu tasks implemented with `AgentTask` for each banking domain.
@@ -65,4 +65,19 @@ Launch the IVR worker with:
 ```bash
 uv run python examples/bank-ivr/agent.py dev
 ```
+
+Place an outbound call via the dispatch helper:
+
+```bash
+uv run python examples/bank-ivr/dial_bank_agent.py --phone "+12132896618" --request "check balance for all accounts I have"
+```
+
+Both `--phone` and `--request` are optional; if omitted, the above defaults are used. 
+The request string is stored as dispatch metadata and surfaces in the agent session so the DTMF assistant knows the caller's desired task.
+
+## End-to-End Workflow
+
+1. **Start the bank IVR agent** – ensure `examples/bank-ivr/data.json` has the desired customer data, then run `uv run python examples/bank-ivr/agent.py dev` to bring up the IVR worker.
+2. **Start the DTMF assistant** – in a separate terminal, launch `uv run python examples/bank-ivr/dtmf_agent.py`; it registers the `PHONE_TREE_AGENT_DISPATCH_NAME` agent and waits for dispatches.
+3. **Place the call** – run `uv run python examples/bank-ivr/dial_bank_agent.py --phone "<number>" --request "<task>"` to create a dispatch and dial the IVR. The request metadata tells the DTMF agent what to accomplish.
 
