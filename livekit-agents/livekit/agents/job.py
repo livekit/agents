@@ -159,7 +159,7 @@ class JobContext:
     def _on_setup(self) -> None:
         is_cloud = misc.is_cloud(self._info.url)
 
-        if is_cloud and not self.is_fake_job():  #  and self.job.enable_recording:
+        if is_cloud: # and not self.is_fake_job():  #  and self.job.enable_recording:
             cloud_hostname = urlparse(self._info.url).hostname
             _setup_cloud_tracer(
                 room_id=self._info.job.room.sid,
@@ -182,9 +182,9 @@ class JobContext:
                 import aiofiles
                 import aiofiles.os
 
-                await aiofiles.os.makedirs(self._job_ctx.session_directory, exist_ok=True)
+                await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
                 async with aiofiles.open(
-                    self._job_ctx.session_directory / "session_report.json", mode="w"
+                    self._session_directory / "session_report.json", mode="w"
                 ) as f:
                     await f.write(report_json)
 

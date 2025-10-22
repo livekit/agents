@@ -17,6 +17,7 @@ from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import Attributes, AttributeValue
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import set_logger_provider, get_logger_provider
+from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
@@ -82,7 +83,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def __init__(self, metadata: dict[str, str]) -> None:
         self._metadata = metadata
 
-    def on_emit(self, log_data: LogData) -> None:
+    def emit(self, log_data: LogData) -> None:
         log_data.log_record.attributes.update(self._metadata)
 
     def shutdown(self) -> None:
@@ -111,7 +112,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     access_token = (
         api.AccessToken()
         .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(datetime.timedelta(hours=6))
+        .with_ttl(timedelta(hours=6))
     )
 
     otlp_compression = Compression.Gzip
@@ -253,7 +254,7 @@ async def _upload_session_report(
     access_token = (
         api.AccessToken()
         .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(datetime.timedelta(hours=6))
+        .with_ttl(timedelta(hours=6))
     )
     jwt = access_token.to_jwt()
 
@@ -262,7 +263,6 @@ async def _upload_session_report(
     )
     header_bytes = header_msg.SerializeToString()
 
-    chat_history_pb = _to_proto_chat_ctx(report.chat_history)
     mp = aiohttp.MultipartWriter("form-data")
 
     part = mp.append(header_bytes)
@@ -285,8 +285,13 @@ async def _upload_session_report(
         item_json = MessageToJson(item_proto)
         chat_logger.emit(
             LogRecord(
-                timestamp=item.created_at,
+                timestamp=int(item.created_at * 1e9),
                 body=item_json,
+                trace_id=0,
+                span_id=0,
+                trace_flags=0,
+                severity_number=SeverityNumber.UNSPECIFIED,
+                severity_text="unspecified",
                 attributes={"protobuf.message_type": item_proto.DESCRIPTOR.full_name},
             )
         )
@@ -313,3 +318,5 @@ async def _upload_session_report(
 
     async with http_session.post(url, data=mp, headers=headers) as resp:
         resp.raise_for_status()
+
+    logger.info("uploaded")
