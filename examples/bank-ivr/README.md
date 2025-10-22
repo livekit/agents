@@ -93,19 +93,18 @@ Set `SIP_OUTBOUND_TRUNK_ID` to a valid LiveKit SIP trunk identifier before runni
 
 Use these suggested `--request` values to validate the agent's responses. Each listing includes the expected numbers straight from `data.json` so you can compare transcripts against ground truth.
 
-1. **"summarize jordan carter checking account"**
+1. **"Summarize jordan carter checking account"**
    - Account `031890246` (Checking) with balance **$4,821.37** and available balance **$4,615.92**.
-   - Interest rate **0.10%**.
    - Recent transactions:
      • 2025-10-08 — PAYROLL DEP - HORIZON TECH — **+$3,250.00**
      • 2025-10-05 — ZELLE TO ALEX R — **-$120.45**
      • 2025-10-04 — COFFEE ROASTERS — **-$5.85**
 
-2. **"what are riley martinez loan obligations"**
+2. **"What are riley martinez loan obligations"**
    - Auto Loan `AUTO-22901`: outstanding balance **$18,642.77**, next payment due **2025-10-10**, monthly payment **$415.17**, autopay **disabled**.
    - Private Student Loan `STUDENT-00218`: outstanding balance **$19,880.43**, next payment due **2025-10-28**, monthly payment **$290.10**, autopay **enabled**.
 
-3. **"give me the platinum travel rewards card details for jordan carter"**
+3. **"Give me the platinum travel rewards card details for jordan carter"**
    - Card `4485 1399 2211 0099` (Platinum Travel Rewards).
    - Statement balance **$2,150.76**, minimum due **$68.00**, payment due date **2025-10-18**.
    - Rewards earn rate **3x travel, 2x dining**.

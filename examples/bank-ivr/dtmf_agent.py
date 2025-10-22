@@ -92,11 +92,14 @@ async def dtmf_session(ctx: JobContext) -> None:
             ivr_detection=True,
             max_ivr_silence_duration=15.0,
         ),
-        min_endpointing_delay=2,
+        min_endpointing_delay=5,
     )
 
     # Get the single user request from the room metadata (set by the dispatcher)
-    user_request = 'Summarize jordan carter checking account. Use account number "1 0 0 0 0 0 0 1" and PIN "0 0 0 0" to authenticate and navigate the IVR.'
+    user_request = (
+        "Summarize jordan carter checking account, including balance and recent transactions. "
+        'Use account number "1 0 0 0 0 0 0 1" and PIN "0 0 0 0" to authenticate and navigate the IVR.'
+    )
     logger.info(f"==> User request: {user_request}")
 
     usage_collector = metrics.UsageCollector()
