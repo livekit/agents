@@ -16,6 +16,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.utils import is_given
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +53,10 @@ class TTS(tts.TTS):
             self.nvidia_api_key = api_key
         else:
             self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
-            if not self.nvidia_api_key:
+            if use_ssl and not self.nvidia_api_key:
                 raise ValueError(
-                    "NVIDIA_API_KEY is not set. Either pass api_key parameter or set NVIDIA_API_KEY environment variable"
+                    "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable "
+                    + "or disable SSL and use a locally hosted Riva NIM service."
                 )
 
         self._opts = TTSOptions(
@@ -70,13 +72,16 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
+            metadata_args = None
+            if is_given(self.nvidia_api_key):
+                metadata_args.append(["authorization", f"Bearer {self.nvidia_api_key}"])
+
+            metadata_args.append(["function-id", self._opts.function_id])
+
             auth = riva.client.Auth(
                 uri=self._opts.server,
                 use_ssl=self._opts.use_ssl,
-                metadata_args=[
-                    ["authorization", f"Bearer {self.nvidia_api_key}"],
-                    ["function-id", self._opts.function_id],
-                ],
+                metadata_args=metadata_args,
             )
 
             auth.metadata = [

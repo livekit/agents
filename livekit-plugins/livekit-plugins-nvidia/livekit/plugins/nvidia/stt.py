@@ -57,9 +57,10 @@ class STT(stt.STT):
             self.nvidia_api_key = api_key
         else:
             self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
-            if not self.nvidia_api_key:
+            if use_ssl and not self.nvidia_api_key:
                 raise ValueError(
-                    "NVIDIA_API_KEY is not set. Either pass api_key parameter or set NVIDIA_API_KEY environment variable"
+                    "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable "
+                    + "or disable SSL and use a locally hosted Riva NIM service."
                 )
 
         logger.info(f"Initializing NVIDIA STT with model: {model}, server: {server}")
@@ -110,12 +111,17 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._request_id = ""
 
+        metadata_args = None
+        if is_given(api_key):
+            metadata_args.append(["authorization", f"Bearer {api_key}"])
+
+        metadata_args.append(["function-id", stt._opts.function_id])
+
         self._auth = riva.client.Auth(
             uri=stt._opts.server,
             use_ssl=stt._opts.use_ssl,
             metadata_args=[
-                ["authorization", f"Bearer {stt.nvidia_api_key}"],
-                ["function-id", stt._opts.function_id],
+                metadata_args,
             ],
         )
         self._asr_service = riva.client.ASRService(self._auth)
