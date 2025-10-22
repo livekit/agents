@@ -37,7 +37,7 @@ class TTS(tts.TTS):
         self,
         *,
         server: str = "grpc.nvcf.nvidia.com:443",
-        voice: str = "Magpie-Multilingual.EN-US.Sofia",
+        voice: str = "Magpie-Multilingual.EN-US.Leo",
         function_id: str = "877104f7-e885-42b9-8de8-f6e4c6303969",
         language_code: str = "en-US",
         use_ssl: bool = True,
