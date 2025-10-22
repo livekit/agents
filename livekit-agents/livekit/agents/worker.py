@@ -384,7 +384,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         elif "PROMETHEUS_MULTIPROC_DIR" in os.environ:
             # Use existing environment variable if already set
             self._prometheus_multiproc_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
-        
+
         # Create prometheus directory if it doesn't exist
         if self._prometheus_multiproc_dir:
             os.makedirs(self._prometheus_multiproc_dir, exist_ok=True)
