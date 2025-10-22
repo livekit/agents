@@ -18,6 +18,8 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
 
+from . import auth
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,24 +74,13 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
-            metadata_args = []
-            if is_given(self.nvidia_api_key):
-                metadata_args.append(["authorization", f"Bearer {self.nvidia_api_key}"])
-
-            metadata_args.append(["function-id", self._opts.function_id])
-
-            auth = riva.client.Auth(
-                uri=self._opts.server,
+            riva_auth = auth.create_riva_auth(
+                api_key=self.nvidia_api_key,
+                function_id=self._opts.function_id,
+                server=self._opts.server,
                 use_ssl=self._opts.use_ssl,
-                metadata_args=metadata_args,
             )
-
-            auth.metadata = [
-                ("authorization", f"Bearer {self.nvidia_api_key}"),
-                ("function-id", self._opts.function_id),
-            ]
-
-            self._tts_service = riva.client.SpeechSynthesisService(auth)
+            self._tts_service = riva.client.SpeechSynthesisService(riva_auth)
         return self._tts_service
 
     def list_voices(self) -> None:

@@ -18,6 +18,8 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
+from . import auth
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,20 +113,11 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._request_id = ""
 
-        if is_given(self._stt.nvidia_api_key):
-            metadata_args = [
-                ["authorization", f"Bearer {self._stt.nvidia_api_key}"],
-                ["function-id", self._stt._opts.function_id],
-            ]
-        else:
-            metadata_args = [
-                ["function-id", self._stt._opts.function_id],
-            ]
-
-        self._auth = riva.client.Auth(
-            uri=stt._opts.server,
+        self._auth = auth.create_riva_auth(
+            api_key=self._stt.nvidia_api_key,
+            function_id=self._stt._opts.function_id,
+            server=stt._opts.server,
             use_ssl=stt._opts.use_ssl,
-            metadata_args=metadata_args,
         )
         self._asr_service = riva.client.ASRService(self._auth)
 
