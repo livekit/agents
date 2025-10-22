@@ -30,7 +30,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows.dtmf_inputs import GetDtmfTask
 from livekit.agents.llm.tool_context import ToolError
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -634,7 +634,7 @@ async def bank_ivr_session(ctx: JobContext) -> None:
         vad=silero.VAD.load(),
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3"),
-        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
+        tts=cartesia.TTS(),
         turn_detection=MultilingualModel(),
         userdata=state,
     )

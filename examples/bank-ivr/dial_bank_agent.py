@@ -85,10 +85,15 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
+    user_request = (
+        args.user_request
+        + f'\n\nUse account number "{" ".join(args.customer_id)}" and PIN "{" ".join(args.pin)}" to authenticate and navigate the IVR.'
+    )
+
+    print(f"==> User request: {user_request}")
     await call_ivr_system(
         args.phone_number,
-        args.user_request
-        + f"Use account number {args.customer_id} and PIN {args.pin} to authenticate and navigate the IVR.",
+        user_request,
     )
 
 

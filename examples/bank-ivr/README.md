@@ -93,7 +93,7 @@ Set `SIP_OUTBOUND_TRUNK_ID` to a valid LiveKit SIP trunk identifier before runni
 
 Use these suggested `--request` values to validate the agent's responses. Each listing includes the expected numbers straight from `data.json` so you can compare transcripts against ground truth.
 
-1. **"summarize jordan carter checking account for jordan carter"**
+1. **"summarize jordan carter checking account"**
    - Account `031890246` (Checking) with balance **$4,821.37** and available balance **$4,615.92**.
    - Interest rate **0.10%**.
    - Recent transactions:

@@ -206,19 +206,9 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
             if self._last_should_schedule_check:
                 return
 
-            logger.debug(
-                "SilenceDetector: user_state=%s, agent_state=%s, scheduling silence check",
-                self._current_user_state,
-                self._current_agent_state,
-            )
             self._debounced_emit.schedule()
             self._last_should_schedule_check = True
         else:
-            logger.debug(
-                "SilenceDetector: user_state=%s, agent_state=%s, canceling silence check",
-                self._current_user_state,
-                self._current_agent_state,
-            )
             self._debounced_emit.cancel()
             self._last_should_schedule_check = False
 
@@ -228,5 +218,4 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
         return is_user_silent and is_agent_silent
 
     async def _emit_silence_detected(self) -> None:
-        logger.debug("SilenceDetector: emitting silence_detected event")
         self.emit("silence_detected", None)
