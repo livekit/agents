@@ -174,7 +174,9 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
         self._max_silence_duration = max_silence_duration
         self._current_user_state: Optional[str] = None  # noqa: UP007
         self._current_agent_state: Optional[str] = None  # noqa: UP007
-        self._debounced_emit = Debounced(self._emit_silence_detected, self._max_silence_duration)
+        self._debounced_emit = Debounced(
+            lambda: self.emit("silence_detected", None), self._max_silence_duration
+        )
 
     async def start(self) -> None:
         self._session.on("user_state_changed", self._on_user_state_changed)
@@ -195,20 +197,16 @@ class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
 
     def _schedule_check(self) -> None:
         if self._current_user_state == self._current_agent_state == "listening":
-            logger.info(
+            logger.debug(
                 "SilenceDetector: user_state=%s, agent_state=%s, scheduling silence check",
                 self._current_user_state,
                 self._current_agent_state,
             )
             self._debounced_emit.schedule()
         else:
-            logger.info(
+            logger.debug(
                 "SilenceDetector: user_state=%s, agent_state=%s, canceling silence check",
                 self._current_user_state,
                 self._current_agent_state,
             )
             self._debounced_emit.cancel()
-
-    async def _emit_silence_detected(self) -> None:
-        logger.info("SilenceDetector: emitting silence_detected event")
-        self.emit("silence_detected", None)
