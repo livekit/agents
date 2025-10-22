@@ -15,9 +15,6 @@ from livekit.agents import (
 from livekit.plugins import nvidia, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-# uncomment to enable Krisp background voice/noise cancellation
-# from livekit.plugins import noise_cancellation
-
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
@@ -28,35 +25,22 @@ def prewarm(proc: JobProcess):
 
 
 async def entrypoint(ctx: JobContext):
-    # each log entry will include these fields
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
-
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=nvidia.STT(),
         tts=nvidia.TTS(),
-        # allow the LLM to generate a response while waiting for the end of turn
         preemptive_generation=True,
-        # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-        # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
-        min_interruption_duration=0.2,  # with false interruption resume, interruption can be more sensitive
-        # use LiveKit's turn detection model
+        min_interruption_duration=0.2,
         turn_detection=MultilingualModel(),
     )
 
     await session.start(
         agent=Agent(instructions="You are a helpful voice AI assistant."),
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # uncomment to enable Krisp BVC noise cancellation
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
+        room_input_options=RoomInputOptions(),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
