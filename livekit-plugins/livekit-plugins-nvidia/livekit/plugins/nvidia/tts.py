@@ -16,7 +16,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils import is_given
 
 from . import auth
 
