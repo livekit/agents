@@ -1256,7 +1256,7 @@ class RealtimeSession(  # noqa: F811
 
                     elif task == tool_task:
                         try:
-                            val = task.result()
+                            val = cast(dict[str, str], task.result())
                             tool_result = val["tool_result"]
                             tool_use_id = val["tool_use_id"]
                             if not isinstance(tool_result, str):

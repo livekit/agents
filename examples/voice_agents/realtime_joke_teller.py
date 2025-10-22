@@ -140,10 +140,7 @@ async def tell_joke(category: list[str] | None = None) -> dict[str, Any]:
     """
     j = await Jokes()
     # Use safe_mode=True to ensure jokes are appropriate for all ages
-    joke = await j.get_joke(
-        category=category if category is not None else ["Pun"],
-        safe_mode=True
-    )
+    joke = await j.get_joke(category=category if category is not None else ["Pun"], safe_mode=True)
     if joke["type"] == "single":
         return {"joke": joke["joke"]}
     else:
