@@ -1,4 +1,5 @@
 # Adapted from https://github.com/livekit-examples/python-agents-examples/blob/main/telephony/make_call/make_call.py
+import argparse
 import asyncio
 import logging
 import os
@@ -17,13 +18,13 @@ AGENT_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "my-telephony-agent")
 OUTBOUND_TRUNK_ID = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
 
-async def call_ivr_system(phone_number: str) -> None:
+async def call_ivr_system(phone_number: str, user_request: str) -> None:
     """Create a dispatch and add a SIP participant to call the phone number"""
     lkapi = api.LiveKitAPI()
 
     logger.info(f"Creating dispatch for agent {AGENT_NAME} in room {ROOM_NAME}")
     dispatch = await lkapi.agent_dispatch.create_dispatch(
-        api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=ROOM_NAME, metadata=phone_number)
+        api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=ROOM_NAME, metadata=user_request)
     )
     logger.info(f"Created dispatch: {dispatch}")
 
@@ -54,8 +55,25 @@ async def call_ivr_system(phone_number: str) -> None:
 
 
 async def main() -> None:
-    phone_number = "+12132896618"
-    await call_ivr_system(phone_number)
+    parser = argparse.ArgumentParser(description="Dial an IVR system and dispatch an agent")
+    parser.add_argument(
+        "--phone",
+        dest="phone_number",
+        default="+12132896618",
+        help="Phone number to dial (default: +12132896618)",
+    )
+    parser.add_argument(
+        "--request",
+        dest="user_request",
+        default="check balance for all accounts I have",
+        help=(
+            "User request/intent passed as dispatch metadata "
+            "(default: 'check balance for all accounts I have')"
+        ),
+    )
+    args = parser.parse_args()
+
+    await call_ivr_system(args.phone_number, args.user_request)
 
 
 if __name__ == "__main__":

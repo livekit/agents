@@ -11,6 +11,7 @@ from livekit.agents import (
     JobContext,
     MetricsCollectedEvent,
     RoomOutputOptions,
+    RunContext,
     TelephonyOptions,
     cli,
     metrics,
@@ -30,7 +31,7 @@ PHONE_TREE_AGENT_DISPATCH_NAME = os.getenv("PHONE_TREE_AGENT_DISPATCH_NAME", "my
 
 
 class DtmfAgent(Agent):
-    def __init__(self, tasks: list[str]) -> None:
+    def __init__(self, user_request: str) -> None:
         super().__init__(
             instructions=(
                 dedent(
@@ -41,10 +42,11 @@ class DtmfAgent(Agent):
                     - Use the DTMF tool whenever digits are required to be entered; do not say numbers aloud if keypad entry is expected.
                     - Assume the persona of a human caller interacting naturally with the IVR.
 
-                    # Tasks
-                    Below are the tasks you will perform:
+                    # Task
+                    - Your single task is:
+                      {user_request}
 
-                    {"\n".join([f"{i + 1}. {task}" for i, task in enumerate(tasks)])}
+                    Once complete with the task, call `record_task_result_and_hang_up` with the result.
 
                     - You will use account number 10000001 and PIN 0000 to authenticate and navigate the IVR.
                     - Carefully listen to each IVR prompt and select the most appropriate option.
@@ -60,14 +62,17 @@ class DtmfAgent(Agent):
         )
 
     @function_tool
-    async def record_task_result(self, content: str) -> None:
+    async def record_task_result_and_hang_up(self, context: RunContext, content: str) -> None:
         """
-        Record the IVR navigation task results.
+        Record the IVR navigation task results and hang up the call/session.
+
+        ONLY call this tool once you have completed the task and the IVR has processed the result.
 
         Args:
             content: The information gathered from completing a task, short validation, or any IVR interaction observation.
         """
         logger.info(f"==> {content}")
+        context.session.shutdown(drain=True)
 
 
 @server.realtime_session(agent_name=PHONE_TREE_AGENT_DISPATCH_NAME)
@@ -85,16 +90,12 @@ async def dtmf_session(ctx: JobContext) -> None:
             ivr_detection=True,
             max_ivr_silence_duration=15.0,
         ),
-        min_endpointing_delay=5.0,
+        min_endpointing_delay=4,
     )
 
-    tasks = [
-        "Retrieve the checking account balance and read the three most recent transactions.",
-        "Confirm the high-yield savings balance and the posted interest rate.",
-        "Report the Platinum Travel Rewards credit card statement balance, minimum payment, and due date.",
-        "Summarize the mortgage outstanding balance, monthly payment amount, and next payment due date.",
-        "Provide the customer's reward tier, total points, and available cashback.",
-    ]
+    # Get the single user request from the room metadata (set by the dispatcher)
+    user_request = ctx.room.metadata or "check balance for all accounts I have"
+    logger.info(f"==> User request: {user_request}")
 
     usage_collector = metrics.UsageCollector()
 
@@ -110,7 +111,7 @@ async def dtmf_session(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=DtmfAgent(tasks=tasks),
+        agent=DtmfAgent(user_request=user_request),
         room=ctx.room,
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
