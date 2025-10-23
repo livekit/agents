@@ -9,24 +9,21 @@ from datetime import datetime, timezone, timedelta
 from livekit import api
 from livekit.protocol import metrics as proto_metrics, agent_pb
 from typing import TYPE_CHECKING, Any, Union
-
 from urllib.parse import urlparse
-
-
 from opentelemetry import context as otel_context, trace
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import Attributes, AttributeValue
-
-
 from opentelemetry import context as otel_context, trace
-from opentelemetry._logs import set_logger_provider
+from opentelemetry._logs import set_logger_provider, get_logger_provider
+from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
     LogRecordProcessor,
     LogData,
+    LogRecord,
 )
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -39,12 +36,14 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http import Compression
 
+from google.protobuf.json_format import MessageToJson
+
 from ..utils import misc
 from ..log import logger
 
 if TYPE_CHECKING:
     from ..voice.report import SessionReport
-    from ..llm import ChatContext
+    from ..llm import ChatContext, ChatItem
 
 
 class _DynamicTracer(Tracer):
@@ -84,7 +83,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def __init__(self, metadata: dict[str, str]) -> None:
         self._metadata = metadata
 
-    def on_emit(self, log_data: LogData) -> None:
+    def emit(self, log_data: LogData) -> None:
         log_data.log_record.attributes.update(self._metadata)
 
     def shutdown(self) -> None:
@@ -109,16 +108,11 @@ def set_tracer_provider(
     tracer.set_provider(tracer_provider)
 
 
-def _setup_cloud_tracer(
-    *,
-    room_id: str,
-    job_id: str,
-    cloud_hostname: str,
-) -> None:
+def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> None:
     access_token = (
         api.AccessToken()
         .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(datetime.timedelta(hours=6))
+        .with_ttl(timedelta(hours=6))
     )
 
     otlp_compression = Compression.Gzip
@@ -161,83 +155,80 @@ def _setup_cloud_tracer(
     root.addHandler(handler)
 
 
-def _to_proto_chat_ctx(chat_ctx: ChatContext) -> agent_pb.agent_session.ChatContext:
-    ctx_pb = agent_pb.agent_session.ChatContext()
+def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.ChatItem:
+    item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
-    for item in chat_ctx.items:
-        item_pb = ctx_pb.items.add()
+    if item.type == "message":
+        msg = item_pb.message
+        msg.id = item.id
 
-        if item.type == "message":
-            msg = item_pb.message
-            msg.id = item.id
+        role_map = {
+            "developer": agent_pb.agent_session.DEVELOPER,
+            "system": agent_pb.agent_session.SYSTEM,
+            "user": agent_pb.agent_session.USER,
+            "assistant": agent_pb.agent_session.ASSISTANT,
+        }
+        msg.role = role_map[item.role]
 
-            role_map = {
-                "developer": agent_pb.agent_session.DEVELOPER,
-                "system": agent_pb.agent_session.SYSTEM,
-                "user": agent_pb.agent_session.USER,
-                "assistant": agent_pb.agent_session.ASSISTANT,
-            }
-            msg.role = role_map[item.role]
+        for content in item.content:
+            if isinstance(content, str):
+                content_pb = msg.content.add()
+                content_pb.text = content
 
-            for content in item.content:
-                if isinstance(content, str):
-                    content_pb = msg.content.add()
-                    content_pb.text = content
+        msg.interrupted = item.interrupted
 
-            msg.interrupted = item.interrupted
+        if item.transcript_confidence is not None:
+            msg.transcript_confidence = item.transcript_confidence
 
-            if item.transcript_confidence is not None:
-                msg.transcript_confidence = item.transcript_confidence
+        for key, value in item.extra.items():
+            msg.extra[key] = str(value)
 
-            for key, value in item.extra.items():
-                msg.extra[key] = str(value)
+        metrics = item.metrics
+        if "started_speaking_at" in metrics:
+            msg.metrics.started_speaking_at.FromSeconds(int(metrics["started_speaking_at"]))
+        if "stopped_speaking_at" in metrics:
+            msg.metrics.stopped_speaking_at.FromSeconds(int(metrics["stopped_speaking_at"]))
+        if "transcription_delay" in metrics:
+            msg.metrics.transcription_delay = metrics["transcription_delay"]
+        if "end_of_turn_delay" in metrics:
+            msg.metrics.end_of_turn_delay = metrics["end_of_turn_delay"]
+        if "on_user_turn_completed_delay" in metrics:
+            msg.metrics.on_user_turn_completed_delay = metrics["on_user_turn_completed_delay"]
+        if "llm_node_ttft" in metrics:
+            msg.metrics.llm_node_ttft = metrics["llm_node_ttft"]
+        if "tts_node_ttfb" in metrics:
+            msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
+        if "e2e_latency" in metrics:
+            msg.metrics.e2e_latency = metrics["e2e_latency"]
 
-            metrics = item.metrics
-            if "started_speaking_at" in metrics:
-                msg.metrics.started_speaking_at.FromSeconds(int(metrics["started_speaking_at"]))
-            if "stopped_speaking_at" in metrics:
-                msg.metrics.stopped_speaking_at.FromSeconds(int(metrics["stopped_speaking_at"]))
-            if "transcription_delay" in metrics:
-                msg.metrics.transcription_delay = metrics["transcription_delay"]
-            if "end_of_turn_delay" in metrics:
-                msg.metrics.end_of_turn_delay = metrics["end_of_turn_delay"]
-            if "on_user_turn_completed_delay" in metrics:
-                msg.metrics.on_user_turn_completed_delay = metrics["on_user_turn_completed_delay"]
-            if "llm_node_ttft" in metrics:
-                msg.metrics.llm_node_ttft = metrics["llm_node_ttft"]
-            if "tts_node_ttfb" in metrics:
-                msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
-            if "e2e_latency" in metrics:
-                msg.metrics.e2e_latency = metrics["e2e_latency"]
+        msg.created_at.FromSeconds(int(item.created_at))
 
-            msg.created_at.FromSeconds(int(item.created_at))
+    elif item.type == "function_call":
+        fc = item_pb.function_call
+        fc.id = item.id
+        fc.call_id = item.call_id
+        fc.arguments = item.arguments
+        fc.name = item.name
+        fc.created_at.FromSeconds(int(item.created_at))
 
-        elif item.type == "function_call":
-            fc = item_pb.function_call
-            fc.id = item.id
-            fc.call_id = item.call_id
-            fc.arguments = item.arguments
-            fc.name = item.name
-            fc.created_at.FromSeconds(int(item.created_at))
+    elif item.type == "function_call_output":
+        fco = item_pb.function_call_output
+        fco.id = item.id
+        fco.name = item.name
+        fco.call_id = item.call_id
+        fco.output = item.output
+        fco.is_error = item.is_error
+        fco.created_at.FromSeconds(int(item.created_at))
 
-        elif item.type == "function_call_output":
-            fco = item_pb.function_call_output
-            fco.id = item.id
-            fco.name = item.name
-            fco.call_id = item.call_id
-            fco.output = item.output
-            fco.is_error = item.is_error
-            fco.created_at.FromSeconds(int(item.created_at))
+    elif item.type == "agent_handoff":
+        ah = item_pb.agent_handoff
+        ah.id = item.id
+        if item.old_agent_id is not None:
+            ah.old_agent_id = item.old_agent_id
+        ah.new_agent_id = item.new_agent_id
+        ah.created_at.FromSeconds(int(item.created_at))
 
-        elif item.type == "agent_handoff":
-            ah = item_pb.agent_handoff
-            ah.id = item.id
-            if item.old_agent_id is not None:
-                ah.old_agent_id = item.old_agent_id
-            ah.new_agent_id = item.new_agent_id
-            ah.created_at.FromSeconds(int(item.created_at))
-
-    return ctx_pb
+    return item_pb
 
 
 def _to_rfc3339(value: int | float | datetime) -> str:
@@ -263,7 +254,7 @@ async def _upload_session_report(
     access_token = (
         api.AccessToken()
         .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(datetime.timedelta(hours=6))
+        .with_ttl(timedelta(hours=6))
     )
     jwt = access_token.to_jwt()
 
@@ -272,9 +263,6 @@ async def _upload_session_report(
     )
     header_bytes = header_msg.SerializeToString()
 
-    chat_history_pb = _to_proto_chat_ctx(report.chat_history)
-    chat_history_bytes = chat_history_pb.SerializeToString() if chat_history_pb is not None else b""
-
     mp = aiohttp.MultipartWriter("form-data")
 
     part = mp.append(header_bytes)
@@ -282,13 +270,31 @@ async def _upload_session_report(
     part.headers["Content-Type"] = "application/protobuf"
     part.headers["Content-Length"] = str(len(header_bytes))
 
-    if chat_history_bytes:
-        part = mp.append(chat_history_bytes)
-        part.set_content_disposition(
-            "form-data", name="chat_history", filename="chat_history.binpb"
+    # if chat_history_bytes:
+    #     part = mp.append(chat_history_bytes)
+    #     part.set_content_disposition(
+    #         "form-data", name="chat_history", filename="chat_history.binpb"
+    #     )
+    #     part.headers["Content-Type"] = "application/protobuf"
+    #     part.headers["Content-Length"] = str(len(chat_history_bytes))
+
+    # chat_history_pb = _to_proto_chat_ctx(report.chat_history)
+    chat_logger = get_logger_provider().get_logger("chat_history")
+    for item in report.chat_history.items:
+        item_proto = _to_proto_chat_item(item)
+        item_json = MessageToJson(item_proto)
+        chat_logger.emit(
+            LogRecord(
+                timestamp=int(item.created_at * 1e9),
+                body=item_json,
+                trace_id=0,
+                span_id=0,
+                trace_flags=0,
+                severity_number=SeverityNumber.UNSPECIFIED,
+                severity_text="unspecified",
+                attributes={"protobuf.message_type": item_proto.DESCRIPTOR.full_name},
+            )
         )
-        part.headers["Content-Type"] = "application/protobuf"
-        part.headers["Content-Length"] = str(len(chat_history_bytes))
 
     if report.audio_recording_path and report.audio_recording_started_at:
         try:
