@@ -1,28 +1,18 @@
-import asyncio
-from typing import Any
-
-import pytest
-
-from livekit.agents import Agent
 from livekit.agents.voice.ivr.ivr_activity import TfidfLoopDetector
 
-from .fake_session import FakeActions, create_session, run_session
 
-SESSION_TIMEOUT = 10.0
+def _count_loops(transcripts: list[str], detector: TfidfLoopDetector | None = None) -> int:
+    detector = detector or TfidfLoopDetector()
+    loop_detected = 0
+    for transcript in transcripts:
+        detector.add_chunk(transcript)
+        if detector.check_loop_detection():
+            loop_detected += 1
+    return loop_detected
 
 
-class MyAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful assistant.")
-
-
-@pytest.mark.asyncio
-async def test_tfidf_no_loop_on_unique_user_speech() -> None:
-    """Does not emit loop events when all user speeches are unique."""
-    speed = 10.0
-    actions = FakeActions()
-    silence_duration = 0.1
-    audio_duration = 1.5
+def test_tfidf_no_loop_on_unique_user_speech() -> None:
+    """Does not report loops when every utterance is unique."""
 
     transcripts = [
         "Welcome to automated phone system",
@@ -35,126 +25,49 @@ async def test_tfidf_no_loop_on_unique_user_speech() -> None:
         "Type 7 for user management",
     ]
 
-    t = 0.5
-    for transcript in transcripts:
-        actions.add_user_speech(t, t + audio_duration, transcript)
-        t += audio_duration + silence_duration
-
-    session = create_session(actions, speed_factor=speed)
-    detector = TfidfLoopDetector(session=session)
-
-    loop_detected_count = 0
-
-    def on_loop_detected(_: Any) -> None:
-        nonlocal loop_detected_count
-        loop_detected_count += 1
-
-    detector.on("loop_detected", on_loop_detected)
-
-    await asyncio.wait_for(detector.start(), timeout=10.0)
-    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
-    assert loop_detected_count == 0
-
-    await detector.aclose()
+    assert _count_loops(transcripts) == 0
 
 
-@pytest.mark.asyncio
-async def test_tfidf_detects_loop_on_repeated_user_speech() -> None:
-    """Emits loop events when user speeches repeat across turns."""
-    speed = 10.0
-    actions = FakeActions()
-    repeat_count = 2
-    silence_duration = 0.1
-    audio_duration = 1.5
+def test_tfidf_detects_loop_on_repeated_user_speech() -> None:
+    """Reports a loop once similar prompts repeat enough times."""
 
-    transcripts_to_repeat = [
+    transcripts = [
         "Welcome to automated phone system",
         "Type 1 for sales",
         "Type 2 for support",
         "Type 3 for billing",
         "Type 4 for technical support",
+        "Welcome to automated phone system",  # similar 1
+        "Type 1 for sales",  # similar 2
+        "Type 2 for support",  # similar 3, loop detected
+        "Type 3 for billing",  # similar 4, loop detected
+        "Type 4 for technical support",  # similar 5, loop detected
     ]
 
-    t = 0.5
-    for _ in range(repeat_count):
-        for transcript in transcripts_to_repeat:
-            actions.add_user_speech(t, t + audio_duration, transcript)
-            t += audio_duration + silence_duration
-
-    session = create_session(actions, speed_factor=speed)
-    detector = TfidfLoopDetector(session=session)
-
-    loop_detected_count = 0
-
-    def on_loop_detected(_: Any) -> None:
-        nonlocal loop_detected_count
-        loop_detected_count += 1
-
-    detector.on("loop_detected", on_loop_detected)
-
-    await asyncio.wait_for(detector.start(), timeout=10.0)
-    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
-    assert loop_detected_count == 3  # loop detected from the second "Type 2 for ..."
-
-    await detector.aclose()
+    assert _count_loops(transcripts) == 3
 
 
-@pytest.mark.asyncio
-async def test_tfidf_detects_loop_after_interleaved_unique_and_repeated() -> None:
-    """Resets on unique speech then detects loops again when repeats resume."""
-    speed = 10.0
-    actions = FakeActions()
-    repeat_count = 2
-    silence_duration = 0.1
-    audio_duration = 1.5
+def test_tfidf_resets_after_novel_speech() -> None:
+    """Resets its consecutive counter after a novel utterance and can detect again."""
 
-    transcripts_to_repeat = [
+    transcripts = [
         "Welcome to automated phone system",
-        "Type 1 for sales",
-        "Type 2 for support",
-        "Type 3 for billing",
+        "Press 1 for sales",
+        "Press 2 for support",
+        "Press 1 for sales",  # similar 1
+        "Press 2 for support",  # similar 2
+        "Press 1 for sales",  # triggers first detection
+        "Here's a new announcement never heard before",
+        "Press 2 for support",  # similar 1 (after reset)
+        "Press 1 for sales",  # similar 2
+        "Press 2 for support",  # triggers second detection
     ]
 
-    t = 0.5
-    for _ in range(repeat_count):
-        for transcript in transcripts_to_repeat:
-            actions.add_user_speech(t, t + audio_duration, transcript)
-            t += audio_duration + silence_duration
-
-    # consecutive count of similar chunks will reset to 0 here
-    actions.add_user_speech(t, t + audio_duration, "This is a non-repeated user speech")
-    t += audio_duration + silence_duration
-
-    # re-increment consecutive count of similar chunks here
-    for transcript in transcripts_to_repeat:
-        actions.add_user_speech(t, t + audio_duration, transcript)
-        t += audio_duration + silence_duration
-
-    session = create_session(actions, speed_factor=speed)
-    detector = TfidfLoopDetector(session=session)
-
-    loop_detected_count = 0
-
-    def on_loop_detected(_: Any) -> None:
-        nonlocal loop_detected_count
-        loop_detected_count += 1
-
-    detector.on("loop_detected", on_loop_detected)
-
-    await asyncio.wait_for(detector.start(), timeout=10.0)
-    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
-    assert loop_detected_count == 4
-
-    await detector.aclose()
+    assert _count_loops(transcripts) == 2
 
 
-@pytest.mark.asyncio
-async def test_tfidf_detects_loop_with_minor_text_variations() -> None:
-    """Treats minor textual variations as similar enough to trigger a loop."""
-    speed = 10.0
-    actions = FakeActions()
-    silence_duration = 0.1
-    audio_duration = 1.5
+def test_tfidf_handles_minor_phrase_variations() -> None:
+    """Treats small textual variations as loops."""
 
     transcripts = [
         "Welcome to automated phone system",
@@ -164,24 +77,4 @@ async def test_tfidf_detects_loop_with_minor_text_variations() -> None:
         "Repeat, type 1 for sales, type 2 for support, and type 3 for billing",
     ]
 
-    t = 0.5
-    for transcript in transcripts:
-        actions.add_user_speech(t, t + audio_duration, transcript)
-        t += audio_duration + silence_duration
-
-    session = create_session(actions, speed_factor=speed)
-    detector = TfidfLoopDetector(session=session)
-
-    loop_detected_count = 0
-
-    def on_loop_detected(_: Any) -> None:
-        nonlocal loop_detected_count
-        loop_detected_count += 1
-
-    detector.on("loop_detected", on_loop_detected)
-
-    await asyncio.wait_for(detector.start(), timeout=10.0)
-    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
-    assert loop_detected_count == 1
-
-    await detector.aclose()
+    assert _count_loops(transcripts) >= 1

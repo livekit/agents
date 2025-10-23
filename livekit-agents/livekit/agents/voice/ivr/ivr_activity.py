@@ -34,20 +34,23 @@ class IVRActivity:
         max_silence_duration: float = 5.0,
     ) -> None:
         self._session = session
-        self._silence_detector = SilenceDetector(session, max_silence_duration=max_silence_duration)
-        self._loop_detector = TfidfLoopDetector(session)
+        self._max_silence_duration = max_silence_duration
+        self._loop_detector = TfidfLoopDetector()
+
+        self._current_user_state: Optional[str] = None  # noqa: UP007
+        self._current_agent_state: Optional[str] = None  # noqa: UP007
+        self._debounced_silence = Debounced(self._on_silence_detected, max_silence_duration)
+        self._last_should_schedule_check: bool | None = None
 
     async def start(self) -> None:
+        self._session.on("user_state_changed", self._on_user_state_changed)
+        self._session.on("agent_state_changed", self._on_agent_state_changed)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
 
     async def update_agent(self, agent: Agent) -> None:
         from ...beta.tools.send_dtmf import send_dtmf_events
 
         agent._tools.append(send_dtmf_events)
-
-    def _on_silence_detected(self, _) -> None:
-        logger.info("IVRActivity: silence detected; sending notification")
-        self._session.generate_reply(user_input=DEFAULT_SILENCE_REMINDER_MESSAGE)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if not ev.is_final:
@@ -63,12 +66,40 @@ class IVRActivity:
             )
             self._loop_detector.reset()
 
-    async def aclose(self) -> None:
-        self._silence_detector.off("silence_detected", self._on_silence_detected)
-        self._loop_detector.off("loop_detected", self._on_loop_detected)
+    def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
+        self._current_user_state = ev.new_state
+        self._schedule_silence_check()
 
-        await self._silence_detector.aclose()
-        await self._loop_detector.aclose()
+    def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
+        self._current_agent_state = ev.new_state
+        self._schedule_silence_check()
+
+    def _schedule_silence_check(self) -> None:
+        should_schedule = self._should_schedule_check()
+        if should_schedule:
+            if self._last_should_schedule_check:
+                return
+
+            self._debounced_silence.schedule()
+        else:
+            self._debounced_silence.cancel()
+
+        self._last_should_schedule_check = should_schedule
+
+    def _should_schedule_check(self) -> bool:
+        is_user_silent = self._current_user_state in ["listening", "away"]
+        is_agent_silent = self._current_agent_state in ["idle", "listening"]
+        return is_user_silent and is_agent_silent
+
+    async def _on_silence_detected(self) -> None:
+        logger.debug("IVRActivity: silence detected; sending notification")
+        self._session.generate_reply(user_input=DEFAULT_SILENCE_REMINDER_MESSAGE)
+
+    async def aclose(self) -> None:
+        self._debounced_silence.cancel()
+        self._session.off("user_state_changed", self._on_user_state_changed)
+        self._session.off("agent_state_changed", self._on_agent_state_changed)
+        self._session.off("user_input_transcribed", self._on_user_input_transcribed)
 
 
 class TfidfLoopDetector:
@@ -78,9 +109,8 @@ class TfidfLoopDetector:
     the similarity of the last N - 1 chunks of transcribed text to the last chunk.
 
     Args:
-        session: The agent session.
         window_size: The number of chunks to compare. Default ``20``.
-        similarity_threshold: The similarity threshold for a chunk to be considered similar to the last chunk. Default ``0.9``.
+        similarity_threshold: The similarity threshold for a chunk to be considered similar to the last chunk. Default ``0.85``.
         consecutive_threshold: The number of consecutive chunks that must be similar to trigger a loop detection. Default ``3``.
     """
 
@@ -145,64 +175,3 @@ class TfidfLoopDetector:
             self._num_consecutive_similar_chunks = 0
 
         return self._num_consecutive_similar_chunks >= self._consecutive_threshold
-
-
-class SilenceDetector:
-    """Silence detector.
-
-    This detector checks for silence in the user / agent interaction.
-
-    Args:
-        session: The agent session.
-        max_silence_duration: The maximum duration of silence to detect in seconds. Default ``5.0`` seconds.
-    """
-
-    def __init__(
-        self,
-        session: AgentSession,
-        *,
-        max_silence_duration: float = 5.0,
-    ) -> None:
-        super().__init__()
-        self._session = session
-        self._max_silence_duration = max_silence_duration
-        self._current_user_state: Optional[str] = None  # noqa: UP007
-        self._current_agent_state: Optional[str] = None  # noqa: UP007
-        self._debounced_emit = Debounced(self._emit_silence_detected, self._max_silence_duration)
-        self._last_should_schedule_check: bool | None = None
-
-    async def start(self) -> None:
-        self._session.on("user_state_changed", self._on_user_state_changed)
-        self._session.on("agent_state_changed", self._on_agent_state_changed)
-
-    async def aclose(self) -> None:
-        self._debounced_emit.cancel()
-        self._session.off("user_state_changed", self._on_user_state_changed)
-        self._session.off("agent_state_changed", self._on_agent_state_changed)
-
-    def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
-        self._current_user_state = ev.new_state
-        self._schedule_check()
-
-    def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
-        self._current_agent_state = ev.new_state
-        self._schedule_check()
-
-    def _schedule_check(self) -> None:
-        if self._should_schedule_check():
-            if self._last_should_schedule_check:
-                return
-
-            self._debounced_emit.schedule()
-            self._last_should_schedule_check = True
-        else:
-            self._debounced_emit.cancel()
-            self._last_should_schedule_check = False
-
-    def _should_schedule_check(self) -> bool:
-        is_user_silent = self._current_user_state in ["listening", "away"]
-        is_agent_silent = self._current_agent_state in ["idle", "listening"]
-        return is_user_silent and is_agent_silent
-
-    async def _emit_silence_detected(self) -> None:
-        self.emit("silence_detected", None)
