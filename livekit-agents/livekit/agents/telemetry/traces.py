@@ -33,7 +33,7 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http import Compression
 
-from google.protobuf.json_format import MessageToJson
+from google.protobuf.json_format import MessageToJson, MessageToDict
 
 from ..utils import misc
 from ..log import logger
@@ -228,57 +228,18 @@ def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.Ch
     return item_pb
 
 
-def _to_log_chat_item(item: ChatItem) -> map[str, any] | None:
-    if item.type == "message":
-        return {
-            "type": item.type,
-            "id": item.id,
-            "role": item.role,
-            "content": [content for content in item.content if isinstance(content, str)],
-            "interrupted": item.interrupted,
-            "transcript_confidence": item.transcript_confidence,
-            "extra": item.extra,
-            "metrics": item.metrics,
-        }
+def _to_log_chat_item(item: ChatItem) -> dict[str, Any]:
+    item_dict = item.model_dump()
 
-    elif item.type == "function_call":
-        try:
-            arguments = json.loads(item.arguments)
-        except:
-            arguments = item.arguments
+    try:
+        if item.type == "function_call":
+            item["arguments"] = json.loads(item["arguments"])
+        elif item.type == "function_call_output":
+            item["output"] = json.loads(item["output"])
+    except Exception:
+        pass
 
-        return {
-            "type": item.type,
-            "id": item.id,
-            "call_id": item.call_id,
-            "arguments": arguments,
-            "name": item.name,
-        }
-
-    elif item.type == "function_call_output":
-        try:
-            output = json.loads(item.output)
-        except:
-            output = item.output
-
-        return {
-            "type": item.type,
-            "id": item.id,
-            "name": item.name,
-            "call_id": item.call_id,
-            "output": output,
-            "is_error": item.is_error,
-        }
-
-    elif item.type == "agent_handoff":
-        return {
-            "type": item.type,
-            "id": item.id,
-            "old_agent_id": item.old_agent_id,
-            "new_agent_id": item.new_agent_id,
-        }
-
-    return None
+    return item_dict
 
 
 def _to_rfc3339(value: int | float | datetime) -> str:
@@ -301,9 +262,8 @@ async def _upload_session_report(
     report: SessionReport,
     http_session: aiohttp.ClientSession,
 ) -> None:
-    # emit logs
     chat_logger = get_logger_provider().get_logger(
-        name="chat_history",
+        name="chat history",
         attributes={
             "room_id": report.room_id,
             "job_id": report.job_id,
@@ -313,12 +273,8 @@ async def _upload_session_report(
     )
     chat_logger.emit(
         LogRecord(
-            timestamp=int(report.audio_recording_started_at * 1e9),
-            body="chat started",
-            attributes={
-                "chat.options": dict(report.options),
-                "chat.report_timestamp": report.timestamp,
-            },
+            body="session report",
+            attributes={"report.timestamp": report.timestamp},
         )
     )
     for item in report.chat_history.items:
@@ -328,9 +284,7 @@ async def _upload_session_report(
                 LogRecord(
                     timestamp=int(item.created_at * 1e9),
                     body="chat item",
-                    attributes={
-                        "chat.item": item_log,
-                    },
+                    attributes={"chat.item": item_log},
                 )
             )
 
@@ -343,8 +297,7 @@ async def _upload_session_report(
     jwt = access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=room_id,
-        enable_user_data_training=report.enable_user_data_training
+        room_id=room_id, enable_user_data_training=report.enable_user_data_training
     )
     header_bytes = header_msg.SerializeToString()
 
@@ -354,16 +307,6 @@ async def _upload_session_report(
     part.set_content_disposition("form-data", name="header", filename="header.binpb")
     part.headers["Content-Type"] = "application/protobuf"
     part.headers["Content-Length"] = str(len(header_bytes))
-
-    # if chat_history_bytes:
-    #     part = mp.append(chat_history_bytes)
-    #     part.set_content_disposition(
-    #         "form-data", name="chat_history", filename="chat_history.binpb"
-    #     )
-    #     part.headers["Content-Type"] = "application/protobuf"
-    #     part.headers["Content-Length"] = str(len(chat_history_bytes))
-
-    # chat_history_pb = _to_proto_chat_ctx(report.chat_history)
 
     if report.audio_recording_path and report.audio_recording_started_at:
         try:
