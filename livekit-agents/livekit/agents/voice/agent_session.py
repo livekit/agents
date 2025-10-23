@@ -85,15 +85,7 @@ class AgentSessionOptions:
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
-    telephony_options: TelephonyOptions
-
-
-@dataclass
-class TelephonyOptions:
-    ivr_detection: bool = False
-    """Whether to detect if the agent is interacting with an IVR system."""
-    max_ivr_silence_duration: float = 15.0
-    """The maximum duration of silence in the IVR system before auto triggering a notification to the agent."""
+    ivr_detection: bool
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -150,7 +142,6 @@ class VoiceActivityVideoSampler:
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
-DEFAULT_TELEPHONY_OPTIONS: TelephonyOptions = TelephonyOptions()
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
@@ -180,7 +171,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
-        telephony_options: NotGivenOr[TelephonyOptions] = NOT_GIVEN,
+        ivr_detection: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -267,7 +258,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
-            telephony_options (TelephonyOptions, optional): Options for telephony.
+            ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
+                Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -307,9 +299,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
-            telephony_options=telephony_options
-            if is_given(telephony_options)
-            else DEFAULT_TELEPHONY_OPTIONS,
+            ivr_detection=ivr_detection,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -591,12 +581,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             "If you want to ignore primary designation, use session.start(record=False)."
                         )
 
-                telephony_options = self.options.telephony_options
-                if telephony_options.ivr_detection:
-                    self._ivr_activity = IVRActivity(
-                        self,
-                        max_silence_duration=telephony_options.max_ivr_silence_duration,
-                    )
+                if self.options.ivr_detection:
+                    self._ivr_activity = IVRActivity(self)
 
                     # inject the IVR activity tools into the session tools
                     self._tools.extend(self._ivr_activity.tools)
