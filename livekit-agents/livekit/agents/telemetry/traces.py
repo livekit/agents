@@ -8,16 +8,15 @@ from collections.abc import Iterator
 from datetime import datetime, timezone, timedelta
 from livekit import api
 from livekit.protocol import metrics as proto_metrics, agent_pb
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from opentelemetry import context as otel_context, trace
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes, AttributeValue
+from opentelemetry.util.types import AttributeValue
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import set_logger_provider, get_logger_provider
-from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
@@ -29,8 +28,6 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider, Span
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
