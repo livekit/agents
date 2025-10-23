@@ -89,6 +89,7 @@ class BehaviorialTask(AgentTask[dict]):
             instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             You will now be learning more about the candidate holistically. This includes their strengths, weaknesses, and work and communication style. You are testing the candidate for a good fit in the company.
             The ideal candidate would be well spoken, energetic, and thorough in their answers. Do not mention the prerequisites. If the candidate does not fulfill the description or refuses to answer, call disqualify().
+            Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
             """,
             tools=[disqualify],
         )
@@ -110,7 +111,7 @@ class BehaviorialTask(AgentTask[dict]):
         self._check_completion()
 
     @function_tool()
-    async def record_weaknesses(self, weaknesses_summary):
+    async def record_weaknesses(self, weaknesses_summary: str):
         """Call to record a summary of the candidate's weaknesses.
 
         Args:
@@ -139,7 +140,7 @@ class ProjectTask(AgentTask[dict]):
         super().__init__(
             instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
                          Gather information about the most technical project the candidate has attempted and probe for their thinking process. Note specificities such as if they worked solo or in a team, and the technology stack they used
-                         if applicable. If they have no projects to dissect, call disqualify(). Do not mention any prerequisites for this position.""",
+                         if applicable. If they have no projects to dissect, call disqualify(). Do not mention any prerequisites for this position. Avoid listing out questions with bullet points or numbers, use a natural conversational tone.""",
             tools=[disqualify],
         )
         self._results = {}
@@ -158,14 +159,14 @@ class ProjectTask(AgentTask[dict]):
         """
 
         self._results["project_description"] = project_description
-        if not self._results["work_division_response"]:
+        if "work_division_response" not in self._results.keys():
             self.session.generate_reply(
                 instructions="Have the candidate walk you through their thought process on splitting the project work. If they already worked in a team for that project, gather their thoughts on what they would do differently."
             )
 
         elif (
             self._results["work_division_response"]
-            and not self._results["scaling_project_response"]
+            and "scaling_project_response" not in self._results.keys()
         ):
             self.session.generate_reply(
                 instructions="Allow the candidate to choose a scenario between expanding upon the project they are currently speaking of or creating a new project entirely. Dissect their thought process and decisions."
@@ -195,7 +196,7 @@ class ProjectTask(AgentTask[dict]):
             instructions="Express interest in seeing the candidate scale their project as they described in the future."
         )
         results = {"scenario": chosen_scenario, "response": scale_response}
-        self._result["scaling_project_response"] = results
+        self._results["scaling_project_response"] = results
 
 
 class ExperienceTask(AgentTask[dict]):
@@ -204,7 +205,7 @@ class ExperienceTask(AgentTask[dict]):
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             Record how many years of experience the candidate has and the descriptions of their previous jobs if any. There is no set required amount for this position.
-            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details.
+            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details. Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
             """,
             tools=[disqualify],
         )
@@ -258,9 +259,9 @@ class CommuteTask(AgentTask[dict]):
         """
         self._result["office_flexibility"] = office_flexibility
         self._result["commute_method"] = commute_method
-        if commute_method.lower() == "personal car":
+        if commute_method.lower() == "subway" or commute_method.lower() == "bus":
             self.session.generate_reply(
-                instructions="The candidate noted that they will drive to work. Inform them that there is no designated parking lot for the office, but there is metered street parking."
+                instructions="Inform the candidate that the company may sponsor their transportation expenses."
             )
 
         self.complete(self._result)
@@ -323,11 +324,12 @@ class SurveyAgent(Agent):
             id="behavorial_task",
             description="Gathers a holistic view of the candidate, including their strengths, weaknesses, and work style",
         )
-        task_group.add(
-            lambda: ProjectTask(),
-            id="project_task",
-            description="Probes the user about their thought process on projects",
-        )
+        # TODO refactor to safely complete task
+        # task_group.add(
+        #     lambda: ProjectTask(),
+        #     id="project_task",
+        #     description="Probes the user about their thought process on projects",
+        # )
 
         results = await task_group
         results = results.task_results
@@ -336,7 +338,6 @@ class SurveyAgent(Agent):
         evaluation = await evaluate_candidate(llm_model=self.session.llm, summary=summary)
         results["summary"] = summary.content
         results["evaluation"] = evaluation
-
         self.session.userdata.task_results = results
         write_to_csv(filename=self.session.userdata.filename, data=results)
 
