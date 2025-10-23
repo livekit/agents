@@ -25,9 +25,10 @@ from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("SurveyAgent")
 
-load_dotenv()
+load_dotenv(".env.local")
 
 CommuteMethods = ["driving", "bus", "subway", "none"]
+WorkStyles = ["independent", "team_player"]
 
 
 @dataclass
@@ -121,7 +122,7 @@ class BehavioralTask(AgentTask[BehavioralResults]):
         super().__init__(
             instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             You will now be learning more about the candidate holistically. This includes their strengths, weaknesses, and work and communication style. You are testing the candidate for a good fit in the company.
-            The ideal candidate would be well spoken, energetic, and thorough in their answers. Do not mention the prerequisites. If the candidate does not fulfill the description or refuses to answer, call disqualify().
+            If the candidate refuses to answer, call disqualify(). Be concise and to the point.
             Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
             """,
             tools=[disqualify],
@@ -154,11 +155,13 @@ class BehavioralTask(AgentTask[BehavioralResults]):
         self._check_completion()
 
     @function_tool()
-    async def record_work_style(self, work_style: str):
-        """Call to record a summary of the candidate's work and communication style.
+    async def record_work_style(
+        self, work_style: Annotated[str, Field(json_schema_extra={"enum": WorkStyles})]
+    ):
+        """Call to record a summary of the candidate's work style.
 
         Args:
-            work_style (str): The candidate's work and communication style
+            work_style (str): The candidate's work style
         """
         self._results["work_style"] = work_style
         self._check_completion()
@@ -171,6 +174,10 @@ class BehavioralTask(AgentTask[BehavioralResults]):
                 work_style=self._results["work_style"],
             )
             self.complete(results)
+        else:
+            self.session.generate_reply(
+                instructions="Continue incrementally collecting the remaining answers for the behavioral stage. Maintain a conversational tone."
+            )
 
 
 class ExperienceTask(AgentTask[ExperienceResults]):
@@ -210,7 +217,7 @@ class CommuteTask(AgentTask[CommuteResults]):
         super().__init__(
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
-            Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week. Disqualify the candidate if they cannot commute at all.
+            Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week.
             """,
             tools=[disqualify],
         )
@@ -228,18 +235,13 @@ class CommuteTask(AgentTask[CommuteResults]):
         commute_method: Annotated[str, Field(json_schema_extra={"enum": CommuteMethods})],
     ) -> None:
         """Call to record the candidate's flexibility of going into office and notes about their commute. If they are able to commute, record their method of transportation.
+        If the candidate chooses public transportation, (bus, subway) then their travel expenses may be subsidized by the company.
 
         Args:
             can_commute (bool): If the candidate can commute to the office
             commute_method (str): The method of transportation the candidate will take to commute, either ['driving', 'bus', 'subway', 'none']
         """
         results = CommuteResults(can_commute=can_commute, commute_method=commute_method)
-
-        if commute_method == "subway" or commute_method == "bus":
-            self.session.generate_reply(
-                instructions="Inform the candidate that the company will sponsor their transportation expenses."
-            )
-
         self.complete(results)
 
 
@@ -275,7 +277,7 @@ class SurveyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
-                You are a Survey agent screening candidates for a Software Engineer position.
+                You are a Survey agent screening candidates for a Software Engineer position. When the interview is concluded, call end_screening to hang up.
             """
         )
 
@@ -308,11 +310,15 @@ class SurveyAgent(Agent):
         results["evaluation"] = evaluation
         self.session.userdata.task_results = results
         write_to_csv(filename=self.session.userdata.filename, data=results)
-
-    async def on_exit(self) -> None:
         await self.session.generate_reply(
             instructions="The interview is now complete, alert the user and thank them for their time. They will hear back within 3 days."
         )
+
+    @function_tool()
+    async def end_screening(self):
+        """Call when the interview/screening is concluded to hang up."""
+        await self.session.generate_reply(instructions="Close out the interview and say goodbye.")
+        self.session.shutdown()
 
 
 server = AgentServer()
