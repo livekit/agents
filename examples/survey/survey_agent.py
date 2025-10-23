@@ -22,6 +22,7 @@ from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
 from livekit.plugins import deepgram, openai, silero
 
+load_dotenv()
 
 @dataclass
 class Userdata:
