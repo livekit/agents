@@ -231,6 +231,49 @@ def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.Ch
     return item_pb
 
 
+def _to_log_chat_item(item: ChatItem) -> map[str, any] | None:
+    if item.type == "message":
+        return {
+            "type": item.type,
+            "id": item.id,
+            "role": item.role,
+            "content": [content for content in item.content if isinstance(content, str)],
+            "interrupted": item.interrupted,
+            "transcript_confidence": item.transcript_confidence,
+            "extra": item.extra,
+            "metrics": item.metrics,
+        }
+
+    elif item.type == "function_call":
+        return {
+            "type": item.type,
+            "id": item.id,
+            "call_id": item.call_id,
+            "arguments": json.loads(item.arguments),
+            "name": item.name,
+        }
+
+    elif item.type == "function_call_output":
+        return {
+            "type": item.type,
+            "id": item.id,
+            "name": item.name,
+            "call_id": item.call_id,
+            "output": json.loads(item.output),
+            "is_error": item.is_error,
+        }
+
+    elif item.type == "agent_handoff":
+        return {
+            "type": item.type,
+            "id": item.id,
+            "old_agent_id": item.old_agent_id,
+            "new_agent_id": item.new_agent_id,
+        }
+
+    return None
+
+
 def _to_rfc3339(value: int | float | datetime) -> str:
     if isinstance(value, (int, float)):
         dt = datetime.fromtimestamp(value, tz=timezone.utc)
@@ -251,6 +294,40 @@ async def _upload_session_report(
     report: SessionReport,
     http_session: aiohttp.ClientSession,
 ) -> None:
+    # emit logs
+    chat_logger = get_logger_provider().get_logger(
+        name="chat_history",
+        attributes={
+            "room_id": report.room_id,
+            "job_id": report.job_id,
+            "room": report.room,
+            "lk.enable_user_data_training": report.enable_user_data_training,
+        },
+    )
+    chat_logger.emit(
+        LogRecord(
+            timestamp=int(report.audio_recording_started_at * 1e9),
+            body="chat started",
+            attributes={
+                "chat.options": dict(report.options),
+                "chat.report_timestamp": report.timestamp,
+            },
+        )
+    )
+    for item in report.chat_history.items:
+        item_log = _to_log_chat_item(item)
+        if item_log is not None:
+            chat_logger.emit(
+                LogRecord(
+                    timestamp=int(item.created_at * 1e9),
+                    body="chat item",
+                    attributes={
+                        "chat.item": item_log,
+                    },
+                )
+            )
+
+    # emit recording
     access_token = (
         api.AccessToken()
         .with_observability_grants(api.ObservabilityGrants(write=True))
@@ -259,7 +336,8 @@ async def _upload_session_report(
     jwt = access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=room_id, enable_user_data_training=report.enable_user_data_training
+        room_id=room_id,
+        enable_user_data_training=report.enable_user_data_training
     )
     header_bytes = header_msg.SerializeToString()
 
@@ -279,22 +357,6 @@ async def _upload_session_report(
     #     part.headers["Content-Length"] = str(len(chat_history_bytes))
 
     # chat_history_pb = _to_proto_chat_ctx(report.chat_history)
-    chat_logger = get_logger_provider().get_logger("chat_history")
-    for item in report.chat_history.items:
-        item_proto = _to_proto_chat_item(item)
-        item_json = MessageToJson(item_proto)
-        chat_logger.emit(
-            LogRecord(
-                timestamp=int(item.created_at * 1e9),
-                body=item_json,
-                trace_id=0,
-                span_id=0,
-                trace_flags=0,
-                severity_number=SeverityNumber.UNSPECIFIED,
-                severity_text="unspecified",
-                attributes={"protobuf.message_type": item_proto.DESCRIPTOR.full_name},
-            )
-        )
 
     if report.audio_recording_path and report.audio_recording_started_at:
         try:
