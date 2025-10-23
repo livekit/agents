@@ -36,7 +36,7 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http import Compression
 
-from google.protobuf.json_format import MessageToJson
+from google.protobuf.json_format import MessageToJson, MessageToDict
 
 from ..utils import misc
 from ..log import logger
@@ -282,17 +282,20 @@ async def _upload_session_report(
     chat_logger = get_logger_provider().get_logger("chat_history")
     for item in report.chat_history.items:
         item_proto = _to_proto_chat_item(item)
-        item_json = MessageToJson(item_proto)
+        item_dict = MessageToDict(item_proto)
         chat_logger.emit(
             LogRecord(
                 timestamp=int(item.created_at * 1e9),
-                body=item_json,
+                body="chat_item",
                 trace_id=0,
                 span_id=0,
                 trace_flags=0,
                 severity_number=SeverityNumber.UNSPECIFIED,
                 severity_text="unspecified",
-                attributes={"protobuf.message_type": item_proto.DESCRIPTOR.full_name},
+                attributes={
+                    "protobuf.message_type": item_proto.DESCRIPTOR.full_name,
+                    "chat.item": item_dict,
+                },
             )
         )
 
