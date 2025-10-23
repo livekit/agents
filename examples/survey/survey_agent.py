@@ -2,8 +2,10 @@ import csv
 import logging
 import os
 from dataclasses import dataclass
+from typing import Annotated
 
 from dotenv import load_dotenv
+from pydantic import Field
 
 from livekit.agents import (
     Agent,
@@ -11,7 +13,6 @@ from livekit.agents import (
     AgentSession,
     AgentTask,
     JobContext,
-    JobProcess,
     RoomInputOptions,
     RunContext,
     cli,
@@ -22,12 +23,43 @@ from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
 from livekit.plugins import deepgram, openai, silero
 
+logger = logging.getLogger("SurveyAgent")
+
 load_dotenv()
+
+CommuteMethods = ["driving", "bus", "subway", "none"]
+
 
 @dataclass
 class Userdata:
     filename: str
+    candidate_name: str
     task_results: dict
+
+
+@dataclass
+class IntroResults:
+    name: str
+    intro: str
+
+
+@dataclass
+class CommuteResults:
+    can_commute: bool
+    commute_method: str
+
+
+@dataclass
+class ExperienceResults:
+    years_of_experience: int
+    experience_description: str
+
+
+@dataclass
+class BehavioralResults:
+    strengths: str
+    weaknesses: str
+    work_style: str
 
 
 def write_to_csv(filename: str, data: dict):
@@ -84,7 +116,7 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     context.session.shutdown()
 
 
-class BehaviorialTask(AgentTask[dict]):
+class BehavioralTask(AgentTask[BehavioralResults]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
@@ -133,84 +165,24 @@ class BehaviorialTask(AgentTask[dict]):
 
     def _check_completion(self):
         if self._results.keys() == {"strengths", "weaknesses", "work_style"}:
-            self.complete(self._results)
-
-
-class ProjectTask(AgentTask[dict]):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="""You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
-                         Gather information about the most technical project the candidate has attempted and probe for their thinking process. Note specificities such as if they worked solo or in a team, and the technology stack they used
-                         if applicable. If they have no projects to dissect, call disqualify(). Do not mention any prerequisites for this position. Avoid listing out questions with bullet points or numbers, use a natural conversational tone.""",
-            tools=[disqualify],
-        )
-        self._results = {}
-
-    async def on_enter(self) -> None:
-        await self.session.generate_reply(
-            instructions="Learn about the candidate's most technically difficult project, be inquisitive on their design choices and thinking process."
-        )
-
-    @function_tool()
-    async def record_project_details(self, context: RunContext, project_description: str) -> None:
-        """Call to record and gradually update the description of their project as they answer more questions.
-
-        Args:
-            project_description (str): A description of the project, including the type of project being described, such as "full stack application." Include the technology stack they used and their reasoning behind it.
-        """
-
-        self._results["project_description"] = project_description
-        if "work_division_response" not in self._results.keys():
-            self.session.generate_reply(
-                instructions="Have the candidate walk you through their thought process on splitting the project work. If they already worked in a team for that project, gather their thoughts on what they would do differently."
+            results = BehavioralResults(
+                strengths=self._results["strengths"],
+                weaknesses=self._results["weaknesses"],
+                work_style=self._results["work_style"],
             )
-
-        elif (
-            self._results["work_division_response"]
-            and "scaling_project_response" not in self._results.keys()
-        ):
-            self.session.generate_reply(
-                instructions="Allow the candidate to choose a scenario between expanding upon the project they are currently speaking of or creating a new project entirely. Dissect their thought process and decisions."
-            )
-
-        else:
-            self.complete(self._results)
-
-    @function_tool()
-    async def record_work_division_response(self, work_division_response: str):
-        """Call once the candidate has provided a complete overview to their perspective on work division.
-
-        Args:
-            work_division_response (str): The candidate's response to approaching work division, especially regarding their aforementioned project
-        """
-        self._results["work_division_response"] = work_division_response
-
-    @function_tool()
-    async def record_project_scale_response(self, chosen_scenario: str, scale_response: str):
-        """Call to record the candidate's response to scaling their project, either the aforementioned or a new one
-
-        Args:
-            chosen_scenario (str): The scenario the candidate chose, either 'old_project' or 'new_project'
-            old_project_scale_response (str): An overview of the candidate's response
-        """
-        self.session.generate_reply(
-            instructions="Express interest in seeing the candidate scale their project as they described in the future."
-        )
-        results = {"scenario": chosen_scenario, "response": scale_response}
-        self._results["scaling_project_response"] = results
+            self.complete(results)
 
 
-class ExperienceTask(AgentTask[dict]):
+class ExperienceTask(AgentTask[ExperienceResults]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
             Record how many years of experience the candidate has and the descriptions of their previous jobs if any. There is no set required amount for this position.
-            Focus on the frameworks they have experience in and any gaps between jobs. Be sure to confirm details. Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+            Be sure to confirm details. Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
             """,
             tools=[disqualify],
         )
-        self._results = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -227,12 +199,13 @@ class ExperienceTask(AgentTask[dict]):
             years_of_experience (int): The years of experience the candidate has
             experience_description (str): A description of each role they previously held. Take note of the corresponding companies as well.
         """
-        self._results["years_of_experience"] = years_of_experience
-        self._results["experience_description"] = experience_description
-        self.complete(self._results)
+        results = ExperienceResults(
+            years_of_experience=years_of_experience, experience_description=experience_description
+        )
+        self.complete(results)
 
 
-class CommuteTask(AgentTask[dict]):
+class CommuteTask(AgentTask[CommuteResults]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
@@ -241,7 +214,6 @@ class CommuteTask(AgentTask[dict]):
             """,
             tools=[disqualify],
         )
-        self._result = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -250,25 +222,28 @@ class CommuteTask(AgentTask[dict]):
 
     @function_tool()
     async def record_commute_flexibility(
-        self, context: RunContext, office_flexibility: str, commute_method: str
+        self,
+        context: RunContext,
+        can_commute: bool,
+        commute_method: Annotated[str, Field(json_schema_extra={"enum": CommuteMethods})],
     ) -> None:
         """Call to record the candidate's flexibility of going into office and notes about their commute. If they are able to commute, record their method of transportation.
 
         Args:
-            office_flexibility (str): How often the candidate can commute to the office
-            commute_method (str): The method of transportation the candidate will take to commute (e.g. personal car, bus, subway)
+            can_commute (bool): If the candidate can commute to the office
+            commute_method (str): The method of transportation the candidate will take to commute, either ['driving', 'bus', 'subway', 'none']
         """
-        self._result["office_flexibility"] = office_flexibility
-        self._result["commute_method"] = commute_method
-        if commute_method.lower() == "subway" or commute_method.lower() == "bus":
+        results = CommuteResults(can_commute=can_commute, commute_method=commute_method)
+
+        if commute_method == "subway" or commute_method == "bus":
             self.session.generate_reply(
-                instructions="Inform the candidate that the company may sponsor their transportation expenses."
+                instructions="Inform the candidate that the company will sponsor their transportation expenses."
             )
 
-        self.complete(self._result)
+        self.complete(results)
 
 
-class IntroTask(AgentTask[dict]):
+class IntroTask(AgentTask[IntroResults]):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
@@ -277,7 +252,6 @@ class IntroTask(AgentTask[dict]):
             You will also be collecting their name and introduction.
             """,
         )
-        self._results = {}
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
@@ -285,17 +259,16 @@ class IntroTask(AgentTask[dict]):
         )
 
     @function_tool()
-    async def record_name(self, context: RunContext, name: str, intro_notes: str) -> None:
+    async def record_intro(self, context: RunContext, name: str, intro_notes: str) -> None:
         """Call to record the candidate's name and any notes about their response
 
         Args:
             name (str): The candidate's name
             intro_notes (str): The candidate's introduction and any additional notes
         """
-        self.session.userdata.task_results["name"] = name
-        self._results["name"] = name
-        self._results["intro_notes"] = intro_notes
-        self.complete(self._results)
+        self.session.userdata.candidate_name = name
+        results = IntroResults(name=name, intro=intro_notes)
+        self.complete(results)
 
 
 class SurveyAgent(Agent):
@@ -321,16 +294,10 @@ class SurveyAgent(Agent):
             description="Collects years of experience",
         )
         task_group.add(
-            lambda: BehaviorialTask(),
+            lambda: BehavioralTask(),
             id="behavorial_task",
             description="Gathers a holistic view of the candidate, including their strengths, weaknesses, and work style",
         )
-        # TODO refactor to safely complete task
-        # task_group.add(
-        #     lambda: ProjectTask(),
-        #     id="project_task",
-        #     description="Probes the user about their thought process on projects",
-        # )
 
         results = await task_group
         results = results.task_results
@@ -348,22 +315,13 @@ class SurveyAgent(Agent):
         )
 
 
-logger = logging.getLogger("SurveyAgent")
-
-load_dotenv(".env.local")
-
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
 server = AgentServer()
 
 
 @server.realtime_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[Userdata](
-        userdata=Userdata(filename="results.csv", task_results={}),
+        userdata=Userdata(filename="results.csv", candidate_name="", task_results={}),
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=openai.TTS(),
