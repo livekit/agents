@@ -17,10 +17,10 @@ from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import (
-    ToolFlag,
     StopResponse,
-    get_raw_function_info,
+    ToolFlag,
     get_function_info,
+    get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
 )
@@ -285,7 +285,7 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
-        return self._agent.tools + self._mcp_tools  # type: ignore
+        return self._session.tools + self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
     def min_consecutive_speech_delay(self) -> float:

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import time
 from collections.abc import AsyncIterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -22,10 +21,9 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import cli, llm, stt, tts, utils, vad
-from .. import inference, llm, stt, tts, utils, vad
+from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import get_job_context
-from ..llm import ChatContext, AgentHandoff
+from ..llm import AgentHandoff, ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import (
@@ -41,7 +39,6 @@ from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
-    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -52,10 +49,9 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
-from .recorder_io import RecorderIO
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -155,6 +151,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
@@ -205,6 +202,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad (vad.VAD, optional): Voice-activity detector
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
+            tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
+                tools shared by every agent in the agent session.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
@@ -315,6 +314,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
+        self._tools = tools if is_given(tools) else []
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
@@ -422,6 +422,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("VoiceAgent isn't running")
 
         return self._agent
+
+    @property
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+        return self._tools
 
     def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
@@ -553,10 +557,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                         if (c.enabled and c.record) or not c.enabled:
                             task = asyncio.create_task(
-                                self._recorder_io.start(output_path=job_ctx.session_directory / "audio.ogg")
+                                self._recorder_io.start(
+                                    output_path=job_ctx.session_directory / "audio.ogg"
+                                )
                             )
                             tasks.append(task)
-
 
                 if record:
                     if job_ctx._primary_agent_session is None:
