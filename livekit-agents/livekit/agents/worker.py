@@ -39,7 +39,7 @@ from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import AssignmentTimeoutError
-from .inference_runner import _InferenceRunner
+from .inference_runner import LocalInferenceRunner
 from .job import (
     JobAcceptArguments,
     JobContext,
@@ -319,9 +319,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._mp_ctx = mp.get_context(self._opts.multiprocessing_context)
 
         self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
-        if len(_InferenceRunner.registered_runners) > 0:
+        if len(LocalInferenceRunner.registered_runners) > 0:
             self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
-                runners=_InferenceRunner.registered_runners,
+                runners=LocalInferenceRunner.registered_runners,
                 initialize_timeout=opts.initialize_process_timeout,
                 close_timeout=5,
                 memory_warn_mb=2000,
