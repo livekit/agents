@@ -983,9 +983,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
-            if self._ivr_activity is not None:
-                await self._ivr_activity.update_agent(agent)
-
             if new_activity == "start":
                 if agent._activity is not None:
                     raise RuntimeError("cannot start agent: an activity is already running")
