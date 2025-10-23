@@ -4,6 +4,7 @@ import weakref
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Callable, Generic, Optional, TypeVar
+
 from . import aio
 
 T = TypeVar("T")
@@ -40,7 +41,7 @@ class ConnectionPool(Generic[T]):
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
-        self.connect_lock = asyncio.Lock()
+        self._connect_lock = asyncio.Lock()
 
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
@@ -90,7 +91,7 @@ class ConnectionPool(Generic[T]):
         Returns:
             An active connection object
         """
-        async with self.connect_lock:
+        async with self._connect_lock:
             await self._drain_to_close()
             now = time.time()
 
@@ -162,7 +163,7 @@ class ConnectionPool(Generic[T]):
             return
 
         async def _prewarm_impl() -> None:
-            async with self.connect_lock:
+            async with self._connect_lock:
                 if not self._connections:
                     conn = await self._connect(timeout=self._connect_timeout)
                     self._available.add(conn)
