@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
-from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
-
-from livekit.rtc import EventEmitter
 
 from ...log import logger
 from ...utils.aio.debounce import Debounced
@@ -29,9 +25,6 @@ DEFAULT_LOOP_DETECTED_MESSAGE = (
     "</system_notification>"
 )
 
-LoopDetectorEventTypes = Literal["loop_detected"]
-SilenceDetectorEventTypes = Literal["silence_detected"]
-
 
 class IVRActivity:
     def __init__(
@@ -45,11 +38,7 @@ class IVRActivity:
         self._loop_detector = TfidfLoopDetector(session)
 
     async def start(self) -> None:
-        self._silence_detector.on("silence_detected", self._on_silence_detected)
-        self._loop_detector.on("loop_detected", self._on_loop_detected)
-
-        await self._silence_detector.start()
-        await self._loop_detector.start()
+        self._session.on("user_input_transcribed", self._on_user_input_transcribed)
 
     async def update_agent(self, agent: Agent) -> None:
         from ...beta.tools.send_dtmf import send_dtmf_events
@@ -60,12 +49,19 @@ class IVRActivity:
         logger.info("IVRActivity: silence detected; sending notification")
         self._session.generate_reply(user_input=DEFAULT_SILENCE_REMINDER_MESSAGE)
 
-    def _on_loop_detected(self, _) -> None:
-        logger.info("IVRActivity: speech loop detected; sending notification")
-        self._loop_detector.reset()
-        self._session.generate_reply(
-            user_input=DEFAULT_LOOP_DETECTED_MESSAGE, allow_interruptions=False
-        )
+    def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        if not ev.is_final:
+            return
+
+        self._loop_detector.add_chunk(ev.transcript)
+
+        if self._loop_detector.check_loop_detection():
+            logger.debug("IVRActivity: speech loop detected; sending notification")
+
+            self._session.generate_reply(
+                user_input=DEFAULT_LOOP_DETECTED_MESSAGE, allow_interruptions=False
+            )
+            self._loop_detector.reset()
 
     async def aclose(self) -> None:
         self._silence_detector.off("silence_detected", self._on_silence_detected)
@@ -75,7 +71,7 @@ class IVRActivity:
         await self._loop_detector.aclose()
 
 
-class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
+class TfidfLoopDetector:
     """TF-IDF based loop detector.
 
     This detector uses TF-IDF to detect loops in the user's input by comparing
@@ -90,14 +86,10 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
 
     def __init__(
         self,
-        session: AgentSession,
-        *,
         window_size: int = 20,
         similarity_threshold: float = 0.85,
         consecutive_threshold: int = 3,
     ) -> None:
-        super().__init__()
-
         if window_size <= 0:
             raise ValueError("window_size must be greater than 0")
 
@@ -107,44 +99,40 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
         if consecutive_threshold <= 0:
             raise ValueError("consecutive_threshold must be greater than 0")
 
-        self._session = session
         self._window_size = window_size
         self._similarity_threshold = similarity_threshold
         self._consecutive_threshold = consecutive_threshold
-        self._vectorizer = TfidfVectorizer()
         self._transcribed_chunks: list[str] = []
         self._num_consecutive_similar_chunks = 0
 
-    @property
-    def loop_detected(self):
-        return self._num_consecutive_similar_chunks >= self._consecutive_threshold
-
-    async def start(self) -> None:
-        self._session.on("user_input_transcribed", self._on_user_input_transcribed)
-
     def reset(self) -> None:
-        self._vectorizer = TfidfVectorizer()
         self._transcribed_chunks = []
         self._num_consecutive_similar_chunks = 0
 
-    async def aclose(self) -> None:
-        self._session.off("user_input_transcribed", self._on_user_input_transcribed)
-
-    def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        if not ev.is_final:
-            return
-
-        self._transcribed_chunks.append(ev.transcript)
+    def add_chunk(self, chunk: str) -> None:
+        self._transcribed_chunks.append(chunk)
         if len(self._transcribed_chunks) > self._window_size:
             self._transcribed_chunks = self._transcribed_chunks[-self._window_size :]
 
+    def check_loop_detection(self) -> bool:
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
+            from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
+        except ImportError:
+            logger.warning(
+                "TfidfLoopDetector: sklearn is not installed; loop detection is disabled. Please install the 'scikit-learn' package to enable loop detection."
+            )
+            return False
+
+        vectorizer = TfidfVectorizer()
+
         # Need at least two chunks to compute similarity against the last chunk
         if len(self._transcribed_chunks) < 2:
-            return
+            return False
 
         # NOTE: currently this is O(n^2) in the number of chunks, let's figure out a more efficient
         # way if this become a bottleneck later.
-        doc_matrix = self._vectorizer.fit_transform(self._transcribed_chunks)
+        doc_matrix = vectorizer.fit_transform(self._transcribed_chunks)
         doc_similarity = cosine_similarity(doc_matrix)
         last_chunk_similarity = doc_similarity[-1][:-1]
 
@@ -156,11 +144,10 @@ class TfidfLoopDetector(EventEmitter[LoopDetectorEventTypes]):
         else:
             self._num_consecutive_similar_chunks = 0
 
-        if self.loop_detected:
-            self.emit("loop_detected", None)
+        return self._num_consecutive_similar_chunks >= self._consecutive_threshold
 
 
-class SilenceDetector(EventEmitter[SilenceDetectorEventTypes]):
+class SilenceDetector:
     """Silence detector.
 
     This detector checks for silence in the user / agent interaction.
