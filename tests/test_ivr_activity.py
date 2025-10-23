@@ -78,3 +78,17 @@ def test_tfidf_handles_minor_phrase_variations() -> None:
     ]
 
     assert _count_loops(transcripts) >= 1
+
+
+def test_tfidf_real_human_small_talk_does_not_trigger_loop() -> None:
+    """Realistic conversational turns with overlapping vocabulary should not be flagged."""
+
+    transcripts = [
+        "Hey there, I'm trying to get some help with my checking account today.",
+        "Sure, before we dive in can you confirm the last four digits of the account?",
+        "Yeah, it's 0 2 4 6, and I think there's a $35 fee that shouldn't be there.",
+        "Thanks, give me just a moment while I pull up those recent transactions.",
+        "Alright, I see the fee. Let me reverse it and send you a confirmation email.",
+    ]
+
+    assert _count_loops(transcripts) == 0
