@@ -17,6 +17,7 @@ from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import set_logger_provider, get_logger_provider
+from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
@@ -285,6 +286,11 @@ async def _upload_session_report(
                     timestamp=int(item.created_at * 1e9),
                     body="chat item",
                     attributes={"chat.item": item_log},
+                    trace_id=0,
+                    span_id=0,
+                    trace_flags=0,
+                    severity_number=SeverityNumber.UNSPECIFIED,
+                    severity_text="unspecified",
                 )
             )
 
