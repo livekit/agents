@@ -4,11 +4,12 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from livekit.agents import llm
+
 from ...log import logger
 from ...utils.aio.debounce import Debounced
 
 if TYPE_CHECKING:
-    from ..agent import Agent
     from ..agent_session import AgentSession
     from ..events import AgentStateChangedEvent, UserInputTranscribedEvent, UserStateChangedEvent
 
@@ -47,10 +48,11 @@ class IVRActivity:
         self._session.on("agent_state_changed", self._on_agent_state_changed)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
 
-    async def update_agent(self, agent: Agent) -> None:
+    @property
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
         from ...beta.tools.send_dtmf import send_dtmf_events
 
-        agent._tools.append(send_dtmf_events)
+        return [send_dtmf_events]
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if not ev.is_final:

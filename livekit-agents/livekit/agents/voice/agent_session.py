@@ -597,6 +597,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         self,
                         max_silence_duration=telephony_options.max_ivr_silence_duration,
                     )
+
+                    # inject the IVR activity tools into the session tools
+                    self._tools.extend(self._ivr_activity.tools)
+
                     tasks.append(
                         asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
                     )
