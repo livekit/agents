@@ -245,21 +245,31 @@ def _to_log_chat_item(item: ChatItem) -> map[str, any] | None:
         }
 
     elif item.type == "function_call":
+        try:
+            arguments = json.loads(item.arguments)
+        except:
+            arguments = item.arguments
+
         return {
             "type": item.type,
             "id": item.id,
             "call_id": item.call_id,
-            "arguments": json.loads(item.arguments),
+            "arguments": arguments,
             "name": item.name,
         }
 
     elif item.type == "function_call_output":
+        try:
+            output = json.loads(item.output)
+        except:
+            output = item.output
+
         return {
             "type": item.type,
             "id": item.id,
             "name": item.name,
             "call_id": item.call_id,
-            "output": json.loads(item.output),
+            "output": output,
             "is_error": item.is_error,
         }
 
