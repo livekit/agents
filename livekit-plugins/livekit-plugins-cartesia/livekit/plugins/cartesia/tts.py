@@ -436,15 +436,16 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         voice["mode"] = "embedding"
         voice["embedding"] = opts.voice
 
-    voice_controls: dict = {}
-    if opts.speed:
-        voice_controls["speed"] = opts.speed
+    if opts.api_version == API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS:
+        voice_controls: dict = {}
+        if opts.speed:
+            voice_controls["speed"] = opts.speed
 
-    if opts.emotion:
-        voice_controls["emotion"] = opts.emotion
+        if opts.emotion:
+            voice_controls["emotion"] = opts.emotion
 
-    if voice_controls:
-        voice["__experimental_controls"] = voice_controls
+        if voice_controls:
+            voice["__experimental_controls"] = voice_controls
 
     options: dict[str, Any] = {
         "model_id": opts.model,
@@ -456,6 +457,14 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         },
         "language": opts.language,
     }
+
+    if opts.api_version > API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS and opts.model.startswith("sonic-3"):
+        generation_config: dict[str, Any] = {}
+        if opts.speed:
+            generation_config["speed"] = opts.speed
+        if generation_config:
+            options["generation_config"] = generation_config
+
     if streaming:
         options["add_timestamps"] = opts.word_timestamps
     return options
