@@ -110,7 +110,7 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
     )
     disqualification_reason = "[DISQUALIFIED] " + disqualification_reason
     data = {
-        "name": context.session.userdata.task_results["name"],
+        "name": context.session.userdata.candidate_name,
         "disqualification reason": disqualification_reason,
     }
     await write_to_csv(context.session.userdata.filename, data)
@@ -287,6 +287,8 @@ class SurveyAgent(Agent):
             id="get_name_intro_task",
             description="Collects name and introduction",
         )
+        # dependent on PR #3711
+        # task_group.add(lambda: GetEmailTask(extra_instructions="If the user refuses to provide their email, call disqualify() insted of decline_email_capture().", tools=[disqualify]), id="get_email_task", description="Collects email")
         task_group.add(lambda: GetEmailTask(), id="get_email_task", description="Collects email")
         task_group.add(lambda: CommuteTask(), id="commute_task", description="Asks about commute")
         task_group.add(
