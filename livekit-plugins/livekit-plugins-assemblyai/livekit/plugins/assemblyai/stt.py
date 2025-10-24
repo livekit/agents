@@ -64,7 +64,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
         encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le",
-        speech_model: Literal[
+        model: Literal[
             "universal-streaming-english", "universal-streaming-multilingual"
         ] = "universal-streaming-english",
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -90,7 +90,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
             encoding=encoding,
-            speech_model=speech_model,
+            speech_model=model,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
