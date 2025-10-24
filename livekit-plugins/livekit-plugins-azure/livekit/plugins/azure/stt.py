@@ -54,6 +54,7 @@ class STTOptions:
     language: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
+    end_silence_timeout_ms: NotGivenOr[int]
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
@@ -79,6 +80,7 @@ class STT(stt.STT):
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
+        end_silence_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Create a new instance of Azure STT.
@@ -144,6 +146,7 @@ class STT(stt.STT):
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
             explicit_punctuation=explicit_punctuation,
+            end_silence_timeout_ms=end_silence_timeout_ms,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -385,6 +388,12 @@ def _create_speech_recognizer(
     if config.explicit_punctuation:
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
+        )
+
+    if config.end_silence_timeout_ms:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs,
+            str(config.end_silence_timeout_ms),
         )
 
     kwargs: dict[str, Any] = {}
