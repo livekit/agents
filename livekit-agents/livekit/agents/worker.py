@@ -541,9 +541,45 @@ class Worker(utils.EventEmitter[EventTypes]):
         await self._update_worker_status()
 
         async def _join_jobs() -> None:
-            for proc in self._proc_pool.processes:
+            # create a snapshot of the process list to avoid concurrent modification
+            processes_snapshot = list(self._proc_pool.processes)
+            join_tasks = []
+            
+            for proc in processes_snapshot:
                 if proc.running_job:
-                    await proc.join()
+                    # create independent join task for each process
+                    async def _join_single_proc(p=proc):
+                        try:
+                            logger.debug(
+                                "waiting for job to complete", 
+                                extra={"job_id": p.running_job.job.id if p.running_job else "unknown"}
+                            )
+                            await p.join()
+                        except Exception as e:
+                            logger.warning(
+                                "error while joining process", 
+                                extra={
+                                    "job_id": p.running_job.job.id if p.running_job else "unknown",
+                                    "error": str(e)
+                                },
+                                exc_info=e
+                            )
+                    
+                    join_tasks.append(_join_single_proc())
+            
+            if join_tasks:
+                # wait for all jobs to complete in parallel, using return_exceptions=True 
+                # to ensure single failures don't affect other jobs
+                results = await asyncio.gather(*join_tasks, return_exceptions=True)
+                
+                # log any exceptions but don't re-raise them
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(
+                            "job failed to drain properly",
+                            extra={"task_index": i, "error": str(result)},
+                            exc_info=result
+                        )
 
         if timeout:
             await asyncio.wait_for(_join_jobs(), timeout)  # raises asyncio.TimeoutError on timeout
