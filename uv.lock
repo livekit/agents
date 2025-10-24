@@ -2453,7 +2453,7 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "onnxruntime", specifier = ">=1.18" },
+    { name = "onnxruntime", specifier = ">=1.18,<=1.23.1" },
 ]
 
 [[package]]

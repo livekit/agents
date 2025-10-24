@@ -24,7 +24,8 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.2.15",
-    "onnxruntime>=1.18",
+    # onnxruntime 1.23.2 is missing wheel on MacOS
+    "onnxruntime>=1.18,<=1.23.1",
     "numpy>=1.26",
 ]
 
