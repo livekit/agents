@@ -541,7 +541,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         await self._update_worker_status()
 
         async def _join_jobs() -> None:
-            for proc in self._proc_pool.processes:
+            for proc in list(self._proc_pool.processes):
                 if proc.running_job:
                     await proc.join()
 
