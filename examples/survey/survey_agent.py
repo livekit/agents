@@ -1,9 +1,10 @@
-import csv
 import logging
 import os
 from dataclasses import dataclass
 from typing import Annotated
 
+import aiofiles
+from aiocsv import AsyncWriter
 from dotenv import load_dotenv
 from pydantic import Field
 
@@ -25,7 +26,7 @@ from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("SurveyAgent")
 
-load_dotenv(".env.local")
+load_dotenv()
 
 CommuteMethods = ["driving", "bus", "subway", "none"]
 WorkStyles = ["independent", "team_player"]
@@ -63,13 +64,12 @@ class BehavioralResults:
     work_style: str
 
 
-def write_to_csv(filename: str, data: dict):
-    with open(filename, "a", newline="") as csvfile:
-        fieldnames = data.keys()
-        csv_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+async def write_to_csv(filename: str, data: dict):
+    async with aiofiles.open(filename, "a", newline="") as csvfile:
+        writer = AsyncWriter(csvfile, data.keys())
         if not os.path.exists(filename):
-            csv_writer.writeheader()
-        csv_writer.writerow(data)
+            await writer.writeheader()
+        await writer.writerow(data.values())
 
 
 async def evaluate_candidate(llm_model, summary) -> str:
@@ -113,7 +113,7 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
         "name": context.session.userdata.task_results["name"],
         "disqualification reason": disqualification_reason,
     }
-    write_to_csv(context.session.userdata.filename, data)
+    await write_to_csv(context.session.userdata.filename, data)
     context.session.shutdown()
 
 
@@ -235,11 +235,10 @@ class CommuteTask(AgentTask[CommuteResults]):
         commute_method: Annotated[str, Field(json_schema_extra={"enum": CommuteMethods})],
     ) -> None:
         """Call to record the candidate's flexibility of going into office and notes about their commute. If they are able to commute, record their method of transportation.
-        If the candidate chooses public transportation, (bus, subway) then their travel expenses may be subsidized by the company.
 
         Args:
             can_commute (bool): If the candidate can commute to the office
-            commute_method (str): The method of transportation the candidate will take to commute, either ['driving', 'bus', 'subway', 'none']
+            commute_method (str): The method of transportation the candidate will take to commute
         """
         results = CommuteResults(can_commute=can_commute, commute_method=commute_method)
         self.complete(results)
@@ -309,7 +308,7 @@ class SurveyAgent(Agent):
         results["summary"] = summary.content
         results["evaluation"] = evaluation
         self.session.userdata.task_results = results
-        write_to_csv(filename=self.session.userdata.filename, data=results)
+        await write_to_csv(filename=self.session.userdata.filename, data=results)
         await self.session.generate_reply(
             instructions="The interview is now complete, alert the user and thank them for their time. They will hear back within 3 days."
         )
