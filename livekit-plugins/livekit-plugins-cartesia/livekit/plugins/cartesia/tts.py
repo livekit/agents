@@ -45,6 +45,7 @@ from .models import (
     TTSModels,
     TTSVoiceEmotion,
     TTSVoiceSpeed,
+    _is_sonic_3,
 )
 
 API_AUTH_HEADER = "X-API-Key"
@@ -85,7 +86,7 @@ class TTS(tts.TTS):
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
-        emotion: list[TTSVoiceEmotion | str] | None = None,
+        emotion: TTSVoiceEmotion | str | list[TTSVoiceEmotion | str] | None = None,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
         http_session: aiohttp.ClientSession | None = None,
@@ -104,8 +105,8 @@ class TTS(tts.TTS):
             language (str, optional): The language code for synthesis. Defaults to "en".
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str | list[float], optional): The voice ID or embedding array.
-            speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
-            emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            speed (TTSVoiceSpeed | float, optional): Speed of speech, with sonic-3, the value is valid between 0.6 and 2.0 (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-speed)
+            emotion (list[TTSVoiceEmotion], optional): Emotion of the speech (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-emotion)
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
@@ -127,16 +128,8 @@ class TTS(tts.TTS):
         if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
 
-        if speed or emotion:
-            if (
-                api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-                or model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-            ):
-                logger.warning(
-                    f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
-                    "see https://docs.cartesia.ai/developer-tools/changelog for details",
-                    extra={"model": model, "speed": speed, "emotion": emotion},
-                )
+        if isinstance(emotion, str):
+            emotion = [emotion]
 
         self._opts = _TTSOptions(
             model=model,
@@ -151,6 +144,10 @@ class TTS(tts.TTS):
             word_timestamps=word_timestamps,
             api_version=api_version,
         )
+
+        if speed or emotion:
+            self._check_speed_and_emotion_support()
+
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -202,7 +199,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str | list[float]] = NOT_GIVEN,
         speed: NotGivenOr[TTSVoiceSpeed | float | None] = NOT_GIVEN,
-        emotion: NotGivenOr[list[TTSVoiceEmotion | str] | None] = NOT_GIVEN,
+        emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str] | None] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -227,20 +224,12 @@ class TTS(tts.TTS):
         if is_given(speed):
             self._opts.speed = cast(Optional[Union[TTSVoiceSpeed, float]], speed)
         if is_given(emotion):
-            self._opts.emotion = emotion
+            self._opts.emotion = [emotion] if isinstance(emotion, str) else emotion
         if is_given(api_version):
             self._opts.api_version = api_version
 
         if speed or emotion:
-            if (
-                self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-                or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-            ):
-                logger.warning(
-                    f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
-                    "see https://docs.cartesia.ai/developer-tools/changelog for details",
-                    extra={"model": self._opts.model, "speed": speed, "emotion": emotion},
-                )
+            self._check_speed_and_emotion_support()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -260,6 +249,24 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
+
+    def _check_speed_and_emotion_support(self) -> None:
+        if _is_sonic_3(self._opts.model):
+            if self._opts.speed is not None and not 0.6 <= self._opts.speed <= 2.0:
+                logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
+        elif (
+            self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+            or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+        ):
+            logger.warning(
+                f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
+                "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                extra={
+                    "model": self._opts.model,
+                    "speed": self._opts.speed,
+                    "emotion": self._opts.emotion,
+                },
+            )
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -458,13 +465,19 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         "language": opts.language,
     }
 
-    if opts.api_version > API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS and opts.model.startswith("sonic-3"):
+    if opts.api_version > API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS and _is_sonic_3(
+        opts.model
+    ):
         generation_config: dict[str, Any] = {}
         if opts.speed:
             generation_config["speed"] = opts.speed
+        if opts.emotion:
+            generation_config["emotion"] = opts.emotion[0]
         if generation_config:
             options["generation_config"] = generation_config
 
     if streaming:
         options["add_timestamps"] = opts.word_timestamps
+
+    logger.info(f"Cartesia options: {options}")
     return options
