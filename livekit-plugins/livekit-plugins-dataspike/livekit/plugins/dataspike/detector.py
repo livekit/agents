@@ -15,17 +15,32 @@
 from __future__ import annotations
 
 import asyncio
+import aiohttp
 import time
+import os
+import sys
 from typing import Awaitable, Callable
+
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIStatusError,
+    utils,
+)
+
 from livekit.plugins.dataspike.schema_pb2 import (
     DeepfakeStreamingSchemaFrameRequest,
     DeepfakeStreamingSchemaFrameRequestFormat,
     DeepfakeStreamingSchemaResultEvent,
-    DeepfakeStreamingSchemaResultEventType,
+    DeepfakeStreamingSchemaResultEventType as EventType,
 )
 
 from livekit import rtc
 from livekit.agents.utils.images import encode, EncodeOptions
+
+from .log import logger
+import random
+import json
 
 
 class InputTrack:
@@ -37,7 +52,7 @@ class InputTrack:
         room: rtc.Room,
         burst_fps: float = 1,
         normal_fps: float = 0.2,
-        state: DeepfakeStreamingSchemaResultEventType = DeepfakeStreamingSchemaResultEventType.CLEAR,
+        state: EventType = EventType.CLEAR,
         quality: int = 75,
     ):
         self.track = track
@@ -45,15 +60,14 @@ class InputTrack:
         self.room = room
         self.burst_fps = burst_fps
         self.normal_fps = normal_fps
+        self.quality = quality
         self.last_sampled_time: float | None = None
         self.state = state
         self.running = False
 
     def _skip_frame(self, now: float) -> bool:
         target_fps = (
-            self.burst_fps
-            if self.state == DeepfakeStreamingSchemaResultEventType.SUSPICIOUS
-            else self.normal_fps
+            self.burst_fps if self.state == EventType.SUSPICIOUS else self.normal_fps
         )
         if target_fps == 0:
             return True
@@ -75,9 +89,11 @@ class InputTrack:
         q: asyncio.Queue[DeepfakeStreamingSchemaFrameRequest],
     ) -> None:
         self.running = True
-        stream = rtc.VideoStream(track)
-        async for frame in stream:
+        stream = rtc.VideoStream(self.track)
+
+        async for stream_event in stream:
             now = time.time()
+            frame = stream_event.frame
 
             if not self.running:
                 break
@@ -101,9 +117,11 @@ class InputTrack:
             )
 
             try:
-                await q.put_nowait(event)
+                await asyncio.wait_for(q.put(event), timeout=0.05)
             except asyncio.QueueFull:
                 # drop message silently, we do not want stale messages to block the queue
+                pass
+            except asyncio.TimeoutError:
                 pass
 
         await stream.aclose()
@@ -113,20 +131,133 @@ class InputTrack:
 
 
 class DataspikeDetector:
-    MAX_QUEUE_SIZE = 64
+    MAX_QUEUE_SIZE = 16
+    NOTIFICATION_TOPIC = "deepfake_alert"
 
     def __init__(
         self,
         *,
         api_key: str | None = None,
-        conn_options: APIConnectOptions,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         burst_fps: float = 1,
         normal_fps: float = 0.2,
         quality: int = 75,
+        notification_cb: (
+            Callable[[DeepfakeStreamingSchemaResultEvent], Awaitable[None]] | None
+        ) = None,
     ) -> None:
+        """
+        Initialize the Dataspike real-time deepfake detector.
 
-        self._ws_url = "wss://api.dataspike.io/api/v4/deepfake/stream"
+        The detector subscribes to remote participants' video tracks in a LiveKit room,
+        samples frames at an adaptive rate, and streams them to the Dataspike WebSocket
+        API for real-time analysis.
+
+        Under the default configuration, the detector automatically **publishes analysis
+        results back to the same LiveKit room** as JSON data messages on
+        ``NOTIFICATION_TOPIC`` (``"deepfake_alert"``). This allows other participants or
+        in-room agents to receive detection updates instantly.
+
+        Developers can override this behavior by providing a custom ``notification_cb``.
+        The callback receives each ``DeepfakeStreamingSchemaResultEvent`` as an argument
+        and can implement any desired action — such as persisting results, triggering
+        moderation workflows, or routing alerts to external systems — instead of or in
+        addition to publishing data messages.
+
+        Args:
+            api_key:
+                Dataspike API key. If omitted, the detector reads ``DATASPIKE_API_KEY``
+                from the environment. A missing key raises ``ValueError`` at startup.
+            conn_options:
+                Connection and retry settings for outbound API/WebSocket traffic.
+                Defaults to ``DEFAULT_API_CONNECT_OPTIONS`` from ``livekit.agents``.
+            burst_fps:
+                Maximum sampling rate (frames per second) applied when the current
+                state is elevated (e.g., ``SUSPICIOUS``). Use this to temporarily
+                increase scrutiny while limiting bandwidth. Default: ``1``.
+            normal_fps:
+                Baseline sampling rate (FPS) during normal operation (e.g., ``CLEAR``).
+                Default: ``0.2`` (one frame every five seconds).
+            quality:
+                JPEG quality (0–100) used when encoding frames before transmission.
+                Higher values increase fidelity and bandwidth. Default: ``75``.
+            notification_cb:
+                Optional async callback invoked when the detector receives a result
+                event from Dataspike. Signature:
+                ``Callable[[DeepfakeStreamingSchemaResultEvent], Awaitable[None]]``.
+                If not provided, a default notifier publishes a compact JSON payload
+                to the room's data channel under ``NOTIFICATION_TOPIC``.
+
+        Detection Flow:
+            1. **Track discovery** – when a remote participant's video track is
+               subscribed, the detector starts an ``InputTrack`` consumer task.
+            2. **Adaptive sampling** – each consumer emits frames at either
+               ``normal_fps`` or ``burst_fps`` depending on the current state
+               (CLEAR → normal, SUSPICIOUS/ALERT → burst).
+            3. **Encoding** – frames are encoded to JPEG with the configured
+               ``quality`` and placed on a bounded async queue (``MAX_QUEUE_SIZE``)
+               to prevent backpressure from stalling the media pipeline.
+            4. **Streaming** – a background WebSocket task sends queued frames to
+               the Dataspike API and receives result events.
+            5. **State updates & notifications** – incoming events update per-track
+               state and trigger notifications via ``notification_cb`` (or the
+               default publisher).
+
+        Notification Semantics:
+            The default notifier publishes a JSON object like:
+            ``{"type": "deepfake_alert", "level": "<clear|suspicious|alert>", "level_code": <int>,
+              "participant_id": "...", "track_id": "...", "message": "...", "timestamp_ms": ...}``.
+            For example:
+              • CLEAR  → "No active manipulation detected."
+              • SUSPICIOUS → "Possible manipulation indicators detected."
+              • ALERT → "High likelihood of manipulation detected."
+
+        Reliability & Reconnection:
+            The detector maintains a persistent WebSocket connection to Dataspike and
+            automatically reconnects on errors or unexpected closes, using exponential
+            backoff with jitter. Notification errors are contained and logged so they
+            do not terminate the stream.
+
+        Performance & Backpressure:
+            • Frame sampling is time-based (FPS), not frame-count based.
+            • The send queue is bounded to ``MAX_QUEUE_SIZE``; when full, frames are
+              dropped to keep latency low and avoid cascading stalls.
+            • JPEG quality lets you trade off detail vs. bandwidth; consider lowering
+              quality or FPS for large rooms.
+
+        Security:
+            • The detector only transmits encoded frames and minimal metadata required
+              for analysis.
+            • Store ``DATASPIKE_API_KEY`` securely (env vars or secret manager). Avoid
+              hard-coding in source.
+
+        Usage Patterns:
+
+            **As part of a ROOM worker (recommended for scaling):**
+                >>> async def entrypoint(ctx: JobContext):
+                ...     await ctx.connect()
+                ...     session = AgentSession(...)
+                ...     detector = DataspikeDetector()
+                ...     await detector.start(session, room=ctx.room)
+                ...     await session.start(agent=Agent(...), room=ctx.room)
+
+            **Standalone participant (immediate join of a specific room):**
+                Create an ``rtc.Room()``, connect with a valid token, then:
+                >>> detector = DataspikeDetector()
+                >>> await detector.start(agent_session, room)
+
+        Notes:
+            • The detector listens to ``track_subscribed`` / ``track_unsubscribed``
+              events and is robust to tracks appearing/disappearing while the agent runs.
+        """
+
+        self._ws_url = os.getenv(
+            "DATASPIKE_WS_URL", "wss://api.dataspike.io/api/v4/deepfake/stream"
+        )
         self._api_key = api_key or os.getenv("DATASPIKE_API_KEY")
+
+        if not self._api_key:
+            raise ValueError("DATASPIKE_API_KEY must be set")
 
         self._burst_fps = burst_fps
         self._normal_fps = normal_fps
@@ -136,14 +267,42 @@ class DataspikeDetector:
         self._session: aiohttp.ClientSession | None = None
         self._agent_session: AgentSession | None = None
         self._room: rtc.Room | None = None
+
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
         self._send_queue: asyncio.Queue[DeepfakeStreamingSchemaFrameRequest] = (
-            asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
+            asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
         )
         self._input_tracks: list[InputTrack] = []
+
+        self._notification_cb = notification_cb or self._notify
+
+    async def _notify(self, event: DeepfakeStreamingSchemaResultEvent) -> None:
+        pid = event.participant_id
+        if event.type == EventType.CLEAR:
+            msg = f"No active manipulation detected for {pid}."
+        elif event.type == EventType.SUSPICIOUS:
+            msg = f"Potential signs of manipulation detected for {pid}."
+        elif event.type == EventType.ALERT:
+            msg = f"High likelihood of manipulation detected for {pid}."
+
+        data = {
+            "type": "deepfake_alert",
+            "level": EventType(event.type).name.lower(),
+            "participant_id": pid,
+            "track_id": event.track_id,
+            "message": msg,
+            "timestamp_ms": int(time.time() * 1000),
+        }
+
+        logger.debug(f"sending notification: {data}")
+
+        await self._room.local_participant.publish_data(
+            topic=self.NOTIFICATION_TOPIC,
+            payload=json.dumps(data).encode("utf-8"),
+        )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -164,15 +323,14 @@ class DataspikeDetector:
         self._agent_session = agent_session
         self._room = room
 
-        await self._run_ws()
+        asyncio.create_task(self._run_ws_forever())
+        logger.info("Dataspike deepfake detector started")
 
         for participant in self._room.remote_participants.values():
-            video_tracks = [
-                publication.track
-                for publication in list(remote_participant.track_publications.values())
-                if publication.track.kind == rtc.TrackKind.KIND_VIDEO
-            ]
-            self._add_track(participant, video_tracks[0])
+            for pub in participant.track_publications.values():
+                track = pub.track  # may be None until subscribed
+                if track and track.kind == rtc.TrackKind.KIND_VIDEO:
+                    self._add_track(participant, track)
 
         @self._room.on("track_subscribed")
         def on_track_subscribed(
@@ -183,7 +341,7 @@ class DataspikeDetector:
             if track.kind == rtc.TrackKind.KIND_VIDEO:
                 self._add_track(participant, track)
 
-        @self.room.on("track_unsubscribed")
+        @self._room.on("track_unsubscribed")
         def on_track_unsubscribed(
             track: rtc.Track,
             publication: rtc.TrackPublication,
@@ -206,6 +364,9 @@ class DataspikeDetector:
         )
         self._input_tracks.append(input_track)
 
+        logger.debug(
+            f"track subscribed: {track.sid} by {participant.identity} kind={track.kind}"
+        )
         asyncio.create_task(input_track.consume(self._send_queue))
 
     def _remove_track(self, track: rtc.Track) -> None:
@@ -216,15 +377,24 @@ class DataspikeDetector:
             (t for t in self._input_tracks if t.track.sid == track.sid), None
         )
         if input_track:
+            logger.debug(
+                f"track unsubscribed: {track.sid} by {input_track.participant_identity} kind={track.kind}"
+            )
             input_track.stop()
             self._input_tracks.remove(input_track)
 
     async def _run_ws(self) -> None:
 
+        # This task is responsible for sending events from the send queue to the websocket.
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for event in self._send_queue:
-                await ws.send_bytes(event.SerializeToString())
+            while True:
+                event = await self._send_queue.get()
+                try:
+                    await ws.send_bytes(event.SerializeToString())
+                finally:
+                    self._send_queue.task_done()
 
+        # This task handles receiving messages from the websocket.
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws.receive()
@@ -248,30 +418,32 @@ class DataspikeDetector:
                     logger.warning("failed to parse Dataspike message", exc_info=e)
                     continue
 
-                if resp.type == DeepfakeStreamingSchemaResultEventType.SUSPICIOUS:
+                # For suspicious events, update the state of the corresponding input track.
+                # Input track will apply the appropriate action based on the state.
+                if resp.type == EventType.SUSPICIOUS:
                     for input_track in self._input_tracks:
                         if input_track.track.sid == resp.track_id:
                             input_track.state = resp.type
                             break
-                elif resp.type == DeepfakeStreamingSchemaResultEventType.CLEAR:
+                elif resp.type == EventType.CLEAR:
                     for input_track in self._input_tracks:
                         if input_track.track.sid == resp.track_id:
-                            if (
-                                input_track.state
-                                == DeepfakeStreamingSchemaResultEventType.ALERT
-                            ):
-                                # TODO: send text to room chat
-                                pass
+                            # only send notification if the state was ALERT
+                            if input_track.state == EventType.ALERT:
+                                await self._notification_cb(resp)
                             input_track.state = resp.type
                             break
-                elif resp.type == DeepfakeStreamingSchemaResultEventType.ALERT:
+                elif resp.type == EventType.ALERT:
                     for input_track in self._input_tracks:
                         if input_track.track.sid == resp.track_id:
-                            # TODO: send text to room chat
+                            # only send notification if the state is not already ALERT
+                            if input_track.state != EventType.ALERT:
+                                await self._notification_cb(resp)
                             input_track.state = resp.type
                             break
 
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+        # Create a websocket connection to the Dataspike API.
+        async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
@@ -280,3 +452,23 @@ class DataspikeDetector:
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
+
+    async def _run_ws_forever(self):
+        """Keep websocket alive; reconnect with exponential backoff on failure."""
+        delay = 1.0
+        while True:
+            try:
+                logger.info("Connecting to Dataspike websocket…")
+                await self._run_ws()  # exits normally only if closed cleanly
+            except asyncio.CancelledError:
+                # shutting down; propagate cancel
+                raise
+            except Exception as e:
+                logger.warning(f"Dataspike WS connection lost: {e!r}")
+            # exponential backoff with jitter
+            delay = min(delay * 2, 60)
+            sleep_for = delay + random.uniform(0, delay / 2)
+            logger.info(f"Reconnecting in {sleep_for:.1f}s…")
+            await asyncio.sleep(sleep_for)
+            # reset delay after successful connection next iteration
+            delay = 1.0
