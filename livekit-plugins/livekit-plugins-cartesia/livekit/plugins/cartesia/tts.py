@@ -63,6 +63,7 @@ class _TTSOptions:
     voice: str | list[float]
     speed: TTSVoiceSpeed | float | None
     emotion: list[TTSVoiceEmotion | str] | None
+    volume: float | None
     word_timestamps: bool
     api_key: str
     language: str
@@ -87,6 +88,7 @@ class TTS(tts.TTS):
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
         emotion: TTSVoiceEmotion | str | list[TTSVoiceEmotion | str] | None = None,
+        volume: float | None = None,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
         http_session: aiohttp.ClientSession | None = None,
@@ -107,6 +109,7 @@ class TTS(tts.TTS):
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Speed of speech, with sonic-3, the value is valid between 0.6 and 2.0 (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-speed)
             emotion (list[TTSVoiceEmotion], optional): Emotion of the speech (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-emotion)
+            volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
@@ -139,14 +142,15 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             emotion=emotion,
+            volume=volume,
             api_key=cartesia_api_key,
             base_url=base_url,
             word_timestamps=word_timestamps,
             api_version=api_version,
         )
 
-        if speed or emotion:
-            self._check_speed_and_emotion_support()
+        if speed or emotion or volume:
+            self._check_generation_config()
 
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -198,8 +202,9 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str | list[float]] = NOT_GIVEN,
-        speed: NotGivenOr[TTSVoiceSpeed | float | None] = NOT_GIVEN,
-        emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str] | None] = NOT_GIVEN,
+        speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
+        emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str]] = NOT_GIVEN,
+        volume: NotGivenOr[float] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -222,14 +227,16 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = cast(Union[str, list[float]], voice)
         if is_given(speed):
-            self._opts.speed = cast(Optional[Union[TTSVoiceSpeed, float]], speed)
+            self._opts.speed = cast(TTSVoiceSpeed | float, speed)
         if is_given(emotion):
             self._opts.emotion = [emotion] if isinstance(emotion, str) else emotion
+        if is_given(volume):
+            self._opts.volume = cast(float, volume)
         if is_given(api_version):
             self._opts.api_version = api_version
 
         if speed or emotion:
-            self._check_speed_and_emotion_support()
+            self._check_generation_config()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -250,10 +257,12 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._pool.aclose()
 
-    def _check_speed_and_emotion_support(self) -> None:
+    def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
             if self._opts.speed is not None and not 0.6 <= self._opts.speed <= 2.0:
                 logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
+            if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
+                logger.warning("volume must be between 0.5 and 2.0 for sonic-3")
         elif (
             self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
             or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
@@ -473,6 +482,8 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
             generation_config["speed"] = opts.speed
         if opts.emotion:
             generation_config["emotion"] = opts.emotion[0]
+        if opts.volume:
+            generation_config["volume"] = opts.volume
         if generation_config:
             options["generation_config"] = generation_config
 
