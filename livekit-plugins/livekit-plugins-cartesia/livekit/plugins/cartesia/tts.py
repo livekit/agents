@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Optional, Union, cast
+from typing import Any, Union, cast
 
 import aiohttp
 
@@ -227,11 +227,12 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = cast(Union[str, list[float]], voice)
         if is_given(speed):
-            self._opts.speed = cast(TTSVoiceSpeed | float, speed)
+            self._opts.speed = cast(Union[TTSVoiceSpeed, float], speed)
         if is_given(emotion):
-            self._opts.emotion = [emotion] if isinstance(emotion, str) else emotion
+            emotion = [emotion] if isinstance(emotion, str) else emotion
+            self._opts.emotion = cast(list[TTSVoiceEmotion | str], emotion)
         if is_given(volume):
-            self._opts.volume = cast(float, volume)
+            self._opts.volume = volume
         if is_given(api_version):
             self._opts.api_version = api_version
 
@@ -259,8 +260,11 @@ class TTS(tts.TTS):
 
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
-            if self._opts.speed is not None and not 0.6 <= self._opts.speed <= 2.0:
-                logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
+            if self._opts.speed:
+                if not isinstance(self._opts.speed, float):
+                    raise ValueError("speed must be a float for sonic-3")
+                if not 0.6 <= self._opts.speed <= 2.0:
+                    logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
             if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
                 logger.warning("volume must be between 0.5 and 2.0 for sonic-3")
         elif (
