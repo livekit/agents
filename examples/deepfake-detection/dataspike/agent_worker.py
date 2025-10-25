@@ -41,7 +41,7 @@ async def entrypoint(ctx: JobContext):
 
 
 async def on_request(req: JobRequest):
-    print(f"[worker] job request for room={req.room.name} id={req.id}", flush=True)
+    logger.info(f"[worker] job request for room={req.room.name} id={req.id}")
     # you can set the agent's participant name/identity here:
     await req.accept(name="dataspike-agent")
 
