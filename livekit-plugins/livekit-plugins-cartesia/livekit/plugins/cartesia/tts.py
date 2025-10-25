@@ -494,5 +494,4 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
     if streaming:
         options["add_timestamps"] = opts.word_timestamps
 
-    logger.info(f"Cartesia options: {options}")
     return options
