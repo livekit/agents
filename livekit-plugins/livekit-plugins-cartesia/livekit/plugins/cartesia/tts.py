@@ -230,7 +230,7 @@ class TTS(tts.TTS):
             self._opts.speed = cast(Union[TTSVoiceSpeed, float], speed)
         if is_given(emotion):
             emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = cast(list[TTSVoiceEmotion | str], emotion)
+            self._opts.emotion = cast(list[Union[TTSVoiceEmotion, str]], emotion)
         if is_given(volume):
             self._opts.volume = volume
         if is_given(api_version):
