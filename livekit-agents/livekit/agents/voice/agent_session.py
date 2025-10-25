@@ -1094,6 +1094,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        if self.user_state == "away" and ev.is_final:
+            # reset user state from away to listening in case VAD has a miss detection
+            self._update_user_state("listening")
+
         self.emit("user_input_transcribed", ev)
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
