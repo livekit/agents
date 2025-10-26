@@ -15,19 +15,24 @@
 from __future__ import annotations
 
 import asyncio
-import aiohttp
-import time
+import json
 import os
-import sys
-from typing import Awaitable, Callable
+import random
+import time
+from collections.abc import Awaitable
+from typing import Callable
 
+import aiohttp
+
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    AgentSession,
     APIConnectOptions,
     APIStatusError,
     utils,
 )
-
+from livekit.agents.utils.images import EncodeOptions, encode
 from livekit.plugins.dataspike.schema_pb2 import (
     DeepfakeStreamingSchemaFrameRequest,
     DeepfakeStreamingSchemaFrameRequestFormat,
@@ -35,21 +40,43 @@ from livekit.plugins.dataspike.schema_pb2 import (
     DeepfakeStreamingSchemaResultEventType as EventType,
 )
 
-from livekit import rtc
-from livekit.agents.utils.images import encode, EncodeOptions
-
 from .log import logger
-import random
-import json
 
 
 class InputTrack:
+    """Frame-sampling wrapper for a remote video track.
+
+    An `InputTrack` decides when to sample frames (based on the current
+    detection state) and enqueues JPEG-encoded frames for transmission.
+
+    Parameters
+    ----------
+    track:
+        The LiveKit `rtc.Track` to sample (must be a video track).
+    participant_identity:
+        Identity of the remote participant that owns `track`.
+    burst_fps:
+        Target FPS to use when the detection state is elevated (e.g., SUSPICIOUS).
+    normal_fps:
+        Baseline FPS to use during normal/clear operation.
+    state:
+        Initial state for adaptive sampling; defaults to `EventType.CLEAR`.
+    quality:
+        JPEG quality (0-100) for encoded frames.
+
+    Attributes
+    ----------
+    last_sampled_time:
+        Timestamp of the last emitted frame (seconds). `None` until the first sample.
+    running:
+        Whether the consumer loop should continue sampling.
+    """
+
     def __init__(
         self,
         *,
         track: rtc.Track,
         participant_identity: str,
-        room: rtc.Room,
         burst_fps: float = 1,
         normal_fps: float = 0.2,
         state: EventType = EventType.CLEAR,
@@ -57,7 +84,6 @@ class InputTrack:
     ):
         self.track = track
         self.participant_identity = participant_identity
-        self.room = room
         self.burst_fps = burst_fps
         self.normal_fps = normal_fps
         self.quality = quality
@@ -66,9 +92,9 @@ class InputTrack:
         self.running = False
 
     def _skip_frame(self, now: float) -> bool:
-        target_fps = (
-            self.burst_fps if self.state == EventType.SUSPICIOUS else self.normal_fps
-        )
+        """Return `True` if the current frame should be skipped given `now`."""
+
+        target_fps = self.burst_fps if self.state == EventType.SUSPICIOUS else self.normal_fps
         if target_fps == 0:
             return True
 
@@ -88,6 +114,17 @@ class InputTrack:
         self,
         q: asyncio.Queue[DeepfakeStreamingSchemaFrameRequest],
     ) -> None:
+        """Read frames from `track`, encode to JPEG, and put them in async Queue `q`.
+
+        The queue is bounded; if it is full or times out, frames are dropped to keep
+        latency low.
+
+        Parameters
+        ----------
+        q:
+            The outbound queue to receive `DeepfakeStreamingSchemaFrameRequest` items.
+        """
+
         self.running = True
         stream = rtc.VideoStream(self.track)
 
@@ -127,10 +164,18 @@ class InputTrack:
         await stream.aclose()
 
     def stop(self) -> None:
+        """Signal the consumer loop to stop sampling."""
         self.running = False
 
 
 class DataspikeDetector:
+    """Real-time deepfake detector for LiveKit video rooms.
+
+    This class manages frame sampling, encoding, and streaming to the
+    Dataspike API. It also handles event notifications, reconnection, and
+    adaptive frame rates.
+    """
+
     MAX_QUEUE_SIZE = 16
     NOTIFICATION_TOPIC = "deepfake_alert"
 
@@ -272,14 +317,94 @@ class DataspikeDetector:
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
-        self._send_queue: asyncio.Queue[DeepfakeStreamingSchemaFrameRequest] = (
-            asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
+        self._send_queue: asyncio.Queue[DeepfakeStreamingSchemaFrameRequest] = asyncio.Queue(
+            maxsize=self.MAX_QUEUE_SIZE
         )
         self._input_tracks: list[InputTrack] = []
 
         self._notification_cb = notification_cb or self._notify
 
+    async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
+        """Attach the detector to an agent session and a LiveKit room.
+
+        This method:
+        1) Caches `agent_session` and `room`.
+        2) Starts the WebSocket sender/receiver tasks.
+        3) Scans existing remote participants for video tracks and begins sampling.
+        4) Subscribes to room events to track future subscribe/unsubscribe events.
+
+        Parameters
+        ----------
+        agent_session:
+            The running `AgentSession` coordinating the LiveKit agent.
+        room:
+            The connected `rtc.Room` whose remote video tracks will be monitored.
+        """
+
+        self._agent_session = agent_session
+        self._room = room
+
+        asyncio.create_task(self._run_ws_forever())
+        logger.info("Dataspike deepfake detector started")
+
+        for participant in self._room.remote_participants.values():
+            for pub in participant.track_publications.values():
+                track = pub.track  # may be None until subscribed
+                if track and track.kind == rtc.TrackKind.KIND_VIDEO:
+                    self._add_track(participant, track)
+
+        @self._room.on("track_subscribed")
+        def on_track_subscribed(
+            track: rtc.Track,
+            publication: rtc.RemoteTrackPublication,
+            participant: rtc.RemoteParticipant,
+        ) -> None:
+            if track.kind == rtc.TrackKind.KIND_VIDEO:
+                self._add_track(participant, track)
+
+        @self._room.on("track_unsubscribed")
+        def on_track_unsubscribed(
+            track: rtc.Track,
+            publication: rtc.TrackPublication,
+            participant: rtc.RemoteParticipant,
+        ) -> None:
+            if track.kind == rtc.TrackKind.KIND_VIDEO:
+                self._remove_track(track)
+
+    def _add_track(self, participant: rtc.RemoteParticipant, track: rtc.Track) -> None:
+        if track.kind != rtc.TrackKind.KIND_VIDEO:
+            return
+
+        input_track = InputTrack(
+            track=track,
+            participant_identity=participant.identity,
+            burst_fps=self._burst_fps,
+            normal_fps=self._normal_fps,
+            quality=self._quality,
+        )
+        self._input_tracks.append(input_track)
+
+        logger.debug(f"track subscribed: {track.sid} by {participant.identity} kind={track.kind}")
+        asyncio.create_task(input_track.consume(self._send_queue))
+
+    def _remove_track(self, track: rtc.Track) -> None:
+        if track.kind != rtc.TrackKind.KIND_VIDEO:
+            return
+
+        input_track = next((t for t in self._input_tracks if t.track.sid == track.sid), None)
+        if input_track:
+            logger.debug(
+                f"track unsubscribed: {track.sid} by {input_track.participant_identity} kind={track.kind}"
+            )
+            input_track.stop()
+            self._input_tracks.remove(input_track)
+
     async def _notify(self, event: DeepfakeStreamingSchemaResultEvent) -> None:
+        """Default notifier: publish a compact JSON alert into the room data channel."""
+        if self._room is None:
+            logger.warning("Cannot send notification: no active room.")
+            return
+
         pid = event.participant_id
         if event.type == EventType.CLEAR:
             msg = f"No active manipulation detected for {pid}."
@@ -319,71 +444,8 @@ class DataspikeDetector:
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
-    async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
-        self._agent_session = agent_session
-        self._room = room
-
-        asyncio.create_task(self._run_ws_forever())
-        logger.info("Dataspike deepfake detector started")
-
-        for participant in self._room.remote_participants.values():
-            for pub in participant.track_publications.values():
-                track = pub.track  # may be None until subscribed
-                if track and track.kind == rtc.TrackKind.KIND_VIDEO:
-                    self._add_track(participant, track)
-
-        @self._room.on("track_subscribed")
-        def on_track_subscribed(
-            track: rtc.Track,
-            publication: rtc.RemoteTrackPublication,
-            participant: rtc.RemoteParticipant,
-        ):
-            if track.kind == rtc.TrackKind.KIND_VIDEO:
-                self._add_track(participant, track)
-
-        @self._room.on("track_unsubscribed")
-        def on_track_unsubscribed(
-            track: rtc.Track,
-            publication: rtc.TrackPublication,
-            participant: rtc.RemoteParticipant,
-        ):
-            if track.kind == rtc.TrackKind.KIND_VIDEO:
-                self._remove_track(track)
-
-    def _add_track(self, participant: rtc.RemoteParticipant, track: rtc.Track) -> None:
-        if track.kind != rtc.TrackKind.KIND_VIDEO:
-            return
-
-        input_track = InputTrack(
-            track=track,
-            participant_identity=participant.identity,
-            room=self._room,
-            burst_fps=self._burst_fps,
-            normal_fps=self._normal_fps,
-            quality=self._quality,
-        )
-        self._input_tracks.append(input_track)
-
-        logger.debug(
-            f"track subscribed: {track.sid} by {participant.identity} kind={track.kind}"
-        )
-        asyncio.create_task(input_track.consume(self._send_queue))
-
-    def _remove_track(self, track: rtc.Track) -> None:
-        if track.kind != rtc.TrackKind.KIND_VIDEO:
-            return
-
-        input_track = next(
-            (t for t in self._input_tracks if t.track.sid == track.sid), None
-        )
-        if input_track:
-            logger.debug(
-                f"track unsubscribed: {track.sid} by {input_track.participant_identity} kind={track.kind}"
-            )
-            input_track.stop()
-            self._input_tracks.remove(input_track)
-
     async def _run_ws(self) -> None:
+        """Run the Dataspike WS send/receive tasks until closed or cancelled."""
 
         # This task is responsible for sending events from the send queue to the websocket.
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -403,9 +465,7 @@ class DataspikeDetector:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError(
-                        "Dataspike websocket connection closed unexpectedly"
-                    )
+                    raise APIStatusError("Dataspike websocket connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected Dataspike message type %s", msg.type)
@@ -453,8 +513,9 @@ class DataspikeDetector:
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws_forever(self):
-        """Keep websocket alive; reconnect with exponential backoff on failure."""
+    async def _run_ws_forever(self) -> None:
+        """Keep the WS alive with exponential backoff and jitter on failure."""
+
         delay = 1.0
         while True:
             try:

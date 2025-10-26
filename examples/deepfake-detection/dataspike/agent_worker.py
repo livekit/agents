@@ -1,5 +1,4 @@
 import logging
-import os
 
 from dotenv import load_dotenv
 
@@ -7,9 +6,9 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
+    JobRequest,
     WorkerOptions,
     WorkerType,
-    JobRequest,
     cli,
 )
 from livekit.plugins import dataspike, openai
@@ -21,18 +20,27 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
         resume_false_interruption=False,
     )
 
     logger.info("starting dataspike detector")
-    dataspike_detector = dataspike.DataspikeDetector()
-    await dataspike_detector.start(session, room=ctx.room)
+    detector = dataspike.DataspikeDetector(
+        # Optional: specify an API key explicitly.
+        # If omitted, the detector will read DATASPIKE_API_KEY from the environment.
+        # api_key="YOUR_API_KEY",
+        # Optional: provide a callback for handling notifications.
+        # If not set, notifications are automatically sent to the room’s data channel.
+        # notification_cb=on_notification,
+        # For additional configuration options, refer to the plugin’s implementation
+        # or documentation for available parameters and their usage.
+    )
 
-    # start the agent, it will join the room
+    # Start the Dataspike detector and attach it to the current session and room.
+    await detector.start(session, room=ctx.room)
+
+    # Launch the main agent, which will automatically join the same room.
     logger.info("starting agent")
     await session.start(
         agent=Agent(instructions="Talk to me!"),

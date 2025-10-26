@@ -73,6 +73,7 @@ jobs:
               -p livekit.plugins.bithuman
               -p livekit.plugins.cartesia
               -p livekit.plugins.clova
+              -p livekit.plugins.dataspike
               -p livekit.plugins.deepgram
               -p livekit.plugins.elevenlabs
               -p livekit.plugins.fal
