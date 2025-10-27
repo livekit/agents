@@ -459,7 +459,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None: ...
 
-    @tracer.start_as_current_span("agent_session", end_on_exit=False)
     async def start(
         self,
         agent: Agent,
@@ -485,13 +484,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._session_span = current_span = tracer.start_span("agent_session")
+
             self._recorded_events = []
             self._room_io = None
             self._recorder_io = None
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
-            self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
 
@@ -766,10 +766,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._recorder_io:
                 await self._recorder_io.aclose()
 
-            self._started = False
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
+
+            self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
