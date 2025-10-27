@@ -63,7 +63,6 @@ class SessionState:
 
 
 def speak(agent: Agent, instructions: str) -> None:
-    logger.debug("prompt: %s", instructions)
     agent.session.say(text=instructions, allow_interruptions=False)
 
 
