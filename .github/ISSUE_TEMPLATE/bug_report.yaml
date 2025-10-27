@@ -60,16 +60,6 @@ body:
   validations:
     required: false
 
-- type: dropdown
-  id: host_method
-  attributes:
-    label: Host Method
-    options:
-      - LiveKit Cloud
-      - Self Hosted
-  validations:
-    required: true
-
 - type: textarea
   id: package_versions
   attributes:
@@ -88,7 +78,7 @@ body:
   id: problematic_ids
   attributes:
     label: Session/Room/Call IDs
-    description: "Related IDs to track particular sessions or SIP calls."
+    description: "LiveKit Cloud related IDs to track particular sessions or SIP calls."
     placeholder: |
       roomID: RM_
       SIP Call ID: SCL_

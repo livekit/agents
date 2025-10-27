@@ -7,14 +7,16 @@ body:
   attributes:
     value: |
       Thank you for taking the time to fill out this request! Please add as much detail as possible so we can help you.
+      Before submitting, please check to ensure that a similar issue doesn’t already exist to avoid duplicates.
       
 - type: dropdown
   attributes:
     label: Feature Type
-    description: "Is your feature request related to a problem, or is it a nice-to-have?"
+    description: "How important is this feature?"
     options:
-      - Related to a problem
       - Nice to have
+      - Would make my life easier
+      - I cannot use LiveKit without it
   validations:
     required: true
 
