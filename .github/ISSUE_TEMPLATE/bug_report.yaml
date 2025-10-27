@@ -54,7 +54,7 @@ body:
 - type: input
   id: pipeline_setup
   attributes:
-    label: Pipeline Setup
+    label: Models Used
     description: "Your STT/LLM/TTS or RealtimeModel setup"
     placeholder: "e.g. Deepgram Nova-3, OpenAI GPT-4.1, Cartesia Sonic-2"
   validations:
