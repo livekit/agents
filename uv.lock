@@ -39,6 +39,7 @@ members = [
     "livekit-plugins-elevenlabs",
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
+    "livekit-plugins-fishaudio",
     "livekit-plugins-gladia",
     "livekit-plugins-google",
     "livekit-plugins-groq",
@@ -862,6 +863,21 @@ wheels = [
 ]
 
 [[package]]
+name = "fish-audio-sdk"
+version = "2025.6.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx", marker = "python_full_version >= '3.10'" },
+    { name = "httpx-ws", marker = "python_full_version >= '3.10'" },
+    { name = "ormsgpack", marker = "python_full_version >= '3.10'" },
+    { name = "pydantic", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/39/113f0fefabd54b92a1b6f14d0e0b5697664c88004679d773214eab774aaf/fish_audio_sdk-2025.6.3.tar.gz", hash = "sha256:56f0bb070d3a1fc21082e023be2b997ea3ceef9b0750a6bfcd64e6cd3b144a8e", size = 27499 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/02/47bb54fad421cc750815fe14de185dfe597217526cc5c6109275afeded3b/fish_audio_sdk-2025.6.3-py3-none-any.whl", hash = "sha256:88365664ba731dd37317820269240e8bb6544b4a7e620c75140d40359b2fd471", size = 8257 },
+]
+
+[[package]]
 name = "flatbuffers"
 version = "25.2.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1213,6 +1229,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4c/60/8f4281fa9bbf3c8034fd54c0e7412e66edbab6bc74c4996bd616f8d0406e/httpx-sse-0.4.0.tar.gz", hash = "sha256:1e81a3a3070ce322add1d3529ed42eb5f70817f45ed6ec915ab753f961139721", size = 12624 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/9b/a181f281f65d776426002f330c31849b86b31fc9d848db62e16f03ff739f/httpx_sse-0.4.0-py3-none-any.whl", hash = "sha256:f329af6eae57eaa2bdfd962b42524764af68075ea87370a2de920af5341e318f", size = 7819 },
+]
+
+[[package]]
+name = "httpx-ws"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio", marker = "python_full_version >= '3.10'" },
+    { name = "httpcore", marker = "python_full_version >= '3.10'" },
+    { name = "httpx", marker = "python_full_version >= '3.10'" },
+    { name = "wsproto", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/dc/d7941f8a598e636779c1f34daa3fd88849b36d440dd3522ceba90915abc6/httpx_ws-0.8.0.tar.gz", hash = "sha256:a4dbe99509751d9498ead8564a455e0e8d27501560e19864d249b8b9766b24ad", size = 25488 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/65/36bec7fe24c61e7e700a5e08210e8f10cf1cf78eb75491316125c958ca76/httpx_ws-0.8.0-py3-none-any.whl", hash = "sha256:42f650a63c5d9b4940e0375e4bee001b644620e06c87d192692ce6015e17f8e2", size = 14986 },
 ]
 
 [[package]]
@@ -1791,6 +1822,9 @@ fal = [
 fireworksai = [
     { name = "livekit-plugins-fireworksai" },
 ]
+fishaudio = [
+    { name = "livekit-plugins-fishaudio", marker = "python_full_version >= '3.10'" },
+]
 gladia = [
     { name = "livekit-plugins-gladia" },
 ]
@@ -1906,6 +1940,7 @@ requires-dist = [
     { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", editable = "livekit-plugins/livekit-plugins-elevenlabs" },
     { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
     { name = "livekit-plugins-fireworksai", marker = "extra == 'fireworksai'", editable = "livekit-plugins/livekit-plugins-fireworksai" },
+    { name = "livekit-plugins-fishaudio", marker = "python_full_version >= '3.10' and extra == 'fishaudio'", editable = "livekit-plugins/livekit-plugins-fishaudio" },
     { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
@@ -1953,7 +1988,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "openai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "openai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
 
 [[package]]
 name = "livekit-api"
@@ -2192,6 +2227,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-fishaudio"
+source = { editable = "livekit-plugins/livekit-plugins-fishaudio" }
+dependencies = [
+    { name = "fish-audio-sdk", marker = "python_full_version >= '3.10'" },
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fish-audio-sdk", marker = "python_full_version >= '3.10'" },
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+]
 
 [[package]]
 name = "livekit-plugins-gladia"
@@ -5944,6 +5993,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2b/49/364a615a0cc0872685646c495c7172e4fc7bf1959e3b12a1807a03014e05/wrapt-1.17.2-cp39-cp39-win32.whl", hash = "sha256:f393cda562f79828f38a819f4788641ac7c4085f30f1ce1a68672baa686482bb", size = 36423 },
     { url = "https://files.pythonhosted.org/packages/00/ad/5d2c1b34ba3202cd833d9221833e74d6500ce66730974993a8dc9a94fb8c/wrapt-1.17.2-cp39-cp39-win_amd64.whl", hash = "sha256:36ccae62f64235cf8ddb682073a60519426fdd4725524ae38874adf72b5f2aeb", size = 38772 },
     { url = "https://files.pythonhosted.org/packages/2d/82/f56956041adef78f849db6b289b282e72b55ab8045a75abad81898c28d19/wrapt-1.17.2-py3-none-any.whl", hash = "sha256:b18f2d1533a71f069c7f82d524a52599053d4c7166e9dd374ae2136b7f40f7c8", size = 23594 },
+]
+
+[[package]]
+name = "wsproto"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "h11", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c9/4a/44d3c295350d776427904d73c189e10aeae66d7f555bb2feee16d1e4ba5a/wsproto-1.2.0.tar.gz", hash = "sha256:ad565f26ecb92588a3e43bc3d96164de84cd9902482b130d0ddbaa9664a85065", size = 53425 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/58/e860788190eba3bcce367f74d29c4675466ce8dddfba85f7827588416f01/wsproto-1.2.0-py3-none-any.whl", hash = "sha256:b9acddd652b585d75b20477888c56642fdade28bdfd3579aa24a4d2c037dd736", size = 24226 },
 ]
 
 [[package]]
