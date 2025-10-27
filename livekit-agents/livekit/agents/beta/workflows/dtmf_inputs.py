@@ -198,27 +198,3 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         self.session.off("agent_state_changed", self._on_user_state_changed)
         self.session.off("agent_state_changed", self._on_agent_state_changed)
         self._generate_dtmf_reply.cancel()
-
-    # async def _generate_instructions_with_repeat(self) -> None:
-    #     instructions_content: str | None = None
-    #     handle: SpeechHandle | None = None
-
-    #     try:
-    #         for _ in range(self._repeat_instructions):
-    #             if not instructions_content:
-    #                 handle = self.session.generate_reply(tool_choice="none")
-    #                 await handle.wait_for_playout()
-
-    #                 if len(handle.chat_items) > 0 and isinstance(
-    #                     handle.chat_items[0].text_content, str
-    #                 ):
-    #                     instructions_content = handle.chat_items[0].text_content
-    #             else:
-    #                 handle = self.session.say(instructions_content, add_to_chat_ctx=False)
-    #                 await handle.wait_for_playout()
-
-    #             if handle.interrupted:
-    #                 break
-    #     finally:
-    #         if handle and not handle.done():
-    #             handle.interrupt(force=True)
