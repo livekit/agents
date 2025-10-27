@@ -1,5 +1,5 @@
 name: Bug Report
-description: Create a report to help us improve
+description: Report a bug with the framework
 labels: bug
 
 body:
