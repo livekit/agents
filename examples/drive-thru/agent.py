@@ -407,7 +407,7 @@ async def on_session_end(ctx: JobContext) -> None:
 
 
 
-@server.realtime_session(on_session_end=on_session_end)
+@server.rtc_session(on_session_end=on_session_end)
 async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = await new_userdata()
     session = AgentSession[Userdata](

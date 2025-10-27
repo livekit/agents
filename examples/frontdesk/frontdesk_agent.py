@@ -164,7 +164,7 @@ async def on_session_end(ctx: JobContext) -> None:
     pass
 
 
-@server.realtime_session(on_session_end=on_session_end)
+@server.rtc_session(on_session_end=on_session_end)
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
