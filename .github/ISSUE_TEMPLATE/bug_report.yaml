@@ -28,7 +28,7 @@ body:
   id: reproduction_steps
   attributes:
     label: Reproduction Steps
-    description: "Steps to reproduce this behavior."
+    description: "Steps to reproduce this behavior, preferably with a minimal reproducible example"
     value: |
       1. 
       2.
