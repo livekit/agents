@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "fishaudio", "fish-audio"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "fishaudio"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.2.15", "fish-audio-sdk"]
+dependencies = ["livekit-agents[codecs]>=1.2.16", "fish-audio-sdk"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
