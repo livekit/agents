@@ -1,12 +1,13 @@
+import asyncio
 from unittest.mock import patch
 
 import pytest
 
-from livekit.agents import AgentSession, beta
-from livekit.agents.llm.tool_context import ToolError
+from livekit import rtc
+from livekit.agents import AgentSession, ToolError, beta
 from livekit.agents.voice.run_result import RunResult
 from livekit.plugins import openai
-from livekit.rtc import Room
+from livekit.rtc.room import MockRoom
 
 
 @pytest.mark.asyncio
@@ -27,7 +28,7 @@ async def test_collect_email() -> None:
 
 class MockJobContext:
     def __init__(self) -> None:
-        self.room = Room()
+        self.room = MockRoom()
 
 
 def get_mock_job_context() -> MockJobContext:
@@ -43,7 +44,7 @@ def get_dtmf_task(ask_for_confirmation: bool) -> beta.workflows.GetDtmfTask:
 
 
 @pytest.mark.asyncio
-async def test_get_dtmf_sip_event_without_confirmation() -> None:
+async def test_get_dtmf_task_verbal_input_bypass_confirmation() -> None:
     with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", get_mock_job_context):
         async with openai.LLM(model="gpt-4.1") as llm, AgentSession(llm=llm) as sess:
             await sess.start(get_dtmf_task(ask_for_confirmation=False))
@@ -62,7 +63,7 @@ async def test_get_dtmf_sip_event_without_confirmation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_dtmf_sip_event_with_confirmation() -> None:
+async def test_get_dtmf_task_verbal_input_with_confirmation() -> None:
     with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", get_mock_job_context):
         async with openai.LLM(model="gpt-4.1") as llm, AgentSession(llm=llm) as sess:
             await sess.start(get_dtmf_task(ask_for_confirmation=True))
@@ -92,3 +93,63 @@ async def test_get_dtmf_sip_event_with_confirmation() -> None:
             )
 
             assert result.final_output.user_input == "1 2 3 4 5 6 7 8 9 0"
+
+
+@pytest.mark.asyncio
+async def test_get_dtmf_task_sip_event_bypass_confirmation() -> None:
+    ctx = get_mock_job_context()
+
+    with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", lambda: ctx):
+        async with openai.LLM(model="gpt-4.1") as llm, AgentSession(llm=llm) as sess:
+            task = get_dtmf_task(ask_for_confirmation=False)
+            await sess.start(task)
+
+            events = [rtc.SipDTMF(code=1, digit=str(i)) for i in range(10)]
+            events = [*events, rtc.SipDTMF(code=1, digit="#")]
+            for event in events:
+                ctx.room.emit_event("sip_dtmf_received", event)
+                await asyncio.sleep(0.1)
+
+            # should immediately complete the task after receiving the expected digits
+            assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_get_dtmf_task_sip_event_with_confirmation() -> None:
+    ctx = get_mock_job_context()
+
+    with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", lambda: ctx):
+        async with openai.LLM(model="gpt-4.1") as llm, AgentSession(llm=llm) as sess:
+            await sess.start(get_dtmf_task(ask_for_confirmation=True))
+
+            result = RunResult[None](output_type=None)
+            sess._global_run_state = result
+
+            events = [rtc.SipDTMF(code=1, digit=str(i)) for i in range(10)]
+            events = [*events, rtc.SipDTMF(code=1, digit="#")]
+            for event in events:
+                ctx.room.emit_event("sip_dtmf_received", event)
+                await asyncio.sleep(0.1)
+
+            await result
+
+            assert await (
+                result.expect.next_event()
+                .is_message(role="assistant")
+                .judge(
+                    llm,
+                    intent="Should ask user to confirm the entered digits 0 1 2 3 4 5 6 7 8 9 is correct",
+                )
+            )
+
+            final_result = await sess.run(
+                user_input="Yes, it's correct",
+                output_type=beta.workflows.GetDtmfResult,
+            )
+
+            final_result.expect.contains_function_call(
+                name="confirm_inputs",
+                arguments={"inputs": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]},
+            )
+
+            assert final_result.final_output.user_input == "0 1 2 3 4 5 6 7 8 9"
