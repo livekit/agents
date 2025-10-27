@@ -1,47 +1,43 @@
 from __future__ import annotations
 
-import aiofiles
-import logging
 import json
-import aiohttp
+import logging
 from collections.abc import Iterator
-from datetime import datetime, timezone, timedelta
-from livekit import api
-from livekit.protocol import metrics as proto_metrics, agent_pb
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+
+import aiofiles
+import aiohttp
+from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, trace
-from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry._logs import get_logger_provider, set_logger_provider
+from opentelemetry._logs.severity import SeverityNumber
+from opentelemetry.exporter.otlp.proto.http import Compression
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk._logs import (
+    LogData,
+    LoggerProvider,
+    LoggingHandler,
+    LogRecord,
+    LogRecordProcessor,
+)
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import Span, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
-from opentelemetry import context as otel_context, trace
-from opentelemetry._logs import set_logger_provider, get_logger_provider
-from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.sdk._logs import (
-    LoggerProvider,
-    LoggingHandler,
-    LogRecordProcessor,
-    LogData,
-    LogRecord,
-)
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.trace import SpanProcessor, TracerProvider, Span
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-from opentelemetry.exporter.otlp.proto.http import Compression
 
-from google.protobuf.json_format import MessageToJson, MessageToDict
+from livekit import api
+from livekit.protocol import agent_pb, metrics as proto_metrics
 
-from ..utils import misc
 from ..log import logger
 
 if TYPE_CHECKING:
+    from ..llm import ChatItem
     from ..voice.report import SessionReport
-    from ..llm import ChatContext, ChatItem
 
 
 class _DynamicTracer(Tracer):

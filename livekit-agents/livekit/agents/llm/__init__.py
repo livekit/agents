@@ -1,5 +1,6 @@
 from . import remote_chat_context, utils
 from .chat_context import (
+    AgentHandoff,
     AudioContent,
     ChatContent,
     ChatContext,
@@ -9,7 +10,6 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
-    AgentHandoff,
     MetricsReport,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter

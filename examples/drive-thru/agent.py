@@ -30,7 +30,6 @@ from livekit.agents import (
     ToolError,
     cli,
     function_tool,
-    ChatContext,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -400,7 +399,6 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    import json
 
     report = ctx.make_session_report()
     # report_json = json.dumps(report.to_dict(), indent=2)

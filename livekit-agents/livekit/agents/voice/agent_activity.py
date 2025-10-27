@@ -37,6 +37,7 @@ from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
+from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
     ModelSettings,
@@ -71,7 +72,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-from ._utils import _set_participant_attributes
 
 if TYPE_CHECKING:
     from ..llm import mcp

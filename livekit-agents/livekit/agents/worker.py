@@ -28,7 +28,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from multiprocessing.context import ForkServerContext
-from typing import Any, Callable, Generic, Literal, TypeVar, overload, Optional, Union
+from typing import Any, Callable, Generic, Literal, Optional, TypeVar, Union, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -381,7 +381,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if func is not None:
             return decorator(func)
         return decorator
-    
+
     @overload
     def setup(
         self,
@@ -417,7 +417,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if func is not None:
             return decorator(func)
         return decorator
-    
+
 
     @property
     def worker_info(self) -> WorkerInfo:

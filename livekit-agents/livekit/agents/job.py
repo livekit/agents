@@ -14,24 +14,21 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
-import datetime
 import asyncio
-import json
 import contextlib
-import tempfile
 import contextvars
 import functools
 import inspect
+import json
 import logging
 import multiprocessing as mp
-from typing import TYPE_CHECKING
+import tempfile
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
+from urllib.parse import urlparse
 
 from opentelemetry import trace
 
@@ -41,9 +38,9 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .telemetry import trace_types, tracer, _setup_cloud_tracer, _upload_session_report
+from .telemetry import _setup_cloud_tracer, _upload_session_report, trace_types, tracer
 from .types import NotGivenOr
-from .utils import http_context, is_given, wait_for_participant, misc
+from .utils import http_context, is_given, misc, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 

@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import re
 import platform
+import re
 import time
 import uuid
 from typing import TypeVar
+from urllib.parse import urlparse
 
 from typing_extensions import TypeGuard
 
 from ..types import NotGiven, NotGivenOr
-
-
-from urllib.parse import urlparse
-
 
 _T = TypeVar("_T")
 

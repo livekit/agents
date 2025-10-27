@@ -1,5 +1,5 @@
 from . import http_server, metrics, trace_types, utils
-from .traces import set_tracer_provider, tracer, _setup_cloud_tracer, _upload_session_report
+from .traces import _setup_cloud_tracer, _upload_session_report, set_tracer_provider, tracer
 
 __all__ = [
     "tracer",

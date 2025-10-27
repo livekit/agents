@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool, RawFunctionTool, LLM
+    from ..llm import LLM, FunctionTool, RawFunctionTool
 
 
 class ImageContent(BaseModel):
@@ -527,7 +527,7 @@ class ChatContext:
 
         if not head:
             return self
-        
+
         source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
         if not source_text:
             return self

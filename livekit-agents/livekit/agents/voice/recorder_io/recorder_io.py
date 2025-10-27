@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-import time
 import asyncio
 import contextlib
 import queue
-from pathlib import Path
 import threading
+import time
 from collections.abc import AsyncIterator
-from typing import Any, Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 import av
 import numpy as np
@@ -17,7 +16,6 @@ from livekit import rtc
 
 from ...log import logger
 from .. import io
-
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -262,7 +260,7 @@ class RecorderAudioInput(io.AudioInput):
     @property
     def started_wall_time(self) -> float | None:
         return self.__started_time
-    
+
     def take_buf(self) -> list[rtc.AudioFrame]:
         frames = self.__acc_frames
         self.__acc_frames = []
@@ -305,7 +303,7 @@ class RecorderAudioOutput(io.AudioOutput):
     @property
     def started_wall_time(self) -> float | None:
         return self.__started_time
-    
+
     @property
     def recorder_io(self) -> RecorderIO:
         return self.__recording_io

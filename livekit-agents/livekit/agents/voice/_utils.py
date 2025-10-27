@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
 from opentelemetry.trace import Span
+
 from livekit import rtc
+
 from ..telemetry import trace_types
 
 

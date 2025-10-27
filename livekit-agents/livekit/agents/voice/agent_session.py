@@ -34,6 +34,7 @@ from ..types import (
 )
 from ..utils.misc import is_given
 from . import io, room_io
+from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
@@ -52,7 +53,6 @@ from .events import (
 from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
-from ._utils import _set_participant_attributes
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels

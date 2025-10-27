@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
 import datetime
 import enum
 import hashlib
@@ -36,7 +36,6 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import rtc
-from ..worker import AgentServer, WorkerOptions
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
@@ -45,6 +44,7 @@ from ..plugin import Plugin
 from ..utils import aio, is_given
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
+from ..worker import AgentServer, WorkerOptions
 from . import proto
 
 # from .discover import get_import_data
