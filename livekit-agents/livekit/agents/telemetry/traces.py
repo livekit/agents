@@ -279,10 +279,13 @@ async def _upload_session_report(
             )
         )
 
-    _log("session report", attributes={
-        "chat.options": vars(report.options),
-        "chat.report_timestamp": report.timestamp,
-    })
+    _log(
+        "session report",
+        attributes={
+            "chat.options": vars(report.options),
+            "chat.report_timestamp": report.timestamp,
+        },
+    )
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)

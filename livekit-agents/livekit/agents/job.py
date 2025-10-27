@@ -36,17 +36,18 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
-from .ipc.inference_executor import InferenceExecutor
 from .log import logger
 from .telemetry import _setup_cloud_tracer, _upload_session_report, trace_types, tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given, misc, wait_for_participant
+
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 if TYPE_CHECKING:
     from .voice.agent_session import AgentSession
+    from .ipc.inference_executor import InferenceExecutor
     from .voice.report import SessionReport
 
 
