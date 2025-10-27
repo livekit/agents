@@ -58,7 +58,7 @@ body:
     description: "Your STT/LLM/TTS or RealtimeModel setup"
     placeholder: "e.g. Deepgram Nova-3, OpenAI GPT-4.1, Cartesia Sonic-2"
   validations:
-    required: true
+    required: false
 
 - type: dropdown
   id: host_method
