@@ -8,13 +8,13 @@ from collections.abc import Iterator
 from datetime import datetime, timezone, timedelta
 from livekit import api
 from livekit.protocol import metrics as proto_metrics, agent_pb
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from opentelemetry import context as otel_context, trace
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes, AttributeValue
+from opentelemetry.util.types import AttributeValue
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import set_logger_provider, get_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
@@ -29,8 +29,6 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider, Span
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
@@ -155,7 +153,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     root.addHandler(handler)
 
 
-def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.ChatItem:
+def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
     item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
     if item.type == "message":
@@ -228,7 +226,18 @@ def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.Ch
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromSeconds(int(item.created_at))
 
-    return item_pb
+    item_dict = MessageToDict(item_pb)
+
+    # patch `arguments` & `output` to make them indexable attributes
+    try:
+        if item.type == "function_call":
+            item_dict["arguments"] = json.loads(item_dict["arguments"])
+        elif item.type == "function_call_output":
+            item_dict["output"] = json.loads(item_dict["output"])
+    except Exception:
+        pass  # ignore
+
+    return item_dict
 
 
 def _to_rfc3339(value: int | float | datetime) -> str:
@@ -251,6 +260,37 @@ async def _upload_session_report(
     report: SessionReport,
     http_session: aiohttp.ClientSession,
 ) -> None:
+    chat_logger = get_logger_provider().get_logger(
+        name="chat history",
+        attributes={
+            "room_id": report.room_id,
+            "job_id": report.job_id,
+            "room": report.room,
+            "lk.enable_user_data_training": report.enable_user_data_training,
+        },
+    )
+    chat_logger.emit(
+        LogRecord(
+            body="session report",
+            attributes={"report.timestamp": report.timestamp},
+        )
+    )
+    for item in report.chat_history.items:
+        item_log = _to_proto_chat_item(item)
+        chat_logger.emit(
+            LogRecord(
+                timestamp=int(item.created_at * 1e9),
+                body="chat item",
+                attributes={"chat.item": item_log},
+                trace_id=0,
+                span_id=0,
+                trace_flags=0,
+                severity_number=SeverityNumber.UNSPECIFIED,
+                severity_text="unspecified",
+            )
+        )
+
+    # emit recording
     access_token = (
         api.AccessToken()
         .with_observability_grants(api.ObservabilityGrants(write=True))
@@ -269,35 +309,6 @@ async def _upload_session_report(
     part.set_content_disposition("form-data", name="header", filename="header.binpb")
     part.headers["Content-Type"] = "application/protobuf"
     part.headers["Content-Length"] = str(len(header_bytes))
-
-    # if chat_history_bytes:
-    #     part = mp.append(chat_history_bytes)
-    #     part.set_content_disposition(
-    #         "form-data", name="chat_history", filename="chat_history.binpb"
-    #     )
-    #     part.headers["Content-Type"] = "application/protobuf"
-    #     part.headers["Content-Length"] = str(len(chat_history_bytes))
-
-    # chat_history_pb = _to_proto_chat_ctx(report.chat_history)
-    chat_logger = get_logger_provider().get_logger("chat_history")
-    for item in report.chat_history.items:
-        item_proto = _to_proto_chat_item(item)
-        item_dict = MessageToDict(item_proto)
-        chat_logger.emit(
-            LogRecord(
-                timestamp=int(item.created_at * 1e9),
-                body="chat_item",
-                trace_id=0,
-                span_id=0,
-                trace_flags=0,
-                severity_number=SeverityNumber.UNSPECIFIED,
-                severity_text="unspecified",
-                attributes={
-                    "protobuf.message_type": item_proto.DESCRIPTOR.full_name,
-                    "chat.item": item_dict,
-                },
-            )
-        )
 
     if report.audio_recording_path and report.audio_recording_started_at:
         try:
