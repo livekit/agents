@@ -257,7 +257,7 @@ async def _upload_session_report(
     http_session: aiohttp.ClientSession,
 ) -> None:
     chat_logger = get_logger_provider().get_logger(
-        name="chat history",
+        name="chat_history",
         attributes={
             "room_id": report.room_id,
             "job_id": report.job_id,
@@ -279,11 +279,14 @@ async def _upload_session_report(
             )
         )
 
-    _log("session_report", attributes={"report.timestamp": report.timestamp})
+    _log("session report", attributes={
+        "chat.options": vars(report.options),
+        "chat.report_timestamp": report.timestamp,
+    })
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)
-        _log("chat_item", attributes={"chat.item": item_log})
+        _log("chat item", attributes={"chat.item": item_log})
 
     # emit recording
     access_token = (
