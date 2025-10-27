@@ -179,7 +179,7 @@ def _posix_readchar() -> str:
             try:
                 tty.setcbreak(fd)
                 cur = termios.tcgetattr(fd)
-                cur[3] |= (termios.ICANON | termios.ECHO | termios.ISIG)
+                cur[3] |= termios.ICANON | termios.ECHO | termios.ISIG
                 termios.tcsetattr(fd, termios.TCSADRAIN, cur)
             except Exception:
                 pass

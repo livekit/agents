@@ -41,4 +41,3 @@ def is_cloud(url: str) -> bool:
     if hostname is None:
         return False
     return hostname.endswith(".livekit.cloud") or hostname.endswith(".livekit.run")
-

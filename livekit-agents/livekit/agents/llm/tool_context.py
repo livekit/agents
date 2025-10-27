@@ -118,6 +118,7 @@ class _RawFunctionToolInfo:
     raw_schema: dict[str, Any]
     flags: ToolFlag
 
+
 @runtime_checkable
 class RawFunctionTool(Protocol):
     __livekit_raw_tool_info: _RawFunctionToolInfo

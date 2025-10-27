@@ -232,7 +232,9 @@ class ServerOptions:
                 f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
             )
 
+
 WorkerOptions = ServerOptions
+
 
 @dataclass
 class WorkerInfo:
@@ -322,7 +324,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._lock = asyncio.Lock()
 
-
     @overload
     def rtc_session(
         self,
@@ -342,7 +343,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Optional[Callable[[JobRequest], Any]] = None,
         on_session_end: Optional[Callable[[JobContext], Any]] = None,
-    ) -> Callable[[Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]]: ...
+    ) -> Callable[
+        [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
+    ]: ...
 
     def rtc_session(
         self,
@@ -354,7 +357,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         on_session_end: Optional[Callable[[JobContext], Any]] = None,
     ) -> Union[
         Callable[[JobContext], Awaitable[None]],
-        Callable[[Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]],
+        Callable[
+            [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
+        ],
     ]:
         """
         Decorator or direct registrar for the RTC session entrypoint.
@@ -366,7 +371,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             server.rtc_session(my_agent, agent_name="survey_agent")
         """
 
-        def decorator(f: Callable[[JobContext], Awaitable[None]]) -> Callable[[JobContext], Awaitable[None]]:
+        def decorator(
+            f: Callable[[JobContext], Awaitable[None]],
+        ) -> Callable[[JobContext], Awaitable[None]]:
             if self._entrypoint_fnc is not None:
                 raise RuntimeError(
                     "The AgentServer currently only supports registering only one rtc_session"
@@ -417,7 +424,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if func is not None:
             return decorator(func)
         return decorator
-
 
     @property
     def worker_info(self) -> WorkerInfo:

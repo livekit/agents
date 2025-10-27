@@ -45,6 +45,7 @@ def proc_main(args: ProcStartArgs) -> None:
 
     client.run()
 
+
 class _InferenceProc:
     def __init__(self, runners: _RunnersDict) -> None:
         # create an instance of each runner (the ctor must not requires any argument)
