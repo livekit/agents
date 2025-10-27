@@ -257,6 +257,10 @@ class RoomIO:
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.on("close", self._on_agent_session_close)
 
+    @property
+    def room(self) -> rtc.Room:
+        return self._room
+
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)

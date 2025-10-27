@@ -18,10 +18,11 @@ from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
+from ._utils import _set_participant_attributes
 from .agent import ModelSettings
 
 if TYPE_CHECKING:
-    from .agent_session import TurnDetectionMode
+    from .agent_session import AgentSession, TurnDetectionMode
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 
@@ -77,6 +78,7 @@ class RecognitionHooks(Protocol):
 class AudioRecognition:
     def __init__(
         self,
+        session: AgentSession,
         *,
         hooks: RecognitionHooks,
         stt: io.STTNode | None,
@@ -86,6 +88,7 @@ class AudioRecognition:
         max_endpointing_delay: float,
         turn_detection_mode: TurnDetectionMode | None,
     ) -> None:
+        self._session = session
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
@@ -219,7 +222,10 @@ class AudioRecognition:
             return
 
         async def _commit_user_turn() -> None:
-            if self._last_final_transcript_time and time.time() - self._last_final_transcript_time > 0.5:
+            if (
+                self._last_final_transcript_time
+                and time.time() - self._last_final_transcript_time > 0.5
+            ):
                 # if the last final transcript is received more than 0.5s ago
                 # append a silence frame to the stt to flush the buffer
 
@@ -650,4 +656,8 @@ class AudioRecognition:
             return self._user_turn_span
 
         self._user_turn_span = tracer.start_span("user_turn")
+
+        if (room_io := self._session._room_io) and room_io.linked_participant:
+            _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
+
         return self._user_turn_span

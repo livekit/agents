@@ -71,6 +71,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
+from ._utils import _set_participant_attributes
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -1663,9 +1664,11 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
-
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
+
+        if room_io := self._session._room_io:
+            _set_participant_attributes(current_span, room_io.room.local_participant)
 
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
@@ -2055,7 +2058,7 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)
 
-    @tracer.start_as_current_span("realtime_agent_turn")
+    @tracer.start_as_current_span("agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
@@ -2067,6 +2070,9 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+
+        if room_io := self._session._room_io:
+            _set_participant_attributes(current_span, room_io.room.local_participant)
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
