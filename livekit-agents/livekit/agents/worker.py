@@ -321,7 +321,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._lock = asyncio.Lock()
 
-    def realtime_session(
+    def rtc_session(
         self,
         *,
         agent_name: str = "",
