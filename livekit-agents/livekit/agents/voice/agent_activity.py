@@ -561,6 +561,7 @@ class AgentActivity(RecognitionHooks):
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
+            self._session,
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
