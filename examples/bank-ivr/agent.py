@@ -64,10 +64,7 @@ class SessionState:
 
 def speak(agent: Agent, instructions: str) -> None:
     logger.debug("prompt: %s", instructions)
-    agent.session.generate_reply(
-        instructions=f"Agent instructions - Speak exactly the following message (nothing more and nothing less): <message>{instructions}</message>",
-        allow_interruptions=False,
-    )
+    agent.session.say(text=instructions, allow_interruptions=False)
 
 
 async def collect_digits(
