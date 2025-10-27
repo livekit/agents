@@ -36,13 +36,13 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import rtc
-from livekit.agents.worker import AgentServer
+from ..worker import AgentServer, WorkerOptions
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
-from ..utils import aio
+from ..utils import aio, is_given
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from . import proto
@@ -1508,5 +1508,34 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     return app
 
 
-def run_app(server: AgentServer) -> None:
+def run_app(server: AgentServer | WorkerOptions) -> None:
+    if isinstance(server, WorkerOptions):
+        s = AgentServer(
+            job_executor_type=server.job_executor_type,
+            load_threshold=server.load_threshold,
+            job_memory_limit_mb=server.job_memory_limit_mb,
+            job_memory_warn_mb=server.job_memory_warn_mb,
+            drain_timeout=server.drain_timeout,
+            num_idle_processes=server.num_idle_processes,
+            shutdown_process_timeout=server.shutdown_process_timeout,
+            initialize_process_timeout=server.initialize_process_timeout,
+            permissions=server.permissions,
+            max_retry=server.max_retry,
+            api_key=server.api_key,
+            api_secret=server.api_secret,
+            host=server.host,
+            port=server.port,
+            http_proxy=server.http_proxy,
+            multiprocessing_context=server.multiprocessing_context,
+            prometheus_port=server.prometheus_port if is_given(server.prometheus_port) else None,
+        )
+        s.setup(server.prewarm_fnc)
+        s.rtc_session(
+            server.entrypoint_fnc,
+            agent_name=server.agent_name,
+            type=server.worker_type,
+            on_request=server.request_fnc,
+        )
+        server = s
+
     _build_cli(server)()
