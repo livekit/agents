@@ -14,19 +14,6 @@ if TYPE_CHECKING:
     from ..events import AgentStateChangedEvent, UserInputTranscribedEvent, UserStateChangedEvent
 
 
-DEFAULT_SILENCE_REMINDER_MESSAGE = (
-    "<system_notification>"
-    "Now that the phone call is become silent for a while, say something or perform some action to proceed with the call. "
-    "</system_notification>"
-)
-
-DEFAULT_LOOP_DETECTED_MESSAGE = (
-    "<system_notification>"
-    "Speech loop has been detected from the automated IVR system, say something or perform some action to proceed with the call. "
-    "</system_notification>"
-)
-
-
 class IVRActivity:
     def __init__(
         self,
@@ -63,9 +50,7 @@ class IVRActivity:
         if self._loop_detector.check_loop_detection():
             logger.debug("IVRActivity: speech loop detected; sending notification")
 
-            self._session.generate_reply(
-                user_input=DEFAULT_LOOP_DETECTED_MESSAGE, allow_interruptions=False
-            )
+            self._session.generate_reply(allow_interruptions=False)
             self._loop_detector.reset()
 
     def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
@@ -95,7 +80,7 @@ class IVRActivity:
 
     async def _on_silence_detected(self) -> None:
         logger.debug("IVRActivity: silence detected; sending notification")
-        self._session.generate_reply(user_input=DEFAULT_SILENCE_REMINDER_MESSAGE)
+        self._session.generate_reply()
 
     async def aclose(self) -> None:
         self._debounced_silence.cancel()
