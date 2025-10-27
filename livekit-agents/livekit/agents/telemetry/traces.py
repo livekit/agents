@@ -153,7 +153,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     root.addHandler(handler)
 
 
-def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.ChatItem:
+def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
     item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
     if item.type == "message":
@@ -226,19 +226,16 @@ def _to_proto_chat_item(item: ChatItem) -> agent_pb.agent_session.ChatContext.Ch
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromSeconds(int(item.created_at))
 
-    return item_pb
+    item_dict = MessageToDict(item_pb)
 
-
-def _to_log_chat_item(item: ChatItem) -> dict[str, Any]:
-    item_dict = item.model_dump()
-
+    # patch `arguments` & `output` to make them indexable attributes
     try:
         if item.type == "function_call":
-            item["arguments"] = json.loads(item["arguments"])
+            item_dict["arguments"] = json.loads(item_dict["arguments"])
         elif item.type == "function_call_output":
-            item["output"] = json.loads(item["output"])
+            item_dict["output"] = json.loads(item_dict["output"])
     except Exception:
-        pass
+        pass  # ignore
 
     return item_dict
 
@@ -279,20 +276,19 @@ async def _upload_session_report(
         )
     )
     for item in report.chat_history.items:
-        item_log = _to_log_chat_item(item)
-        if item_log is not None:
-            chat_logger.emit(
-                LogRecord(
-                    timestamp=int(item.created_at * 1e9),
-                    body="chat item",
-                    attributes={"chat.item": item_log},
-                    trace_id=0,
-                    span_id=0,
-                    trace_flags=0,
-                    severity_number=SeverityNumber.UNSPECIFIED,
-                    severity_text="unspecified",
-                )
+        item_log = _to_proto_chat_item(item)
+        chat_logger.emit(
+            LogRecord(
+                timestamp=int(item.created_at * 1e9),
+                body="chat item",
+                attributes={"chat.item": item_log},
+                trace_id=0,
+                span_id=0,
+                trace_flags=0,
+                severity_number=SeverityNumber.UNSPECIFIED,
+                severity_text="unspecified",
             )
+        )
 
     # emit recording
     access_token = (
