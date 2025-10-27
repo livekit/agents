@@ -269,19 +269,12 @@ async def _upload_session_report(
             "lk.enable_user_data_training": report.enable_user_data_training,
         },
     )
-    chat_logger.emit(
-        LogRecord(
-            body="session report",
-            attributes={"report.timestamp": report.timestamp},
-        )
-    )
-    for item in report.chat_history.items:
-        item_log = _to_proto_chat_item(item)
+
+    def _log(body: str, attributes: dict) -> None:
         chat_logger.emit(
             LogRecord(
-                timestamp=int(item.created_at * 1e9),
-                body="chat item",
-                attributes={"chat.item": item_log},
+                body=body,
+                attributes=attributes,
                 trace_id=0,
                 span_id=0,
                 trace_flags=0,
@@ -289,6 +282,12 @@ async def _upload_session_report(
                 severity_text="unspecified",
             )
         )
+
+    _log("session_report", attributes={"report.timestamp": report.timestamp})
+
+    for item in report.chat_history.items:
+        item_log = _to_proto_chat_item(item)
+        _log("chat_item", attributes={"chat.item": item_log})
 
     # emit recording
     access_token = (
