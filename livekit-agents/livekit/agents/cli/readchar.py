@@ -161,21 +161,28 @@ def _posix_readchar() -> str:
     ``_posix_read.readchar`` function.
     """
     import termios
+    import tty
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     term = termios.tcgetattr(fd)
     try:
-        # Disable canonical input & echo (local flags)
         term[3] &= ~(termios.ICANON | termios.ECHO)
         term[3] |= termios.ISIG
-        # Disable break handling (input flags)
-        term[0] &= ~(termios.IGNBRK | termios.BRKINT)
         termios.tcsetattr(fd, termios.TCSAFLUSH, term)
 
         ch = sys.stdin.read(1)
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            try:
+                tty.setcbreak(fd)
+                cur = termios.tcgetattr(fd)
+                cur[3] |= (termios.ICANON | termios.ECHO | termios.ISIG)
+                termios.tcsetattr(fd, termios.TCSADRAIN, cur)
+            except Exception:
+                pass
     return ch
 
 
