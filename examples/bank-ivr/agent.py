@@ -30,7 +30,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows.dtmf_inputs import GetDtmfTask
 from livekit.agents.llm.tool_context import ToolError
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -62,12 +62,8 @@ class SessionState:
     audit_log: list[str] = field(default_factory=list)
 
 
-def speak(agent: Agent, instructions: str, *, allow_interruptions: bool = False) -> None:
-    logger.debug("prompt: %s", instructions)
-    agent.session.generate_reply(
-        instructions=f"Agent instructions - Speak exactly the following message (nothing more and nothing less): <message>{instructions}</message>",
-        allow_interruptions=allow_interruptions,
-    )
+def speak(agent: Agent, instructions: str) -> None:
+    agent.session.say(text=instructions, allow_interruptions=False)
 
 
 async def collect_digits(
@@ -75,7 +71,7 @@ async def collect_digits(
     *,
     prompt: str,
     num_digits: int,
-    confirmation: bool = True,
+    confirmation: bool = False,
 ) -> str:
     while True:
         try:
@@ -154,21 +150,21 @@ class RootBankIVRAgent(Agent):
 
     async def _authenticate_customer(self) -> None:
         while True:
-            # customer_id = await collect_digits(
-            #     self,
-            #     prompt="Please enter your eight digit customer ID",
-            #     num_digits=8,
-            #     confirmation=False,
-            # )
-            customer_id = "10000001"
+            customer_id = await collect_digits(
+                self,
+                prompt="Please enter your eight digit customer ID",
+                num_digits=8,
+                confirmation=False,
+            )
+            # customer_id = "10000001"
             await add_event_message(self, content=f"User entered customer ID: {customer_id}")
-            # pin = await collect_digits(
-            #     self,
-            #     prompt="Now enter your four digit telephone banking PIN",
-            #     num_digits=4,
-            #     confirmation=False,
-            # )
-            pin = "0000"
+            pin = await collect_digits(
+                self,
+                prompt="Now enter your four digit telephone banking PIN",
+                num_digits=4,
+                confirmation=False,
+            )
+            # pin = "0000"
             await add_event_message(self, content=f"User entered PIN: {pin}")
 
             if self._service.authenticate(customer_id, pin):
@@ -216,7 +212,7 @@ class RootBankIVRAgent(Agent):
         while True:
             prompt = (
                 f"Main menu for {self._state.customer_name}. "
-                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, or 5 to switch profile."
+                "Press 1 for deposit accounts, 2 for credit cards, 3 for loans, 4 for rewards, or 5 to switch profile. Always say out loud the menu options to user first before asking for selection."
             )
             choice = await run_menu(self, prompt=prompt, options=options)
 
@@ -304,7 +300,6 @@ class RootBankIVRAgent(Agent):
         speak(
             self,
             "Thanks for banking with Horizon Federal Bank. Goodbye!",
-            allow_interruptions=False,
         )
 
 
@@ -633,9 +628,9 @@ async def bank_ivr_session(ctx: JobContext) -> None:
 
     session: AgentSession[SessionState] = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-5"),
+        llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3"),
-        tts=elevenlabs.TTS(model="eleven_multilingual_v2"),
+        tts=cartesia.TTS(),
         turn_detection=MultilingualModel(),
         userdata=state,
     )

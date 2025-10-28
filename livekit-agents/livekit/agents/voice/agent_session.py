@@ -50,6 +50,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
@@ -85,6 +86,7 @@ class AgentSessionOptions:
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
+    ivr_detection: bool
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -170,6 +172,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
+        ivr_detection: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -256,6 +259,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can reduce response latency by overlapping model inference with user audio,
                 but may incur extra compute if the user interrupts or revises mid-utterance.
                 Defaults to ``False``.
+            ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
+                Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -295,6 +300,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             preemptive_generation=preemptive_generation,
+            ivr_detection=ivr_detection,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
         )
         self._conn_options = conn_options or SessionConnectOptions()
@@ -361,6 +367,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._root_span_context: otel_context.Context | None = None
 
         self._recorded_events: list[AgentEvent] = []
+
+        # ivr activity
+        self._ivr_activity: IVRActivity | None = None
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
@@ -573,6 +582,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             "If you want to ignore primary designation, use session.start(record=False)."
                         )
 
+                if self.options.ivr_detection:
+                    self._ivr_activity = IVRActivity(self)
+
+                    # inject the IVR activity tools into the session tools
+                    self._tools.extend(self._ivr_activity.tools)
+
+                    tasks.append(
+                        asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
+                    )
+
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
                 current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
                 current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
@@ -765,6 +784,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._recorder_io:
                 await self._recorder_io.aclose()
+
+            if self._ivr_activity is not None:
+                await self._ivr_activity.aclose()
 
             if self._session_span:
                 self._session_span.end()
