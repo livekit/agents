@@ -185,6 +185,7 @@ class RealtimeModel(llm.RealtimeModel):
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
             tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
             _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
@@ -522,7 +523,7 @@ class RealtimeSession(llm.RealtimeSession):
         return False
 
     @property
-    def get_session_resumption_handle(self) -> str | None:
+    def session_resumption_handle(self) -> str | None:
         return self._session_resumption_handle
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
