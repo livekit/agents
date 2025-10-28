@@ -1668,7 +1668,7 @@ class AgentActivity(RecognitionHooks):
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
-        if room_io := self._session._room_io:
+        if (room_io := self._session._room_io) and room_io.room.connection_state == 1:
             _set_participant_attributes(current_span, room_io.room.local_participant)
 
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
