@@ -82,6 +82,7 @@ class TTS(tts.TTS):
             authentication_type=authentication_type,
             authentication_configuration_file_spec=authentication_configuration_file_spec,
             authentication_profile_name=authentication_profile_name,
+            request_id_prefix="live-kit-tts-plug-in-",
             voice=voice,
             sample_rate=REQUIRED_LIVE_KIT_AUDIO_RATE,
         )

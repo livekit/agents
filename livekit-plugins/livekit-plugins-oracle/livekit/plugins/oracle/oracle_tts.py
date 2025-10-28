@@ -53,6 +53,7 @@ class OracleTTS:
         authentication_type: AuthenticationType = AuthenticationType.SECURITY_TOKEN,
         authentication_configuration_file_spec: str = "~/.oci/config",
         authentication_profile_name: str = "DEFAULT",
+        request_id_prefix: str = "",
         voice: str = "Victoria",
         sample_rate: int = 16000,
     ) -> None:
@@ -65,6 +66,7 @@ class OracleTTS:
             authentication_type: Authentication type. Type is AuthenticationType enum (API_KEY, SECURITY_TOKEN, INSTANCE_PRINCIPAL, or RESOURCE_PRINCIPAL). Default is SECURITY_TOKEN.
             authentication_configuration_file_spec: Authentication configuration file spec. Type is str. Default is "~/.oci/config". Applies only for API_KEY or SECURITY_TOKEN.
             authentication_profile_name: Authentication profile name. Type is str. Default is "DEFAULT". Applies only for API_KEY or SECURITY_TOKEN.
+            request_id_prefix: Request ID prefix. Type is str. Default is "".
             voice: Voice. Type is str. Default is "Victoria".
             sample_rate: Sample rate. Type is int. Default is 16000.
         """
@@ -77,6 +79,7 @@ class OracleTTS:
             authentication_configuration_file_spec
         )
         self._parameters.authentication_profile_name = authentication_profile_name
+        self._parameters.request_id_prefix = request_id_prefix
         self._parameters.voice = voice
         self._parameters.sample_rate = sample_rate
 
@@ -146,6 +149,9 @@ class OracleTTS:
                     "The authentication_profile_name parameter must not be an empty string."
                 )
 
+        if not isinstance(self._parameters.request_id_prefix, str):
+            raise TypeError("The request_id_prefix parameter must be a string.")
+
         if not isinstance(self._parameters.voice, str):
             raise TypeError("The voice parameter must be a string.")
         self._parameters.voice = self._parameters.voice.strip()
@@ -159,7 +165,7 @@ class OracleTTS:
 
     async def synthesize_speech(self, *, text: str) -> bytes:
         def sync_call():
-            request_id = short_uuid()
+            request_id = self._parameters.request_id_prefix + short_uuid()
 
             logger.debug("Before call to TTS service for: " + text)
 

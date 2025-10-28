@@ -88,6 +88,7 @@ class STT(stt.STT):
             authentication_type=authentication_type,
             authentication_configuration_file_spec=authentication_configuration_file_spec,
             authentication_profile_name=authentication_profile_name,
+            request_id_prefix="live-kit-stt-plug-in-",
             sample_rate=REQUIRED_REAL_TIME_SPEECH_SERVICE_AUDIO_RATE,
             language_code=language_code,
             model_domain=model_domain,

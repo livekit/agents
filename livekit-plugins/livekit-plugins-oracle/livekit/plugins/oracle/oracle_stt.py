@@ -53,6 +53,7 @@ class OracleSTT(RealtimeSpeechClientListener):
         authentication_type: AuthenticationType = AuthenticationType.SECURITY_TOKEN,
         authentication_configuration_file_spec: str = "~/.oci/config",
         authentication_profile_name: str = "DEFAULT",
+        request_id_prefix: str = "",
         sample_rate: int = 16000,
         language_code: str = "en-US",
         model_domain: str = "GENERIC",
@@ -74,6 +75,7 @@ class OracleSTT(RealtimeSpeechClientListener):
             authentication_type: Authentication type. Type is AuthenticationType enum (API_KEY, SECURITY_TOKEN, INSTANCE_PRINCIPAL, or RESOURCE_PRINCIPAL). Default is SECURITY_TOKEN.
             authentication_configuration_file_spec: Authentication configuration file spec. Type is str. Default is "~/.oci/config". Applies only for API_KEY or SECURITY_TOKEN.
             authentication_profile_name: Authentication profile name. Type is str. Default is "DEFAULT". Applies only for API_KEY or SECURITY_TOKEN.
+            request_id_prefix: Request ID prefix. Type is str. Default is "".
             sample_rate: Sample rate. Type is int. Default is 16000.
             language_code: Language code. Type is str. Default is "en-US".
             model_domain: Model domain. Type is str. Default is "GENERIC".
@@ -95,6 +97,7 @@ class OracleSTT(RealtimeSpeechClientListener):
             authentication_configuration_file_spec
         )
         self._parameters.authentication_profile_name = authentication_profile_name
+        self._parameters.request_id_prefix = request_id_prefix
         self._parameters.sample_rate = sample_rate
         self._parameters.language_code = language_code
         self._parameters.model_domain = model_domain
@@ -167,6 +170,9 @@ class OracleSTT(RealtimeSpeechClientListener):
                 raise ValueError(
                     "The authentication_profile_name parameter must not be an empty string."
                 )
+
+        if not isinstance(self._parameters.request_id_prefix, str):
+            raise TypeError("The request_id_prefix parameter must be a string.")
 
         if not isinstance(self._parameters.sample_rate, int):
             raise TypeError("The sample_rate parameter must be an integer.")
@@ -279,6 +285,31 @@ class OracleSTT(RealtimeSpeechClientListener):
         real_time_speech_client_listener = self
 
         compartment_id = self._parameters.compartment_id
+
+        #
+        #  TODO: The self._parameters.request_id_prefix parameter is never used because there is no clear
+        #        way to set the opc_request_id using the RealtimeParameters and the RealtimeSpeechClient
+        #        classes. The commented-out Python code just below accomplishes part of this but it doesn't
+        #        seem to support the four different ways of authenticating which require both the "config"
+        #        and "signer" parameters.
+        #
+        # import oci
+        #
+        # config = oci.config.from_file()
+        #
+        # ai_speech_client = oci.ai_speech.AIServiceSpeechClient(config)
+        #
+        # create_realtime_session_token_response = ai_speech_client.create_realtime_session_token(
+        # create_realtime_session_token_details=oci.ai_speech.models.CreateRealtimeSessionTokenDetails(
+        #     compartment_id="ocid1.test.oc1..<unique_ID>EXAMPLE-compartmentId-Value",
+        #     freeform_tags={
+        #         'EXAMPLE_KEY_XhhWK': 'EXAMPLE_VALUE_boU7XVY49wxJc7QtHycR'},
+        #     defined_tags={
+        #         'EXAMPLE_KEY_C52Iu': {
+        #         'EXAMPLE_KEY_0C8XM': 'EXAMPLE--Value'}}),
+        # opc_retry_token="EXAMPLE-opcRetryToken-Value",
+        # opc_request_id="BRMK4LU7R2XWHOJSLH3S<unique_ID>")
+        #
 
         self._real_time_speech_client = RealtimeSpeechClient(
             config,
