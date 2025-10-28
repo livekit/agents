@@ -12,9 +12,9 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import socket
-import json
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Callable, cast, Awaitable
+from typing import Any, Callable, cast
 
 from opentelemetry import trace
 
@@ -70,6 +70,9 @@ def proc_main(args: ProcStartArgs) -> None:
     import threading
 
     for t in threading.enumerate():
+        if threading.main_thread() == t:
+            continue
+
         print(t.name, t.native_id)
 
 
@@ -271,7 +274,7 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
-        # TODO(theomonnom): move this code? 
+        # TODO(theomonnom): move this code?
         if session := self._job_ctx._primary_agent_session:
             await session.aclose()
 

@@ -124,7 +124,7 @@ class DtmfAgent(Agent):
         return f"User's phone number is {result.user_input}"
 
 
-@server.realtime_session(agent_name=DTMF_AGENT_DISPATCH_NAME)
+@server.rtc_session(agent_name=DTMF_AGENT_DISPATCH_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {
         "room": ctx.room.name,

@@ -619,7 +619,7 @@ class RewardsTask(BaseBankTask):
 SubmenuTaskType = DepositAccountsTask | CreditCardsTask | LoansTask | RewardsTask
 
 
-@server.realtime_session(agent_name=BANK_IVR_DISPATCH_NAME)
+@server.rtc_session(agent_name=BANK_IVR_DISPATCH_NAME)
 async def bank_ivr_session(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 

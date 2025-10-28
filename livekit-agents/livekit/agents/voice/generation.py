@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import time
 import asyncio
 import functools
 import inspect
 import json
+import time
 from collections.abc import AsyncIterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
@@ -34,7 +34,6 @@ from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
-
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings

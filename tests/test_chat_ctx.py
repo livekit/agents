@@ -1,4 +1,4 @@
-from livekit.agents.llm import utils, FunctionCall, FunctionCallOutput, AgentHandoff
+from livekit.agents.llm import AgentHandoff, FunctionCall, FunctionCallOutput, utils
 from livekit.plugins import openai
 
 # function_arguments_to_pydantic_model
@@ -51,7 +51,6 @@ def test_dict():
 
 
 async def test_summarize():
-    from livekit import rtc
     from livekit.agents import ChatContext
 
     chat_ctx = ChatContext()

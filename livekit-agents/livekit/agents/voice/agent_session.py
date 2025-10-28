@@ -34,6 +34,7 @@ from ..types import (
 )
 from ..utils.misc import is_given
 from . import io, room_io
+from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
@@ -467,7 +468,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None: ...
 
-    @tracer.start_as_current_span("agent_session", end_on_exit=False)
     async def start(
         self,
         agent: Agent,
@@ -493,13 +493,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._session_span = current_span = tracer.start_span("agent_session")
+
             self._recorded_events = []
             self._room_io = None
             self._recorder_io = None
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
-            self._session_span = current_span = trace.get_current_span()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
 
@@ -787,10 +788,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._ivr_activity is not None:
                 await self._ivr_activity.aclose()
 
-            self._started = False
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
+
+            self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
@@ -1124,9 +1126,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span("agent_speaking")
-                self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
+
+                if self._room_io:
+                    _set_participant_attributes(
+                        self._agent_speaking_span, self._room_io.room.local_participant
+                    )
+                # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._agent_speaking_span is not None:
-            self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
+            # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
@@ -1150,10 +1157,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if state == "speaking" and self._user_speaking_span is None:
             self._user_speaking_span = tracer.start_span("user_speaking")
-            self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
+
+            if self._room_io and self._room_io.linked_participant:
+                _set_participant_attributes(
+                    self._user_speaking_span, self._room_io.linked_participant
+                )
+
+            # self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            end_time = last_speaking_time or time.time()
-            self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
+            # end_time = last_speaking_time or time.time()
+            # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
             self._user_speaking_span.end()
             self._user_speaking_span = None
 

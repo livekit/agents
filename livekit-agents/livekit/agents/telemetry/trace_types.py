@@ -4,6 +4,11 @@ ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
 
+
+ATTR_PARTICIPANT_ID = "lk.participant_id"
+ATTR_PARTICIPANT_IDENTITY = "lk.participant_identity"
+ATTR_PARTICIPANT_KIND = "lk.participant_kind"
+
 # session start
 ATTR_JOB_ID = "lk.job_id"
 ATTR_AGENT_NAME = "lk.agent_name"

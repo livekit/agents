@@ -1,16 +1,10 @@
-from livekit.protocol import agent_pb
-
 import time
-from datetime import datetime
-from typing import TYPE_CHECKING
-from pathlib import Path
 from dataclasses import dataclass, field
-from .agent_session import AgentSession, AgentSessionOptions
-from .io import AudioInput, AudioOutput
-from .events import AgentEvent
-from .recorder_io import RecorderIO, RecorderAudioInput, RecorderAudioOutput
+from pathlib import Path
+
 from ..llm import ChatContext
-from ..log import logger
+from .agent_session import AgentSessionOptions
+from .events import AgentEvent
 
 
 @dataclass

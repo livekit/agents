@@ -28,7 +28,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from multiprocessing.context import ForkServerContext
-from typing import Any, Callable, Generic, Literal, TypeVar
+from typing import Any, Callable, Generic, Literal, Optional, TypeVar, Union, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -146,7 +146,7 @@ _default_permissions = WorkerPermissions()
 
 # NOTE: this object must be pickle-able
 @dataclass
-class WorkerOptions:
+class ServerOptions:
     entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     """Entrypoint function that will be called when a job is assigned to this worker."""
     request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
@@ -231,6 +231,9 @@ class WorkerOptions:
             logger.warning(
                 f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
             )
+
+
+WorkerOptions = ServerOptions
 
 
 @dataclass
@@ -321,51 +324,105 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._lock = asyncio.Lock()
 
-    def realtime_session(
+    @overload
+    def rtc_session(
+        self,
+        func: Callable[[JobContext], Awaitable[None]],
+        *,
+        agent_name: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Optional[Callable[[JobRequest], Any]] = None,
+        on_session_end: Optional[Callable[[JobContext], Any]] = None,
+    ) -> Callable[[JobContext], Awaitable[None]]: ...
+
+    @overload
+    def rtc_session(
         self,
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Callable[[JobRequest], Any] | None = None,
-        on_session_end: Callable[[JobContext], Any] | None = None,
+        on_request: Optional[Callable[[JobRequest], Any]] = None,
+        on_session_end: Optional[Callable[[JobContext], Any]] = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
+    ]: ...
+
+    def rtc_session(
+        self,
+        func: Optional[Callable[[JobContext], Awaitable[None]]] = None,
+        *,
+        agent_name: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Optional[Callable[[JobRequest], Any]] = None,
+        on_session_end: Optional[Callable[[JobContext], Any]] = None,
+    ) -> Union[
+        Callable[[JobContext], Awaitable[None]],
+        Callable[
+            [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
+        ],
     ]:
         """
-        Decorator for registering the RTC session entrypoint.
-        Usage:
-            @server.realtime_session(agent_name="survey_agent")
-            async def my_agent(job_ctx: JobContext):
-                ...
-        """
-        if self._entrypoint_fnc is not None:
-            raise RuntimeError(
-                "The AgentServer currently only supports registering only one rtc_session"
-            )
+        Decorator or direct registrar for the RTC session entrypoint.
 
-        def decorator(func: Callable[[JobContext], Awaitable[None]]):
-            self._entrypoint_fnc = func
+        Usage:
+            @server.rtc_session(agent_name="survey_agent")
+            async def my_agent(job_ctx: JobContext): ...
+
+            server.rtc_session(my_agent, agent_name="survey_agent")
+        """
+
+        def decorator(
+            f: Callable[[JobContext], Awaitable[None]],
+        ) -> Callable[[JobContext], Awaitable[None]]:
+            if self._entrypoint_fnc is not None:
+                raise RuntimeError(
+                    "The AgentServer currently only supports registering only one rtc_session"
+                )
+            self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
             self._agent_name = agent_name
             self._server_type = type
-            return func
+            return f
 
+        if func is not None:
+            return decorator(func)
         return decorator
 
-    def setup(self) -> Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]:
+    @overload
+    def setup(
+        self,
+        func: Callable[[JobProcess], Any],
+    ) -> Callable[[JobProcess], Any]: ...
+
+    @overload
+    def setup(
+        self,
+    ) -> Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]: ...
+
+    def setup(
+        self,
+        func: Optional[Callable[[JobProcess], Any]] = None,
+    ) -> Union[
+        Callable[[JobProcess], Any],
+        Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]],
+    ]:
         """
-        Decorator for registering the setup/prewarm function.
+        Decorator or direct registrar for the setup/prewarm function.
+
         Usage:
             @server.setup()
-            def setup_process(job_proc: JobProcess):
-                ...
+            def setup_process(job_proc: JobProcess): ...
+
+            server.setup(setup_process)
         """
 
-        def decorator(func: Callable[[JobProcess], Any]):
-            self._prewarm_fnc = func
-            return func
+        def decorator(f: Callable[[JobProcess], Any]) -> Callable[[JobProcess], Any]:
+            self._prewarm_fnc = f
+            return f
 
+        if func is not None:
+            return decorator(func)
         return decorator
 
     @property

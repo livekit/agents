@@ -37,6 +37,7 @@ from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
+from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
     ModelSettings,
@@ -560,6 +561,7 @@ class AgentActivity(RecognitionHooks):
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
+            self._session,
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
@@ -1663,9 +1665,11 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
-
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
+
+        if room_io := self._session._room_io:
+            _set_participant_attributes(current_span, room_io.room.local_participant)
 
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
@@ -2055,7 +2059,7 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)
 
-    @tracer.start_as_current_span("realtime_agent_turn")
+    @tracer.start_as_current_span("agent_turn")
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
@@ -2067,6 +2071,9 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+
+        if room_io := self._session._room_io:
+            _set_participant_attributes(current_span, room_io.room.local_participant)
 
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
