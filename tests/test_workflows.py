@@ -122,19 +122,15 @@ async def test_get_dtmf_task_sip_event_with_confirmation() -> None:
         async with openai.LLM(model="gpt-4.1") as llm, AgentSession(llm=llm) as sess:
             await sess.start(get_dtmf_task(ask_for_confirmation=True))
 
-            result = RunResult[None](output_type=None)
-            sess._global_run_state = result
+            async with sess.eval(output_type=None) as run_result:
+                events = [rtc.SipDTMF(code=1, digit=str(i)) for i in range(10)]
+                events = [*events, rtc.SipDTMF(code=1, digit="#")]
+                for event in events:
+                    ctx.room.emit_event("sip_dtmf_received", event)
+                    await asyncio.sleep(0.1)
 
-            events = [rtc.SipDTMF(code=1, digit=str(i)) for i in range(10)]
-            events = [*events, rtc.SipDTMF(code=1, digit="#")]
-            for event in events:
-                ctx.room.emit_event("sip_dtmf_received", event)
-                await asyncio.sleep(0.1)
-
-            await result
-
-            assert await (
-                result.expect.next_event()
+            await (
+                run_result.expect.next_event()
                 .is_message(role="assistant")
                 .judge(
                     llm,

@@ -4,6 +4,7 @@ import asyncio
 import copy
 import time
 from collections.abc import AsyncIterable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
@@ -435,6 +436,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input)
         return run_state
+
+    @asynccontextmanager
+    async def eval(self, *, output_type: type[Run_T] | None = None):
+        if self._global_run_state is not None and not self._global_run_state.done():
+            raise RuntimeError("nested runs are not supported")
+
+        try:
+            run_state = RunResult(output_type=output_type)
+            self._global_run_state = run_state
+            yield run_state
+            await run_state
+        finally:
+            self._global_run_state = None
 
     @overload
     async def start(
