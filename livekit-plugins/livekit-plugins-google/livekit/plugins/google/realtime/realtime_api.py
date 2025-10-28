@@ -80,6 +80,7 @@ class _RealtimeOptions:
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
+    session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
 
 
 @dataclass
@@ -142,6 +143,7 @@ class RealtimeModel(llm.RealtimeModel):
         context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
         tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
         tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+        session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
@@ -183,6 +185,7 @@ class RealtimeModel(llm.RealtimeModel):
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
             tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
             _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
@@ -283,6 +286,7 @@ class RealtimeModel(llm.RealtimeModel):
             conn_options=conn_options,
             http_options=http_options,
             thinking_config=thinking_config,
+            session_resumption=session_resumption,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -387,7 +391,12 @@ class RealtimeSession(llm.RealtimeSession):
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
 
-        self._session_resumption_handle: str | None = None
+        self._session_resumption_handle: str | None = (
+            self._opts.session_resumption.handle
+            if is_given(self._opts.session_resumption)
+            else None
+        )
+
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
@@ -514,6 +523,10 @@ class RealtimeSession(llm.RealtimeSession):
         ):
             return True
         return False
+
+    @property
+    def session_resumption_handle(self) -> str | None:
+        return self._session_resumption_handle
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
