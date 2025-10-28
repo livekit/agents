@@ -335,12 +335,14 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str, optional): Voice.
             model (TTSModels | str, optional): TTS model to use.
             language (str, optional): Language code for the TTS model.
+            extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
         """
         if is_given(model):
             self._opts.model = model
@@ -348,6 +350,8 @@ class TTS(tts.TTS):
             self._opts.voice = voice
         if is_given(language):
             self._opts.language = language
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs.update(extra_kwargs)
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -407,6 +411,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
+                token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
                 input_sent_event.set()
