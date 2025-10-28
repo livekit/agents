@@ -359,13 +359,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            text_msg = ""
             async for word in word_stream:
-                text_msg = {"text": f"{word.token} ", "context_id": segment_id}
-                self._mark_started()
-                await ws.send_str(json.dumps(text_msg))
+                text_msg += f"{word.token} "
 
-            stop_msg = {"text": "<STOP>", "context_id": segment_id}
-            await ws.send_str(json.dumps(stop_msg))
+            self._mark_started()
+            msg = {"text": f"{text_msg}<STOP>", "context_id": segment_id}
+            await ws.send_str(json.dumps(msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
