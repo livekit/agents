@@ -391,9 +391,11 @@ class RealtimeSession(llm.RealtimeSession):
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
 
-        self._session_resumption_handle: str | None = self._opts.session_resumption.handle if is_given(
-            self._opts.session_resumption
-        ) else None
+        self._session_resumption_handle: str | None = (
+            self._opts.session_resumption.handle
+            if is_given(self._opts.session_resumption)
+            else None
+        )
 
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
