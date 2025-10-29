@@ -100,7 +100,7 @@ def proc_main(args: ProcStartArgs) -> None:
         frame = frames.get(t.ident)
 
         logger.warn(
-            f"thread `{t.name}` is preventing the process from exiting",
+            f"non-daemon thread `{t.name}` may prevent the process from exiting",
             extra={"thread_id": t.native_id, "thread_name": t.name},
         )
 
