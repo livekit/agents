@@ -10,6 +10,7 @@ LiveAPIModels = Literal[
     # models supported on Gemini API
     "gemini-2.0-flash-live-001",
     "gemini-live-2.5-flash-preview",
+    "gemini-live-2.5-flash-preview-native-audio-09-2025",
     "gemini-2.5-flash-native-audio-preview-09-2025",
     "gemini-2.5-flash-preview-native-audio-dialog",
     "gemini-2.5-flash-exp-native-audio-thinking-dialog",
