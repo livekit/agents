@@ -164,7 +164,7 @@ class STT(stt.STT):
                                 max(0.0, (w.get("end", 0.0) or 0.0) - (w.get("start", 0.0) or 0.0))
                             )
                         if durations:
-                            speaker_id = max(durations, key=durations.get)
+                            speaker_id = max(durations, key=lambda spk: durations.get(spk, 0.0))
                 else:
                     api_language = self._opts.language_code
 
