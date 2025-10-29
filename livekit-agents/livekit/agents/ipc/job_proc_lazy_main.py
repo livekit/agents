@@ -80,8 +80,6 @@ def proc_main(args: ProcStartArgs) -> None:
     import threading
     import traceback
 
-    frames = sys._current_frames()
-
     for t in threading.enumerate():
         if threading.main_thread() == t:
             continue
@@ -97,6 +95,7 @@ def proc_main(args: ProcStartArgs) -> None:
 
         t.join(timeout=0.2)
 
+        frames = sys._current_frames()
         frame = frames.get(t.ident)
 
         logger.warn(
