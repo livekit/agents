@@ -12,6 +12,8 @@ from .. import utils
 from ..utils.aio import duplex_unix
 
 
+_end_sentinel = b"end"
+
 class LogQueueListener:
     def __init__(
         self,
@@ -47,6 +49,10 @@ class LogQueueListener:
         while True:
             try:
                 data = self._duplex.recv_bytes()
+                if data == _end_sentinel:
+                    self._duplex.send_bytes(_end_sentinel)
+                    break
+
             except utils.aio.duplex_unix.DuplexClosed:
                 break
 
@@ -64,10 +70,20 @@ class LogQueueHandler(logging.Handler):
         self._send_thread = threading.Thread(target=self._forward_logs, name="ipc_log_forwarder")
         self._send_thread.start()
 
+    @property
+    def thread(self) -> threading.Thread:
+        return self._send_thread
+
     def _forward_logs(self) -> None:
         while True:
             serialized_record = self._send_q.get()
             if serialized_record is None:
+                self._duplex.send_bytes(_end_sentinel)
+                try:
+                    self._duplex.recv_bytes()
+                except Exception as e:
+                    pass
+                
                 break
 
             try:

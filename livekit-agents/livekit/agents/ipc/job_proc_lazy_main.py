@@ -48,7 +48,16 @@ class ProcStartArgs:
 
 
 def proc_main(args: ProcStartArgs) -> None:
+    import logging
     from .proc_client import _ProcClient
+    from .log_queue import LogQueueHandler
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.NOTSET)
+
+    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
+    log_handler = LogQueueHandler(log_cch)
+    root_logger.addHandler(log_handler)
 
     job_proc = _JobProc(
         args.initialize_process_fnc,
@@ -59,7 +68,6 @@ def proc_main(args: ProcStartArgs) -> None:
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
-    client.initialize_logger()
     try:
         client.initialize()
     except Exception:
@@ -73,7 +81,23 @@ def proc_main(args: ProcStartArgs) -> None:
         if threading.main_thread() == t:
             continue
 
-        print(t.name, t.native_id)
+        if threading.current_thread() == t:
+            continue
+
+        if t == log_handler.thread:
+            continue
+        
+        if t.daemon:
+            continue
+
+        t.join(timeout=0.2)
+
+        logger.warn(
+            f"thread `{t.name}` is preventing the process from exiting",
+            extra={"thread_id": t.native_id, "thread_name": t.name},
+        )
+
+    log_handler.close()
 
 
 class _InfClient(InferenceExecutor):
