@@ -68,7 +68,9 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.environ.get("SPEECHMATICS_API_KEY")
         if not api_key:
-            raise ValueError("Speechmatics API key required. Set SPEECHMATICS_API_KEY or provide api_key.")
+            raise ValueError(
+                "Speechmatics API key required. Set SPEECHMATICS_API_KEY or provide api_key."
+            )
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -143,7 +145,7 @@ class ChunkedStream(tts.ChunkedStream):
                 buffer = b""
 
                 # Helper to move all complete 2-byte int16 samples from buffer into frames
-                def _emit_complete_samples():
+                def _emit_complete_samples() -> bytes | None:
                     nonlocal buffer
                     if len(buffer) < 2:
                         return None
