@@ -87,13 +87,13 @@ def proc_main(args: ProcStartArgs) -> None:
         if threading.current_thread() == t:
             continue
 
-        # if t == log_handler.thread:
-        #     continue
+        if t == log_handler.thread:
+            continue
 
         if t.daemon:
             continue
 
-        t.join(timeout=0.2)
+        t.join(timeout=0.25)
 
         frames = sys._current_frames()
         frame = frames.get(t.ident)
