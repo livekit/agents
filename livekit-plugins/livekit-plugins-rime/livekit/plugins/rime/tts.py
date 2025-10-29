@@ -59,6 +59,7 @@ class _ArcanaOptions:
     temperature: NotGivenOr[float] = NOT_GIVEN
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
+    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
 
 
 @dataclass
@@ -81,13 +82,13 @@ class TTS(tts.TTS):
         base_url: str = RIME_BASE_URL,
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
+        lang: TTSLangs | str = "eng",
         # Arcana options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         # Mistv2 options
-        lang: TTSLangs | str = "eng",
         sample_rate: int = 22050,
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
@@ -125,6 +126,7 @@ class TTS(tts.TTS):
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
+                lang=lang, 
             )
         elif model == "mistv2":
             self._opts.mistv2_options = _Mistv2Options(
@@ -197,6 +199,8 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["top_p"] = arcana_opts.top_p
             if is_given(arcana_opts.max_tokens):
                 payload["max_tokens"] = arcana_opts.max_tokens
+            if is_given(arcana_opts.lang): 
+                payload["lang"] = arcana_opts.lang
             format = "audio/wav"
         elif self._opts.model == "mistv2":
             mistv2_opts = self._opts.mistv2_options
