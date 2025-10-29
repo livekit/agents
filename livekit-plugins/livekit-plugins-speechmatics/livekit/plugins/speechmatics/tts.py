@@ -22,6 +22,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .utils import get_tts_url
+
 BASE_URL = "https://preview.tts.speechmatics.com"
 NUM_CHANNELS = 1
 DEFAULT_VOICE = "sarah"
@@ -51,7 +53,7 @@ class TTS(tts.TTS):
         Create a new instance of Speechmatics TTS.
 
         Args:
-            voice (str): Voice model to use for synthesis. Defaults to "sarah".
+            voice (str): Voice model to use for synthesis. Options: "sarah", "theo", "megan". Defaults to "sarah".
             sample_rate (int): Sample rate of audio. Defaults to 16000.
             api_key (str): Speechmatics API key. If not provided, will look for SPEECHMATICS_API_KEY in environment.
             base_url (str): Base URL for Speechmatics TTS API. Defaults to "https://preview.tts.speechmatics.com"
@@ -120,7 +122,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "text": self._input_text,
             }
 
-            url = f"{self._opts.base_url}/generate/{self._opts.voice}?output_format=pcm_{self._opts.sample_rate}"
+            url = get_tts_url(self._opts.base_url, self._opts.voice, self._opts.sample_rate)
 
             async with self._tts._ensure_session().post(
                 url,
