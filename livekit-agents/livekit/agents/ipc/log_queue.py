@@ -11,8 +11,6 @@ from typing import Callable, Optional
 from .. import utils
 from ..utils.aio import duplex_unix
 
-_end_sentinel = b"end"
-
 
 class LogQueueListener:
     def __init__(
@@ -49,10 +47,6 @@ class LogQueueListener:
         while True:
             try:
                 data = self._duplex.recv_bytes()
-                if data == _end_sentinel:
-                    self._duplex.send_bytes(_end_sentinel)
-                    break
-
             except utils.aio.duplex_unix.DuplexClosed:
                 break
 
@@ -78,12 +72,6 @@ class LogQueueHandler(logging.Handler):
         while True:
             serialized_record = self._send_q.get()
             if serialized_record is None:
-                self._duplex.send_bytes(_end_sentinel)
-                try:
-                    self._duplex.recv_bytes()
-                except Exception:
-                    pass
-
                 break
 
             try:
