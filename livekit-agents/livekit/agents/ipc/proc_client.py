@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import socket
 import sys
 from collections.abc import Coroutine
@@ -32,7 +31,7 @@ class _ProcClient:
         self._initialize_fnc = initialize_fnc
         self._main_task_fnc = main_task_fnc
         self._initialized = False
-        
+
     def initialize(self) -> None:
         try:
             cch = aio.duplex_unix._Duplex.open(self._mp_cch)

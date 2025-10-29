@@ -11,8 +11,8 @@ from typing import Callable, Optional
 from .. import utils
 from ..utils.aio import duplex_unix
 
-
 _end_sentinel = b"end"
+
 
 class LogQueueListener:
     def __init__(
@@ -81,9 +81,9 @@ class LogQueueHandler(logging.Handler):
                 self._duplex.send_bytes(_end_sentinel)
                 try:
                     self._duplex.recv_bytes()
-                except Exception as e:
+                except Exception:
                     pass
-                
+
                 break
 
             try:

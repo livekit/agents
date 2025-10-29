@@ -49,8 +49,9 @@ class ProcStartArgs:
 
 def proc_main(args: ProcStartArgs) -> None:
     import logging
-    from .proc_client import _ProcClient
+
     from .log_queue import LogQueueHandler
+    from .proc_client import _ProcClient
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.NOTSET)
@@ -75,7 +76,11 @@ def proc_main(args: ProcStartArgs) -> None:
 
     client.run()
 
+    import sys
     import threading
+    import traceback
+
+    frames = sys._current_frames()
 
     for t in threading.enumerate():
         if threading.main_thread() == t:
@@ -84,18 +89,23 @@ def proc_main(args: ProcStartArgs) -> None:
         if threading.current_thread() == t:
             continue
 
-        if t == log_handler.thread:
-            continue
-        
+        # if t == log_handler.thread:
+        #     continue
+
         if t.daemon:
             continue
 
         t.join(timeout=0.2)
 
+        frame = frames.get(t.ident)
+
         logger.warn(
             f"thread `{t.name}` is preventing the process from exiting",
             extra={"thread_id": t.native_id, "thread_name": t.name},
         )
+
+        if frame is not None:
+            logger.warn("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
 
     log_handler.close()
 
