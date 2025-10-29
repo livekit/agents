@@ -121,7 +121,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         ):
             if (
                 task_id not in self._registered_factories
-                or task_id not in self._visited_tasks.keys()
+                or task_id not in self._visited_tasks
             ):
                 raise ToolError("unable to regress, invalid task id")
 
