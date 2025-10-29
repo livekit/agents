@@ -48,7 +48,17 @@ class ProcStartArgs:
 
 
 def proc_main(args: ProcStartArgs) -> None:
+    import logging
+
+    from .log_queue import LogQueueHandler
     from .proc_client import _ProcClient
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.NOTSET)
+
+    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
+    log_handler = LogQueueHandler(log_cch)
+    root_logger.addHandler(log_handler)
 
     job_proc = _JobProc(
         args.initialize_process_fnc,
@@ -59,7 +69,6 @@ def proc_main(args: ProcStartArgs) -> None:
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
-    client.initialize_logger()
     try:
         client.initialize()
     except Exception:
@@ -67,13 +76,37 @@ def proc_main(args: ProcStartArgs) -> None:
 
     client.run()
 
+    import sys
     import threading
+    import traceback
 
     for t in threading.enumerate():
         if threading.main_thread() == t:
             continue
 
-        print(t.name, t.native_id)
+        if threading.current_thread() == t:
+            continue
+
+        if t == log_handler.thread:
+            continue
+
+        if t.daemon:
+            continue
+
+        t.join(timeout=0.25)
+
+        frames = sys._current_frames()
+        frame = frames.get(t.ident)
+
+        logger.warn(
+            f"non-daemon thread `{t.name}` may prevent the process from exiting",
+            extra={"thread_id": t.native_id, "thread_name": t.name},
+        )
+
+        if frame is not None:
+            logger.warn("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
+
+    log_handler.close()
 
 
 class _InfClient(InferenceExecutor):

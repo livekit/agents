@@ -41,13 +41,12 @@ from .telemetry import _setup_cloud_tracer, _upload_session_report, trace_types,
 from .types import NotGivenOr
 from .utils import http_context, is_given, misc, wait_for_participant
 
-
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 if TYPE_CHECKING:
-    from .voice.agent_session import AgentSession
     from .ipc.inference_executor import InferenceExecutor
+    from .voice.agent_session import AgentSession
     from .voice.report import SessionReport
 
 
