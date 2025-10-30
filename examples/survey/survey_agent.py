@@ -296,11 +296,15 @@ class SurveyAgent(Agent):
             id="get_email_task",
             description="Collects email",
         )
-        task_group.add(lambda: CommuteTask(), id="commute_task", description="Asks about commute")
+        task_group.add(
+            lambda: CommuteTask(),
+            id="commute_task",
+            description="Asks about commute and corresponding method of transportation.",
+        )
         task_group.add(
             lambda: ExperienceTask(),
             id="experience_task",
-            description="Collects years of experience",
+            description="Collects years of experience and a description of their professionl work history.",
         )
         task_group.add(
             lambda: BehavioralTask(),
