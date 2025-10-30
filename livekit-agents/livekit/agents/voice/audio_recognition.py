@@ -92,11 +92,11 @@ class AudioRecognition:
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._min_endpointing_delay = min_endpointing_delay
         self._max_endpointing_delay = max_endpointing_delay
-        self._turn_detector = turn_detector
+        self._turn_detector: _TurnDetector | None = None
         self._stt = stt
         self._vad = vad
-        self._turn_detection_mode = turn_detection_mode
-        self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
+        self._turn_detection_mode: TurnDetectionMode | None = None
+        self._vad_base_turn_detection = False
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
 
@@ -119,6 +119,9 @@ class AudioRecognition:
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
+        # apply initial turn detection configuration via the common update path
+        self.update_turn_detection(turn_detection_mode, turn_detector, vad)
+
     def update_options(
         self,
         *,
@@ -129,6 +132,45 @@ class AudioRecognition:
             self._min_endpointing_delay = min_endpointing_delay
         if is_given(max_endpointing_delay):
             self._max_endpointing_delay = max_endpointing_delay
+
+    def update_turn_detection(
+        self,
+        mode: TurnDetectionMode | None,
+        turn_detector: _TurnDetector | None,
+        vad: vad.VAD | None,
+    ) -> None:
+        previous_mode = self._turn_detection_mode
+        manual_prev = previous_mode == "manual"
+        manual_now = mode == "manual"
+
+        self._turn_detection_mode = mode
+        self._turn_detector = turn_detector
+        base_mode = mode if isinstance(mode, str) else None
+        self._vad_base_turn_detection = base_mode in ("vad", None)
+
+        vad_changed = vad is not self._vad
+        vad_active = self._vad_atask is not None
+        if vad_changed or vad_active:
+            self.update_vad(vad)
+        else:
+            self._vad = vad
+
+        if manual_now:
+            if self._end_of_turn_task is not None and not self._end_of_turn_task.done():
+                self._end_of_turn_task.cancel()
+            self._end_of_turn_task = None
+            self._user_turn_committed = False
+            return
+
+        if manual_prev and not manual_now:
+            if self._end_of_turn_task is not None:
+                if not self._end_of_turn_task.done():
+                    self._end_of_turn_task.cancel()
+                self._end_of_turn_task = None
+
+            if not self._speaking and self._audio_transcript:
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
     def start(self) -> None:
         self.update_stt(self._stt)

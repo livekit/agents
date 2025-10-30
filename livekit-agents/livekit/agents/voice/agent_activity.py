@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -41,6 +41,7 @@ from .audio_recognition import (
     RecognitionHooks,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
+    _TurnDetector,
 )
 from .events import (
     AgentFalseInterruptionEvent,
@@ -85,6 +86,9 @@ class _PreemptiveGeneration:
 
 
 # NOTE: AgentActivity isn't exposed to the public API
+_StrTurnDetection = Literal["stt", "vad", "realtime_llm", "manual"]
+
+
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -116,86 +120,11 @@ class AgentActivity(RecognitionHooks):
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
-        self._turn_detection_mode = (
-            self.turn_detection if isinstance(self.turn_detection, str) else None
-        )
-
+        self._turn_detection_mode: TurnDetectionMode | None = None
+        self._turn_detector: _TurnDetector | None = None
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
 
-        if self._turn_detection_mode == "vad" and not self.vad:
-            logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
-            self._turn_detection_mode = None
-
-        if self._turn_detection_mode == "stt" and not self.stt:
-            logger.warning(
-                "turn_detection is set to 'stt', but no STT model is provided, "
-                "ignoring the turn_detection setting"
-            )
-            self._turn_detection_mode = None
-
-        if isinstance(self.llm, llm.RealtimeModel):
-            if self.llm.capabilities.turn_detection and not self.allow_interruptions:
-                raise ValueError(
-                    "the RealtimeModel uses a server-side turn detection, "
-                    "allow_interruptions cannot be False, disable turn_detection in "
-                    "the RealtimeModel and use VAD on the AgentSession instead"
-                )
-
-            if (
-                self._turn_detection_mode == "realtime_llm"
-                and not self.llm.capabilities.turn_detection
-            ):
-                logger.warning(
-                    "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
-                    "or the server-side turn detection is not supported/enabled, "
-                    "ignoring the turn_detection setting"
-                )
-                self._turn_detection_mode = None
-
-            if self._turn_detection_mode == "stt":
-                logger.warning(
-                    "turn_detection is set to 'stt', but the LLM is a RealtimeModel, "
-                    "ignoring the turn_detection setting"
-                )
-                self._turn_detection_mode = None
-
-            elif (
-                self._turn_detection_mode
-                and self._turn_detection_mode != "realtime_llm"
-                and self.llm.capabilities.turn_detection
-            ):
-                logger.warning(
-                    f"turn_detection is set to '{self._turn_detection_mode}', but the LLM "
-                    "is a RealtimeModel and server-side turn detection enabled, "
-                    "ignoring the turn_detection setting"
-                )
-                self._turn_detection_mode = None
-
-            # fallback to VAD if server side turn detection is disabled and VAD is available
-            if (
-                not self.llm.capabilities.turn_detection
-                and self.vad
-                and self._turn_detection_mode is None
-            ):
-                self._turn_detection_mode = "vad"
-        elif self._turn_detection_mode == "realtime_llm":
-            logger.warning(
-                "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel"
-            )
-            self._turn_detection_mode = None
-
-        if (
-            not self.vad
-            and self.stt
-            and not self.stt.capabilities.streaming
-            and isinstance(self.llm, llm.LLM)
-            and self.allow_interruptions
-            and self._turn_detection_mode is None
-        ):
-            logger.warning(
-                "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
-                "for more responsive interruption handling."
-            )
+        self.update_turn_detection()
 
         self._mcp_tools: list[mcp.MCPTool] = []
 
@@ -204,6 +133,113 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
+
+    def _determine_turn_detection_mode(
+        self,
+    ) -> tuple[_StrTurnDetection | None, _TurnDetector | None]:
+        turn_detection = self.turn_detection
+        if isinstance(turn_detection, str):
+            mode: _StrTurnDetection | None = turn_detection
+            turn_detector = None
+        elif turn_detection is None:
+            mode = None
+            turn_detector = None
+        else:
+            mode = None
+            turn_detector = turn_detection
+
+        vad_model = self.vad
+        stt_model = self.stt
+        llm_model = self.llm
+
+        if mode == "vad" and not vad_model:
+            logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
+            mode = None
+
+        if mode == "stt" and not stt_model:
+            logger.warning(
+                "turn_detection is set to 'stt', but no STT model is provided, "
+                "ignoring the turn_detection setting"
+            )
+            mode = None
+
+        if isinstance(llm_model, llm.RealtimeModel):
+            if llm_model.capabilities.turn_detection and not self.allow_interruptions:
+                raise ValueError(
+                    "the RealtimeModel uses a server-side turn detection, "
+                    "allow_interruptions cannot be False, disable turn_detection in "
+                    "the RealtimeModel and use VAD on the AgentSession instead"
+                )
+
+            if mode == "realtime_llm" and not llm_model.capabilities.turn_detection:
+                logger.warning(
+                    "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
+                    "or the server-side turn detection is not supported/enabled, "
+                    "ignoring the turn_detection setting"
+                )
+                mode = None
+
+            if mode == "stt":
+                logger.warning(
+                    "turn_detection is set to 'stt', but the LLM is a RealtimeModel, "
+                    "ignoring the turn_detection setting"
+                )
+                mode = None
+
+            elif mode and mode != "realtime_llm" and llm_model.capabilities.turn_detection:
+                logger.warning(
+                    f"turn_detection is set to '{mode}', but the LLM "
+                    "is a RealtimeModel and server-side turn detection enabled, "
+                    "ignoring the turn_detection setting"
+                )
+                mode = None
+
+            if not llm_model.capabilities.turn_detection and vad_model and mode is None:
+                mode = "vad"
+        elif mode == "realtime_llm":
+            logger.warning(
+                "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel"
+            )
+            mode = None
+
+        if (
+            not vad_model
+            and stt_model
+            and not stt_model.capabilities.streaming
+            and isinstance(llm_model, llm.LLM)
+            and self.allow_interruptions
+            and mode is None
+        ):
+            logger.warning(
+                "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
+                "for more responsive interruption handling."
+            )
+
+        return mode, turn_detector
+
+    def update_turn_detection(self) -> None:
+        previous_mode = self._turn_detection_mode
+        mode, turn_detector = self._determine_turn_detection_mode()
+
+        self._turn_detection_mode = mode
+        self._turn_detector = turn_detector
+
+        if mode == "manual":
+            if self._false_interruption_timer is not None:
+                self._false_interruption_timer.cancel()
+                self._false_interruption_timer = None
+
+            if self._interrupt_paused_speech_task is not None:
+                if not self._interrupt_paused_speech_task.done():
+                    self._interrupt_paused_speech_task.cancel()
+                self._interrupt_paused_speech_task = None
+        elif previous_mode == "manual":
+            if self._false_interruption_timer is not None:
+                self._false_interruption_timer.cancel()
+                self._false_interruption_timer = None
+
+        if self._audio_recognition is not None:
+            self._audio_recognition.update_turn_detection(mode, turn_detector, self.vad)
 
     @property
     def scheduling_paused(self) -> bool:
@@ -542,7 +578,7 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
-            turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
+            turn_detector=self._turn_detector,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
             turn_detection_mode=self._turn_detection_mode,

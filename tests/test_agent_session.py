@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -81,6 +81,19 @@ class MyAgent(Agent):
 
 
 SESSION_TIMEOUT = 60.0
+
+
+async def wait_for_condition(
+    predicate: Callable[[], bool], *, timeout: float = 1.0, interval: float = 0.01
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        if predicate():
+            return
+        if loop.time() >= deadline:
+            raise asyncio.TimeoutError("condition not met")
+        await asyncio.sleep(interval)
 
 
 async def test_events_and_metrics() -> None:
@@ -637,6 +650,97 @@ async def test_interrupt_during_on_user_turn_completed(
     assert conversation_events[2].item.type == "message"
     assert conversation_events[2].item.role == "assistant"
     assert conversation_events[2].item.text_content == "Here is a story about a firefighter..."
+
+
+async def test_set_turn_detection_manual_requires_commit() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.0, "manual speech", stt_delay=0.0)
+
+    session = create_session(actions, speed_factor=5.0)
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    transcription_sync: TranscriptSynchronizer | None = None
+    if isinstance(session.output.audio, _SyncedAudioOutput):
+        transcription_sync = session.output.audio._synchronizer
+
+    try:
+        await session.start(agent)
+        session.set_turn_detection("manual")
+
+        stt = session.stt
+        audio_input = session.input.audio
+        assert isinstance(stt, FakeSTT)
+        assert isinstance(audio_input, FakeAudioInput)
+
+        audio_input.push(0.1)
+        await stt.fake_user_speeches_done
+        await asyncio.sleep(0.2)
+
+        assert conversation_events == []
+
+        session.commit_user_turn()
+        await wait_for_condition(lambda: len(conversation_events) >= 1, timeout=2.0)
+        assert conversation_events[0].item.role == "user"
+        assert conversation_events[0].item.text_content == "manual speech"
+
+        with contextlib.suppress(RuntimeError):
+            await session.drain()
+    finally:
+        with contextlib.suppress(Exception):
+            await session.aclose()
+        if transcription_sync is not None:
+            await transcription_sync.aclose()
+
+
+async def test_set_turn_detection_back_to_auto_resumes_detection() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.2, "first manual speech", stt_delay=0.0)
+    actions.add_user_speech(8.0, 9.0, "second auto speech", stt_delay=0.0)
+
+    session = create_session(actions, speed_factor=5.0)
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    transcription_sync: TranscriptSynchronizer | None = None
+    if isinstance(session.output.audio, _SyncedAudioOutput):
+        transcription_sync = session.output.audio._synchronizer
+
+    try:
+        await session.start(agent)
+        session.set_turn_detection("manual")
+
+        stt = session.stt
+        audio_input = session.input.audio
+        assert isinstance(stt, FakeSTT)
+        assert isinstance(audio_input, FakeAudioInput)
+
+        audio_input.push(0.1)
+
+        await asyncio.sleep(0.4)
+        assert len(conversation_events) == 0
+
+        session.commit_user_turn()
+        await wait_for_condition(lambda: len(conversation_events) >= 1, timeout=2.0)
+
+        session.set_turn_detection("vad")
+
+        await wait_for_condition(lambda: len(conversation_events) >= 2, timeout=3.0)
+        assert conversation_events[1].item.role == "user"
+        assert conversation_events[1].item.text_content == "second auto speech"
+
+        await stt.fake_user_speeches_done
+        with contextlib.suppress(RuntimeError):
+            await session.drain()
+    finally:
+        with contextlib.suppress(Exception):
+            await session.aclose()
+        if transcription_sync is not None:
+            await transcription_sync.aclose()
 
 
 # helpers
