@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RoomInputOptions,
     RoomOutputOptions,
-    WorkerOptions,
     cli,
 )
 from livekit.plugins import openai
@@ -34,6 +34,10 @@ class MyAgent(Agent):
         )
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.LLM(model="gpt-4o-mini"),
@@ -48,4 +52,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

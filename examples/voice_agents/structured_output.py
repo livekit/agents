@@ -10,12 +10,12 @@ from typing_extensions import TypedDict
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
+    AgentServer,
     AgentSession,
     ChatContext,
     FunctionTool,
     JobContext,
     ModelSettings,
-    WorkerOptions,
     cli,
 )
 from livekit.plugins import openai, silero
@@ -123,6 +123,10 @@ class MyAgent(Agent):
         )
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -132,4 +136,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
