@@ -41,7 +41,7 @@ AUTHORIZATION_HEADER = "xi-api-key"
 class _STTOptions:
     api_key: str
     base_url: str
-    language_code: str = None
+    language_code: str | None = None
     tag_audio_events: bool = True
 
 
