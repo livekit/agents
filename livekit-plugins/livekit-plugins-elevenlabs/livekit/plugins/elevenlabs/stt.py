@@ -121,7 +121,7 @@ class STT(stt.STT):
             ) as response:
                 response_json = await response.json()
                 extracted_text = response_json.get("text")
-
+                language_code = response_json.get("language_code")
                 speaker_id = None
                 start_time, end_time = 0, 0
                 words = response_json.get("words")
@@ -143,6 +143,7 @@ class STT(stt.STT):
             raise APIConnectionError() from e
 
         return self._transcription_to_speech_event(
+            language_code=language_code,
             text=extracted_text,
             start_time=start_time,
             end_time=end_time,
@@ -151,6 +152,7 @@ class STT(stt.STT):
 
     def _transcription_to_speech_event(
         self,
+        language_code: str,
         text: str,
         start_time: float,
         end_time: float,
@@ -161,7 +163,7 @@ class STT(stt.STT):
             alternatives=[
                 stt.SpeechData(
                     text=text,
-                    language=self._opts.language_code,
+                    language=language_code,
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
