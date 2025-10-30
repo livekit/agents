@@ -23,6 +23,7 @@ from livekit.agents import (
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
 from livekit.plugins import deepgram, openai, silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("SurveyAgent")
 
@@ -106,7 +107,7 @@ async def disqualify(context: RunContext, disqualification_reason: str) -> None:
         disqualification_reason (str): The justification for ending the interview (ex. Refuses to answer question)
     """
     context.session.generate_reply(
-        instructions=f"The interview is ending now, inform the candidate that the reason was {disqualification_reason}"
+        instructions=f"The interview is ending now, inform the candidate that the reason was {disqualification_reason}. Be respectful and natural."
     )
     disqualification_reason = "[DISQUALIFIED] " + disqualification_reason
     data = {
@@ -217,7 +218,7 @@ class CommuteTask(AgentTask[CommuteResults]):
         super().__init__(
             instructions="""
             You are an interviewer screening a candidate for a software engineering position. You have already been asking a series of questions, and this is another stage of the process.
-            Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week.
+            Record if the candidate is able to commute to the office and their flexibility. Ideally, the candidate should commute to the office three days a week. Avoiding using parentheses in your response.
             """,
             tools=[disqualify],
         )
@@ -287,7 +288,14 @@ class SurveyAgent(Agent):
             id="get_name_intro_task",
             description="Collects name and introduction",
         )
-        task_group.add(lambda: GetEmailTask(extra_instructions="If the user refuses to provide their email, call disqualify() insted of decline_email_capture().", tools=[disqualify]), id="get_email_task", description="Collects email")
+        task_group.add(
+            lambda: GetEmailTask(
+                extra_instructions="If the user refuses to provide their email, call disqualify() insted of decline_email_capture().",
+                tools=[disqualify],
+            ),
+            id="get_email_task",
+            description="Collects email",
+        )
         task_group.add(lambda: CommuteTask(), id="commute_task", description="Asks about commute")
         task_group.add(
             lambda: ExperienceTask(),
@@ -316,21 +324,21 @@ class SurveyAgent(Agent):
     @function_tool()
     async def end_screening(self):
         """Call when the interview/screening is concluded to hang up."""
-        await self.session.generate_reply(instructions="Close out the interview and say goodbye.")
         self.session.shutdown()
 
 
 server = AgentServer()
 
 
-@server.realtime_session()
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=Userdata(filename="results.csv", candidate_name="", task_results={}),
-        llm=openai.LLM(model="gpt-4.1"),
+        llm=openai.LLM(),
         stt=deepgram.STT(model="nova-3", language="multi"),
         tts=openai.TTS(),
         vad=silero.VAD.load(),
+        turn_detection=MultilingualModel(),
         preemptive_generation=True,
     )
 
