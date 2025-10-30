@@ -21,6 +21,7 @@ CartesiaModels = Literal[
     "cartesia",
     "cartesia/sonic",
     "cartesia/sonic-2",
+    "cartesia/sonic-3",
     "cartesia/sonic-turbo",
 ]
 ElevenlabsModels = Literal[
@@ -411,7 +412,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
-                token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
+                token_pkt["extra"] = self._tts._opts.extra_kwargs if self._tts._opts.extra_kwargs else {}
+                # Include voice in each packet so it updates dynamically
+                if self._tts._opts.voice:
+                    token_pkt["voice"] = self._tts._opts.voice
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
                 input_sent_event.set()
