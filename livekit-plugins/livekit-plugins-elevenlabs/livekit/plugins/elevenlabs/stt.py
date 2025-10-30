@@ -41,7 +41,7 @@ AUTHORIZATION_HEADER = "xi-api-key"
 class _STTOptions:
     api_key: str
     base_url: str
-    language_code: str = "en"
+    language_code: str = None
     tag_audio_events: bool = True
 
 
@@ -61,7 +61,7 @@ class STT(stt.STT):
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            language (NotGivenOr[str]): Language code for the STT model. Optional.
+            language_code (NotGivenOr[str]): Language code for the STT model. Optional.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription. Default is True.
         """  # noqa: E501
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
@@ -75,9 +75,10 @@ class STT(stt.STT):
         self._opts = _STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            language_code=language_code if is_given(language_code) else "en",
             tag_audio_events=tag_audio_events,
         )
+        if is_given(language_code):
+            self._opts.language_code = language_code
         self._session = http_session
 
     @property
@@ -108,8 +109,9 @@ class STT(stt.STT):
         form = aiohttp.FormData()
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", "scribe_v1")
-        form.add_field("language_code", self._opts.language_code)
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
+        if self._opts.language_code:
+            form.add_field("language_code", self._opts.language_code)
 
         try:
             async with self._ensure_session().post(
