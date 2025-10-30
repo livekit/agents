@@ -69,7 +69,7 @@ TTSAudioFormat = Literal["pcm", "mp3", "flac", "wav"]
 TTSSampleRate = Literal[8000, 16000, 22050, 24000, 32000, 44100]
 TTSBitRate = Literal[32000, 64000, 128000, 256000]  # only for mp3 format
 
-DEFAULT_BASE_URL = "https://api.minimaxi.io"  # or "https://api.minimaxi.com"
+DEFAULT_BASE_URL = "https://api.minimax.io"  # or "https://api.minimax.com"
 
 
 @dataclass
