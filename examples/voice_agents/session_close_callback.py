@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, CloseEvent, JobContext, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli, llm
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -30,6 +30,10 @@ class MyAgent(Agent):
         self.session.shutdown()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -72,4 +76,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

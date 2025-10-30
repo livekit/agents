@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RoomInputOptions,
     RoomOutputOptions,
-    WorkerOptions,
     cli,
     voice,  # noqa: F401
 )
@@ -18,7 +18,10 @@ logger = logging.getLogger("realtime-video-agent")
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -47,4 +50,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -8,7 +8,7 @@ import httpx
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent
@@ -17,6 +17,8 @@ from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
+
+server = AgentServer()
 
 load_dotenv()
 
@@ -107,9 +109,5 @@ if __name__ == "__main__":
     args, remaining_args = parser.parse_known_args()
     sys.argv = sys.argv[:1] + remaining_args
 
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=partial(entrypoint, avatar_dispatcher_url=args.avatar_url),
-            worker_type=WorkerType.ROOM,
-        )
-    )
+    server.rtc_session(partial(entrypoint, avatar_dispatcher_url=args.avatar_url))
+    cli.run_app(server)

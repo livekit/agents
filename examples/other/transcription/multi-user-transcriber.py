@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
@@ -14,7 +15,6 @@ from livekit.agents import (
     RoomIO,
     RoomOutputOptions,
     StopResponse,
-    WorkerOptions,
     cli,
     llm,
     utils,
@@ -123,6 +123,10 @@ class MultiUserTranscriber:
         await sess.aclose()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     transcriber = MultiUserTranscriber(ctx)
     transcriber.start()
@@ -138,9 +142,10 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(cleanup)
 
 
+@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

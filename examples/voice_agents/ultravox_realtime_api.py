@@ -4,10 +4,10 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RoomOutputOptions,
-    WorkerOptions,
     cli,
     function_tool,
 )
@@ -42,6 +42,10 @@ class MyAgent(Agent):
         return f"The weather in {city} is sunny and 70 degrees"
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession()
 
@@ -55,4 +59,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

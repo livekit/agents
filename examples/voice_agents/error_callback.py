@@ -5,7 +5,7 @@ import pathlib
 
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import CloseEvent, ErrorEvent
@@ -21,7 +21,10 @@ load_dotenv()
 # This example demonstrates how to handle errors from STT, TTS, and LLM
 # and how to continue the conversation after an error if the error is recoverable
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -90,4 +93,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
