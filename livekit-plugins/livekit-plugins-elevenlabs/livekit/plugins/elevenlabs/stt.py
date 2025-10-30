@@ -43,6 +43,9 @@ class _STTOptions:
     base_url: str
     language_code: str = "en"
     tag_audio_events: bool = True
+    enable_diarization: bool = False
+    num_speakers: NotGivenOr[int] = NOT_GIVEN
+    diarization_threshold: NotGivenOr[float] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -53,6 +56,9 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         tag_audio_events: bool = True,
+        enable_diarization: bool = False,
+        num_speakers: NotGivenOr[int] = NOT_GIVEN,
+        diarization_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -64,7 +70,11 @@ class STT(stt.STT):
             language (NotGivenOr[str]): Language code for the STT model. Optional.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription. Default is True.
         """  # noqa: E501
-        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=False, interim_results=True, diarization=enable_diarization
+            )
+        )
 
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
@@ -77,6 +87,9 @@ class STT(stt.STT):
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             language_code=language_code if is_given(language_code) else "en",
             tag_audio_events=tag_audio_events,
+            enable_diarization=enable_diarization,
+            num_speakers=num_speakers,
+            diarization_threshold=diarization_threshold,
         )
         self._session = http_session
 
@@ -110,6 +123,17 @@ class STT(stt.STT):
         form.add_field("model_id", "scribe_v1")
         form.add_field("language_code", self._opts.language_code)
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
+        # Request diarization and word-level timestamps when enabled
+        form.add_field("timestamps_granularity", "word")
+        form.add_field("diarize", str(self._opts.enable_diarization).lower())
+        if self._opts.enable_diarization:
+            if is_given(self._opts.num_speakers):
+                form.add_field("num_speakers", str(self._opts.num_speakers))
+            # diarization_threshold can only be set when diarize=True and num_speakers=None
+            if (not is_given(self._opts.num_speakers)) and is_given(
+                self._opts.diarization_threshold
+            ):
+                form.add_field("diarization_threshold", str(self._opts.diarization_threshold))
 
         try:
             async with self._ensure_session().post(
@@ -118,15 +142,75 @@ class STT(stt.STT):
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
                 response_json = await response.json()
-                extracted_text = response_json.get("text")
+                extracted_text = response_json.get("text") or ""
+
+                # Prefer language reported by API if present
+                api_language = response_json.get("language_code") or self._opts.language_code
 
                 speaker_id = None
-                start_time, end_time = 0, 0
-                words = response_json.get("words")
+                start_time, end_time = 0.0, 0.0
+                words = response_json.get("words") or []
+                alternatives: list[stt.SpeechData] = []
+
                 if words:
-                    speaker_id = words[0].get("speaker_id", None)
-                    start_time = min(w.get("start", 0) for w in words)
-                    end_time = max(w.get("end", 0) for w in words)
+                    start_time = min(w.get("start", 0.0) for w in words)
+                    end_time = max(w.get("end", 0.0) for w in words)
+
+                    # When diarization is enabled, group by speaker and emit one alternative per speaker
+                    if self._opts.enable_diarization:
+                        by_speaker: dict[str, dict[str, object]] = {}
+                        for w in words:
+                            spk = w.get("speaker_id")
+                            if not spk:
+                                continue
+                            entry = by_speaker.setdefault(
+                                str(spk), {"tokens": [], "start": float("inf"), "end": 0.0}
+                            )
+                            token = (w.get("text") or w.get("word") or "").strip()
+                            if token:
+                                entry["tokens"].append(token)  # type: ignore[index]
+                            s = float(w.get("start", 0.0) or 0.0)
+                            e = float(w.get("end", 0.0) or 0.0)
+                            entry["start"] = min(entry["start"], s)  # type: ignore[index]
+                            entry["end"] = max(entry["end"], e)  # type: ignore[index]
+
+                        # Build alternatives in chronological order
+                        for spk, data in sorted(
+                            by_speaker.items(), key=lambda item: float(item[1]["start"])  # type: ignore[index]
+                        ):
+                            tokens = data["tokens"]  # type: ignore[index]
+                            spk_text = " ".join(tokens).strip() if tokens else extracted_text
+                            alt = stt.SpeechData(
+                                text=spk_text,
+                                language=api_language,
+                                speaker_id=str(spk),
+                                start_time=(
+                                    float(data["start"]) if data["start"] != float("inf") else 0.0  # type: ignore[index]
+                                ),
+                                end_time=float(data["end"])  # type: ignore[index]
+                            )
+                            alternatives.append(alt)
+
+                        # If we built at least one alternative, return a single event with alternatives
+                        if alternatives:
+                            return stt.SpeechEvent(
+                                type=SpeechEventType.FINAL_TRANSCRIPT,
+                                alternatives=alternatives,
+                            )
+
+                    # Fallback: determine a dominant speaker for single-alternative output
+                    durations: dict[str, float] = {}
+                    for w in words:
+                        spk = w.get("speaker_id")
+                        if not spk:
+                            continue
+                        durations[str(spk)] = durations.get(str(spk), 0.0) + float(
+                            max(0.0, (w.get("end", 0.0) or 0.0) - (w.get("start", 0.0) or 0.0))
+                        )
+                    if durations:
+                        speaker_id = max(durations, key=lambda spk: durations.get(spk, 0.0))
+                else:
+                    api_language = self._opts.language_code
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -145,6 +229,7 @@ class STT(stt.STT):
             start_time=start_time,
             end_time=end_time,
             speaker_id=speaker_id,
+            language=api_language,
         )
 
     def _transcription_to_speech_event(
@@ -153,13 +238,14 @@ class STT(stt.STT):
         start_time: float,
         end_time: float,
         speaker_id: str | None,
+        language: str,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
                 stt.SpeechData(
                     text=text,
-                    language=self._opts.language_code,
+                    language=language,
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
