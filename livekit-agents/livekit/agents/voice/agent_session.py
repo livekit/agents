@@ -779,6 +779,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
+        # attach to the root span if called outside of the root span
+        current_span = trace.get_current_span()
+        if current_span is trace.INVALID_SPAN and self._root_span_context is not None:
+            otel_context.attach(self._root_span_context)
+
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -820,6 +825,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Returns:
             SpeechHandle: A handle to the generated reply.
         """  # noqa: E501
+        # attach to the root span if called outside of the root span
+        current_span = trace.get_current_span()
+        if current_span is trace.INVALID_SPAN and self._root_span_context is not None:
+            otel_context.attach(self._root_span_context)
+
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -925,6 +935,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._next_activity = agent._activity
 
+            if self._root_span_context is not None:
+                # restore the root span context so on_exit, on_enter, and future turns
+                # are direct children of the root span, not nested under a tool call.
+                otel_context.attach(self._root_span_context)
+
             previous_activity_v = self._activity
             if self._activity is not None:
                 if previous_activity == "close":
@@ -959,11 +974,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if old_task is not None:
             await old_task
-
-        if self._root_span_context is not None:
-            # restore the root span context so on_exit, on_enter, and future turns
-            # are direct children of the root span, not nested under a tool call.
-            otel_context.attach(self._root_span_context)
 
         await self._update_activity(agent)
 
