@@ -404,6 +404,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt = {
                 "type": "input_transcript",
             }
+            # Always include voice if available (for mid-session voice updates)
+            # This ensures the gateway can update settings before processing each message
+            if is_given(self._opts.voice):
+                base_pkt["voice"] = self._opts.voice
+            # Include extra settings if available (for mid-session extra_kwargs updates)
+            if self._opts.extra_kwargs:
+                base_pkt["extra"] = self._opts.extra_kwargs.copy()
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
