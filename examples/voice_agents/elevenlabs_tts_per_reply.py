@@ -57,7 +57,7 @@ class MyAgent(Agent):
         # Cycle through different TTS settings configurations
         # ElevenLabs supports: auto_mode (bool), apply_text_normalization ("on"/"off"/"auto"), inactivity_timeout (int)
         settings_cycle = [
-            {"auto_mode": True, "apply_text_normalization": "on"},
+            {"auto_mode": True, "apply_text_normalization": "on", "inactivity_timeout": 5},
             {"auto_mode": False, "apply_text_normalization": "off"},
             {"auto_mode": True, "apply_text_normalization": "auto"},
             {"auto_mode": False, "apply_text_normalization": "on"},
