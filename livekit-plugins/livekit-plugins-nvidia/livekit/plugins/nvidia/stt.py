@@ -121,6 +121,7 @@ class SpeechStream(stt.SpeechStream):
         self._asr_service = riva.client.ASRService(self._auth)
 
         self._event_loop = asyncio.get_running_loop()
+        self.done_fut = asyncio.Future()
 
     async def _run(self) -> None:
         try:
@@ -136,11 +137,9 @@ class SpeechStream(stt.SpeechStream):
 
             await self._collect_audio()
 
-            if self._recognition_thread:
-                await asyncio.to_thread(self._recognition_thread.join)
-
         finally:
-            self._shutdown()
+            self._audio_queue.put(None)
+            await self.done_fut
 
     def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
         return riva.client.StreamingRecognitionConfig(
@@ -158,15 +157,14 @@ class SpeechStream(stt.SpeechStream):
 
     async def _collect_audio(self) -> None:
         async for data in self._input_ch:
-            if self._shutdown_event.is_set():
-                break
-
             if isinstance(data, rtc.AudioFrame):
                 audio_bytes = data.data.tobytes()
                 if audio_bytes:
                     self._audio_queue.put(audio_bytes)
             elif isinstance(data, self._FlushSentinel):
                 break
+
+        self._audio_queue.put(None)
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
         try:
@@ -177,20 +175,24 @@ class SpeechStream(stt.SpeechStream):
             )
 
             for response in response_generator:
-                if self._shutdown_event.set():
-                    break
                 self._handle_response(response)
 
         except Exception as e:
             logger.exception(f"Error in NVIDIA recognition thread: {e}")
+        finally:
+            self._event_loop.call_soon_threadsafe(self.done_fut.set_result, None)
 
     def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
         """
         The nvidia riva SDK requires a generator for realtime STT - so we have to
         wrap the
         """
-        while not self._shutdown_event.is_set():
+        while True:
             audio_chunk = self._audio_queue.get()
+
+            if not audio_chunk:
+                break
+
             yield audio_chunk
 
     def _handle_response(self, response) -> None:
@@ -266,18 +268,6 @@ class SpeechStream(stt.SpeechStream):
             confidence=confidence,
             text=transcript,
         )
-
-    def _shutdown(self) -> None:
-        logger.debug("Shutting down NVIDIA STT stream")
-        self._shutdown_event.set()
-
-        if self._recognition_thread:
-            try:
-                self._recognition_thread.join(timeout=2.0)
-                if self._recognition_thread.is_alive():
-                    logger.warning("Recognition thread did not shut down cleanly")
-            except Exception as e:
-                logger.warning(f"Error joining shutting down thread: {e}")
 
     def log_asr_models(self, asr_service: riva.client.ASRService) -> None:
         try:
