@@ -89,7 +89,8 @@ class VoiceOptions:
 Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
 
-TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
+TurnDetectionStr = Literal["stt", "vad", "realtime_llm", "manual"]
+TurnDetectionMode = Union[TurnDetectionStr, _TurnDetector]
 """
 The mode of turn detection to use.
 

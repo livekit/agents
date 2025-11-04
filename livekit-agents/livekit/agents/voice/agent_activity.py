@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -68,8 +68,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from .agent_session import AgentSession, TurnDetectionMode
-
+    from .agent_session import AgentSession, TurnDetectionMode, TurnDetectionStr
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
@@ -83,10 +82,6 @@ class _PreemptiveGeneration:
     tools: list[llm.FunctionTool | llm.RawFunctionTool]
     tool_choice: llm.ToolChoice | None
     created_at: float
-
-
-# NOTE: AgentActivity isn't exposed to the public API
-_StrTurnDetection = Literal["stt", "vad", "realtime_llm", "manual"]
 
 
 class AgentActivity(RecognitionHooks):
@@ -136,10 +131,10 @@ class AgentActivity(RecognitionHooks):
 
     def _determine_turn_detection_mode(
         self,
-    ) -> tuple[_StrTurnDetection | None, _TurnDetector | None]:
+    ) -> tuple[TurnDetectionStr | None, _TurnDetector | None]:
         turn_detection = self.turn_detection
         if isinstance(turn_detection, str):
-            mode: _StrTurnDetection | None = turn_detection
+            mode: TurnDetectionStr | None = turn_detection
             turn_detector = None
         elif turn_detection is None:
             mode = None
