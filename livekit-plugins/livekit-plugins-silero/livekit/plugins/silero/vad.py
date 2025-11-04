@@ -20,7 +20,7 @@ import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import onnxruntime  # type: ignore
@@ -125,6 +125,7 @@ class VAD(agents.vad.VAD):
 
         resolved_onnx_path: Path | None
         if is_given(onnx_file_path):
+            onnx_file_path = cast(Path | str, onnx_file_path)
             resolved_onnx_path = Path(onnx_file_path)
         else:
             resolved_onnx_path = None
