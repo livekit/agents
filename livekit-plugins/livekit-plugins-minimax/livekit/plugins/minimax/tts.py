@@ -298,10 +298,6 @@ class TTS(tts.TTS):
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
         session = self._ensure_session()
         ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
-        
-        # 记录 WebSocket 连接建立
-        logger.info(f"MiniMax WebSocket connected to {url}")
-        
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -333,9 +329,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        # 初始使用临时 ID，从 WebSocket 消息中获取真实 trace_id 后会更新
+        # Initialize with temporary ID, will be updated from WebSocket messages
         request_id = utils.shortuuid()
-        trace_id_holder = {"trace_id": request_id}  # 用于在闭包中共享和更新 trace_id
+        trace_id_holder = {"trace_id": request_id}
         
         output_emitter.initialize(
             request_id=request_id,
@@ -399,12 +395,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data: dict[str, Any] = json.loads(msg.data)
                 
-                # 提取 trace_id（优先级：root.trace_id > base_resp.trace_id）
-                # api.minimax.io 在 root.trace_id，api.minimaxi.com 可能在 base_resp.trace_id
+                # Extract trace_id from response (root.trace_id or base_resp.trace_id)
                 msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
                 if msg_trace_id and msg_trace_id != trace_id_holder["trace_id"]:
                     trace_id_holder["trace_id"] = msg_trace_id
-                    logger.info(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
+                    logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
                 
                 base_resp = data.get("base_resp", {})
                 status_code = base_resp.get("status_code", 0)
@@ -424,14 +419,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
 
                 if data.get("event") == "connected_success":
-                    # 记录连接成功
-                    logger.info(f"MiniMax WebSocket connected_success, trace_id={trace_id_holder['trace_id']}")
+                    logger.debug(f"MiniMax WebSocket connected, trace_id={trace_id_holder['trace_id']}")
 
                 elif data.get("event") == "task_started":
                     task_started.set_result(None)
                     session_id = data.get("session_id", "")
-                    # 记录任务开始
-                    logger.info(f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={trace_id_holder['trace_id']}")
+                    logger.debug(f"MiniMax task started, session_id={session_id}")
                     output_emitter.start_segment(segment_id=session_id)
 
                 elif data.get("event") == "task_continued":
@@ -532,19 +525,16 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 resp.raise_for_status()
                 
-                # 从响应头提取 trace_id（所有请求都有）
-                # 注意：api.minimax.io 还会在响应体的 root.trace_id 中返回
+                # Extract trace_id from response headers
                 trace_id = resp.headers.get("Trace-Id") or resp.headers.get("X-Trace-Id")
                 minimax_request_id = resp.headers.get("Minimax-Request-Id")
                 
-                if trace_id:
-                    logger.info(f"MiniMax HTTP stream request started, trace_id={trace_id}, minimax_request_id={minimax_request_id}")
-                else:
+                if not trace_id:
                     trace_id = utils.shortuuid()
-                    logger.warning(f"No Trace-Id in response headers, using generated ID: {trace_id}")
+                    logger.debug(f"No Trace-Id in response headers, using generated ID: {trace_id}")
 
                 output_emitter.initialize(
-                    request_id=trace_id,  # 使用 trace_id 作为 request_id
+                    request_id=trace_id,
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
                     mime_type=f"audio/{self._opts.audio_format}",
@@ -560,7 +550,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                     data = json.loads(line[5:])
                     
-                    # api.minimax.io 会在响应体顶层返回 trace_id
+                    # Some endpoints return trace_id in response body
                     body_trace_id = data.get("trace_id")
                     if body_trace_id and body_trace_id != trace_id:
                         logger.debug(f"Found trace_id in response body: {body_trace_id}")
@@ -572,7 +562,7 @@ class ChunkedStream(tts.ChunkedStream):
                         status_code = base_resp.get("status_code", 0)
                         if status_code != 0:
                             status_msg = base_resp.get("status_msg", "Unknown error")
-                            # trace_id 优先级: 响应体顶层 > 响应头
+                            # Prefer trace_id from response body over header
                             error_trace_id = body_trace_id or trace_id
                             
                             logger.error(
@@ -633,6 +623,9 @@ def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:
 
     if opts.emotion is not None:
         config["voice_setting"]["emotion"] = opts.emotion
+    
+    if opts.text_normalization:
+        config["voice_setting"]["text_normalization"] = opts.text_normalization
 
     if opts.pronunciation_dict:
         config["pronunciation_dict"] = opts.pronunciation_dict
