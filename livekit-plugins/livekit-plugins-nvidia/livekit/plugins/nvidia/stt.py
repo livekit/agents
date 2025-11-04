@@ -11,7 +11,6 @@ import riva.client
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     stt,
 )
@@ -54,7 +53,6 @@ class STT(stt.STT):
             ),
         )
 
-        # Get API key from parameter or environment
         if is_given(api_key):
             self.nvidia_api_key = api_key
         else:
@@ -97,6 +95,24 @@ class STT(stt.STT):
     ) -> stt.RecognizeStream:
         effective_language = language if is_given(language) else self._opts.language_code
         return SpeechStream(stt=self, conn_options=conn_options, language=effective_language)
+
+    def log_asr_models(self, asr_service: riva.client.ASRService) -> dict:
+        config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
+            riva.client.RivaSpeechRecognitionConfigRequest()
+        )
+
+        asr_models = {}
+        for model_config in config_response.model_config:
+            if model_config.parameters.get("type") == "online":
+                language_code = model_config.parameters["language_code"]
+                model = {"model": [model_config.model_name]}
+                if language_code in asr_models:
+                    asr_models[language_code].append(model)
+                else:
+                    asr_models[language_code] = [model]
+
+        asr_models = dict(sorted(asr_models.items()))
+        return asr_models
 
 
 class SpeechStream(stt.SpeechStream):
@@ -175,8 +191,8 @@ class SpeechStream(stt.SpeechStream):
             for response in response_generator:
                 self._handle_response(response)
 
-        except Exception as e:
-            logger.exception(f"Error in NVIDIA recognition thread: {e}")
+        except Exception:
+            logger.exception("Error in NVIDIA recognition thread")
         finally:
             self._event_loop.call_soon_threadsafe(self.done_fut.set_result, None)
 
@@ -245,8 +261,8 @@ class SpeechStream(stt.SpeechStream):
                         ),
                     )
 
-        except Exception as e:
-            logger.error(f"Error handling response: {e}")
+        except Exception:
+            logger.exception("Error handling response")
 
     def _convert_to_speech_data(self, alternative) -> stt.SpeechData:
         transcript = getattr(alternative, "transcript", "")
@@ -266,25 +282,3 @@ class SpeechStream(stt.SpeechStream):
             confidence=confidence,
             text=transcript,
         )
-
-    def log_asr_models(self, asr_service: riva.client.ASRService) -> None:
-        try:
-            config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
-                riva.client.RivaSpeechRecognitionConfigRequest()
-            )
-
-            asr_models = {}
-            for model_config in config_response.model_config:
-                if model_config.parameters.get("type") == "online":
-                    language_code = model_config.parameters["language_code"]
-                    model = {"model": [model_config.model_name]}
-                    if language_code in asr_models:
-                        asr_models[language_code].append(model)
-                    else:
-                        asr_models[language_code] = [model]
-
-            logger.debug("Available ASR models")
-            asr_models = dict(sorted(asr_models.items()))
-            logger.debug(asr_models)
-        except Exception as e:
-            logger.warning(f"Could not retrieve ASR models: {e}")

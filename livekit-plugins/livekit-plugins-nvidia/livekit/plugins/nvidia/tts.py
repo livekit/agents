@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import queue
@@ -45,7 +44,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
     ):
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=16000,
             num_channels=1,
         )
@@ -82,7 +81,7 @@ class TTS(tts.TTS):
             self._tts_service = riva.client.SpeechSynthesisService(riva_auth)
         return self._tts_service
 
-    def list_voices(self) -> None:
+    def list_voices(self) -> dict:
         service = self._ensure_session()
         config_response = service.stub.GetRivaSynthesisConfig(
             riva.client.proto.riva_tts_pb2.RivaSynthesisConfigRequest()
@@ -105,8 +104,7 @@ class TTS(tts.TTS):
                 tts_models[language_code] = {"voices": full_voice_names}
 
         tts_models = dict(sorted(tts_models.items()))
-        logger.info("Available TTS voices:")
-        logger.info(json.dumps(tts_models, indent=4))
+        return tts_models
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
