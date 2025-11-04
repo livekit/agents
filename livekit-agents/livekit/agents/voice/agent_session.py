@@ -5,6 +5,7 @@ import copy
 import json
 import time
 from collections.abc import AsyncIterable, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
@@ -779,11 +780,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
-        # attach to the root span if called outside of the root span
-        current_span = trace.get_current_span()
-        if current_span is trace.INVALID_SPAN and self._root_span_context is not None:
-            otel_context.attach(self._root_span_context)
-
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -793,14 +789,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use say()")
 
-        handle = activity.say(
-            text,
-            audio=audio,
-            allow_interruptions=allow_interruptions,
-            add_to_chat_ctx=add_to_chat_ctx,
-        )
-        if run_state:
-            run_state._watch_handle(handle)
+        # attach to the session span if called outside of the AgentSession
+        use_span: AbstractContextManager[trace.Span | None] = nullcontext()
+        if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
+            use_span = trace.use_span(self._session_span, end_on_exit=False)
+
+        with use_span:
+            handle = activity.say(
+                text,
+                audio=audio,
+                allow_interruptions=allow_interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+            )
+            if run_state:
+                run_state._watch_handle(handle)
 
         return handle
 
@@ -825,11 +827,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Returns:
             SpeechHandle: A handle to the generated reply.
         """  # noqa: E501
-        # attach to the root span if called outside of the root span
-        current_span = trace.get_current_span()
-        if current_span is trace.INVALID_SPAN and self._root_span_context is not None:
-            otel_context.attach(self._root_span_context)
-
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -845,14 +842,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-        handle = activity._generate_reply(
-            user_message=user_message,
-            instructions=instructions,
-            tool_choice=tool_choice,
-            allow_interruptions=allow_interruptions,
-        )
-        if run_state:
-            run_state._watch_handle(handle)
+        # attach to the session span if called outside of the AgentSession
+        use_span: AbstractContextManager[trace.Span | None] = nullcontext()
+        if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
+            use_span = trace.use_span(self._session_span, end_on_exit=False)
+
+        with use_span:
+            handle = activity._generate_reply(
+                user_message=user_message,
+                instructions=instructions,
+                tool_choice=tool_choice,
+                allow_interruptions=allow_interruptions,
+            )
+            if run_state:
+                run_state._watch_handle(handle)
 
         return handle
 
