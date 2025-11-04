@@ -162,19 +162,16 @@ class SpeechStream(stt.SpeechStream):
         )
 
     async def _collect_audio(self) -> None:
-        try:
-            async for data in self._input_ch:
-                if self._shutdown_event.is_set():
-                    break
+        async for data in self._input_ch:
+            if self._shutdown_event.is_set():
+                break
 
-                if isinstance(data, rtc.AudioFrame):
-                    audio_bytes = data.data.tobytes()
-                    if audio_bytes:
-                        self._audio_queue.put(audio_bytes)
-                elif isinstance(data, self._FlushSentinel):
-                    break
-        finally:
-            self._shutdown_event.set()
+            if isinstance(data, rtc.AudioFrame):
+                audio_bytes = data.data.tobytes()
+                if audio_bytes:
+                    self._audio_queue.put(audio_bytes)
+            elif isinstance(data, self._FlushSentinel):
+                break
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
         try:
