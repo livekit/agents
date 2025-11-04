@@ -125,9 +125,6 @@ class TTS(tts.TTS):
         return SynthesizeStream(tts=self, conn_options=conn_options, opts=self._opts)
 
 
-SENT_FLUSH_SENTINEL = object()
-
-
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
         super().__init__(tts=tts, conn_options=conn_options)
@@ -136,6 +133,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
         self._token_q = queue.Queue()
         self._shutdown_event = threading.Event()
+        self._event_loop = asyncio.get_running_loop()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         output_emitter.initialize(
@@ -158,40 +156,32 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _process_segments() -> None:
             async for word_stream in self._sent_tokenizer_stream:
                 self._token_q.put(word_stream)
-            self._token_q.put(SENT_FLUSH_SENTINEL)
+            self._token_q.put(None)
 
         def _synthesize_worker() -> None:
-            try:
-                service = self._tts._ensure_session()
-                while not self._shutdown_event.is_set():
-                    try:
-                        token = self._token_q.get(timeout=0.1)
-                    except queue.Empty:
-                        continue
+            service = self._tts._ensure_session()
+            while not self._shutdown_event.is_set():
+                token = self._token_q.get()
 
-                    if token is SENT_FLUSH_SENTINEL:
-                        break
+                if not token:
+                    break
 
-                    try:
-                        responses = service.synthesize_online(
-                            token.token,
-                            self._opts.voice,
-                            self._opts.language_code,
-                            sample_rate_hz=self._opts.sample_rate,
-                            encoding=AudioEncoding.LINEAR_PCM,
-                        )
-                        for response in responses:
-                            if self._shutdown_event.is_set():
-                                break
-                            output_emitter.push(response.audio)
-                    except Exception as e:
-                        logger.error(f"Error in synthesis: {e}")
-                        continue
-                    finally:
-                        self._token_q.task_done()
+                try:
+                    responses = service.synthesize_online(
+                        token.token,
+                        self._opts.voice,
+                        self._opts.language_code,
+                        sample_rate_hz=self._opts.sample_rate,
+                        encoding=AudioEncoding.LINEAR_PCM,
+                    )
+                    for response in responses:
+                        if self._shutdown_event.is_set():
+                            break
+                        self._event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
 
-            except Exception as e:
-                logger.error(f"Error in synthesis worker: {e}")
+                except Exception as e:
+                    logger.error(f"Error in synthesis: {e}")
+                    continue
 
         synthesize_thread = threading.Thread(
             target=_synthesize_worker,
