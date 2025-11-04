@@ -44,8 +44,8 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
+from .models import GladiaLanguages, GladiaModels
 from .version import __version__
-from .models import GladiaModels, GladiaLanguages
 
 BASE_URL = "https://api.gladia.io/v2/live"
 
