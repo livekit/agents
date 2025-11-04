@@ -173,9 +173,6 @@ class SpeechStream(stt.SpeechStream):
                         self._audio_queue.put(audio_bytes)
                 elif isinstance(data, self._FlushSentinel):
                     break
-
-        except Exception as e:
-            logger.exception(f"Error collecting audio: {e}")
         finally:
             self._shutdown_event.set()
 
