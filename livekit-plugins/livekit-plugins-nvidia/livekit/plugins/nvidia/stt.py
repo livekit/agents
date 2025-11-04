@@ -182,6 +182,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
             for response in response_generator:
+                if self._shutdown_event.set():
+                    break
                 self._handle_response(response)
 
         except Exception as e:
@@ -274,13 +276,13 @@ class SpeechStream(stt.SpeechStream):
         logger.debug("Shutting down NVIDIA STT stream")
         self._shutdown_event.set()
 
-        if self._recognition_thread and self._recognition_thread.is_alive():
+        if self._recognition_thread:
             try:
                 self._recognition_thread.join(timeout=2.0)
                 if self._recognition_thread.is_alive():
                     logger.warning("Recognition thread did not shut down cleanly")
             except Exception as e:
-                logger.warning(f"Error joining recognition thread: {e}")
+                logger.warning(f"Error joining shutting down thread: {e}")
 
     def log_asr_models(self, asr_service: riva.client.ASRService) -> None:
         try:
