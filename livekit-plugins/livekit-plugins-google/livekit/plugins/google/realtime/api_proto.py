@@ -9,6 +9,7 @@ LiveAPIModels = Literal[
     # VertexAI models
     "gemini-2.0-flash-exp",
     "gemini-live-2.5-flash-preview-native-audio",
+    "gemini-live-2.5-flash-preview-native-audio-09-2025",
     # Gemini API models
     "gemini-2.0-flash-live-001",
     "gemini-live-2.5-flash-preview",

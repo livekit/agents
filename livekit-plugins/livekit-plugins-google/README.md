@@ -33,3 +33,4 @@ And these on Vertex AI:
 
 - gemini-2.0-flash-exp
 - gemini-live-2.5-flash-preview-native-audio
+- gemini-live-2.5-flash-preview-native-audio-09-2025
