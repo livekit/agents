@@ -114,7 +114,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         @function_tool(description=description, flags=ToolFlag.IGNORE_ON_ENTER)
         async def out_of_scope(
             task_ids: Annotated[
-                list,
+                list[str],
                 Field(
                     description="The IDs of the tasks requested",
                     json_schema_extra={"items": {"enum": list(task_ids)}},
