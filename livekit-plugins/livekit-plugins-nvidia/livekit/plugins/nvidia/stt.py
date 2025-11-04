@@ -124,17 +124,17 @@ class SpeechStream(stt.SpeechStream):
         self.done_fut = asyncio.Future()
 
     async def _run(self) -> None:
+        config = self._create_streaming_config()
+
+        self._recognition_thread = threading.Thread(
+            target=self._recognition_worker,
+            args=(config,),
+            name="nvidia-asr-recognition",
+            daemon=True,
+        )
+        self._recognition_thread.start()
+
         try:
-            config = self._create_streaming_config()
-
-            self._recognition_thread = threading.Thread(
-                target=self._recognition_worker,
-                args=(config,),
-                name="nvidia-asr-recognition",
-                daemon=True,
-            )
-            self._recognition_thread.start()
-
             await self._collect_audio()
 
         finally:
@@ -163,8 +163,6 @@ class SpeechStream(stt.SpeechStream):
                     self._audio_queue.put(audio_bytes)
             elif isinstance(data, self._FlushSentinel):
                 break
-
-        self._audio_queue.put(None)
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
         try:
