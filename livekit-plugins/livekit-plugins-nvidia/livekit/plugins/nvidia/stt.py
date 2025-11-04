@@ -224,7 +224,7 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
                     )
 
-                speech_data = self._convert_to_speech_data(alternative, is_final)
+                speech_data = self._convert_to_speech_data(alternative)
 
                 if is_final:
                     self._event_loop.call_soon_threadsafe(
@@ -254,7 +254,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             logger.error(f"Error handling response: {e}")
 
-    def _convert_to_speech_data(self, alternative, is_final: bool) -> stt.SpeechData:
+    def _convert_to_speech_data(self, alternative) -> stt.SpeechData:
         transcript = getattr(alternative, "transcript", "")
         confidence = getattr(alternative, "confidence", 0.0)
         words = getattr(alternative, "words", [])
