@@ -25,8 +25,8 @@ class TaskGroupResult:
 
 
 class _OutOfScopeError(ToolError):
-    def __init__(self, target_task_id: str) -> None:
-        self.target_task_id = target_task_id
+    def __init__(self, target_task_ids: list) -> None:
+        self.target_task_ids = target_task_ids
 
 
 class TaskGroup(AgentTask[TaskGroupResult]):
@@ -73,7 +73,8 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 task_results[task_id] = res
             except _OutOfScopeError as e:
                 task_stack.insert(0, task_id)
-                task_stack.insert(0, e.target_task_id)
+                for task_id in reversed(e.target_task_ids):
+                    task_stack.insert(0, task_id)
                 continue
             except Exception as e:
                 self.complete(e)
@@ -104,28 +105,27 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         }
 
         description = (
-            "Call to regress to another task according to what the user requested to modify, return the corresponding task id, "
+            "Call to regress to other tasks according to what the user requested to modify, return the corresponding task ids. "
             'For example, if the user wants to change their email and there is a task with id "email_task" with a description of "Collect the user\'s email", return the id ("get_email_task").'
+            "If the user requests to regress to multiple tasks, such as changing their phone number and email, return both task ids in the order they were requested."
             f"The following are the IDs and their corresponding task description. {json.dumps(task_repr)}"
         )
 
         @function_tool(description=description, flags=ToolFlag.IGNORE_ON_ENTER)
         async def out_of_scope(
-            task_id: Annotated[
-                str,
+            task_ids: Annotated[
+                list,
                 Field(
-                    description="The ID of the task requested",
-                    json_schema_extra={"enum": list(task_ids)},
+                    description="The IDs of the tasks requested",
+                    json_schema_extra={"items": {"enum": list(task_ids)}},
                 ),
             ],
         ):
-            if (
-                task_id not in self._registered_factories
-                or task_id not in self._visited_tasks
-            ):
-                raise ToolError("unable to regress, invalid task id")
+            for task_id in task_ids:
+                if task_id not in self._registered_factories or task_id not in self._visited_tasks:
+                    raise ToolError("unable to regress, invalid task id")
 
             if not self._current_task.done():
-                self._current_task.complete(_OutOfScopeError(target_task_id=task_id))
+                self._current_task.complete(_OutOfScopeError(target_task_ids=task_ids))
 
         return out_of_scope
