@@ -526,10 +526,11 @@ async def _execute_tools_task(
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        logger.exception(
-                            "exception occurred while executing tool",
-                            extra={"function": fnc_call.name, "speech_id": speech_handle.id},
-                        )
+                        if not isinstance(e, StopResponse):
+                            logger.exception(
+                                "exception occurred while executing tool",
+                                extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                            )
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
