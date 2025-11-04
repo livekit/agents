@@ -126,7 +126,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._context_id = utils.shortuuid()
         self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
         self._token_q = queue.Queue()
-        self._shutdown_event = threading.Event()
         self._event_loop = asyncio.get_running_loop()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -138,6 +137,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
         output_emitter.start_segment(segment_id=self._context_id)
+
+        done_fut = asyncio.Future()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -153,29 +154,32 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._token_q.put(None)
 
         def _synthesize_worker() -> None:
-            service = self._tts._ensure_session()
-            while not self._shutdown_event.is_set():
-                token = self._token_q.get()
+            try:
+                service = self._tts._ensure_session()
+                while True:
+                    token = self._token_q.get()
 
-                if not token:
-                    break
+                    if not token:
+                        break
 
-                try:
-                    responses = service.synthesize_online(
-                        token.token,
-                        self._opts.voice,
-                        self._opts.language_code,
-                        sample_rate_hz=self._opts.sample_rate,
-                        encoding=AudioEncoding.LINEAR_PCM,
-                    )
-                    for response in responses:
-                        if self._shutdown_event.is_set():
-                            break
-                        self._event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
+                    try:
+                        responses = service.synthesize_online(
+                            token.token,
+                            self._opts.voice,
+                            self._opts.language_code,
+                            sample_rate_hz=self._opts.sample_rate,
+                            encoding=AudioEncoding.LINEAR_PCM,
+                        )
+                        for response in responses:
+                            self._event_loop.call_soon_threadsafe(
+                                output_emitter.push, response.audio
+                            )
 
-                except Exception as e:
-                    logger.error(f"Error in synthesis: {e}")
-                    continue
+                    except Exception as e:
+                        logger.error(f"Error in synthesis: {e}")
+                        continue
+            finally:
+                self._event_loop.call_soon_threadsafe(done_fut.set_result, None)
 
         synthesize_thread = threading.Thread(
             target=_synthesize_worker,
@@ -191,7 +195,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await asyncio.gather(*tasks)
-            await asyncio.to_thread(synthesize_thread.join)
         finally:
-            self._shutdown_event.set()
+            self._token_q.put(None)
+            await done_fut
             output_emitter.end_segment()
