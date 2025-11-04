@@ -389,6 +389,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -408,16 +409,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["transcript"] = ev.token + " "
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
+                input_sent_event.set()
 
             end_pkt = {
                 "type": "session.flush",
             }
             await ws.send_str(json.dumps(end_pkt))
+            # needed in case empty input is sent
+            input_sent_event.set()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_session_id: str | None = None
+            await input_sent_event.wait()
+
             while True:
-                msg = await ws.receive()
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -461,6 +467,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
 

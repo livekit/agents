@@ -830,22 +830,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         run_state = self._global_run_state
-        if self._activity.scheduling_paused:
-            if self._next_activity is None:
-                raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
-            handle = self._next_activity._generate_reply(
-                user_message=user_message,
-                instructions=instructions,
-                tool_choice=tool_choice,
-                allow_interruptions=allow_interruptions,
-            )
-            if run_state:
-                run_state._watch_handle(handle)
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-            return handle
-
-        handle = self._activity._generate_reply(
+        handle = activity._generate_reply(
             user_message=user_message,
             instructions=instructions,
             tool_choice=tool_choice,
@@ -1104,6 +1094,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        if self.user_state == "away" and ev.is_final:
+            # reset user state from away to listening in case VAD has a miss detection
+            self._update_user_state("listening")
+
         self.emit("user_input_transcribed", ev)
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
