@@ -98,7 +98,7 @@ class LanguageConfiguration:
 @dataclass
 class TranslationConfiguration:
     enabled: bool = False
-    target_languages: list[str] = dataclasses.field(default_factory=list)
+    target_languages: list[GladiaLanguages] = dataclasses.field(default_factory=list)
     model: str = "base"
     match_original_utterances: bool = True
     lipsync: bool = True
@@ -205,7 +205,7 @@ class STT(stt.STT):
         *,
         model: GladiaModels = "solaria-1",
         interim_results: bool = True,
-        languages: list[str] | None = None,
+        languages: list[GladiaLanguages] | None = None,
         code_switching: bool = True,
         sample_rate: int = 16000,
         bit_depth: Literal[8, 16, 24, 32] = 16,
@@ -219,7 +219,7 @@ class STT(stt.STT):
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
         translation_enabled: bool = False,
-        translation_target_languages: list[str] | None = None,
+        translation_target_languages: list[GladiaLanguages] | None = None,
         translation_model: str = "base",
         translation_match_original_utterances: bool = True,
         translation_lipsync: bool = True,
@@ -490,7 +490,7 @@ class STT(stt.STT):
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     def _create_speech_event(
-        self, utterances: list[dict], session_id: str, languages: list[str] | None
+        self, utterances: list[dict], session_id: str, languages: list[GladiaLanguages] | None
     ) -> stt.SpeechEvent:
         """Create a SpeechEvent from Gladia's transcript data."""
         alternatives = []
@@ -548,7 +548,7 @@ class STT(stt.STT):
         self,
         *,
         model: GladiaModels | None = None,
-        languages: list[str] | None = None,
+        languages: list[GladiaLanguages] | None = None,
         code_switching: bool | None = None,
         interim_results: bool | None = None,
         sample_rate: int | None = None,
@@ -559,7 +559,7 @@ class STT(stt.STT):
         maximum_duration_without_endpointing: float | None = None,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
         translation_enabled: bool | None = None,
-        translation_target_languages: list[str] | None = None,
+        translation_target_languages: list[GladiaLanguages] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
         translation_lipsync: bool | None = None,
@@ -681,7 +681,7 @@ class STT(stt.STT):
                 pre_processing_speech_threshold=pre_processing_speech_threshold,
             )
 
-    def _sanitize_options(self, *, languages: list[str] | None = None) -> STTOptions:
+    def _sanitize_options(self, *, languages: list[GladiaLanguages] | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
         if languages is not None:
             language_config = dataclasses.replace(
@@ -731,7 +731,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         model: GladiaModels | None = None,
-        languages: list[str] | None = None,
+        languages: list[GladiaLanguages] | None = None,
         code_switching: bool | None = None,
         interim_results: bool | None = None,
         sample_rate: int | None = None,
@@ -742,7 +742,7 @@ class SpeechStream(stt.SpeechStream):
         maximum_duration_without_endpointing: float | None = None,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
         translation_enabled: bool | None = None,
-        translation_target_languages: list[str] | None = None,
+        translation_target_languages: list[GladiaLanguages] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
         translation_lipsync: bool | None = None,
