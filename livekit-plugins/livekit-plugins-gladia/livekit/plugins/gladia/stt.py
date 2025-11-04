@@ -344,7 +344,7 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[GladiaLanguages] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         """Implement synchronous speech recognition for Gladia using the live endpoint."""
@@ -529,7 +529,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[GladiaLanguages] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(languages=[language] if is_given(language) else None)
