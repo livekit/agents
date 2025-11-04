@@ -17,6 +17,7 @@ livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-fireworksai = { workspace = true }
+livekit-plugins-fishaudio = { workspace = true }
 livekit-plugins-gladia = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
