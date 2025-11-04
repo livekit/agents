@@ -137,7 +137,7 @@ class SpeechStream(stt.SpeechStream):
         self._asr_service = riva.client.ASRService(self._auth)
 
         self._event_loop = asyncio.get_running_loop()
-        self.done_fut = asyncio.Future()
+        self._done_fut = asyncio.Future()
 
     async def _run(self) -> None:
         config = self._create_streaming_config()
@@ -155,7 +155,7 @@ class SpeechStream(stt.SpeechStream):
 
         finally:
             self._audio_queue.put(None)
-            await self.done_fut
+            await self._done_fut
 
     def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
         return riva.client.StreamingRecognitionConfig(
@@ -194,7 +194,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             logger.exception("Error in NVIDIA recognition thread")
         finally:
-            self._event_loop.call_soon_threadsafe(self.done_fut.set_result, None)
+            self._event_loop.call_soon_threadsafe(self._done_fut.set_result, None)
 
     def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
         """
