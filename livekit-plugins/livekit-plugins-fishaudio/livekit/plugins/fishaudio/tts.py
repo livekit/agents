@@ -28,6 +28,9 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import LatencyMode, OutputFormat
 
+DEFAULT_MODEL: Backends = "s1"
+DEFAULT_REFERENCE_ID = "8ef4a238714b45718ce04243307c57a7"
+
 
 @dataclass
 class _TTSOptions:
@@ -51,8 +54,8 @@ class TTS(tts.TTS):
 
     Args:
         api_key (NotGivenOr[str]): Fish Audio API key. Can be set via argument or `FISH_API_KEY` environment variable.
-        model (Backends): TTS model/backend to use. Defaults to "speech-1.6".
-        reference_id (NotGivenOr[str]): Optional reference voice model ID.
+        model (Backends): TTS model/backend to use. Defaults to "s1".
+        reference_id (NotGivenOr[str]): Reference voice model ID. Defaults to a general-purpose voice.
         output_format (OutputFormat): Audio output format. Defaults to "pcm" for streaming.
         sample_rate (int): Audio sample rate in Hz. Defaults to 24000.
         num_channels (int): Number of audio channels. Defaults to 1 (mono).
@@ -64,8 +67,8 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        model: Backends = "s1",
-        reference_id: NotGivenOr[str] = "8ef4a238714b45718ce04243307c57a7",
+        model: Backends = DEFAULT_MODEL,
+        reference_id: NotGivenOr[str] = DEFAULT_REFERENCE_ID,
         output_format: OutputFormat = "pcm",
         sample_rate: int = 24000,
         num_channels: int = 1,
