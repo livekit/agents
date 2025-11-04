@@ -67,7 +67,7 @@ class VAD(agents.vad.VAD):
         activation_threshold: float = 0.5,
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
-        onnx_file_path: NotGivenOr[Path] = NOT_GIVEN,
+        onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
@@ -104,7 +104,7 @@ class VAD(agents.vad.VAD):
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
-            onnx_file_path (Path | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
+            onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -125,11 +125,13 @@ class VAD(agents.vad.VAD):
 
         resolved_onnx_path: Path | None
         if is_given(onnx_file_path):
-            resolved_onnx_path = onnx_file_path
+            resolved_onnx_path = Path(onnx_file_path)
         else:
             resolved_onnx_path = None
 
-        session = onnx_model.new_inference_session(force_cpu, resolved_onnx_path)
+        session = onnx_model.new_inference_session(
+            force_cpu, onnx_file_path=resolved_onnx_path or None
+        )
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
