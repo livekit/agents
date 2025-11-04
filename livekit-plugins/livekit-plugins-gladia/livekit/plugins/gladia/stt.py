@@ -121,8 +121,8 @@ class STTOptions:
     sample_rate: int
     bit_depth: Literal[8, 16, 24, 32]
     channels: int
-    endpointing: float = 0.05
-    maximum_duration_without_endpointing: float = 5
+    endpointing: float
+    maximum_duration_without_endpointing: float
     region: Literal["us-west", "eu-west"]
     encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"]
     translation_config: TranslationConfiguration = dataclasses.field(
