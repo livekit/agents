@@ -139,11 +139,6 @@ class SpeechStream(stt.SpeechStream):
             if self._recognition_thread:
                 await asyncio.to_thread(self._recognition_thread.join)
 
-        except Exception as e:
-            logger.exception("Error in NVIDIA streaming")
-            if isinstance(e, APIConnectionError):
-                raise e
-            raise APIConnectionError(f"NVIDIA ASR streaming failed: {str(e)}") from e
         finally:
             self._shutdown()
 
