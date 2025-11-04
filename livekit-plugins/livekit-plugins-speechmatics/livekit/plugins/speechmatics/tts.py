@@ -84,6 +84,14 @@ class TTS(tts.TTS):
         )
         self._session = http_session
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Speechmatics"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -144,34 +152,21 @@ class ChunkedStream(tts.ChunkedStream):
                 # Process the response in streaming chunks
                 buffer = b""
 
-                # Helper to move all complete 2-byte int16 samples from buffer into frames
-                def _emit_complete_samples() -> bytes | None:
-                    nonlocal buffer
-                    if len(buffer) < 2:
-                        return None
-                    complete_samples = len(buffer) // 2
-                    complete_bytes = complete_samples * 2
-
-                    audio_data = buffer[:complete_bytes]
-                    buffer = buffer[complete_bytes:]  # Keep remaining bytes for next iteration
-
-                    return audio_data
-
                 async for data, _ in resp.content.iter_chunks():
                     if not data:
                         continue
 
                     buffer += data
 
-                    # Emit all complete samples currently in buffer
-                    audio_data = _emit_complete_samples()
-                    if audio_data:
-                        output_emitter.push(audio_data)
+                    # Emit all complete 2-byte int16 samples from buffer
+                    if len(buffer) >= 2:
+                        complete_samples = len(buffer) // 2
+                        complete_bytes = complete_samples * 2
 
-                # Process any remaining bytes in buffer after streaming ends
-                audio_data = _emit_complete_samples()
-                if audio_data:
-                    output_emitter.push(audio_data)
+                        audio_data = buffer[:complete_bytes]
+                        buffer = buffer[complete_bytes:]  # Keep remaining bytes for next iteration
+
+                        output_emitter.push(audio_data)
 
                 output_emitter.flush()
 
