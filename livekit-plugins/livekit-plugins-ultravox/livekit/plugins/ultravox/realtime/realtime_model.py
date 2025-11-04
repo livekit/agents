@@ -28,7 +28,7 @@ from livekit.agents.utils import is_given
 
 from ..log import logger
 from ..models import UltravoxModel, UltravoxVoice
-from ..utils import parse_tools
+from ..utils import coerce_parameters_to_schema, parse_tools
 from .events import (
     CallStartedEvent,
     ClientToolInvocationEvent,
@@ -1052,11 +1052,14 @@ class RealtimeSession(
                 f"invocationId={event.invocation_id} params_keys={list(event.parameters.keys())}"
             )
 
+        # Coerce parameters to match the tool schema so downstream consumers get correct types
+        coerced_params = coerce_parameters_to_schema(self._tools, event.tool_name, event.parameters)
+
         # Emit FunctionCall to maintain framework compatibility
         function_call = llm.FunctionCall(
             call_id=event.invocation_id,
             name=event.tool_name,
-            arguments=json.dumps(event.parameters),
+            arguments=json.dumps(coerced_params),
         )
 
         if self._current_generation is None:
