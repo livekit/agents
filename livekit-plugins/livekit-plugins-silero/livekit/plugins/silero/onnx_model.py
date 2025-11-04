@@ -18,13 +18,14 @@ SUPPORTED_SAMPLE_RATES = [8000, 16000]
 
 
 def new_inference_session(
-    force_cpu: bool, onnx_file_path: Path | None = None
+    force_cpu: bool, onnx_file_path: Path | str | None = None
 ) -> onnxruntime.InferenceSession:
     if onnx_file_path is None:
         res = importlib.resources.files("livekit.plugins.silero.resources") / "silero_vad.onnx"
         ctx = importlib.resources.as_file(res)
         path = str(_resource_files.enter_context(ctx))
     else:
+        onnx_file_path = Path(onnx_file_path)
         if not onnx_file_path.exists():
             raise FileNotFoundError(f"Silero VAD model file not found: {onnx_file_path}")
         if not onnx_file_path.is_file():

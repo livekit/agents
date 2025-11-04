@@ -20,7 +20,7 @@ import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 import numpy as np
 import onnxruntime  # type: ignore
@@ -123,16 +123,7 @@ class VAD(agents.vad.VAD):
             )
             prefix_padding_duration = padding_duration
 
-        resolved_onnx_path: Path | None
-        if is_given(onnx_file_path):
-            onnx_file_path = cast(Path | str, onnx_file_path)
-            resolved_onnx_path = Path(onnx_file_path)
-        else:
-            resolved_onnx_path = None
-
-        session = onnx_model.new_inference_session(
-            force_cpu, onnx_file_path=resolved_onnx_path or None
-        )
+        session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
