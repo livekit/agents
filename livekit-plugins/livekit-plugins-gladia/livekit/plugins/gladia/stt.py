@@ -209,8 +209,8 @@ class STT(stt.STT):
         code_switching: bool = True,
         sample_rate: int = 16000,
         bit_depth: Literal[8, 16, 24, 32] = 16,
-		endpointing: float = 0.05,
-		maximum_duration_without_endpointing: float = 5,
+        endpointing: float = 0.05,
+        maximum_duration_without_endpointing: float = 5,
         channels: int = 1,
         region: Literal["us-west", "eu-west"] = "eu-west",
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] = "wav/pcm",
@@ -234,7 +234,7 @@ class STT(stt.STT):
         """Create a new instance of Gladia STT.
 
         Args:
-			model: The model to use for recognition. Defaults to "solaria-1".
+            model: The model to use for recognition. Defaults to "solaria-1".
             interim_results: Whether to return interim (non-final) transcription results.
                             Defaults to True.
             languages: List of language codes to use for recognition. Defaults to None
@@ -656,7 +656,7 @@ class STT(stt.STT):
 
         for stream in self._streams:
             stream.update_options(
-				model=model,
+                model=model,
                 languages=languages,
                 code_switching=code_switching,
                 interim_results=interim_results,
@@ -664,8 +664,8 @@ class STT(stt.STT):
                 bit_depth=bit_depth,
                 channels=channels,
                 region=region,
-				endpointing=endpointing,
-				maximum_duration_without_endpointing=maximum_duration_without_endpointing,
+                endpointing=endpointing,
+                maximum_duration_without_endpointing=maximum_duration_without_endpointing,
                 encoding=encoding,
                 translation_enabled=translation_enabled,
                 translation_target_languages=translation_target_languages,
