@@ -83,36 +83,30 @@ class TTS(tts.TTS):
         return self._tts_service
 
     def list_voices(self) -> None:
-        try:
-            service = self._ensure_session()
-            config_response = service.stub.GetRivaSynthesisConfig(
-                riva.client.proto.riva_tts_pb2.RivaSynthesisConfigRequest()
-            )
-            tts_models = {}
-            for model_config in config_response.model_config:
-                language_code = model_config.parameters.get("language_code", "unknown")
-                voice_name = model_config.parameters.get("voice_name", "unknown")
-                subvoices_str = model_config.parameters.get("subvoices", "")
+        service = self._ensure_session()
+        config_response = service.stub.GetRivaSynthesisConfig(
+            riva.client.proto.riva_tts_pb2.RivaSynthesisConfigRequest()
+        )
+        tts_models = {}
+        for model_config in config_response.model_config:
+            language_code = model_config.parameters.get("language_code", "unknown")
+            voice_name = model_config.parameters.get("voice_name", "unknown")
+            subvoices_str = model_config.parameters.get("subvoices", "")
 
-                if subvoices_str:
-                    subvoices = [voice.split(":")[0] for voice in subvoices_str.split(",")]
-                    full_voice_names = [voice_name + "." + subvoice for subvoice in subvoices]
-                else:
-                    full_voice_names = [voice_name]
+            if subvoices_str:
+                subvoices = [voice.split(":")[0] for voice in subvoices_str.split(",")]
+                full_voice_names = [voice_name + "." + subvoice for subvoice in subvoices]
+            else:
+                full_voice_names = [voice_name]
 
-                if language_code in tts_models:
-                    tts_models[language_code]["voices"].extend(full_voice_names)
-                else:
-                    tts_models[language_code] = {"voices": full_voice_names}
+            if language_code in tts_models:
+                tts_models[language_code]["voices"].extend(full_voice_names)
+            else:
+                tts_models[language_code] = {"voices": full_voice_names}
 
-            tts_models = dict(sorted(tts_models.items()))
-            logger.info("Available TTS voices:")
-            logger.info(json.dumps(tts_models, indent=4))
-
-        except Exception as e:
-            logger.error(f"Error listing TTS voices: {e}")
-            logger.warning("TTS voice listing failed, skipping...")
-            return
+        tts_models = dict(sorted(tts_models.items()))
+        logger.info("Available TTS voices:")
+        logger.info(json.dumps(tts_models, indent=4))
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

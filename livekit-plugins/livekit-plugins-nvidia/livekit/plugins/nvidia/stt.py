@@ -108,7 +108,6 @@ class SpeechStream(stt.SpeechStream):
         self._audio_queue = queue.Queue()
         self._shutdown_event = threading.Event()
         self._recognition_thread = None
-        self._thread_exception = None
 
         self._speaking = False
         self._request_id = ""
@@ -121,12 +120,14 @@ class SpeechStream(stt.SpeechStream):
         )
         self._asr_service = riva.client.ASRService(self._auth)
 
+        self._event_loop = asyncio.get_running_loop()
+
     async def _run(self) -> None:
         try:
             config = self._create_streaming_config()
 
             self._recognition_thread = threading.Thread(
-                target=self._recognition_thread_worker,
+                target=self._recognition_worker,
                 args=(config,),
                 name="nvidia-asr-recognition",
                 daemon=True,
@@ -137,9 +138,6 @@ class SpeechStream(stt.SpeechStream):
 
             if self._recognition_thread:
                 await asyncio.to_thread(self._recognition_thread.join)
-
-            if self._thread_exception:
-                raise self._thread_exception
 
         except Exception as e:
             logger.exception("Error in NVIDIA streaming")
@@ -181,7 +179,7 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._shutdown_event.set()
 
-    def _recognition_thread_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
+    def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
         try:
             audio_generator = self._audio_chunk_generator()
 
@@ -190,24 +188,19 @@ class SpeechStream(stt.SpeechStream):
             )
 
             for response in response_generator:
-                if self._shutdown_event.is_set():
-                    break
                 self._handle_response(response)
 
         except Exception as e:
             logger.exception(f"Error in NVIDIA recognition thread: {e}")
-            self._thread_exception = e
 
     def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
+        """
+        The nvidia riva SDK requires a generator for realtime STT - so we have to
+        wrap the
+        """
         while not self._shutdown_event.is_set():
-            try:
-                audio_chunk = self._audio_queue.get(timeout=0.1)
-                yield audio_chunk
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Error in audio generator: {e}")
-                break
+            audio_chunk = self._audio_queue.get()
+            yield audio_chunk
 
     def _handle_response(self, response) -> None:
         try:
@@ -229,30 +222,37 @@ class SpeechStream(stt.SpeechStream):
 
                 if not self._speaking and transcript.strip():
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                    self._event_ch.send_nowait(start_event)
+                    self._event_loop.call_soon_threadsafe(
+                        self._event_ch.send_nowait,
+                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
+                    )
 
                 speech_data = self._convert_to_speech_data(alternative, is_final)
 
                 if is_final:
-                    final_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=self._request_id,
-                        alternatives=[speech_data],
+                    self._event_loop.call_soon_threadsafe(
+                        self._event_ch.send_nowait,
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            request_id=self._request_id,
+                            alternatives=[speech_data],
+                        ),
                     )
-                    self._event_ch.send_nowait(final_event)
 
                     if self._speaking:
-                        self._speaking = False
-                        end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                        self._event_ch.send_nowait(end_event)
+                        self._event_loop.call_soon_threadsafe(
+                            self._event_ch.send_nowait,
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
+                        )
                 else:
-                    interim_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                        request_id=self._request_id,
-                        alternatives=[speech_data],
+                    self._event_loop.call_soon_threadsafe(
+                        self._event_ch.send_nowait,
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            request_id=self._request_id,
+                            alternatives=[speech_data],
+                        ),
                     )
-                    self._event_ch.send_nowait(interim_event)
 
         except Exception as e:
             logger.error(f"Error handling response: {e}")
