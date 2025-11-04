@@ -766,11 +766,7 @@ def _validate_keyterms(
         )
 
     if is_given(keyterms) and (
-        (
-            model.startswith("nova-3")
-            and language == "multi"
-        )
-        or not model.startswith("nova-3")
+        (model.startswith("nova-3") and language == "multi") or not model.startswith("nova-3")
     ):
         raise ValueError(
             "Keyterm Prompting is only available for monolingual transcription using the Nova-3 Model. "
