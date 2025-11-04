@@ -195,6 +195,7 @@ class AvatarSession:
 
         if self._runtime:
             runtime = self._runtime
+            await runtime._initialize_token()
         else:
             kwargs = {
                 "model_path": self._model_path,
