@@ -630,19 +630,18 @@ class AgentActivity(RecognitionHooks):
         # `resume` must only be called by AgentSession
 
         async with self._lock:
-            start_span = tracer.start_span(
+            span = tracer.start_span(
                 "resume_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
                 await self._start_session()
             finally:
-                start_span.end()
+                span.end()
 
     def _wake_up_scheduling_task(self) -> None:
         self._q_updated.set()
 
-    @tracer.start_as_current_span("pause_agent_activity")
     async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
         # `pause` must only be called by AgentSession
 
@@ -652,8 +651,15 @@ class AgentActivity(RecognitionHooks):
 
         # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
-            await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
-            await self._close_session()
+            span = tracer.start_span(
+                "pause_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+            )
+            try:
+                await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+                await self._close_session()
+            finally:
+                span.end()
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
@@ -2291,14 +2297,15 @@ class AgentActivity(RecognitionHooks):
                         forwarded_text = ""
                         playback_position = 0
 
-                    # truncate server-side message
-                    msg_modalities = await msg_gen.modalities
-                    self._rt_session.truncate(
-                        message_id=msg_gen.message_id,
-                        modalities=msg_modalities,
-                        audio_end_ms=int(playback_position * 1000),
-                        audio_transcript=forwarded_text,
-                    )
+                    # truncate server-side message (if supported)
+                    if self.llm.capabilities.message_truncation:
+                        msg_modalities = await msg_gen.modalities
+                        self._rt_session.truncate(
+                            message_id=msg_gen.message_id,
+                            modalities=msg_modalities,
+                            audio_end_ms=int(playback_position * 1000),
+                            audio_transcript=forwarded_text,
+                        )
 
                 msg: llm.ChatMessage | None = None
                 if forwarded_text:
@@ -2402,6 +2409,18 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             if len(new_fnc_outputs) > 0:
+                # wait all speeches played before updating the tool output and generating the response
+                # most realtime models dont't support generating multiple responses at the same time
+                while self._current_speech or self._speech_q:
+                    if (
+                        self._current_speech
+                        and not self._current_speech.done()
+                        and self._current_speech is not speech_handle
+                    ):
+                        await self._current_speech
+                    else:
+                        await asyncio.sleep(0)
+
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)
                 try:

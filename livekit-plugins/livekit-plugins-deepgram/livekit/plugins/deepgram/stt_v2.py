@@ -407,6 +407,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
@@ -483,9 +484,10 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._event_ch.send_nowait(end_event)
 
         elif data["type"] == "Error":
+            logger.warning("deepgram sent an error", extra={"data": data})
             desc = data.get("description") or "unknown error from deepgram"
-            status_code = data.get("code") or -1
-            raise APIStatusError(message=desc, status_code=status_code)
+            code = -1
+            raise APIStatusError(message=desc, status_code=code)
 
 
 def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:

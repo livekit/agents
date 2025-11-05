@@ -125,7 +125,22 @@ class TTS(tts.TTS):
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
+        try:
+            # Send Flush and Close messages to ensure Deepgram processes all remaining audio
+            # and properly terminates the session, preventing lingering TTS sessions
+            await ws.send_str(SynthesizeStream._FLUSH_MSG)
+            await ws.send_str(SynthesizeStream._CLOSE_MSG)
+
+            # Wait for server acknowledgment to prevent race conditions and ensure
+            # proper cleanup, avoiding 429 Too Many Requests errors from lingering sessions
+            try:
+                await asyncio.wait_for(ws.receive(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+        except Exception as e:
+            logger.warning(f"Error during WebSocket close sequence: {e}")
+        finally:
+            await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -220,6 +235,9 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
+    _FLUSH_MSG: str = json.dumps({"type": "Flush"})
+    _CLOSE_MSG: str = json.dumps({"type": "Close"})
+
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
@@ -278,18 +296,22 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
+        input_sent_event = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for word in word_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
                 self._mark_started()
                 await ws.send_str(json.dumps(speak_msg))
+                input_sent_event.set()
 
-            # Always flush after a segment
+            # always flush after a segment
             flush_msg = {"type": "Flush"}
             await ws.send_str(json.dumps(flush_msg))
+            input_sent_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            await input_sent_event.wait()
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -323,4 +345,5 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
+                input_sent_event.set()
                 await utils.aio.gracefully_cancel(*tasks)

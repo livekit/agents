@@ -10,6 +10,8 @@ import unicodedata
 from abc import ABC, abstractmethod
 from typing import Any
 
+from huggingface_hub import errors
+
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
@@ -26,7 +28,18 @@ MAX_HISTORY_TURNS = 6
 def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     from huggingface_hub import hf_hub_download
 
-    local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
+    try:
+        local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
+    except (errors.LocalEntryNotFoundError, OSError):
+        logger.error(
+            f'Could not find file "{filename}". '
+            "Make sure you have downloaded the model before running the agent. "
+            "Use `python3 your_agent.py download-files` to download the model."
+        )
+        raise RuntimeError(
+            "livekit-plugins-turn-detector initialization failed. "
+            f'Could not find file "{filename}".'
+        ) from None
     return local_path
 
 
@@ -93,6 +106,7 @@ class _EUORunnerBase(_InferenceRunner):
             from transformers import AutoTokenizer  # type: ignore
         finally:
             logger.removeFilter(filt)
+
 
         try:
             local_path_onnx = _download_from_hf_hub(

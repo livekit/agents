@@ -4,7 +4,8 @@ import asyncio
 import copy
 import time
 from collections.abc import AsyncIterable, Sequence
-from dataclasses import dataclass
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -162,7 +163,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
         min_endpointing_delay: float = 0.5,
-        max_endpointing_delay: float = 6.0,
+        max_endpointing_delay: float = 3.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
@@ -225,7 +226,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 or an EOU model) before it declares the user’s turn complete.
                 Default ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
-                will wait before terminating the turn. Default ``6.0`` s.
+                will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
                 Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
@@ -250,8 +251,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
                 to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
-            preemptive_generation (bool): Whether to use preemptive generation.
-                Default ``False``.
             preemptive_generation (bool):
                 Whether to speculatively begin LLM and TTS requests before an end-of-turn is
                 detected. When True, the agent sends inference calls as soon as a user
@@ -736,6 +735,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             self._closing = True
+            self._cancel_user_away_timer()
 
             if self._activity is not None:
                 if not drain:
@@ -796,12 +796,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
-            self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            # close room io after close event is emitted
+            if self._room_io:
+                await self._room_io.aclose()
+                self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
@@ -849,14 +853,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if activity is None:
             raise RuntimeError("AgentSession is closing, cannot use say()")
 
-        handle = activity.say(
-            text,
-            audio=audio,
-            allow_interruptions=allow_interruptions,
-            add_to_chat_ctx=add_to_chat_ctx,
-        )
-        if run_state:
-            run_state._watch_handle(handle)
+        # attach to the session span if called outside of the AgentSession
+        use_span: AbstractContextManager[trace.Span | None] = nullcontext()
+        if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
+            use_span = trace.use_span(self._session_span, end_on_exit=False)
+
+        with use_span:
+            handle = activity.say(
+                text,
+                audio=audio,
+                allow_interruptions=allow_interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+            )
+            if run_state:
+                run_state._watch_handle(handle)
 
         return handle
 
@@ -891,11 +901,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         run_state = self._global_run_state
-        if self._activity.scheduling_paused:
-            if self._next_activity is None:
-                raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
-            handle = self._next_activity._generate_reply(
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+
+        # attach to the session span if called outside of the AgentSession
+        use_span: AbstractContextManager[trace.Span | None] = nullcontext()
+        if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
+            use_span = trace.use_span(self._session_span, end_on_exit=False)
+
+        with use_span:
+            handle = activity._generate_reply(
                 user_message=user_message,
                 instructions=instructions,
                 tool_choice=tool_choice,
@@ -903,17 +920,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
             if run_state:
                 run_state._watch_handle(handle)
-
-            return handle
-
-        handle = self._activity._generate_reply(
-            user_message=user_message,
-            instructions=instructions,
-            tool_choice=tool_choice,
-            allow_interruptions=allow_interruptions,
-        )
-        if run_state:
-            run_state._watch_handle(handle)
 
         return handle
 
@@ -996,6 +1002,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._next_activity = agent._activity
 
+            if self._root_span_context is not None:
+                # restore the root span context so on_exit, on_enter, and future turns
+                # are direct children of the root span, not nested under a tool call.
+                otel_context.attach(self._root_span_context)
+
             previous_activity_v = self._activity
             if self._activity is not None:
                 if previous_activity == "close":
@@ -1037,11 +1048,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if old_task is not None:
             await old_task
-
-        if self._root_span_context is not None:
-            # restore the root span context so on_exit, on_enter, and future turns
-            # are direct children of the root span, not nested under a tool call.
-            otel_context.attach(self._root_span_context)
 
         await self._update_activity(agent)
 
@@ -1180,6 +1186,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        if self.user_state == "away" and ev.is_final:
+            # reset user state from away to listening in case VAD has a miss detection
+            self._update_user_state("listening")
+
         self.emit("user_input_transcribed", ev)
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:

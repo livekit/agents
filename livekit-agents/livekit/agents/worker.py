@@ -224,6 +224,11 @@ class ServerOptions:
     """
     prometheus_port: NotGivenOr[int] = NOT_GIVEN
     """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
+    prometheus_multiproc_dir: str | None = None
+    """Directory for prometheus multiprocess mode to enable metrics collection from child job processes.
+    When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
+    When None (default), multiprocess mode is disabled and only main process metrics are collected.
+    Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -277,6 +282,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
+
 
         if not self._ws_url:
             raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")

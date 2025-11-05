@@ -766,13 +766,9 @@ def _validate_keyterms(
         )
 
     if is_given(keyterms) and (
-        (
-            model.startswith("nova-3")
-            and language not in ("en-US", "en", "de", "nl", "sv", "sv-SE", "da", "da-DK")
-        )
-        or not model.startswith("nova-3")
+        (model.startswith("nova-3") and language == "multi") or not model.startswith("nova-3")
     ):
         raise ValueError(
-            "Keyterm Prompting is only available for English transcription using the Nova-3 Model. "
+            "Keyterm Prompting is only available for monolingual transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
         )
