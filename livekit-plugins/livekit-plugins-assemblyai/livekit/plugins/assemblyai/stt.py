@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -205,7 +205,7 @@ class SpeechStream(stt.SpeechStream):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         # Build UpdateConfiguration message for dynamic updates
-        update_config = {"type": "UpdateConfiguration"}
+        update_config: dict[str, Any] = {"type": "UpdateConfiguration"}
         needs_update = False
 
         if is_given(buffer_size_seconds):
