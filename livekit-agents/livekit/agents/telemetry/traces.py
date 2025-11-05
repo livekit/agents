@@ -77,6 +77,9 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def __init__(self, metadata: dict[str, str]) -> None:
         self._metadata = metadata
 
+    def emit(self, log_data: LogData) -> None:
+        log_data.log_record.attributes.update(self._metadata)
+
     def on_emit(self, log_data: LogData) -> None:
         log_data.log_record.attributes.update(self._metadata)
 
