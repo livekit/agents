@@ -256,8 +256,8 @@ class JobContext:
             room_id=self.job.room.sid,
             room=self.job.room.name,
             options=session.options,
-            audio_recording_path=recorder_io.output_path,
-            audio_recording_started_at=recorder_io.recording_started_at,
+            audio_recording_path=recorder_io.output_path if recorder_io else None,
+            audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
             events=session._recorded_events,
             enable_user_data_training=True,  # TODO
             chat_history=session.history.copy(),
