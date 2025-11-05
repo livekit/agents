@@ -18,10 +18,20 @@ def _split_sentences(
 ) -> list[tuple[str, int, int]]:
     _, offsets = blingfire.text_to_sentences_with_offsets(text)
 
+    # Added boundaries where punctuation is immediately followed by '<' or a capital letter.
+    ends: list[int] = [end for _, end in offsets]
+    for m in re.finditer(r"[.!?](?=(?:<|[A-Z]))", text):
+        ends.append(m.end())
+
+    # Normalize and sort unique boundaries
+    ends = sorted({e for e in ends if 0 < e <= len(text)})
+
     merged_sentences = []
     start = 0
 
-    for _, end in offsets:
+    for end in ends:
+        if end <= start:
+            continue
         raw_sentence = text[start:end]
         sentence = re.sub(r"\s*\n+\s*", " ", raw_sentence).strip()
         if not sentence or len(sentence) < min_sentence_len:
