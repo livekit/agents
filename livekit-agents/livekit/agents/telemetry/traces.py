@@ -269,10 +269,11 @@ async def _upload_session_report(
         },
     )
 
-    def _log(body: str, attributes: dict) -> None:
+    def _log(body: str, timestamp: int, attributes: dict) -> None:
         chat_logger.emit(
             LogRecord(
                 body=body,
+                timestamp=timestamp,
                 attributes=attributes,
                 trace_id=0,
                 span_id=0,
@@ -283,7 +284,8 @@ async def _upload_session_report(
         )
 
     _log(
-        "session report",
+        body="session report",
+        timestamp=int(report.audio_recording_started_at * 1e9),
         attributes={
             "chat.options": vars(report.options),
             "chat.report_timestamp": report.timestamp,
@@ -292,7 +294,11 @@ async def _upload_session_report(
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)
-        _log("chat item", attributes={"chat.item": item_log})
+        _log(
+            body="chat item",
+            timestamp=int(item.created_at * 1e9),
+            attributes={"chat.item": item_log},
+        )
 
     # emit recording
     access_token = (
