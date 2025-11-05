@@ -193,6 +193,7 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._current_language_code: str = "en"  # Track language code from utterances
 
     def update_options(
         self,
@@ -383,7 +384,9 @@ class SpeechStream(stt.SpeechStream):
             turn_is_formatted = data.get("turn_is_formatted", False)
             utterance = data.get("utterance", "")
             transcript = data.get("transcript", "")
-            language_code = data.get("language_code", "en")
+            # language_code is only returned with utterances, so track it for final transcript
+            if "language_code" in data:
+                self._current_language_code = data["language_code"]
 
             if words:
                 interim_text = " ".join(word.get("text", "") for word in words)
@@ -396,7 +399,9 @@ class SpeechStream(stt.SpeechStream):
             if utterance:
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language=language_code, text=utterance)],
+                    alternatives=[
+                        stt.SpeechData(language=self._current_language_code, text=utterance)
+                    ],
                 )
                 self._event_ch.send_nowait(final_event)
 
@@ -406,7 +411,9 @@ class SpeechStream(stt.SpeechStream):
             ):
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language=language_code, text=transcript)],
+                    alternatives=[
+                        stt.SpeechData(language=self._current_language_code, text=transcript)
+                    ],
                 )
                 self._event_ch.send_nowait(final_event)
 
