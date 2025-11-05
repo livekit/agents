@@ -32,7 +32,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.2.17",
+    "livekit-agents[codecs]>=1.2.18",
     "numpy>=1.26",
     "aiohttp>=3.8.0",
 ]
