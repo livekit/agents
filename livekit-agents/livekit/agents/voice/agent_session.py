@@ -753,6 +753,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the agent session.
@@ -760,11 +761,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
             max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+            turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
+                when the user has finished speaking. ``None`` reverts to automatic selection.
         """
         if is_given(min_endpointing_delay):
             self._opts.min_endpointing_delay = min_endpointing_delay
         if is_given(max_endpointing_delay):
             self._opts.max_endpointing_delay = max_endpointing_delay
+
+        if is_given(turn_detection):
+            self._update_turn_detection_setting(turn_detection)
 
         if self._activity is not None:
             self._activity.update_options(
@@ -772,17 +778,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 max_endpointing_delay=max_endpointing_delay,
             )
 
-    def set_turn_detection(self, turn_detection: TurnDetectionMode) -> None:
-        """Update the session's turn detection strategy while the session is running.
-
-        Args:
-            turn_detection: The new strategy to apply. This can be one of the built-in
-                modes (``"manual"``, ``"vad"``, ``"stt"``, ``"realtime_llm"``) or a
-                custom :class:`~livekit.agents.voice.audio_recognition._TurnDetector`.
-                Switching to ``"manual"`` disables automatic end-of-turn commits and
-                requires explicit calls to :meth:`commit_user_turn`.
-        """
-
+    def _update_turn_detection_setting(self, turn_detection: TurnDetectionMode | None) -> None:
         previous_setting = self._turn_detection
         previous_mode = self._activity._turn_detection_mode if self._activity is not None else None
 
@@ -806,6 +802,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "current_mode": current_mode,
             },
         )
+
+    def set_turn_detection(self, turn_detection: TurnDetectionMode) -> None:
+        """Update the session's turn detection strategy while the session is running.
+
+        Args:
+            turn_detection: The new strategy to apply. This can be one of the built-in
+                modes (``"manual"``, ``"vad"``, ``"stt"``, ``"realtime_llm"``) or a
+                custom :class:`~livekit.agents.voice.audio_recognition._TurnDetector`.
+                Switching to ``"manual"`` disables automatic end-of-turn commits and
+                requires explicit calls to :meth:`commit_user_turn`.
+        """
+        self._update_turn_detection_setting(turn_detection)
 
     def say(
         self,
