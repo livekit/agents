@@ -285,7 +285,7 @@ async def _upload_session_report(
 
     _log(
         body="session report",
-        timestamp=int(report.audio_recording_started_at * 1e9),
+        timestamp=int((report.audio_recording_started_at or 0) * 1e9),
         attributes={
             "chat.options": vars(report.options),
             "chat.report_timestamp": report.timestamp,
