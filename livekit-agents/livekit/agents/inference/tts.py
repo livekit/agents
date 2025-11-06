@@ -405,9 +405,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            base_pkt = {
-                "type": "input_transcript",
-            }
+            base_pkt: dict[str, Any] = {}
+            base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
