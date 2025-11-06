@@ -129,10 +129,9 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
-    def _determine_turn_detection_mode(
-        self,
+    def _validate_turn_detection(
+        self, turn_detection: TurnDetectionMode | None
     ) -> tuple[TurnDetectionStr | None, _TurnDetector | None]:
-        turn_detection = self.turn_detection
         if isinstance(turn_detection, str):
             mode: TurnDetectionStr | None = turn_detection
             turn_detector = None
@@ -214,7 +213,7 @@ class AgentActivity(RecognitionHooks):
 
     def update_turn_detection(self) -> None:
         previous_mode = self._turn_detection_mode
-        mode, turn_detector = self._determine_turn_detection_mode()
+        mode, turn_detector = self._validate_turn_detection(self.turn_detection)
 
         self._turn_detection_mode = mode
         self._turn_detector = turn_detector
