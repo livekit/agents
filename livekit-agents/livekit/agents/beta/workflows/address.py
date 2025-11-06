@@ -62,7 +62,6 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary. \n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
-            ),extra_instructions
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
@@ -106,7 +105,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def confirm_address(self, ctx: RunContext) -> None:
-        """Validates/confirms the address provided by the user."""
+        """Call this tool when the user confirms that the address is correct."""
         await ctx.wait_for_playout()
 
         if ctx.speech_handle == self._address_update_speech_handle:
