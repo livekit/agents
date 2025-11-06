@@ -110,7 +110,7 @@ class TTS(tts.TTS):
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Sentence tokenizer will be used to synthesize one sentence at a time. Defaults to True.
-            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer when auto_mode=False, `livekit.agents.tokenize.blingfire.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
