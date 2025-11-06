@@ -52,10 +52,17 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 "(before asking any questions or providing any answers.) \n"
                 "Don't invent new addresses, stick strictly to what the user said. \n"
                 "Call `confirm_address` after the user confirmed the address is correct. \n"
+                "When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.\n"
+                "Do not read the number and the suffix letters separately.\n"
+                "Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.\n"
+                "For example, read 90210 as 'nine zero two one zero.'\n"
+                "Avoid using bullet points and parenthese in any responses.\n"
+                "Spell out the address letter-by-letter when applicable, such as street names and provinces, especially when the user spells it out initially. \n"
                 "If the address is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts in this order: street address, unit number if applicable, locality, and country. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary. \n"
                 "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
                 + extra_instructions
+            ),extra_instructions
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
@@ -87,7 +94,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             country (str): The country the user lives in spelled out fully
         """
         self._address_update_speech_handle = ctx.speech_handle
-        address_fields = [street_address, unit_number, locality, country]
+        address_fields = [street_address, unit_number, locality, country] if unit_number.strip() else [street_address, locality, country]
         address = " ".join(address_fields)
         self._current_address = address
 
