@@ -93,7 +93,11 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             country (str): The country the user lives in spelled out fully
         """
         self._address_update_speech_handle = ctx.speech_handle
-        address_fields = [street_address, unit_number, locality, country] if unit_number.strip() else [street_address, locality, country]
+        address_fields = (
+            [street_address, unit_number, locality, country]
+            if unit_number.strip()
+            else [street_address, locality, country]
+        )
         address = " ".join(address_fields)
         self._current_address = address
 
