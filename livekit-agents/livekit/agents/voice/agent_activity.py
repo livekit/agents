@@ -1394,7 +1394,9 @@ class AgentActivity(RecognitionHooks):
             # otherwise invalidate the preemptive generation
 
             # Normalize text by lowercasing and removing punctuation for comparison
-            def normalize_text(text: str) -> str:
+            def normalize_text(text: str | None) -> str:
+                if text is None:
+                    return ""
                 return text.lower().translate(str.maketrans("", "", string.punctuation))
 
             if (
