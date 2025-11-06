@@ -82,7 +82,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         Args:
             street_address (str): Dependent on country, may include fields like house number, street name, block, or district
-            unit_number (str): The unit number, for example Floor 1 or Apartment 12
+            unit_number (str): The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''
             locality (str): Dependent on country, may include fields like city, zip code, or province
             country (str): The country the user lives in spelled out fully
         """
