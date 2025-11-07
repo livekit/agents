@@ -663,6 +663,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.tts, tts.TTS):
             self.tts.off("metrics_collected", self._on_metrics_collected)
             self.tts.off("error", self._on_error)
+            await self.tts.aclose()
 
         if isinstance(self.vad, vad.VAD):
             self.vad.off("metrics_collected", self._on_metrics_collected)
