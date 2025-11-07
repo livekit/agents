@@ -1,3 +1,3 @@
 import logging
 
-logger = logging.getLogger("livekit.plugins.minimal")
+logger = logging.getLogger("livekit.plugins.moss")

@@ -12,20 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Minimal example plugin for LiveKit Agents
-
-This is a stubbed example plugin.
-"""
+"""InferEdge Moss plugin for LiveKit Agents."""
 
 from livekit.agents import Plugin
 
+from .MossClient import MossClient, DocumentInfo, IndexInfo, SearchResult
 from .log import logger
 from .version import __version__
 
+__all__ = [
+    "MossClient",
+    "DocumentInfo",
+    "IndexInfo",
+    "SearchResult",
+    "__version__",
+]
 
-class MinimalPlugin(Plugin):
+
+class MossPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(MinimalPlugin())
+Plugin.register_plugin(MossPlugin())
