@@ -39,9 +39,9 @@ from .agent import (
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
+    TurnDetectionMode,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
-    _TurnDetector,
 )
 from .events import (
     AgentFalseInterruptionEvent,
@@ -68,7 +68,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from .agent_session import AgentSession, TurnDetectionMode, TurnDetectionStr
+    from .agent_session import AgentSession
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
@@ -84,6 +84,7 @@ class _PreemptiveGeneration:
     created_at: float
 
 
+# NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -115,33 +116,42 @@ class AgentActivity(RecognitionHooks):
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
-        self._turn_detection_mode: TurnDetectionMode | None = None
-        self._turn_detector: _TurnDetector | None = None
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
-
-        self.update_turn_detection()
-
         self._mcp_tools: list[mcp.MCPTool] = []
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and not self.allow_interruptions
+        ):
+            raise ValueError(
+                "the RealtimeModel uses a server-side turn detection, "
+                "allow_interruptions cannot be False, disable turn_detection in "
+                "the RealtimeModel and use VAD on the AgentSession instead"
+            )
+
+        # validate turn detection mode and turn detector
+        turn_detection = (
+            cast(Optional[TurnDetectionMode], self._agent.turn_detection)
+            if is_given(self._agent.turn_detection)
+            else self._session.turn_detection
+        )
+        self._turn_detection = self._validate_turn_detection(turn_detection)
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
-    ) -> tuple[TurnDetectionStr | None, _TurnDetector | None]:
-        if isinstance(turn_detection, str):
-            mode: TurnDetectionStr | None = turn_detection
-            turn_detector = None
-        elif turn_detection is None:
-            mode = None
-            turn_detector = None
-        else:
-            mode = None
-            turn_detector = turn_detection
+    ) -> TurnDetectionMode | None:
+        if turn_detection is not None and not isinstance(turn_detection, str):
+            # return directly if turn_detection is _TurnDetector
+            return turn_detection
 
+        mode = turn_detection if isinstance(turn_detection, str) else None
         vad_model = self.vad
         stt_model = self.stt
         llm_model = self.llm
@@ -158,13 +168,6 @@ class AgentActivity(RecognitionHooks):
             mode = None
 
         if isinstance(llm_model, llm.RealtimeModel):
-            if llm_model.capabilities.turn_detection and not self.allow_interruptions:
-                raise ValueError(
-                    "the RealtimeModel uses a server-side turn detection, "
-                    "allow_interruptions cannot be False, disable turn_detection in "
-                    "the RealtimeModel and use VAD on the AgentSession instead"
-                )
-
             if mode == "realtime_llm" and not llm_model.capabilities.turn_detection:
                 logger.warning(
                     "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
@@ -188,8 +191,10 @@ class AgentActivity(RecognitionHooks):
                 )
                 mode = None
 
+            # fallback to VAD if server side turn detection is disabled and VAD is available
             if not llm_model.capabilities.turn_detection and vad_model and mode is None:
                 mode = "vad"
+
         elif mode == "realtime_llm":
             logger.warning(
                 "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel"
@@ -209,31 +214,7 @@ class AgentActivity(RecognitionHooks):
                 "for more responsive interruption handling."
             )
 
-        return mode, turn_detector
-
-    def update_turn_detection(self) -> None:
-        previous_mode = self._turn_detection_mode
-        mode, turn_detector = self._validate_turn_detection(self.turn_detection)
-
-        self._turn_detection_mode = mode
-        self._turn_detector = turn_detector
-
-        if mode == "manual":
-            if self._false_interruption_timer is not None:
-                self._false_interruption_timer.cancel()
-                self._false_interruption_timer = None
-
-            if self._interrupt_paused_speech_task is not None:
-                if not self._interrupt_paused_speech_task.done():
-                    self._interrupt_paused_speech_task.cancel()
-                self._interrupt_paused_speech_task = None
-        elif previous_mode == "manual":
-            if self._false_interruption_timer is not None:
-                self._false_interruption_timer.cancel()
-                self._false_interruption_timer = None
-
-        if self._audio_recognition is not None:
-            self._audio_recognition.update_turn_detection(mode, turn_detector, self.vad)
+        return mode
 
     @property
     def scheduling_paused(self) -> bool:
@@ -246,18 +227,6 @@ class AgentActivity(RecognitionHooks):
     @property
     def agent(self) -> Agent:
         return self._agent
-
-    @property
-    def turn_detection(self) -> TurnDetectionMode | None:
-        if self._session.turn_detection_updated:
-            return self._session.turn_detection
-
-        return cast(
-            "TurnDetectionMode | None",
-            self._agent.turn_detection
-            if is_given(self._agent.turn_detection)
-            else self._session.turn_detection,
-        )
 
     @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
@@ -363,6 +332,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         if utils.is_given(tool_choice):
             self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
@@ -370,10 +340,22 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
+        if utils.is_given(turn_detection):
+            turn_detection = self._validate_turn_detection(
+                cast(Optional[TurnDetectionMode], turn_detection)
+            )
+
+            if (
+                self._turn_detection == "manual" or turn_detection == "manual"
+            ) and self._false_interruption_timer is not None:
+                self._false_interruption_timer.cancel()
+                self._false_interruption_timer = None
+
         if self._audio_recognition:
             self._audio_recognition.update_options(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                turn_detection=turn_detection,
             )
 
     def _create_speech_task(
@@ -575,10 +557,9 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
-            turn_detector=self._turn_detector,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
-            turn_detection_mode=self._turn_detection_mode,
+            turn_detection=self._turn_detection,
         )
         self._audio_recognition.start()
 
@@ -1199,7 +1180,7 @@ class AgentActivity(RecognitionHooks):
             self._start_false_interruption_timer(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode in ("manual", "realtime_llm"):
+        if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
@@ -1303,7 +1284,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             self.stt is not None
-            and self._turn_detection_mode != "manual"
+            and self._turn_detection != "manual"
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
@@ -1453,11 +1434,11 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.interrupt()
 
         metadata: Metadata | None = None
-        if isinstance(self.turn_detection, str):
-            metadata = Metadata(model_name="unknown", model_provider=self.turn_detection)
-        elif self.turn_detection is not None:
+        if isinstance(self._turn_detection, str):
+            metadata = Metadata(model_name="unknown", model_provider=self._turn_detection)
+        elif self._turn_detection is not None:
             metadata = Metadata(
-                model_name=self.turn_detection.model, model_provider=self.turn_detection.provider
+                model_name=self._turn_detection.model, model_provider=self._turn_detection.provider
             )
 
         eou_metrics = EOUMetrics(

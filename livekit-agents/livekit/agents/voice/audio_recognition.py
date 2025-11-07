@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Literal, Optional, Protocol, Union, cast
 
 from opentelemetry import trace
 
@@ -19,9 +19,6 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from .agent import ModelSettings
-
-if TYPE_CHECKING:
-    from .agent_session import TurnDetectionMode
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 
@@ -60,6 +57,22 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
+TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
+"""
+The mode of turn detection to use.
+
+- "stt": use speech-to-text result to detect the end of the user's turn
+- "vad": use VAD to detect the start and end of the user's turn
+- "realtime_llm": use server-side turn detection provided by the realtime LLM
+- "manual": manually manage the turn detection
+- _TurnDetector: use the default mode with the provided turn detector
+
+(default) If not provided, automatically choose the best mode based on
+    available models (realtime_llm -> vad -> stt -> manual)
+If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+"""
+
+
 class RecognitionHooks(Protocol):
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
@@ -79,10 +92,9 @@ class AudioRecognition:
         hooks: RecognitionHooks,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
-        turn_detector: _TurnDetector | None,
+        turn_detection: TurnDetectionMode | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
-        turn_detection_mode: TurnDetectionMode | None,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
@@ -92,11 +104,11 @@ class AudioRecognition:
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._min_endpointing_delay = min_endpointing_delay
         self._max_endpointing_delay = max_endpointing_delay
-        self._turn_detector: _TurnDetector | None = None
+        self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
-        self._turn_detection_mode: TurnDetectionMode | None = None
-        self._vad_base_turn_detection = False
+        self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
+        self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
 
@@ -119,58 +131,34 @@ class AudioRecognition:
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
-        # apply initial turn detection configuration via the common update path
-        self.update_turn_detection(turn_detection_mode, turn_detector, vad)
-
     def update_options(
         self,
         *,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         if is_given(min_endpointing_delay):
             self._min_endpointing_delay = min_endpointing_delay
         if is_given(max_endpointing_delay):
             self._max_endpointing_delay = max_endpointing_delay
 
-    def update_turn_detection(
-        self,
-        mode: TurnDetectionMode | None,
-        turn_detector: _TurnDetector | None,
-        vad: vad.VAD | None,
-    ) -> None:
-        previous_mode = self._turn_detection_mode
-        manual_prev = previous_mode == "manual"
-        manual_now = mode == "manual"
+        if is_given(turn_detection):
+            turn_detection = cast(Optional[TurnDetectionMode], turn_detection)
+            self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
 
-        self._turn_detection_mode = mode
-        self._turn_detector = turn_detector
-        base_mode = mode if isinstance(mode, str) else None
-        self._vad_base_turn_detection = base_mode in ("vad", None)
+            mode = turn_detection if isinstance(turn_detection, str) else None
+            if self._turn_detection_mode != mode:
+                previous_mode = self._turn_detection_mode
+                self._turn_detection_mode = mode
+                self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
 
-        vad_changed = vad is not self._vad
-        vad_active = self._vad_atask is not None
-        if vad_changed or vad_active:
-            self.update_vad(vad)
-        else:
-            self._vad = vad
-
-        if manual_now:
-            if self._end_of_turn_task is not None and not self._end_of_turn_task.done():
-                self._end_of_turn_task.cancel()
-            self._end_of_turn_task = None
-            self._user_turn_committed = False
-            return
-
-        if manual_prev and not manual_now:
-            if self._end_of_turn_task is not None:
-                if not self._end_of_turn_task.done():
-                    self._end_of_turn_task.cancel()
-                self._end_of_turn_task = None
-
-            if not self._speaking and self._audio_transcript:
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+                if self._turn_detection_mode == "manual" or previous_mode == "manual":
+                    if self._end_of_turn_task:
+                        if not self._end_of_turn_task.done():
+                            self._end_of_turn_task.cancel()
+                    self._end_of_turn_task = None
+                    self._user_turn_committed = False
 
     def start(self) -> None:
         self.update_stt(self._stt)
