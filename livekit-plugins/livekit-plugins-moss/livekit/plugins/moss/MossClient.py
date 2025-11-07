@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
-from typing import Any, dict
+from typing import Any
 
 try:
     from inferedge_moss import (
@@ -33,7 +32,7 @@ except ImportError:
 
 from .log import logger
 
-__all__ = ["MossClient", "DocumentInfo", "IndexInfo", "SearchResult"]
+__all__ = ["MossClient", "DocumentInfo", "IndexInfo", "SearchResult", "AddDocumentsOptions", "GetDocumentsOptions"]
 
 
 class MossClient:
@@ -105,7 +104,7 @@ class MossClient:
 
         logger.debug("listing moss indexes")
         indexes = await self._client.list_indexes()
-        if not isinstance(indexes, list[IndexInfo]):
+        if not isinstance(indexes, list):
             raise TypeError("inferedge_moss.list_indexes returned an unexpected type")
         return indexes
 
@@ -124,7 +123,7 @@ class MossClient:
 
         logger.debug("adding documents to moss index", extra={"index": index_name, "count": len(docs)})
         mapping = await self._client.add_docs(index_name, docs, options)
-        if not isinstance(mapping, dict[str, int]):
+        if not isinstance(mapping, dict):
             raise TypeError("inferedge_moss.add_docs returned an unexpected type")
         return mapping
 
@@ -133,7 +132,7 @@ class MossClient:
 
         logger.debug("deleting documents from moss index", extra={"index": index_name, "count": len(doc_ids)})
         mapping = await self._client.delete_docs(index_name, doc_ids)
-        if not isinstance(mapping, dict[str, int]):
+        if not isinstance(mapping, dict):
             raise TypeError("inferedge_moss.delete_docs returned an unexpected type")
         return mapping
 
@@ -144,7 +143,7 @@ class MossClient:
 
         logger.debug("retrieving documents from moss index", extra={"index": index_name})
         documents = await self._client.get_docs(index_name, options)
-        if not isinstance(documents, list[DocumentInfo]):
+        if not isinstance(documents, list):
             raise TypeError("inferedge_moss.get_docs returned an unexpected type")
         return documents
 
