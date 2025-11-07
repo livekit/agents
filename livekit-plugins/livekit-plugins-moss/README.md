@@ -49,4 +49,4 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-See ``examples/moss_lifecycle.py`` for a full lifecycle demonstration.
+See ``examples/dev/MossLifecycle.py`` for a full lifecycle demonstration.

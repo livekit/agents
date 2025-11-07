@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-moss"
 dynamic = ["version"]
-description = "Minimal plugin template for LiveKit Agents"
+description = "Moss plugin for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"

@@ -14,6 +14,8 @@
 
 """InferEdge Moss plugin for LiveKit Agents."""
 
+from __future__ import annotations
+
 from livekit.agents import Plugin
 
 from .log import logger
