@@ -777,9 +777,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            self._update_turn_detection_setting(
-                cast(Optional[TurnDetectionMode], turn_detection)
-            )
+            self._update_turn_detection_setting(cast(Optional[TurnDetectionMode], turn_detection))
 
         if self._activity is not None:
             self._activity.update_options(
