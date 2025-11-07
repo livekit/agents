@@ -75,6 +75,7 @@ class STTOptions:
     sample_rate: int
     min_confidence_threshold: float
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
+    denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
         if is_given(self.keywords):
@@ -265,6 +266,7 @@ class STT(stt.STT):
             ),
             model=config.model,
             language_codes=config.languages,
+            denoiser_config=config.denoiser_config,
         )
 
         try:
@@ -516,6 +518,7 @@ class SpeechStream(stt.SpeechStream):
                                 enable_word_time_offsets=self._config.enable_word_time_offsets,
                                 enable_spoken_punctuation=self._config.spoken_punctuation,
                             ),
+                            denoiser_config=self._config.denoiser_config,
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
                             interim_results=self._config.interim_results,
