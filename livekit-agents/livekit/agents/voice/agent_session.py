@@ -296,6 +296,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
+        self._turn_detection_updated = False
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -368,6 +369,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
         return self._turn_detection
+
+    @property
+    def turn_detection_updated(self) -> bool:
+        return self._turn_detection_updated
 
     @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
@@ -783,6 +788,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         previous_setting = self._turn_detection
         previous_mode = self._activity._turn_detection_mode if self._activity is not None else None
 
+        self._turn_detection_is_given = True
         self._turn_detection = turn_detection
 
         # propagate changes to running or pending activities

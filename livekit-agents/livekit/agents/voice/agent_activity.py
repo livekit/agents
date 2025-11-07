@@ -249,6 +249,9 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
+        if self._session.turn_detection_updated:
+            return self._session.turn_detection
+
         return cast(
             "TurnDetectionMode | None",
             self._agent.turn_detection
