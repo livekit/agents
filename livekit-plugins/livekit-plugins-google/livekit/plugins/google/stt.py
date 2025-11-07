@@ -114,6 +114,7 @@ class STT(stt.STT):
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
@@ -177,6 +178,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
+            denoiser_config=denoiser_config,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClient](
