@@ -527,7 +527,6 @@ class ChunkedStream(tts.ChunkedStream):
 
                 # Extract trace_id from response headers
                 trace_id = resp.headers.get("Trace-Id") or resp.headers.get("X-Trace-Id")
-                minimax_request_id = resp.headers.get("Minimax-Request-Id")
 
                 if not trace_id:
                     trace_id = utils.shortuuid()
