@@ -351,7 +351,7 @@ class BackgroundAudioPlayer:
                 else:
                     yield frame
 
-            # TODO(theomonnom): the wait_for_playout() may be innaccurate by 400ms
+            # TODO(theomonnom): the wait_for_playout() may be inaccurate by 400ms
             play_handle._mark_playout_done()
 
         gen = _gen_wrapper()

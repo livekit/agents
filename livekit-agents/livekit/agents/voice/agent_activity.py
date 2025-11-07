@@ -306,7 +306,7 @@ class AgentActivity(RecognitionHooks):
             await self._rt_session.update_tools(tools)
 
         if isinstance(self.llm, llm.LLM):
-            # for realtime LLM, we assume the server will remove unvalid tool messages
+            # for realtime LLM, we assume the server will remove invalid tool messages
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
 
     async def update_chat_ctx(
@@ -622,7 +622,7 @@ class AgentActivity(RecognitionHooks):
     async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
         # `pause` must only be called by AgentSession
 
-        # When draining, the tasks that have done the "premption" must be ignored.
+        # When draining, the tasks that have done the "preemption" must be ignored.
         # They will most likely block until the Agent transition is done. So we must not
         # wait for them to avoid deadlocks.
 
@@ -706,7 +706,7 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
         ):
-            # discard the audio if the current speech is not interruptable
+            # discard the audio if the current speech is not interruptible
             return
 
         if self._rt_session is not None:
@@ -1055,7 +1055,7 @@ class AgentActivity(RecognitionHooks):
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
             logger.exception(
-                "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
+                "RealtimeAPI input_speech_started, but current speech is not interruptible, this should never happen!"  # noqa: E501
             )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
@@ -1366,7 +1366,7 @@ class AgentActivity(RecognitionHooks):
         except StopResponse:
             return  # ignore this turn
         except Exception:
-            logger.exception("error occured during on_user_turn_completed")
+            logger.exception("error occurred during on_user_turn_completed")
             return
 
         callback_duration = time.time() - start_time
@@ -2252,7 +2252,7 @@ class AgentActivity(RecognitionHooks):
         finally:
             self._background_speeches.discard(speech_handle)
 
-        # important: no agent ouput should be used after this point
+        # important: no agent output should be used after this point
 
         if len(tool_output.output) > 0:
             speech_handle._num_steps += 1
@@ -2300,7 +2300,7 @@ class AgentActivity(RecognitionHooks):
 
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response
-                # most realtime models dont't support generating multiple responses at the same time
+                # most realtime models don't support generating multiple responses at the same time
                 while self._current_speech or self._speech_q:
                     if (
                         self._current_speech

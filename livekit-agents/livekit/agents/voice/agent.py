@@ -193,7 +193,7 @@ class Agent:
         )
 
     # -- Pipeline nodes --
-    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
+    # They can all be overridden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the VoiceAgent
 
     async def on_enter(self) -> None:
