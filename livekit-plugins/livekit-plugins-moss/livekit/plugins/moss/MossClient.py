@@ -30,9 +30,17 @@ except ImportError:
     class SearchResult(_MissingDependency):
         pass
 
+
 from .log import logger
 
-__all__ = ["MossClient", "DocumentInfo", "IndexInfo", "SearchResult", "AddDocumentsOptions", "GetDocumentsOptions"]
+__all__ = [
+    "MossClient",
+    "DocumentInfo",
+    "IndexInfo",
+    "SearchResult",
+    "AddDocumentsOptions",
+    "GetDocumentsOptions",
+]
 
 
 class MossClient:
@@ -52,7 +60,9 @@ class MossClient:
         self._project_key = project_key or os.environ.get("MOSS_PROJECT_KEY")
 
         if not self._project_id:
-            raise ValueError("project_id must be provided or set through the MOSS_PROJECT_ID environment variable")
+            raise ValueError(
+                "project_id must be provided or set through the MOSS_PROJECT_ID environment variable"
+            )
 
         if not self._project_key:
             raise ValueError(
@@ -81,7 +91,9 @@ class MossClient:
 
     # ---------- Index lifecycle ----------
 
-    async def create_index(self, index_name: str, documents: list[DocumentInfo], model_id: str) -> bool:
+    async def create_index(
+        self, index_name: str, documents: list[DocumentInfo], model_id: str
+    ) -> bool:
         """Create a new index and populate it with documents."""
 
         logger.debug("creating moss index", extra={"index": index_name, "model": model_id})
@@ -118,10 +130,14 @@ class MossClient:
         return bool(deleted)
 
     # ---------- Document mutations ----------
-    async def add_documents(self, index_name: str, docs: list[DocumentInfo], options: AddDocumentsOptions | None) -> dict[str, int]:
+    async def add_documents(
+        self, index_name: str, docs: list[DocumentInfo], options: AddDocumentsOptions | None
+    ) -> dict[str, int]:
         """Add or update documents in an index."""
 
-        logger.debug("adding documents to moss index", extra={"index": index_name, "count": len(docs)})
+        logger.debug(
+            "adding documents to moss index", extra={"index": index_name, "count": len(docs)}
+        )
         mapping = await self._client.add_docs(index_name, docs, options)
         if not isinstance(mapping, dict):
             raise TypeError("inferedge_moss.add_docs returned an unexpected type")
@@ -130,7 +146,9 @@ class MossClient:
     async def delete_docs(self, index_name: str, doc_ids: list[str]) -> dict[str, int]:
         """Delete documents from an index by their IDs."""
 
-        logger.debug("deleting documents from moss index", extra={"index": index_name, "count": len(doc_ids)})
+        logger.debug(
+            "deleting documents from moss index", extra={"index": index_name, "count": len(doc_ids)}
+        )
         mapping = await self._client.delete_docs(index_name, doc_ids)
         if not isinstance(mapping, dict):
             raise TypeError("inferedge_moss.delete_docs returned an unexpected type")
@@ -138,7 +156,9 @@ class MossClient:
 
     # ---------- View existing documents ----------
 
-    async def get_docs(self, index_name: str, options: GetDocumentsOptions | None) -> list[DocumentInfo]:
+    async def get_docs(
+        self, index_name: str, options: GetDocumentsOptions | None
+    ) -> list[DocumentInfo]:
         """Retrieve documents from an index."""
 
         logger.debug("retrieving documents from moss index", extra={"index": index_name})
@@ -158,7 +178,9 @@ class MossClient:
             logger.debug("unexpected load_index return type", extra={"type": type(result).__name__})
         return result
 
-    async def query(self, index_name: str, query: str, top_k: int = 5, *, auto_load: bool = True) -> SearchResult:
+    async def query(
+        self, index_name: str, query: str, top_k: int = 5, *, auto_load: bool = True
+    ) -> SearchResult:
         """Perform a semantic similarity search against the specified index."""
         if auto_load:
             await self.load_index(index_name)
