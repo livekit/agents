@@ -141,6 +141,7 @@ class STT(stt.STT):
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
+            denoiser_config(DenoiserConfig): configuration for audio denoising (default: None)
         """
         if not is_given(use_streaming):
             use_streaming = True
