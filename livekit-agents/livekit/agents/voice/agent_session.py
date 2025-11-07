@@ -14,6 +14,7 @@ from typing import (
     Protocol,
     TypeVar,
     Union,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -770,7 +771,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
         if is_given(turn_detection):
-            self._update_turn_detection_setting(turn_detection)
+            self._update_turn_detection_setting(
+                cast(TurnDetectionMode | None, turn_detection)
+            )
 
         if self._activity is not None:
             self._activity.update_options(
