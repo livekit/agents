@@ -22,8 +22,10 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.2.18",
-                "inferedge-moss>=1.0.0b2"]
+dependencies = [
+    "livekit-agents>=1.2.18",
+    "inferedge-moss>=1.0.0b2",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

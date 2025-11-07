@@ -16,8 +16,8 @@
 
 from livekit.agents import Plugin
 
-from .MossClient import MossClient, DocumentInfo, IndexInfo, SearchResult
 from .log import logger
+from .MossClient import DocumentInfo, IndexInfo, MossClient, SearchResult
 from .version import __version__
 
 __all__ = [
