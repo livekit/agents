@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "livekit-agents>=1.2.18",
     "inferedge-moss>=1.0.0b2",
+    "dotenv"
 ]
 
 [project.urls]

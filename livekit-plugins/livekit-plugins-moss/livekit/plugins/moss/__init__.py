@@ -27,6 +27,8 @@ __all__ = [
     "DocumentInfo",
     "IndexInfo",
     "SearchResult",
+    "AddDocumentsOptions",
+    "GetDocumentsOptions",
     "__version__",
 ]
 

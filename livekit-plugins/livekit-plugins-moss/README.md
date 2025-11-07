@@ -8,16 +8,13 @@ configuration, and index caching.
 ## Installation
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
+cd livekit-plugins/livekit-plugins-moss
+python -m venv .venv #Optional: create a virtual environment
+source .venv/bin/activate #Optional: activate the virtual environment
+python -m pip install --upgrade pip setuptools build
 python -m pip install -e .
-```
 
-The plugin depends on the InferEdge client:
-
-```bash
-python -m pip install inferedge-moss
+# (Run the example shown below — moved to the end of this file for clarity.)
 ```
 
 Set your credentials via environment variables:
@@ -50,3 +47,9 @@ asyncio.run(main())
 ```
 
 See ``examples/dev/MossLifecycle.py`` for a full lifecycle demonstration.
+
+```bash
+# change into the examples/dev folder and run the demo
+cd examples/dev
+python MossLifecycle.py
+```
