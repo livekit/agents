@@ -252,7 +252,7 @@ class JobContext:
                 "Cannot create the AgentSession report, the RecorderIO is still recording"
             )
 
-        return SessionReport(
+        sr = SessionReport(
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
@@ -260,9 +260,16 @@ class JobContext:
             audio_recording_path=recorder_io.output_path if recorder_io else None,
             audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
             events=session._recorded_events,
-            enable_user_data_training=True,  # TODO
             chat_history=session.history.copy(),
         )
+
+        if recorder_io:
+            if recorder_io.output_path:
+                sr.audio_recording_path = recorder_io.output_path
+            if recorder_io.recording_started_at:
+                sr.audio_recording_started_at = recorder_io.recording_started_at
+                sr.duration = sr.timestamp - sr.audio_recording_started_at
+        return sr
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:

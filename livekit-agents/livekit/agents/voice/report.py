@@ -13,11 +13,11 @@ class SessionReport:
     room_id: str
     room: str
     options: AgentSessionOptions
-    audio_recording_path: Path | None
-    audio_recording_started_at: float | None
     events: list[AgentEvent]
     chat_history: ChatContext
-    enable_user_data_training: bool
+    audio_recording_path: Path | None = None
+    audio_recording_started_at: float | None = None
+    duration: float | None = None
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:

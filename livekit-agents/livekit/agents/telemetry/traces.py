@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import aiofiles
 import aiohttp
 from google.protobuf.json_format import MessageToDict
+from google.protobuf.timestamp_pb2 import Timestamp
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
@@ -271,7 +272,6 @@ async def _upload_session_report(
             "room_id": report.room_id,
             "job_id": report.job_id,
             "room": report.room,
-            "lk.enable_user_data_training": report.enable_user_data_training,
         },
     )
 
@@ -315,7 +315,12 @@ async def _upload_session_report(
     jwt = access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=room_id, enable_user_data_training=report.enable_user_data_training
+        room_id=room_id,
+        start_time=Timestamp(
+            seconds=int(report.audio_recording_started_at),
+            nanos=int((report.audio_recording_started_at % 1) * 1e9),
+        ),
+        duration=int(report.duration),
     )
     header_bytes = header_msg.SerializeToString()
 
@@ -352,7 +357,8 @@ async def _upload_session_report(
         "Content-Type": mp.content_type,
     }
 
+    logger.debug("uploading session report to LiveKit Cloud", extra={"headers": headers})
     async with http_session.post(url, data=mp, headers=headers) as resp:
         resp.raise_for_status()
 
-    logger.info("uploaded")
+    logger.debug("finished uploading")
