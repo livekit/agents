@@ -917,6 +917,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(user_input)
             else NOT_GIVEN
         )
+        # even though it's not speech, we'd want this attribute to compute e2e latency
+        if user_message:
+            user_message.metrics["stopped_speaking_at"] = time.time()
 
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
