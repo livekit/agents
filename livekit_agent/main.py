@@ -1,6 +1,8 @@
 import asyncio
 import logging
+
 from interruption_filter import InterruptionFilter
+
 
 class VoiceAgent:
     def __init__(self):
@@ -25,8 +27,8 @@ class VoiceAgent:
 async def main():
     # True fillers only (English + Hindi)
     ignored_words = [
-        "uh", "umm", "hmm", "haan",         
-        "accha", "theek",                                             
+        "uh", "umm", "hmm", "haan",
+        "accha", "theek",
     ]
     filter_layer = InterruptionFilter(ignored_words=ignored_words)
 

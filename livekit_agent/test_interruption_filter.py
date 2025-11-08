@@ -1,6 +1,8 @@
 import asyncio
 import logging
+
 from interruption_filter import InterruptionFilter
+
 
 class MockAgent:
     def __init__(self):

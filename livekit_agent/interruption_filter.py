@@ -1,5 +1,6 @@
 import logging
 
+
 class InterruptionFilter:
     def __init__(self, ignored_words=None, confidence_threshold=0.6):
         # Default English + Hindi fillers
@@ -16,7 +17,7 @@ class InterruptionFilter:
             logging.info(f"[LOW CONF] Ignored: '{text}' (conf={confidence:.2f})")
             return "IGNORE"
 
-        tokens = set(word.lower() for word in text.split())
+        tokens = {word.lower() for word in text.split()}
 
         if agent_speaking:
             if tokens.issubset(self.ignored_words):
