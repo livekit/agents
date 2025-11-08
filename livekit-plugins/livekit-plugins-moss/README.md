@@ -1,8 +1,8 @@
-# InferEdge Moss plugin for LiveKit Agents
+# Moss plugin for LiveKit Agents
 
-This package wires the [InferEdge Moss](https://inferedge.dev/) semantic search
+This package wires the [Moss](https://www.usemoss.dev/) semantic search
 SDK into the LiveKit Agents plugin ecosystem. It exposes a thin wrapper around
-``inferedge_moss`` with LiveKit-friendly defaults, environment-based
+``moss`` with LiveKit-friendly defaults, environment-based
 configuration, and index caching.
 
 ## Installation
