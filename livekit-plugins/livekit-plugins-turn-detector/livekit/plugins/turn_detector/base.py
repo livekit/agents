@@ -107,7 +107,6 @@ class _EUORunnerBase(_InferenceRunner):
         finally:
             logger.removeFilter(filt)
 
-
         try:
             local_path_onnx = _download_from_hf_hub(
                 HG_MODEL,

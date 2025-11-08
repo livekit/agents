@@ -24,7 +24,7 @@ from opentelemetry.sdk._logs import (
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import Span, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
@@ -78,10 +78,16 @@ class _MetadataLogProcessor(LogRecordProcessor):
         self._metadata = metadata
 
     def emit(self, log_data: LogData) -> None:
-        log_data.log_record.attributes.update(self._metadata)
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(self._metadata)
+        else:
+            log_data.log_record.attributes = self._metadata
 
     def on_emit(self, log_data: LogData) -> None:
-        log_data.log_record.attributes.update(self._metadata)
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(self._metadata)
+        else:
+            log_data.log_record.attributes = self._metadata
 
     def shutdown(self) -> None:
         pass

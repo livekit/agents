@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from inspect import istraceback
 from types import FrameType
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional
 
 import numpy as np
 import typer
@@ -717,9 +717,9 @@ _RESERVED_ATTRS: tuple[str, ...] = (
 
 
 def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]) -> None:
-    for key, value in record.__dict__.items():
-        if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
-            target[key] = value
+    for k, v in record.__dict__.items():
+        if k not in _RESERVED_ATTRS and not (hasattr(k, "startswith") and k.startswith("_")):
+            target[k] = v
 
 
 class RichLoggingHandler(logging.Handler):
@@ -1322,13 +1322,13 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     def console(
         *,
         input_device: Annotated[
-            Union[str, None],
+            str | None,
             typer.Option(
                 help="Numeric input device ID or input device name substring(s)",
             ),
         ] = None,
         output_device: Annotated[
-            Union[str, None],
+            str | None,
             typer.Option(
                 help="Numeric output device ID or output device name substring(s)",
             ),

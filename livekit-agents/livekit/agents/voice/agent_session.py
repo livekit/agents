@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,

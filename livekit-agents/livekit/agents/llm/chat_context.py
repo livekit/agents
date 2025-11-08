@@ -573,7 +573,7 @@ class ChatContext:
         self._items = preserved
 
         created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
-        summary_msg = self.add_message(
+        self.add_message(
             role="assistant",
             content=f"[history summary]\n{summary}",
             created_at=created_at_hint,
