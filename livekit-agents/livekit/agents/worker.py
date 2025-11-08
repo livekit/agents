@@ -28,7 +28,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from multiprocessing.context import ForkServerContext
-from typing import Any, Callable, Generic, Literal, Optional, TypeVar, Union, overload
+from typing import Any, Callable, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -339,8 +339,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Optional[Callable[[JobRequest], Any]] = None,
-        on_session_end: Optional[Callable[[JobContext], Any]] = None,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
     ) -> Callable[[JobContext], Awaitable[None]]: ...
 
     @overload
@@ -349,26 +349,26 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Optional[Callable[[JobRequest], Any]] = None,
-        on_session_end: Optional[Callable[[JobContext], Any]] = None,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
     ]: ...
 
     def rtc_session(
         self,
-        func: Optional[Callable[[JobContext], Awaitable[None]]] = None,
+        func: Callable[[JobContext], Awaitable[None]] | None = None,
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        on_request: Optional[Callable[[JobRequest], Any]] = None,
-        on_session_end: Optional[Callable[[JobContext], Any]] = None,
-    ) -> Union[
-        Callable[[JobContext], Awaitable[None]],
-        Callable[
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+    ) -> (
+        Callable[[JobContext], Awaitable[None]]
+        | Callable[
             [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
-        ],
-    ]:
+        ]
+    ):
         """
         Decorator or direct registrar for the RTC session entrypoint.
 
@@ -410,11 +410,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     def setup(
         self,
-        func: Optional[Callable[[JobProcess], Any]] = None,
-    ) -> Union[
-        Callable[[JobProcess], Any],
-        Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]],
-    ]:
+        func: Callable[[JobProcess], Any] | None = None,
+    ) -> (
+        Callable[[JobProcess], Any]
+        | Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]
+    ):
         """
         Decorator or direct registrar for the setup/prewarm function.
 

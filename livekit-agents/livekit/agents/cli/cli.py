@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from inspect import istraceback
 from types import FrameType
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional
 
 import numpy as np
 import typer
@@ -1322,13 +1322,13 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     def console(
         *,
         input_device: Annotated[
-            Union[str, None],
+            str | None,
             typer.Option(
                 help="Numeric input device ID or input device name substring(s)",
             ),
         ] = None,
         output_device: Annotated[
-            Union[str, None],
+            str | None,
             typer.Option(
                 help="Numeric output device ID or output device name substring(s)",
             ),
