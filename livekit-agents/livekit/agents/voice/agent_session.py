@@ -84,7 +84,7 @@ class AgentSessionOptions:
     false_interruption_timeout: float | None
     resume_false_interruption: bool
     min_consecutive_speech_delay: float
-    use_tts_aligned_transcript: NotGivenOr[bool]
+    use_tts_aligned_transcript: bool | None
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
@@ -300,7 +300,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             ivr_detection=ivr_detection,
-            use_tts_aligned_transcript=use_tts_aligned_transcript,
+            use_tts_aligned_transcript=use_tts_aligned_transcript
+            if is_given(use_tts_aligned_transcript)
+            else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
