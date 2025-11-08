@@ -9,6 +9,7 @@ from .events import AgentEvent
 
 @dataclass
 class SessionReport:
+    enable_recording: bool
     job_id: str
     room_id: str
     room: str

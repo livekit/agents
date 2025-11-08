@@ -38,9 +38,9 @@ from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
 from .log import logger
-from .telemetry import _setup_cloud_tracer, _upload_session_report, trace_types, tracer
+from .telemetry import _upload_session_report, trace_types, tracer
 from .types import NotGivenOr
-from .utils import http_context, is_given, misc, wait_for_participant
+from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -155,15 +155,7 @@ class JobContext:
         self._lock = asyncio.Lock()
 
     def _on_setup(self) -> None:
-        is_cloud = misc.is_cloud(self._info.url)
-
-        if is_cloud:  # and not self.is_fake_job():  #  and self.job.enable_recording:
-            cloud_hostname = urlparse(self._info.url).hostname
-            _setup_cloud_tracer(
-                room_id=self._info.job.room.sid,
-                job_id=self._info.job.id,
-                cloud_hostname=cloud_hostname,
-            )
+        pass
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -173,6 +165,8 @@ class JobContext:
 
         c = AgentsConsole.get_instance()
         report = self.make_session_report(session)
+
+        # console recording, dump data to a local file
         if c.enabled and c.record:
             try:
                 report_json = json.dumps(report.to_dict(), indent=2)
@@ -189,17 +183,18 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        try:
-            cloud_hostname = urlparse(self._info.url).hostname
-            await _upload_session_report(
-                room_id=self._info.job.room.sid,
-                job_id=self._info.job.id,
-                cloud_hostname=cloud_hostname,
-                report=report,
-                http_session=http_context.http_session(),
-            )
-        except Exception:
-            logger.exception("failed to upload the session report to LiveKit Cloud")
+        if report.enable_recording:
+            try:
+                cloud_hostname = urlparse(self._info.url).hostname
+                await _upload_session_report(
+                    room_id=self._info.job.room.sid,
+                    job_id=self._info.job.id,
+                    cloud_hostname=cloud_hostname,
+                    report=report,
+                    http_session=http_context.http_session(),
+                )
+            except Exception:
+                logger.exception("failed to upload the session report to LiveKit Cloud")
 
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
@@ -253,6 +248,7 @@ class JobContext:
             )
 
         sr = SessionReport(
+            enable_recording=session._enable_recording,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
