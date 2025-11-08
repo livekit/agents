@@ -717,9 +717,9 @@ _RESERVED_ATTRS: tuple[str, ...] = (
 
 
 def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]) -> None:
-    for key, value in record.__dict__.items():
-        if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
-            target[key] = value
+    for k, v in record.__dict__.items():
+        if k not in _RESERVED_ATTRS and not (hasattr(k, "startswith") and k.startswith("_")):
+            target[k] = v
 
 
 class RichLoggingHandler(logging.Handler):

@@ -30,9 +30,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 from urllib.parse import urlparse
 
-from opentelemetry import trace
-
 import aiohttp
+from opentelemetry import trace
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims

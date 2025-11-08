@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sys
@@ -400,7 +401,7 @@ server = AgentServer()
 
 async def on_session_end(ctx: JobContext) -> None:
     report = ctx.make_session_report()
-    # report_json = json.dumps(report.to_dict(), indent=2)
+    _ = json.dumps(report.to_dict(), indent=2)
 
 
 @server.rtc_session(on_session_end=on_session_end)

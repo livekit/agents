@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, AgentServer, cli
+from livekit.agents import AgentServer, JobContext, cli
 
 logger = logging.getLogger("minimal-worker")
 logger.setLevel(logging.INFO)
@@ -10,6 +10,7 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 server = AgentServer()
+
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):

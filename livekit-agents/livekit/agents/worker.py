@@ -251,6 +251,11 @@ EventTypes = Literal["worker_started", "worker_registered"]
 
 
 class AgentServer(utils.EventEmitter[EventTypes]):
+    _default_num_idle_processes = ServerEnvOption(
+        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+    )
+    _default_port = ServerEnvOption(dev_default=0, prod_default=8081)
+
     def __init__(
         self,
         *,
@@ -259,9 +264,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_memory_warn_mb: float = 500,
         job_memory_limit_mb: float = 0,
         drain_timeout: int = 1800,
-        num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
-            dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
-        ),
+        num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
@@ -270,7 +273,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         api_key: str | None = None,
         api_secret: str | None = None,
         host: str = "",  # default to all interfaces
-        port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081),
+        port: int | ServerEnvOption[int] = _default_port,
         http_proxy: str | None = None,
         multiprocessing_context: Literal["spawn", "forkserver"] = (
             "spawn" if not sys.platform.startswith("linux") else "forkserver"
@@ -282,7 +285,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
-
 
         if not self._ws_url:
             raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
