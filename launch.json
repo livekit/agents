@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Run LiveKit agent (console)",
+        "type": "python",
+        "request": "launch",
+        "program": "agents/custom_agents/run_custom_agent.py",
+        "args": ["console"],
+        "envFile": "agents/.env",
+        "console": "integratedTerminal"
+      }
+    ]
+  }
+  
