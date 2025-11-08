@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 __all__ = ["readchar", "readkey", "key"]
 
@@ -233,7 +233,7 @@ def _win_readchar() -> str:
     """
     import msvcrt
 
-    return msvcrt.getwch()
+    return msvcrt.getwch()  # type: ignore
 
 
 def _win_readkey() -> str:
@@ -261,6 +261,10 @@ def _win_readkey() -> str:
 
     return ch
 
+
+key: type[_BaseKey]
+readchar: Callable[[], str]
+readkey: Callable[[], str]
 
 if sys.platform.startswith(("linux", "darwin", "freebsd", "openbsd")):
     key = _PosixKey
