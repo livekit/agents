@@ -177,3 +177,4 @@ docs/
 
 # Examples for development
 examples/dev/*
+.env.local
