@@ -30,16 +30,22 @@ except ImportError:
     class SearchResult(_MissingDependency):
         pass
 
+    class AddDocumentsOptions(_MissingDependency):
+        pass
+
+    class GetDocumentsOptions(_MissingDependency):
+        pass
+
 
 from .log import logger
 
 __all__ = [
-    "MossClient",
-    "DocumentInfo",
-    "IndexInfo",
-    "SearchResult",
     "AddDocumentsOptions",
+    "DocumentInfo",
     "GetDocumentsOptions",
+    "IndexInfo",
+    "MossClient",
+    "SearchResult",
 ]
 
 

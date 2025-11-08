@@ -1,4 +1,4 @@
-# InferEdge Moss plugin for LiveKit
+# InferEdge Moss plugin for LiveKit Agents
 
 This package wires the [InferEdge Moss](https://inferedge.dev/) semantic search
 SDK into the LiveKit Agents plugin ecosystem. It exposes a thin wrapper around
@@ -9,8 +9,8 @@ configuration, and index caching.
 
 ```bash
 cd livekit-plugins/livekit-plugins-moss
-python -m venv .venv #Optional: create a virtual environment
-source .venv/bin/activate #Optional: activate the virtual environment
+python -m venv .venv 
+source .venv/bin/activate 
 python -m pip install --upgrade pip setuptools build
 python -m pip install -e .
 

@@ -19,16 +19,23 @@ from __future__ import annotations
 from livekit.agents import Plugin
 
 from .log import logger
-from .MossClient import DocumentInfo, IndexInfo, MossClient, SearchResult
+from .MossClient import (
+    AddDocumentsOptions,
+    DocumentInfo,
+    GetDocumentsOptions,
+    IndexInfo,
+    MossClient,
+    SearchResult,
+)
 from .version import __version__
 
 __all__ = [
-    "MossClient",
-    "DocumentInfo",
-    "IndexInfo",
-    "SearchResult",
     "AddDocumentsOptions",
+    "DocumentInfo",
     "GetDocumentsOptions",
+    "IndexInfo",
+    "MossClient",
+    "SearchResult",
     "__version__",
 ]
 
