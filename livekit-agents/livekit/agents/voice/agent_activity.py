@@ -1436,7 +1436,12 @@ class AgentActivity(RecognitionHooks):
                 self._session._conversation_item_added(user_message)
             return
 
-        metrics_report: llm.MetricsReport = {}
+        current_span = trace.get_current_span()
+        span_contrext = current_span.get_span_context()
+        metrics_report: llm.MetricsReport = {
+            "span_id": span_contrext.span_id,
+            "trace_id": span_contrext.trace_id,
+        }
         if info.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.started_speaking_at
 
@@ -1672,6 +1677,7 @@ class AgentActivity(RecognitionHooks):
         from .agent import ModelSettings
 
         current_span = trace.get_current_span()
+        span_contrext = current_span.get_span_context()
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
@@ -1841,7 +1847,10 @@ class AgentActivity(RecognitionHooks):
             )
 
         stopped_speaking_at = time.time()
-        assistant_metrics: llm.MetricsReport = {}
+        assistant_metrics: llm.MetricsReport = {
+            "span_id": span_contrext.span_id,
+            "trace_id": span_contrext.trace_id,
+        }
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft

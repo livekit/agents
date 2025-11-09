@@ -503,12 +503,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._enable_recording = record
             if is_cloud(job_ctx._info.url) and self._enable_recording:
                 cloud_hostname = urlparse(job_ctx._info.url).hostname
-                logger.debug("configuring session recording")
-                _setup_cloud_tracer(
-                    room_id=job_ctx.job.room.sid,
-                    job_id=job_ctx.job.id,
-                    cloud_hostname=cloud_hostname,
-                )
+                logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
+                if cloud_hostname:
+                    _setup_cloud_tracer(
+                        room_id=job_ctx.job.room.sid,
+                        job_id=job_ctx.job.id,
+                        cloud_hostname=cloud_hostname,
+                    )
             else:
                 self._enable_recording = False
 

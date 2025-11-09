@@ -96,7 +96,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
         return True
 
 
-class _LoggerNameProcessor(LogRecordProcessor):
+class _ExtraDetailsProcessor(LogRecordProcessor):
     def emit(self, log_data: LogData) -> None:
         attrs = log_data.log_record.attributes
         if attrs is None:
@@ -104,6 +104,9 @@ class _LoggerNameProcessor(LogRecordProcessor):
             log_data.log_record.attributes = attrs
 
         attrs["logger.name"] = log_data.instrumentation_scope.name
+        context = trace.get_current_span().get_span_context()
+        log_data.log_record.span_id = context.span_id
+        log_data.log_record.trace_id = context.trace_id
 
     def on_emit(self, log_data: LogData) -> None:
         self.emit(log_data)
@@ -170,7 +173,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         compression=otlp_compression,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
-    logger_provider.add_log_record_processor(_LoggerNameProcessor())
+    logger_provider.add_log_record_processor(_ExtraDetailsProcessor())
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
@@ -207,7 +210,6 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
             msg.extra[key] = str(value)
 
         metrics = item.metrics
-        logger.info("item metrics", extra={"metrics": metrics})
         if "started_speaking_at" in metrics:
             msg.metrics.started_speaking_at.FromMilliseconds(
                 int(metrics["started_speaking_at"] * 1000)
@@ -228,7 +230,6 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
             msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
         if "e2e_latency" in metrics:
             msg.metrics.e2e_latency = metrics["e2e_latency"]
-
         msg.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call":
@@ -299,17 +300,25 @@ async def _upload_session_report(
         },
     )
 
-    def _log(body: str, timestamp: int, attributes: dict) -> None:
+    def _log(
+        body: str,
+        timestamp: int,
+        attributes: dict,
+        span_id: str | None = None,
+        trace_id: str | None = None,
+        severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
+        severity_text: str = "unspecified",
+    ) -> None:
         chat_logger.emit(
             LogRecord(
                 body=body,
                 timestamp=timestamp,
                 attributes=attributes,
-                trace_id=0,
-                span_id=0,
+                span_id=span_id,
+                trace_id=trace_id,
                 trace_flags=0,
-                severity_number=SeverityNumber.UNSPECIFIED,
-                severity_text="unspecified",
+                severity_number=severity,
+                severity_text=severity_text,
             )
         )
 
@@ -324,10 +333,25 @@ async def _upload_session_report(
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)
+        span_id: int | None = None
+        trace_id: int | None = None
+        severity: SeverityNumber = SeverityNumber.UNSPECIFIED
+        severity_text: str = "unspecified"
+        if "metrics" in item and item.metrics:
+            span_id = item.metrics["span_id"]
+            trace_id = item.metrics["trace_id"]
+
+        if item.type == "function_call_output" and item.is_error:
+            severity = SeverityNumber.ERROR
+            severity_text = "error"
         _log(
             body="chat item",
             timestamp=int(item.created_at * 1e9),
             attributes={"chat.item": item_log},
+            span_id=span_id,
+            trace_id=trace_id,
+            severity=severity,
+            severity_text=severity_text,
         )
 
     # emit recording
@@ -340,7 +364,7 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=room_id,
-        duration=int(report.duration * 1000),
+        duration=int(report.duration or 0 * 1000),
     )
     header_msg.start_time.FromMilliseconds(int(report.audio_recording_started_at * 1000))
     header_bytes = header_msg.SerializeToString()
