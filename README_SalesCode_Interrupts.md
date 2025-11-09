@@ -17,11 +17,7 @@ salescode_interrupt_handler/
 
 ###    first paste your own key in .env file 
 
-### Run
-
-   ```bash
-   python main.py console 
-
+###
 
 # Filler-Aware Interruption Handling for LiveKit Voice Agents
 
@@ -85,5 +81,53 @@ It **does not modify** LiveKit's core VAD. All behavior uses public events
    ```bash
    python main.py console 
 
+
+
+### Bonus task 
+
+## Bonus Features Implemented
+
+### 1. Runtime-Configurable Ignore & Interrupt Lists
+
+The interruption logic is not hard-coded. The `InterruptConfig` class exposes
+helpers to **modify behavior at runtime**:
+
+- `add_filler_words([...])` / `remove_filler_words([...])`
+- `add_hard_phrases([...])` / `remove_hard_phrases([...])`
+
+The `FillerAwareInterruptController.refresh_hard_commands()` method rebuilds its
+internal command caches based on the updated config. This allows:
+
+- Rapid tuning without redeploying the worker.
+- Experimentation per-customer or per-language profile.
+- Future admin/API endpoints to plug directly into these methods.
+
+This satisfies the bonus requirement of _“Dynamically update ignored-word lists during runtime.”_
+
+### 2. Multi-Language / Code-Mixed Filler & Command Support
+
+The implementation is designed to handle **English + Hindi / Hinglish** and can
+be easily extended to additional languages:
+
+- `filler_words` includes tokens like:
+  - English: `uh`, `umm`, `um`, `hmm`, `hmmm`, `huh`, `ah`, `oh`, `mmm`
+  - Hindi / Hinglish: `haan`, `arey`, `acha`
+- `hard_interrupt_phrases` includes:
+  - English: `stop`, `wait`, `hold on`, `one second`, `listen`,
+    `no not that one`, `not this`
+  - Hindi / Hinglish: `bas`, `ruk`, `ruko`, `thoda ruk`, `thodi der ruk`, `ek second`
+
+Because detection is:
+- lowercased,
+- token-based for single-word commands,
+- substring-based for multi-word phrases,
+
+it correctly handles **mixed utterances**, for example:
+
+- `“umm thoda ruk please”` → immediate interrupt
+- `“haan umm acha”` (while agent is speaking) → ignored as filler
+- same words when the agent is silent → treated as normal user input
+
+This satisfies the bonus requirement of _“Implement multi-language filler detection (e.g., Hindi + English mix).”_
 
 
