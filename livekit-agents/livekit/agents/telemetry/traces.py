@@ -96,6 +96,25 @@ class _MetadataLogProcessor(LogRecordProcessor):
         return True
 
 
+class _LoggerNameProcessor(LogRecordProcessor):
+    def emit(self, log_data: LogData) -> None:
+        attrs = log_data.log_record.attributes
+        if attrs is None:
+            attrs = {}
+            log_data.log_record.attributes = attrs
+
+        attrs["logger.name"] = log_data.instrumentation_scope.name
+
+    def on_emit(self, log_data: LogData) -> None:
+        self.emit(log_data)
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
 def set_tracer_provider(
     tracer_provider: TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
@@ -151,6 +170,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         compression=otlp_compression,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+    logger_provider.add_log_record_processor(_LoggerNameProcessor())
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 

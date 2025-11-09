@@ -1,6 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from ..llm import ChatContext
 from .agent_session import AgentSessionOptions
@@ -16,9 +17,9 @@ class SessionReport:
     options: AgentSessionOptions
     events: list[AgentEvent]
     chat_history: ChatContext
-    audio_recording_path: Path | None = None
-    audio_recording_started_at: float | None = None
-    duration: float | None = None
+    audio_recording_path: Optional[Path] = None
+    audio_recording_started_at: Optional[float] = None
+    duration: Optional[float] = None
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:

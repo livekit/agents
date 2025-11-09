@@ -101,7 +101,7 @@ class _EUORunnerBase(_InferenceRunner):
         # filter this log since it conflicts with the console CLI (since it directly prints to stdout)
         logger.addFilter(filt)
         try:
-            import onnxruntime as ort
+            import onnxruntime as ort  # type: ignore
             from huggingface_hub import errors
             from transformers import AutoTokenizer  # type: ignore
         finally:
