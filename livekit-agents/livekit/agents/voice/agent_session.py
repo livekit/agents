@@ -40,6 +40,7 @@ from . import io, room_io
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
+from .filler_detector import FillerDetector
 from .events import (
     AgentState,
     AgentStateChangedEvent,
@@ -171,6 +172,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         preemptive_generation: bool = False,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
+        # Filler detection parameters
+        filler_words: NotGivenOr[Sequence[str] | None] = NOT_GIVEN,
+        filler_min_confidence: float = 0.3,
+        filler_languages: NotGivenOr[Sequence[str] | None] = NOT_GIVEN,
+        filler_enable_logging: bool = False,
         # deprecated
         agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
@@ -352,6 +358,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+
+        # Initialize filler detector if any filler parameters are provided
+        self._filler_detector: FillerDetector | None = None
+        if is_given(filler_words) or is_given(filler_languages):
+            self._filler_detector = FillerDetector(
+                filler_words=filler_words if is_given(filler_words) else None,
+                min_confidence_threshold=filler_min_confidence,
+                enable_logging=filler_enable_logging,
+                languages=filler_languages if is_given(filler_languages) else None,
+            )
 
     @property
     def userdata(self) -> Userdata_T:

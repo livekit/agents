@@ -19,6 +19,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from .agent import ModelSettings
+from .filler_detector import FillerDetector, FillerDetectionResult
 
 if TYPE_CHECKING:
     from .agent_session import TurnDetectionMode
@@ -83,6 +84,7 @@ class AudioRecognition:
         min_endpointing_delay: float,
         max_endpointing_delay: float,
         turn_detection_mode: TurnDetectionMode | None,
+        filler_detector: FillerDetector | None = None,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
@@ -99,6 +101,8 @@ class AudioRecognition:
         self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
+        
+        self._filler_detector = filler_detector
 
         self._speaking = False
         self._last_speaking_time: float = 0
@@ -303,6 +307,30 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
+            # Apply filler detection for final transcripts
+            if self._filler_detector is not None and transcript:
+                detection_result = self._filler_detector.detect(
+                    transcript=transcript,
+                    confidence=confidence,
+                    agent_speaking=self._speaking,
+                )
+                
+                # If it's filler-only and shouldn't interrupt, skip processing
+                if not detection_result.should_interrupt:
+                    logger.debug(
+                        "Filler-only transcript ignored during agent speech",
+                        extra={
+                            "transcript": transcript,
+                            "detection_reason": detection_result.detection_reason,
+                            "agent_speaking": self._speaking,
+                        }
+                    )
+                    return
+                
+                # Use filtered transcript if meaningful content was detected
+                if detection_result.contains_meaningful_content:
+                    transcript = detection_result.filtered_transcript
+
             if not self._last_language or (
                 language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
             ):
@@ -358,13 +386,26 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
-
-            if not transcript:
-                return
+            # Apply filler detection for preflight transcripts
+            if self._filler_detector is not None and transcript:
+                detection_result = self._filler_detector.detect(
+                    transcript=transcript,
+                    confidence=confidence,
+                    agent_speaking=self._speaking,
+                )
+                
+                if not detection_result.should_interrupt:
+                    logger.debug(
+                        "Filler-only preflight transcript ignored during agent speech",
+                        extra={
+                            "transcript": transcript,
+                            "detection_reason": detection_result.detection_reason,
+                        }
+                    )
+                    return
+                
+                if detection_result.contains_meaningful_content:
+                    transcript = detection_result.filtered_transcript
 
             logger.debug(
                 "received user preflight transcript",
@@ -392,7 +433,22 @@ class AudioRecognition:
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
-            self._audio_interim_transcript = ev.alternatives[0].text
+            interim_transcript = ev.alternatives[0].text
+            
+            # Apply filler detection for interim transcripts
+            if self._filler_detector is not None and interim_transcript:
+                detection_result = self._filler_detector.detect(
+                    transcript=interim_transcript,
+                    confidence=ev.alternatives[0].confidence,
+                    agent_speaking=self._speaking,
+                )
+                
+                if not detection_result.should_interrupt:
+                    return
+                
+                interim_transcript = detection_result.filtered_transcript or interim_transcript
+            
+            self._audio_interim_transcript = interim_transcript
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):

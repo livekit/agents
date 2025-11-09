@@ -24,6 +24,7 @@ from .room_io import (
 )
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer
+from .filler_detector import FillerDetector, FillerDetectionResult
 
 __all__ = [
     "ChatCLI",
@@ -53,6 +54,8 @@ __all__ = [
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
+    "FillerDetector",
+    "FillerDetectionResult",
 ]
 
 # Cleanup docs of unexported modules

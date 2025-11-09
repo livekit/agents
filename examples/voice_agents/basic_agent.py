@@ -79,7 +79,7 @@ async def entrypoint(ctx: JobContext):
         stt="assemblyai/universal-streaming:en",
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm="openai/gpt-4.1-mini",
+        llm="openai/gpt-4o-mini",
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
@@ -94,6 +94,18 @@ async def entrypoint(ctx: JobContext):
         # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
+        # ========== FILLER DETECTION CONFIGURATION ==========
+        # Intelligent Filler Detection - ignores filler words when agent is speaking
+        # Treats the same words as valid speech when agent is silent
+        # Set to None to disable filler detection completely
+        filler_words=["uh", "um", "umm", "hmm", "hm", "haan", "ah", "er", "mm", "mhm", "uh-huh"],
+        # Minimum STT confidence to consider transcript valid during agent speech
+        # Lower confidence transcripts are treated as potential fillers/background noise
+        filler_min_confidence=0.3,
+        # Optional: Enable multi-language filler detection
+        # filler_languages=["en", "hi"],  # English + Hindi
+        # Optional: Enable debug logging for filler detection
+        filler_enable_logging=True,
     )
 
     # log metrics as they are emitted, and total usage after session is over

@@ -1,5 +1,9 @@
 [tool.uv]
-constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+# Exclude packages that don't support Windows
+constraint-dependencies = [
+    "bithuman; sys_platform != 'win32'",
+    "livekit-plugins-bithuman; sys_platform != 'win32'",
+]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -10,7 +14,6 @@ livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
-livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
@@ -52,6 +55,7 @@ members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
     "livekit-plugins/livekit-plugins-browser",
     "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-plugins-bithuman",  # Exclude bithuman on Windows
 ]
 
 [dependency-groups]
