@@ -19,8 +19,10 @@ class SessionReport:
     chat_history: ChatContext
     audio_recording_path: Optional[Path] = None
     audio_recording_started_at: Optional[float] = None
+    """Timestamp when the audio recording started"""
     duration: Optional[float] = None
     timestamp: float = field(default_factory=time.time)
+    """Timestamp when the session report was created, typically at the end of the session"""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []

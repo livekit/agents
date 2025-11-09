@@ -26,7 +26,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import Span, TraceFlags, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
 
@@ -292,7 +292,7 @@ async def _upload_session_report(
     http_session: aiohttp.ClientSession,
 ) -> None:
     chat_logger = get_logger_provider().get_logger(
-        name="chat_history",
+        name="transcript",
         attributes={
             "room_id": report.room_id,
             "job_id": report.job_id,
@@ -318,15 +318,16 @@ async def _upload_session_report(
                 trace_id=trace_id,
                 severity_number=severity,
                 severity_text=severity_text,
+                trace_flags=TraceFlags.DEFAULT,
             )
         )
 
     _log(
         body="session report",
-        timestamp=int((report.audio_recording_started_at or 0) * 1e9),
+        timestamp=int((report.timestamp or 0) * 1e9),
         attributes={
-            "chat.options": vars(report.options),
-            "chat.report_timestamp": report.timestamp,
+            "session.options": vars(report.options),
+            "session.report_timestamp": report.timestamp,
         },
     )
 
