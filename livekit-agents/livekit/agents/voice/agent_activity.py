@@ -74,7 +74,7 @@ from .generation import (
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from ..llm import mcp
+    from ..llm import mcp, tool_context
     from .agent_session import AgentSession, TurnDetectionMode
 
 
@@ -835,12 +835,15 @@ class AgentActivity(RecognitionHooks):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
                 filtered_tools = []
                 for tool in tools:
+                    info: (
+                        tool_context._FunctionToolInfo | tool_context._RawFunctionToolInfo | None
+                    ) = None
                     if is_raw_function_tool(tool):
                         info = get_raw_function_info(tool)
                     elif is_function_tool(tool):
                         info = get_function_info(tool)
 
-                    if info.flags & ToolFlag.IGNORE_ON_ENTER:
+                    if not info or (info.flags & ToolFlag.IGNORE_ON_ENTER):
                         continue
 
                     filtered_tools.append(tool)
@@ -883,7 +886,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
                     tools=tools,
-                    new_message=user_message,
+                    new_message=user_message if is_given(user_message) else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice

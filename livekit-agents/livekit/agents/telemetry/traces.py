@@ -62,11 +62,11 @@ class _DynamicTracer(Tracer):
             yield span
 
 
-tracer: Tracer = _DynamicTracer("livekit-agents")
+tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    def __init__(self, metadata: dict[str, str]) -> None:
+    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
@@ -74,18 +74,18 @@ class _MetadataSpanProcessor(SpanProcessor):
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
-    def __init__(self, metadata: dict[str, str]) -> None:
+    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
     def emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)
+            log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
 
     def on_emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)
+            log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
 
@@ -98,12 +98,10 @@ class _MetadataLogProcessor(LogRecordProcessor):
 
 class _ExtraDetailsProcessor(LogRecordProcessor):
     def emit(self, log_data: LogData) -> None:
-        attrs = log_data.log_record.attributes
-        if attrs is None:
-            attrs = {}
-            log_data.log_record.attributes = attrs
-
-        attrs["logger.name"] = log_data.instrumentation_scope.name
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(  # type: ignore
+                {"logger.name": log_data.instrumentation_scope.name}
+            )
         context = trace.get_current_span().get_span_context()
         log_data.log_record.span_id = context.span_id
         log_data.log_record.trace_id = context.trace_id
@@ -141,8 +139,10 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     )
 
     otlp_compression = Compression.Gzip
-    headers = (("Authorization", f"Bearer {access_token.to_jwt()}"),)
-    metadata = {"room_id": room_id, "job_id": job_id}
+    headers = {
+        "Authorization": f"Bearer {access_token.to_jwt()}",
+    }
+    metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
 
     resource = Resource.create(
         {
@@ -304,8 +304,8 @@ async def _upload_session_report(
         body: str,
         timestamp: int,
         attributes: dict,
-        span_id: str | None = None,
-        trace_id: str | None = None,
+        span_id: int | None = None,
+        trace_id: int | None = None,
         severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
         severity_text: str = "unspecified",
     ) -> None:
@@ -316,7 +316,6 @@ async def _upload_session_report(
                 attributes=attributes,
                 span_id=span_id,
                 trace_id=trace_id,
-                trace_flags=0,
                 severity_number=severity,
                 severity_text=severity_text,
             )
@@ -337,13 +336,19 @@ async def _upload_session_report(
         trace_id: int | None = None
         severity: SeverityNumber = SeverityNumber.UNSPECIFIED
         severity_text: str = "unspecified"
-        if "metrics" in item and item.metrics:
+        if (
+            item.type == "message"
+            and item.metrics
+            and "span_id" in item.metrics
+            and "trace_id" in item.metrics
+        ):
             span_id = item.metrics["span_id"]
             trace_id = item.metrics["trace_id"]
 
         if item.type == "function_call_output" and item.is_error:
             severity = SeverityNumber.ERROR
             severity_text = "error"
+
         _log(
             body="chat item",
             timestamp=int(item.created_at * 1e9),
@@ -364,9 +369,9 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=room_id,
-        duration=int(report.duration or 0 * 1000),
+        duration=int((report.duration or 0) * 1000),
     )
-    header_msg.start_time.FromMilliseconds(int(report.audio_recording_started_at * 1000))
+    header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
 
     mp = aiohttp.MultipartWriter("form-data")

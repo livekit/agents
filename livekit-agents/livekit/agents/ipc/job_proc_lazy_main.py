@@ -95,16 +95,19 @@ def proc_main(args: ProcStartArgs) -> None:
 
         t.join(timeout=0.25)
 
-        frames = sys._current_frames()
-        frame = frames.get(t.ident)
-
-        logger.warn(
-            f"non-daemon thread `{t.name}` may prevent the process from exiting",
+        logger.warning(
+            "non-daemon thread `%s` may prevent the process from exiting",
+            t.name,
             extra={"thread_id": t.native_id, "thread_name": t.name},
         )
 
-        if frame is not None:
-            logger.warn("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
+        frames = sys._current_frames()
+        if t.ident:
+            frame = frames.get(t.ident)
+            if frame is not None:
+                logger.warning(
+                    "stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame))
+                )
 
     log_handler.close()
 
@@ -252,7 +255,7 @@ class _JobProc:
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
 
-        self._job_task.add_done_callback(_exit_proc_cb)
+        self._job_task.add_done_callback(_exit_proc_cb)  # type: ignore
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:

@@ -678,7 +678,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: NotGivenOr[float] = NOT_GIVEN,
         job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
-        drain_timeout: NotGivenOr[float] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,
@@ -1121,7 +1121,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "room_id": msg.job.room.sid,
                 "agent_name": self._agent_name,
                 "resuming": msg.resuming,
-                "enable_recording": msg.enable_recording,
+                "enable_recording": msg.job.enable_recording,
             },
         )
 
@@ -1156,7 +1156,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "room": assignment.job.room.name,
                 "job_id": assignment.job.id,
                 "dispatch_id": assignment.job.dispatch_id,
-                "enable_recording": assignment.enable_recording,
+                "enable_recording": assignment.job.enable_recording,
             },
         )
         if assignment.job.id in self._pending_assignments:

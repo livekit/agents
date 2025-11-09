@@ -149,7 +149,7 @@ class JobContext:
         if c.enabled:
             self._session_directory = c.session_directory
         else:
-            self._session_directory = self._tempdir.name
+            self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
         self._lock = asyncio.Lock()
@@ -186,13 +186,14 @@ class JobContext:
         if report.enable_recording:
             try:
                 cloud_hostname = urlparse(self._info.url).hostname
-                await _upload_session_report(
-                    room_id=self._info.job.room.sid,
-                    job_id=self._info.job.id,
-                    cloud_hostname=cloud_hostname,
-                    report=report,
-                    http_session=http_context.http_session(),
-                )
+                if cloud_hostname:
+                    await _upload_session_report(
+                        room_id=self._info.job.room.sid,
+                        job_id=self._info.job.id,
+                        cloud_hostname=cloud_hostname,
+                        report=report,
+                        http_session=http_context.http_session(),
+                    )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 

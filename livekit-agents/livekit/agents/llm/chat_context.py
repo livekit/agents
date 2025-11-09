@@ -147,11 +147,11 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
-    span_id: int | None = None
+    span_id: int | None
     """Span ID from the current trace
     """
 
-    trace_id: int | None = None
+    trace_id: int | None
     """Trace ID from the current trace
     """
 
@@ -164,7 +164,7 @@ class ChatMessage(BaseModel):
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
-    metrics: MetricsReport = Field(default_factory=MetricsReport)
+    metrics: MetricsReport = Field(default_factory=dict)
     created_at: float = Field(default_factory=time.time)
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
 

@@ -323,7 +323,7 @@ class AudioRecognition:
                 return
 
             self._hooks.on_final_transcript(ev)
-            extra = {"user_transcript": transcript, "language": self._last_language}
+            extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
             logger.debug("received user transcript", extra=extra)
@@ -569,8 +569,8 @@ class AudioRecognition:
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
-                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay,
-                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay,
+                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay or 0,
+                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
                     }
                 )
                 user_turn_span.end()

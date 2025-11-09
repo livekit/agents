@@ -135,7 +135,7 @@ class RecorderIO:
         GROW_FACTOR = 1.5
         INV_INT16 = 1.0 / 32768.0
 
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._output_path.parent.mkdir(parents=True, exist_ok=True)  # type: ignore
 
         container = av.open(self._output_path, mode="w", format="ogg")
         stream: av.AudioStream = container.add_stream(
