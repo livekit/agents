@@ -174,24 +174,31 @@ class FillerDetector:
                 logger.debug("[FillerDetector] Empty transcript detected")
             return FillerDetectionResult(
                 is_filler_only=True,
+                contains_meaningful_content=False,
+                original_transcript=transcript,
+                filtered_transcript="",
+                confidence=confidence,
                 should_interrupt=False,
                 detection_reason="empty_transcript",
-                filtered_transcript="",
             )
 
         # Low confidence during agent speech -> treat as filler
-        if agent_speaking and confidence < self._min_confidence_threshold:
+        # FIX: Changed _min_confidence_threshold to _min_confidence
+        if agent_speaking and confidence < self._min_confidence:
             self._stats["low_confidence_ignored"] += 1
             if self._enable_logging:
                 logger.info(
                     f"[FillerDetector] Low confidence during agent speech: "
-                    f"confidence={confidence:.3f} < {self._min_confidence_threshold}"
+                    f"confidence={confidence:.3f} < {self._min_confidence}"
                 )
             return FillerDetectionResult(
                 is_filler_only=True,
+                contains_meaningful_content=False,
+                original_transcript=transcript,
+                filtered_transcript="",
+                confidence=confidence,
                 should_interrupt=False,
                 detection_reason="low_confidence_during_agent_speech",
-                filtered_transcript="",
             )
 
         # Check if transcript contains only filler words
@@ -214,9 +221,12 @@ class FillerDetector:
                 )
             return FillerDetectionResult(
                 is_filler_only=True,
+                contains_meaningful_content=False,
+                original_transcript=transcript,
+                filtered_transcript="",
+                confidence=confidence,
                 should_interrupt=False,
                 detection_reason="filler_only_during_agent_speech",
-                filtered_transcript="",
             )
 
         elif not is_filler_only and agent_speaking:
@@ -228,9 +238,12 @@ class FillerDetector:
                 )
             return FillerDetectionResult(
                 is_filler_only=False,
+                contains_meaningful_content=True,
+                original_transcript=transcript,
+                filtered_transcript=filtered,
+                confidence=confidence,
                 should_interrupt=True,
                 detection_reason="meaningful_interruption",
-                filtered_transcript=filtered,
             )
 
         else:
@@ -242,9 +255,12 @@ class FillerDetector:
                 )
             return FillerDetectionResult(
                 is_filler_only=is_filler_only,
+                contains_meaningful_content=not is_filler_only,
+                original_transcript=transcript,
+                filtered_transcript=filtered if not is_filler_only else "",
+                confidence=confidence,
                 should_interrupt=True,
                 detection_reason="agent_quiet_all_speech_valid",
-                filtered_transcript=filtered if not is_filler_only else "",
             )
     
     def get_stats(self) -> dict[str, int]:
