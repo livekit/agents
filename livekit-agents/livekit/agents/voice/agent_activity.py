@@ -69,7 +69,71 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession, TurnDetectionMode
 
+import os
+import re
+from typing import Dict, List, Set, Optional
 
+
+class FillerManager:
+    """
+    Keeps track of filler words by language and lets you update them at runtime.
+    """
+
+    def __init__(self) -> None:
+        # base/default fillers from env (comma-separated)
+        raw = os.getenv("LIVEKIT_IGNORED_FILLERS", "uh,umm,hmm,haan")
+        base = {w.strip().lower() for w in raw.split(",") if w.strip()}
+        # store per-lang sets
+        self._fillers_by_lang: Dict[str, Set[str]] = {
+            "default": base,
+            # seed some common ones
+            "en": {"uh", "umm", "hmm", "like"},
+            "hi": {"haan", "hmmm", "accha", "arey"},
+            "hinglish": {"umm", "haan", "accha"},
+        }
+        # global min confidence
+        try:
+            self._min_conf = float(os.getenv("LIVEKIT_FILLER_CONFIDENCE", "0.6"))
+        except ValueError:
+            self._min_conf = 0.6
+
+    # ----- query side -----
+    def get_min_conf(self) -> float:
+        return self._min_conf
+
+    def get_fillers_for(self, lang: Optional[str]) -> Set[str]:
+        """
+        lang might be 'en', 'hi', 'en-IN', 'hi-IN', None...
+        we normalize to short code and fall back.
+        """
+        if not lang:
+            return self._fillers_by_lang.get("default", set())
+        short = lang.split("-")[0].lower()
+        # try exact, then short, then default
+        return (
+            self._fillers_by_lang.get(lang.lower())
+            or self._fillers_by_lang.get(short)
+            or self._fillers_by_lang.get("default", set())
+        )
+
+    # ----- update side -----
+    def add_filler(self, word: str, lang: str = "default") -> None:
+        word = word.strip().lower()
+        if not word:
+            return
+        if lang not in self._fillers_by_lang:
+            self._fillers_by_lang[lang] = set()
+        self._fillers_by_lang[lang].add(word)
+
+    def remove_filler(self, word: str, lang: str = "default") -> None:
+        word = word.strip().lower()
+        if lang in self._fillers_by_lang:
+            self._fillers_by_lang[lang].discard(word)
+
+    def set_min_conf(self, value: float) -> None:
+        self._min_conf = float(value)
+
+FILLERS=FillerManager()
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
@@ -85,6 +149,19 @@ class _PreemptiveGeneration:
 
 
 # NOTE: AgentActivity isn't exposed to the public API
+FILLER_WORDS_ENV = "LIVEKIT_IGNORED_FILLERS"
+FILLER_CONFIDENCE_ENV = "LIVEKIT_FILLER_CONFIDENCE"
+
+def _load_filler_config() -> tuple[list[str], float]:
+    import os
+    raw = os.getenv(FILLER_WORDS_ENV, "uh,umm,hmm,haan")
+    fillers = [w.strip().lower() for w in raw.split(",") if w.strip()]
+    try:
+        conf = float(os.getenv(FILLER_CONFIDENCE_ENV, "0.6"))
+    except ValueError:
+        conf = 0.6
+    return fillers, conf
+
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -1180,29 +1257,104 @@ class AgentActivity(RecognitionHooks):
             self._interrupt_by_audio_activity()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
-        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
-            # skip stt transcription if user_transcription is enabled on the realtime model
+        from .. import llm as _llm
+        from ..log import logger as _logger
+
+        # pull STT fields up front
+        alt = ev.alternatives[0]
+        transcript = alt.text or ""
+        confidence = alt.confidence
+        language = alt.language
+        speaker_id = alt.speaker_id
+
+        # if the LLM itself is doing user transcription, don't double-handle
+        if isinstance(self.llm, _llm.RealtimeModel) and self.llm.capabilities.user_transcription:
+            # still forward to session so transcript UI stays correct
+            self._session._user_input_transcribed(
+                UserInputTranscribedEvent(
+                    language=language,
+                    transcript=transcript,
+                    is_final=False,
+                    speaker_id=speaker_id,
+                ),
+            )
             return
 
+        # always forward transcript to the session (so UI/logs get it)
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
-                language=ev.alternatives[0].language,
-                transcript=ev.alternatives[0].text,
+                language=language,
+                transcript=transcript,
                 is_final=False,
-                speaker_id=ev.alternatives[0].speaker_id,
+                speaker_id=speaker_id,
             ),
         )
 
-        if ev.alternatives[0].text:
+        # ---- filler-aware, multi-language logic ----
+        # get lang-specific+default fillers
+        fillers_for_lang = FILLERS.get_fillers_for(language)
+        min_conf = FILLERS.get_min_conf()
+
+        import re
+        normalized = transcript.strip().lower()
+        tokens = [t for t in re.split(r"\W+", normalized) if t]
+
+        # agent is speaking if we have a current speech and it isn't paused
+        agent_is_speaking = self._current_speech is not None and self._paused_speech is None
+
+        def is_filler_only() -> bool:
+            if not tokens:
+                return True
+            # union default + language + hinglish
+            lang_fillers = set(fillers_for_lang) | FILLERS.get_fillers_for("hinglish")
+            default_fillers = FILLERS.get_fillers_for("default")
+            all_known = lang_fillers | default_fillers
+            return all(tok in all_known for tok in tokens)
+
+        ignore = False
+        if agent_is_speaking:
+            if is_filler_only():
+                ignore = True
+            else:
+                # background murmur / low confidence → ignore
+                if confidence is not None and confidence < min_conf:
+                    ignore = True
+
+        # ---- act on it ----
+        if transcript and not ignore:
+            _logger.debug(
+                "valid user interruption",
+                extra={
+                    "transcript": transcript,
+                    "confidence": confidence,
+                    "agent_is_speaking": agent_is_speaking,
+                },
+            )
+
+            # real interruption → pause/stop TTS
             self._interrupt_by_audio_activity()
 
+            # keep existing false-interruption resume behaviour
             if (
                 speaking is False
                 and self._paused_speech
                 and (timeout := self._session.options.false_interruption_timeout) is not None
             ):
-                # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
+
+        elif ignore:
+            _logger.debug(
+                "ignored non-meaningful speech while agent speaking",
+                extra={
+                    "transcript": transcript,
+                    "confidence": confidence,
+                    "fillers": list(fillers_for_lang),
+                    "agent_is_speaking": agent_is_speaking,
+                    "language": language,
+                },
+            )
+
+
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:

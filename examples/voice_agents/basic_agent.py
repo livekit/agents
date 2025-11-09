@@ -18,7 +18,8 @@ from livekit.agents import (
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
+from livekit.agents.llm import function_tool
+from livekit.agents.voice.agent import FILLERS 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
 
@@ -37,6 +38,21 @@ class MyAgent(Agent):
             "you will speak english to the user",
         )
 
+    async def add_filler_word(self, context: RunContext, word: str, lang: str = "default"):
+        """
+        Add a filler word at runtime so that the agent does not interrupt when it hears it.
+        lang can be something like 'en', 'hi', 'hinglish', or leave default.
+        """
+        FILLERS.add_filler(word, lang)
+        return f"Added filler '{word}' for language '{lang}'."
+
+    @function_tool
+    async def remove_filler_word(self, context: RunContext, word: str, lang: str = "default"):
+        """
+        Remove a filler from the runtime list.
+        """
+        FILLERS.remove_filler(word, lang)
+        return f"Removed filler '{word}' for language '{lang}'."
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
