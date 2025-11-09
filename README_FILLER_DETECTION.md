@@ -120,3 +120,22 @@ Filler detection initialized with languages: ['en', 'hi']
 Agent is ready and listening for commands.
 ```
 
+### Test 2: Live Agent Testing
+
+You can test with either example:
+
+#### Option A: Simple Agent (Minimal Example)
+```bash
+uv run python examples/voice_agents/simple_agent.py dev
+```
+
+#### Option B: Basic Agent (Full-Featured Example)
+```bash
+uv run python examples/voice_agents/basic_agent.py dev
+```
+
+**Both agents include:**
+- ✅ Filler detection with English + Hindi support
+- ✅ Confidence threshold filtering (0.3)
+- ✅ Debug logging enabled
+
