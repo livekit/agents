@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 import aiofiles
 import aiohttp
 from google.protobuf.json_format import MessageToDict
-from google.protobuf.timestamp_pb2 import Timestamp
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
@@ -188,10 +187,15 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
             msg.extra[key] = str(value)
 
         metrics = item.metrics
+        logger.info("item metrics", extra={"metrics": metrics})
         if "started_speaking_at" in metrics:
-            msg.metrics.started_speaking_at.FromSeconds(int(metrics["started_speaking_at"]))
+            msg.metrics.started_speaking_at.FromMilliseconds(
+                int(metrics["started_speaking_at"] * 1000)
+            )
         if "stopped_speaking_at" in metrics:
-            msg.metrics.stopped_speaking_at.FromSeconds(int(metrics["stopped_speaking_at"]))
+            msg.metrics.stopped_speaking_at.FromMilliseconds(
+                int(metrics["stopped_speaking_at"] * 1000)
+            )
         if "transcription_delay" in metrics:
             msg.metrics.transcription_delay = metrics["transcription_delay"]
         if "end_of_turn_delay" in metrics:
@@ -205,7 +209,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         if "e2e_latency" in metrics:
             msg.metrics.e2e_latency = metrics["e2e_latency"]
 
-        msg.created_at.FromSeconds(int(item.created_at))
+        msg.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call":
         fc = item_pb.function_call
@@ -213,7 +217,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fc.call_id = item.call_id
         fc.arguments = item.arguments
         fc.name = item.name
-        fc.created_at.FromSeconds(int(item.created_at))
+        fc.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call_output":
         fco = item_pb.function_call_output
@@ -222,7 +226,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fco.call_id = item.call_id
         fco.output = item.output
         fco.is_error = item.is_error
-        fco.created_at.FromSeconds(int(item.created_at))
+        fco.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "agent_handoff":
         ah = item_pb.agent_handoff
@@ -230,7 +234,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         if item.old_agent_id is not None:
             ah.old_agent_id = item.old_agent_id
         ah.new_agent_id = item.new_agent_id
-        ah.created_at.FromSeconds(int(item.created_at))
+        ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     item_dict = MessageToDict(item_pb)
 
@@ -316,12 +320,9 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=room_id,
-        start_time=Timestamp(
-            seconds=int(report.audio_recording_started_at),
-            nanos=int((report.audio_recording_started_at % 1) * 1e9),
-        ),
-        duration=int(report.duration),
+        duration=int(report.duration * 1000),
     )
+    header_msg.start_time.FromMilliseconds(int(report.audio_recording_started_at * 1000))
     header_bytes = header_msg.SerializeToString()
 
     mp = aiohttp.MultipartWriter("form-data")

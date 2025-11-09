@@ -883,7 +883,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
                     tools=tools,
-                    new_message=user_message.model_copy() if user_message else None,
+                    new_message=user_message,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
@@ -1283,7 +1283,10 @@ class AgentActivity(RecognitionHooks):
         )
         chat_ctx = self._agent.chat_ctx.copy()
         speech_handle = self._generate_reply(
-            user_message=user_message, chat_ctx=chat_ctx, schedule_speech=False
+            # we need to send in the original user_message because metrics are injected later on
+            user_message=user_message,
+            chat_ctx=chat_ctx,
+            schedule_speech=False,
         )
 
         self._preemptive_generation = _PreemptiveGeneration(
@@ -1483,7 +1486,8 @@ class AgentActivity(RecognitionHooks):
             # Ensure the new message is passed to generate_reply
             # This preserves the original message_id, making it easier for users to track responses
             speech_handle = self._generate_reply(
-                user_message=user_message, chat_ctx=temp_mutable_chat_ctx
+                user_message=user_message,
+                chat_ctx=temp_mutable_chat_ctx,
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():

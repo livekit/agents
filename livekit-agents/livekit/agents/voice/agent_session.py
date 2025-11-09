@@ -934,7 +934,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         with use_span:
             handle = activity._generate_reply(
-                user_message=user_message,
+                user_message=user_message if user_message else None,
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,

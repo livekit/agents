@@ -323,10 +323,10 @@ class AudioRecognition:
                 return
 
             self._hooks.on_final_transcript(ev)
-            logger.debug(
-                "received user transcript",
-                extra={"user_transcript": transcript, "language": self._last_language},
-            )
+            extra = {"user_transcript": transcript, "language": self._last_language}
+            if self._last_speaking_time:
+                extra["transcript_delay"] = time.time() - self._last_speaking_time
+            logger.debug("received user transcript", extra=extra)
 
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
@@ -450,9 +450,6 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._speech_end_time = time.time()
-
-            # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._speaking = False
 
             if self._vad_base_turn_detection or (
