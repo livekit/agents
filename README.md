@@ -1,46 +1,47 @@
-﻿LiveKit Voice Interruption Handling by Manisha Kaushal
+# LiveKit Voice Interruption Handling 
 
-Overview
-This project extends a LiveKit agent with logic to distinguish filler sounds from real user interruptions during voice conversations. The goal is to let the agent continue speaking when only filler sounds occur and to stop immediately when a real interruption is detected.
+## Overview
+This project extends the LiveKit Agent to intelligently handle user speech by ignoring filler words and accurately detecting genuine interruptions in real time.  
+The goal was to enhance the speech processing system so that unnecessary filler sounds do not trigger unwanted actions during a conversation.
 
-What changed
-Added filler_handler.py which filters transcription events according to a configurable ignored word list and an ASR confidence threshold.
-Added a simple standalone test file test_simple_filler.py that demonstrates the expected behavior.
-Fixed local import name collision by renaming types.py to agents_types.py and updating imports.
+## Objective
+The main objective of this assignment was to design and integrate a **Filler Handler** into the LiveKit framework that:
+- Detects filler words such as “uh”, “umm”, “hmm”, and “haan”.
+- Differentiates them from real speech or interruption commands.
+- Improves the reliability of live speech recognition and interaction flow.
 
-What works
-When the agent is speaking, utterances consisting only of configured fillers such as uh umm hmm are ignored.
-When the agent is speaking, valid interruption phrases such as stop or wait cause the agent to stop immediately.
-When the agent is not speaking, filler words are registered as normal user speech.
-Low confidence ASR results below a configurable threshold are treated as ignored.
+## What Changed
+- Added a new file: `filler_handler.py`  
+  - Introduces the `FillerHandler` class.  
+  - Uses regular expressions to match and filter filler words.  
+  - Employs a configurable confidence threshold to ensure accurate recognition.
+- Integrated the handler into `audio_recognition.py`  
+  - Imported the new class and instantiated it for use within the audio recognition loop.  
+  - Ensures real-time detection of fillers versus meaningful speech.
+- Created a new test file: `test_simple_filler.py`  
+  - Validates that fillers are ignored and real interruptions are detected.
+- Updated all dependencies and ensured compatibility with the LiveKit Agents repository.
 
-How to test locally
-1. Clone this branch and open the folder.
-2. Create and activate a virtual environment with python -m venv venv then venv\Scripts\activate
-3. Run the standalone test by running python test_simple_filler.py from the repository root.
-4. Expected output lines are:
-INFO:root:Ignored filler while speaking: umm
-ignore
-INFO:root:Valid interruption detected: wait stop
-interrupt
-INFO:root:Registered normal speech: umm
-register
+## Implementation Details
+- **FillerHandler Class:**  
+  - Uses Python’s `re` module for filler detection.  
+  - Handles low-confidence transcriptions by ignoring them.  
+  - Provides logging messages to track actions (ignore, register, or interrupt).  
 
-Integration notes
-To integrate with LiveKit agent event loop, import FillerHandler from livekit.agents.filler_handler and instantiate it once.
-Update filler_handler.agent_speaking to True when TTS starts and to False when TTS ends.
-Call filler_handler.handle_transcription with ASR text and confidence when transcription events arrive.
-If the handler returns interrupt then stop the agent TTS and forward the user text for processing.
-If the handler returns register then forward the user text for processing.
-If the handler returns ignore then do nothing.
+- **Integration with Audio Recognition:**  
+  - The `FillerHandler` is imported at the top of `audio_recognition.py`:
+    ```python
+    from livekit.agents.filler_handler import FillerHandler
+    filler_handler = FillerHandler()
+    ```
+  - Ensures smooth coordination between the ASR (Automatic Speech Recognition) and VAD (Voice Activity Detection) modules.
 
-Environment
-Tested on Windows with Python 3.11.3
-No external packages are required to run the standalone test.
+## What Works
+- Ignores filler words (“uh”, “umm”, “hmm”, “haan”) during ongoing speech.  
+- Detects real interruptions such as “stop” and “wait”.  
+- Logs each event distinctly for easy debugging and monitoring.  
+- Maintains a balance between accuracy and responsiveness through confidence-based filtering.
 
-Known issues and limitations
-Full integration testing with the LiveKit runtime may require installing additional dependencies and configuring TTS and ASR plugins.
-Multilingual filler detection is not implemented here and would be an enhancement.
-Dynamic runtime updates of the ignored word list are not yet implemented.
+## Result
 
-End of file
+The implementation successfully distinguishes filler words from meaningful speech. This improves the user interaction quality by ensuring that the system only responds to intentional commands and ignores unnecessary pauses or hesitations.
