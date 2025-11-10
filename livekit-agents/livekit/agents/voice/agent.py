@@ -372,8 +372,42 @@ class Agent:
                         stream.push_frame(frame)
 
                 forward_task = asyncio.create_task(_forward_input())
+
+                from livekit.agents.voice.interruption_filter import InterruptionFilter
+                from livekit.agents.voice.speech_handle import SpeechHandle
+
+                if not hasattr(agent, "_interrupt_filter"):
+                    agent._interrupt_filter = InterruptionFilter()
+                    logger.info("Initialized InterruptionFilter for agent")
+
                 try:
                     async for event in stream:
+                        if hasattr(event, "text") and event.text:
+                            text = event.text.strip()
+                            confidence = getattr(event, "confidence", 1.0)
+
+                            agent_speaking = (
+                                hasattr(agent, "_speech_handle")
+                                and isinstance(agent._speech_handle, SpeechHandle)
+                                and not agent._speech_handle.done()
+                            )
+
+                            decision = agent._interrupt_filter.evaluate(
+                                transcript=text,
+                                confidence=confidence,
+                                agent_speaking=agent_speaking,
+                            )
+
+                            if decision == "IGNORE" and agent_speaking:
+                                logger.debug(f"[IGNORED filler during TTS] → {text}")
+                                continue
+
+                            if decision == "INTERRUPT" and agent_speaking:
+                                if hasattr(agent, "_speech_handle") and agent._speech_handle.allow_interruptions:
+                                    agent._speech_handle.interrupt()
+                                    logger.info(f"[USER INTERRUPTION] → {text}")
+                                continue
+
                         yield event
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
