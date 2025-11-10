@@ -69,6 +69,7 @@ class _LLMOptions:
     top_p: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
+    disable_tool_validation: NotGivenOr[bool]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
     max_completion_tokens: NotGivenOr[int]
@@ -95,6 +96,7 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        disable_tool_validation: NotGivenOr[bool] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
@@ -126,6 +128,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            disable_tool_validation=disable_tool_validation,
             store=store,
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
@@ -883,6 +886,15 @@ class LLM(llm.LLM):
         )
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
+
+        if is_given(self._opts.disable_tool_validation):
+            provider_host = self._client._base_url.netloc.decode("utf-8")
+            if "groq" not in provider_host:
+                raise ValueError(
+                    "disable_tool_validation is only supported for Groq endpoints. "
+                    "Provide a Groq API base_url (e.g. https://api.groq.com/openai/v1) to enable it."
+                )
+            extra["disable_tool_validation"] = self._opts.disable_tool_validation
 
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
         if is_given(tool_choice):
