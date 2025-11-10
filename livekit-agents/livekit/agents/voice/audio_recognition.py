@@ -43,6 +43,7 @@ class _EndOfTurnInfo:
 class _PreemptiveGenerationInfo:
     new_transcript: str
     transcript_confidence: float
+    started_speaking_at: float | None
 
 
 class _TurnDetector(Protocol):
@@ -356,6 +357,7 @@ class AudioRecognition:
                                 if self._final_transcript_confidence
                                 else 0
                             ),
+                            started_speaking_at=self._speech_start_time,
                         )
                     )
 
@@ -398,6 +400,7 @@ class AudioRecognition:
                     _PreemptiveGenerationInfo(
                         new_transcript=self._audio_preflight_transcript,
                         transcript_confidence=sum(confidence_vals) / len(confidence_vals),
+                        started_speaking_at=self._speech_start_time,
                     )
                 )
 
@@ -421,6 +424,8 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(None)
 
             self._speaking = True
+            if self._speech_start_time is None:
+                self._speech_start_time = time.time()
             self._last_speaking_time = time.time()
 
             if self._end_of_turn_task is not None:

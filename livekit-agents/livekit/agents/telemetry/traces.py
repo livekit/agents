@@ -292,7 +292,7 @@ async def _upload_session_report(
     http_session: aiohttp.ClientSession,
 ) -> None:
     chat_logger = get_logger_provider().get_logger(
-        name="transcript",
+        name="chat_history",
         attributes={
             "room_id": report.room_id,
             "job_id": report.job_id,
@@ -304,8 +304,6 @@ async def _upload_session_report(
         body: str,
         timestamp: int,
         attributes: dict,
-        span_id: int | None = None,
-        trace_id: int | None = None,
         severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
         severity_text: str = "unspecified",
     ) -> None:
@@ -314,11 +312,9 @@ async def _upload_session_report(
                 body=body,
                 timestamp=timestamp,
                 attributes=attributes,
-                span_id=span_id,
-                trace_id=trace_id,
                 severity_number=severity,
                 severity_text=severity_text,
-                trace_flags=TraceFlags.DEFAULT,
+                trace_flags=TraceFlags.get_default(),
             )
         )
 
@@ -333,18 +329,8 @@ async def _upload_session_report(
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)
-        span_id: int | None = None
-        trace_id: int | None = None
         severity: SeverityNumber = SeverityNumber.UNSPECIFIED
         severity_text: str = "unspecified"
-        if (
-            item.type == "message"
-            and item.metrics
-            and "span_id" in item.metrics
-            and "trace_id" in item.metrics
-        ):
-            span_id = item.metrics["span_id"]
-            trace_id = item.metrics["trace_id"]
 
         if item.type == "function_call_output" and item.is_error:
             severity = SeverityNumber.ERROR
@@ -354,8 +340,6 @@ async def _upload_session_report(
             body="chat item",
             timestamp=int(item.created_at * 1e9),
             attributes={"chat.item": item_log},
-            span_id=span_id,
-            trace_id=trace_id,
             severity=severity,
             severity_text=severity_text,
         )

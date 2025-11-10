@@ -147,14 +147,6 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
-    span_id: int | None
-    """Span ID from the current trace
-    """
-
-    trace_id: int | None
-    """Trace ID from the current trace
-    """
-
 
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
