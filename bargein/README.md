@@ -18,3 +18,5 @@ CARTESIA_API_KEY=""
 ```bash
 uv run bargein/bargein_example.py console
 ```
+
+For each inference, it will save the input in either `recordings/barge_in` or `recordings/not_barge_in` for debugging.
