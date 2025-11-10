@@ -14,7 +14,7 @@
 
 from .avatar import AvatarSession
 from .errors import AnamException
-from .types import PersonaConfig
+from .agents_types import PersonaConfig
 from .version import __version__
 
 __all__ = [
