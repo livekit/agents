@@ -1,0 +1,7 @@
+[project]
+name = "livekit-interrupt-handler"
+version = "0.1.0"
+dependencies = [
+  "aiohttp>=3.8",
+  "python-dotenv>=1.0"
+]
