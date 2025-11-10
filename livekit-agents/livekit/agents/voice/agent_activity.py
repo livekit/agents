@@ -2,6 +2,11 @@ from __future__ import annotations
 from agents.extensions.interrupt_handler import InterruptFilter, livekit_asr_adapter
 
 import asyncio
+try:
+    from agents.extensions.interrupt_handler import InterruptFilter
+except Exception:
+    InterruptFilter = None
+
 import contextvars
 import heapq
 import json
@@ -88,6 +93,9 @@ class _PreemptiveGeneration:
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
+        self._interrupt_requested = False
+        self._interrupt_filter = InterruptFilter() if InterruptFilter is not None else None
+
         self._interrupt_filter = InterruptFilter(
             on_interrupt=lambda info: asyncio.create_task(self._handle_interrupt(info))
         )
@@ -210,6 +218,20 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
+    async def _maybe_handle_interrupt(self, text: str, *, confidence: float = 1.0, agent_speaking: bool = False) -> None:
+        try:
+            result = await self._interrupt_filter.on_asr_event(text, confidence=confidence, agent_speaking=agent_speaking)
+        except Exception:
+            import logging
+            logging.exception("InterruptFilter failed")
+            return
+        if result.get("should_stop_agent"):
+            # request session-level interrupt (the session shim we added earlier)
+            try:
+                self._session.request_interrupt()
+            except Exception:
+                logging.exception("Failed to request session interrupt")
+
     async def _handle_interrupt(self, info: dict):
         try:
             if hasattr(self, "interrupt"):
@@ -222,6 +244,16 @@ class AgentActivity(RecognitionHooks):
         except Exception:
             if hasattr(self, "logger"):
                 self.logger.exception("Error handling interrupt")
+    
+    def request_interrupt(self) -> None:
+        self._interrupt_requested = True
+
+    def consume_interrupt_request(self) -> bool:
+        if self._interrupt_requested:
+            self._interrupt_requested = False
+            return True
+        return False
+
 
     @property
     def scheduling_paused(self) -> bool:
@@ -934,6 +966,10 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def commit_user_turn(self, *, transcript_timeout: float, stt_flush_duration: float) -> None:
+        if self.consume_interrupt_request():
+            self._logger.info("Interrupt requested — stopping agent output early")
+            asyncio.create_task(self._stop_speaking_now())
+
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
@@ -1211,6 +1247,9 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
+        if self._interrupt_filter is not None:
+            asyncio.create_task(self._maybe_handle_interrupt(ev.alternatives[0].text, confidence=getattr(ev.alternatives[0],'confidence',1.0), agent_speaking=self._session.use_tts_aligned_transcript() if hasattr(self._session,'use_tts_aligned_transcript') else True))
+
         try:
             raw_text = getattr(ev.alternatives[0], "text", "") or ""
             raw_conf = getattr(ev.alternatives[0], "confidence", None)
@@ -1258,6 +1297,9 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+
+        if self._interrupt_filter is not None:
+            asyncio.create_task(self._maybe_handle_interrupt(ev.alternatives[0].text, confidence=getattr(ev.alternatives[0],'confidence',1.0), agent_speaking=self._session.use_tts_aligned_transcript() if hasattr(self._session,'use_tts_aligned_transcript') else True))
         
         try:
             raw_text = getattr(ev.alternatives[0], "text", "") or ""

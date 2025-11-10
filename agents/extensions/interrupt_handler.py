@@ -1,92 +1,110 @@
-import os
-import asyncio
-import re
-import json
-from typing import List, Optional, Callable, Dict, Any
-
+﻿import asyncio
 import logging
-logger = logging.getLogger("interrupt_handler")
-ignored_logger = logging.getLogger("interrupt_handler.ignored")
-valid_logger = logging.getLogger("interrupt_handler.valid")
-if not logging.getLogger().handlers:
-    h = logging.StreamHandler()
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    h.setFormatter(fmt)
-    logging.getLogger().addHandler(h)
-    logging.getLogger().setLevel(logging.INFO)
+import os
+from typing import Iterable, Dict, Any
 
-def _load_ignored_words_from_env() -> List[str]:
-    raw = os.getenv("IGNORED_WORDS", "uh,umm,hmm,haan")
-    return [w.strip().lower() for w in raw.split(",") if w.strip()]
+log = logging.getLogger("InterruptFilter")
+log.setLevel(logging.INFO)
+
+DEFAULT_IGNORED = [w.strip().lower() for w in os.environ.get("IGNORED_WORDS", "uh,umm,hmm,haan").split(",") if w.strip()]
+DEFAULT_CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", 0.6))
 
 class InterruptFilter:
-    def __init__(
-        self,
-        ignored_words: Optional[List[str]] = None,
-        confidence_threshold: float = 0.5,
-        on_interrupt: Optional[Callable[[Dict[str, Any]], None]] = None,
-    ):
-        self._ignored_words = set(ignored_words or _load_ignored_words_from_env())
-        self._confidence_threshold = float(confidence_threshold)
+    def __init__(self, ignored_words=None, conf_threshold=0.6):
+        self._ignored_words = set(ignored_words or [])
+        self._conf_threshold = conf_threshold
         self._lock = asyncio.Lock()
-        self.on_interrupt = on_interrupt
 
-    async def on_asr_event(self, text: str, confidence: float, agent_speaking: bool) -> Dict[str, Any]:
-        if text is None:
-            text = ""
-        normalized = text.strip().lower()
-        tokens = [t for t in re.split(r"\W+", normalized) if t]
-
+    async def update_ignored_words(self, new_list):
         async with self._lock:
-            if not tokens:
-                reason = "empty_or_unintelligible"
-                ignored_logger.info(json.dumps({"text": text, "confidence": confidence, "reason": reason}))
-                return {"should_stop_agent": False, "handled_as_ignored": True, "reason": reason}
+            self._ignored_words = set(new_list)
 
-            non_ignored_tokens = [t for t in tokens if t not in self._ignored_words]
+    def __init__(self, ignored_words: Iterable[str] = None, conf_threshold: float = DEFAULT_CONF_THRESHOLD):
+        self.ignored_words = set(w.lower().strip() for w in (ignored_words or DEFAULT_IGNORED))
+        self.conf_threshold = conf_threshold
+        self._lock = asyncio.Lock()
+        self.stats = {"ignored": 0, "accepted": 0}
 
+    async def set_ignored_words(self, new_words: list[str]):
+        async with self._lock:
+            self._ignored_words = set(new_words)
+            logger.info("InterruptFilter: ignored words updated -> %s", new_words)
+
+    async def on_asr_event(self, text: str, *, confidence: float = 1.0, agent_speaking: bool = False) -> Dict[str, Any]:
+        """
+        Evaluate ASR event text and return {"should_stop_agent": bool, "reason": str}
+        """
+        async with self._lock:
+            text = (text or "").strip()
+            if not text:
+                return {"should_stop_agent": False, "reason": "empty"}
+
+            words = [w.lower().strip() for w in text.split() if w.strip()]
+            non_filler_words = [w for w in words if w not in self.ignored_words]
+
+            # Agent currently speaking
             if agent_speaking:
-                if len(non_ignored_tokens) == 0:
-                    reason = "all_filler_tokens"
-                    ignored_logger.info(json.dumps({"text": text, "confidence": confidence, "reason": reason}))
-                    return {"should_stop_agent": False, "handled_as_ignored": True, "reason": reason}
+                if confidence < self.conf_threshold and not non_filler_words:
+                    self.stats["ignored"] += 1
+                    log.debug("Ignored low-confidence filler while agent speaking: %s (conf=%s)", text, confidence)
+                    return {"should_stop_agent": False, "reason": "low_confidence_filler"}
 
-                if confidence >= self._confidence_threshold:
-                    reason = "contains_non_filler_with_confidence"
-                    valid_logger.info(json.dumps({"text": text, "confidence": confidence, "reason": reason}))
-                    if callable(self.on_interrupt):
-                        try:
-                            self.on_interrupt({"text": text, "confidence": confidence, "reason": reason})
-                        except Exception as e:
-                            logger.exception("on_interrupt callback failed: %s", e)
-                    return {"should_stop_agent": True, "handled_as_ignored": False, "reason": reason}
-                else:
-                    reason = "non_filler_low_confidence_ignored"
-                    ignored_logger.info(json.dumps({"text": text, "confidence": confidence, "reason": reason}))
-                    return {"should_stop_agent": False, "handled_as_ignored": True, "reason": reason}
-            else:
-                reason = "agent_quiet_registered"
-                valid_logger.info(json.dumps({"text": text, "confidence": confidence, "reason": reason}))
-                if callable(self.on_interrupt):
-                    try:
-                        self.on_interrupt({"text": text, "confidence": confidence, "reason": reason})
-                    except Exception as e:
-                        logger.exception("on_interrupt callback failed: %s", e)
-                return {"should_stop_agent": False, "handled_as_ignored": False, "reason": reason}
+                if not non_filler_words:
+                    self.stats["ignored"] += 1
+                    log.info("Ignored filler while agent speaking: '%s'", text)
+                    return {"should_stop_agent": False, "reason": "filler_only"}
 
-    async def update_ignored_words(self, new_words: List[str]):
-        async with self._lock:
-            self._ignored_words = set(w.strip().lower() for w in new_words if w.strip())
-            logger.info("Ignored words updated: %s", list(self._ignored_words))
+                # Mixed or real interruption
+                self.stats["accepted"] += 1
+                log.info("Accepted interruption while agent speaking: '%s'", text)
+                return {"should_stop_agent": True, "reason": "non_filler_present"}
 
-    def set_confidence_threshold(self, threshold: float):
-        self._confidence_threshold = float(threshold)
-        logger.info("Confidence threshold set to %s", self._confidence_threshold)
+            # Agent quiet -> register as user speech
+            self.stats["accepted"] += 1
+            log.info("Agent quiet — treat as user speech: '%s'", text)
+            return {"should_stop_agent": False, "reason": "agent_quiet"}
 
-def livekit_asr_adapter(event: Dict[str, Any]) -> Dict[str, Any]:
-    text = event.get("text") or ""
-    conf = event.get("confidence")
+    def update_ignored_words(self, new_words: Iterable[str]) -> None:
+        """Dynamically update the ignored words list."""
+        self.ignored_words = set(w.lower().strip() for w in new_words if w.strip())
+        log.info("Updated ignored words: %s", self.ignored_words)
+
+
+def livekit_asr_adapter(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize typical LiveKit/ASR event payloads into:
+      {"text": str, "confidence": float, "agent_speaking": bool}
+
+    Accepts multiple shapes: {'text':..., 'confidence':...}, or nested,
+    or legacy fields. Returns defaults when missing.
+    """
+    if not isinstance(data, dict):
+        return {"text": str(data or ""), "confidence": 1.0, "agent_speaking": False}
+
+    # Try common keys
+    text = data.get("text") or data.get("transcript") or data.get("alternatives_text") or ""
+    # Some ASR providers use a list of alternatives
+    if not text:
+        alt = data.get("alternatives") or data.get("results") or None
+        if isinstance(alt, list) and len(alt) > 0:
+            first = alt[0]
+            # try to extract text from alt structure
+            if isinstance(first, dict):
+                text = first.get("transcript") or first.get("text") or ""
+            elif isinstance(first, str):
+                text = first
+
+    # Confidence heuristics
+    conf = data.get("confidence")
     if conf is None:
+        # sometimes inside alternatives
+        if isinstance(alt, list) and len(alt) > 0 and isinstance(alt[0], dict):
+            conf = alt[0].get("confidence", 1.0)
+    try:
+        conf = float(conf) if conf is not None else 1.0
+    except Exception:
         conf = 1.0
-    agent_speaking = bool(event.get("agent_speaking", False))
-    return {"text": text, "confidence": float(conf), "agent_speaking": agent_speaking}
+
+    agent_speaking = bool(data.get("agent_speaking")) or bool(data.get("agentIsSpeaking")) or False
+
+    return {"text": str(text or ""), "confidence": conf, "agent_speaking": agent_speaking}
