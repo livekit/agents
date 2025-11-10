@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from inspect import istraceback
 from types import FrameType
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
 
 import numpy as np
 import typer
@@ -942,7 +942,7 @@ def prompt(
     return "".join(buffer)
 
 
-UpdateFn = Callable[[Optional[str | Text]], None]
+UpdateFn = Callable[[Optional[Union[str, Text]]], None]
 
 
 @contextmanager

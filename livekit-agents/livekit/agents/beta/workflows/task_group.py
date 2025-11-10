@@ -1,8 +1,17 @@
+from __future__ import annotations
+
 import json
+import sys
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, Self
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
+
+from typing import Annotated, Any
 
 from pydantic import Field
 
