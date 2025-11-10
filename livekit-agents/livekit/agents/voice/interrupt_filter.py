@@ -122,8 +122,12 @@ class InterruptionClassifier:
 
         # Select language-specific sets
         lang = language.lower() if language else None
-        fillers = self._fillers_by_lang.get(lang, self._fillers_default)
-        stops = self._stop_by_lang.get(lang, self._stop_default)
+        if lang is not None:
+            fillers = self._fillers_by_lang.get(lang, self._fillers_default)
+            stops = self._stop_by_lang.get(lang, self._stop_default)
+        else:
+            fillers = self._fillers_default
+            stops = self._stop_default
 
         # Command override
         if any(cmd in text for cmd in stops):
