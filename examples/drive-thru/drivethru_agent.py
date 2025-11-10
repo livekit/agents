@@ -30,8 +30,8 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import cartesia, deepgram, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import cartesia, deepgram, openai
+# from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -398,31 +398,35 @@ async def entrypoint(ctx: JobContext):
     userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
-        stt=deepgram.STT(
-            model="nova-3",
-            keyterms=[
-                "Big Mac",
-                "McFlurry",
-                "McCrispy",
-                "McNuggets",
-                "Meal",
-                "Sundae",
-                "Oreo",
-                "Jalapeno Ranch",
-            ],
-            mip_opt_out=True,
-        ),
-        llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        # tts=elevenlabs.TTS(
-        #     model="eleven_turbo_v2_5",
-        #     voice_id="21m00Tcm4TlvDq8ikWAM",
-        #     voice_settings=elevenlabs.VoiceSettings(
-        #         speed=1.15, stability=0.5, similarity_boost=0.75
-        #     ),
+        # stt=deepgram.STT(
+        #     model="nova-3",
+        #     keyterms=[
+        #         "Big Mac",
+        #         "McFlurry",
+        #         "McCrispy",
+        #         "McNuggets",
+        #         "Meal",
+        #         "Sundae",
+        #         "Oreo",
+        #         "Jalapeno Ranch",
+        #     ],
+        #     mip_opt_out=True,
         # ),
-        tts=cartesia.TTS(voice="f786b574-daa5-4673-aa0c-cbe3e8534c02", speed="fast"),
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
+        # llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
+        # # tts=elevenlabs.TTS(
+        # #     model="eleven_turbo_v2_5",
+        # #     voice_id="21m00Tcm4TlvDq8ikWAM",
+        # #     voice_settings=elevenlabs.VoiceSettings(
+        # #         speed=1.15, stability=0.5, similarity_boost=0.75
+        # #     ),
+        # # ),
+        # tts=cartesia.TTS(voice="f786b574-daa5-4673-aa0c-cbe3e8534c02", speed="fast"),
+        # userdata=Userdata(cal=cal),
+        stt="assemblyai/universal-streaming:en",
+        llm="google/gemini-2.0-flash",
+        tts="cartesia/sonic-3:6ccbfb76-1fc6-48f7-b71d-91ac6298247b",
+        # turn_detection=MultilingualModel(),
+        # vad=silero.VAD.load(),
         max_tool_steps=10,
     )
 

@@ -19,14 +19,39 @@ from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.agents.llm import function_tool
-from livekit.agents.voice.agent import FILLERS 
+# from livekit.agents.voice.agent import FILLERS 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
+# logger = logging.getLogger("basic-agent")
+logging.basicConfig(level=logging.INFO)
 
+
+import os
+
+class FillerManager:
+    def __init__(self) -> None:
+        base = os.getenv("LIVEKIT_IGNORED_FILLERS", "uh,umm,hmm,haan,accha").split(",")
+        self._fillers_by_lang = {
+            "default": {b.strip().lower() for b in base if b.strip()},
+            "hinglish": {"umm", "haan", "hmm", "accha"},
+            "en": {"uh", "umm", "hmm"},
+            "hi": {"haan", "accha"},
+        }
+        self._min_conf = float(os.getenv("LIVEKIT_FILLER_CONFIDENCE", "0.6"))
+
+    def get_all_for(self, lang: str | None):
+        lang = (lang or "default").split("-")[0].lower()
+        merged = set(self._fillers_by_lang.get("default", set()))
+        merged |= self._fillers_by_lang.get("hinglish", set())
+        merged |= self._fillers_by_lang.get(lang, set())
+        return merged
+
+    def get_min_conf(self) -> float:
+        return self._min_conf
 
 class MyAgent(Agent):
     def __init__(self) -> None:
@@ -38,21 +63,6 @@ class MyAgent(Agent):
             "you will speak english to the user",
         )
 
-    async def add_filler_word(self, context: RunContext, word: str, lang: str = "default"):
-        """
-        Add a filler word at runtime so that the agent does not interrupt when it hears it.
-        lang can be something like 'en', 'hi', 'hinglish', or leave default.
-        """
-        FILLERS.add_filler(word, lang)
-        return f"Added filler '{word}' for language '{lang}'."
-
-    @function_tool
-    async def remove_filler_word(self, context: RunContext, word: str, lang: str = "default"):
-        """
-        Remove a filler from the runtime list.
-        """
-        FILLERS.remove_filler(word, lang)
-        return f"Removed filler '{word}' for language '{lang}'."
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
@@ -79,6 +89,7 @@ class MyAgent(Agent):
 
         return "sunny with a temperature of 70 degrees."
 
+FILLERS = FillerManager()
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -93,15 +104,11 @@ async def entrypoint(ctx: JobContext):
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
         stt="assemblyai/universal-streaming:en",
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm="openai/gpt-4.1-mini",
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+        llm="google/gemini-2.0-flash",
+        tts="cartesia/sonic-3:6ccbfb76-1fc6-48f7-b71d-91ac6298247b",
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
+        # turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
@@ -126,7 +133,46 @@ async def entrypoint(ctx: JobContext):
 
     # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)
+    async def _on_transcription(ev):
+        alt = ev.alternatives[0]
+        transcript = (alt.text or "").strip()
+        confidence = getattr(alt, "confidence", None)
+        language = getattr(alt, "language", "default")
 
+        tokens = [t for t in transcript.lower().split() if t]
+        fillers = FILLERS.get_all_for(language)
+        min_conf = FILLERS.get_min_conf()
+
+        def is_filler_only() -> bool:
+            if not tokens:
+                return True
+            return all(tok in fillers for tok in tokens)
+
+        agent_is_speaking = session.is_speaking
+
+        if agent_is_speaking:
+            # explicit commands win
+            if any(k in transcript.lower() for k in ["stop", "wait", "hold on", "no not that"]):
+                logger.info("[interruption] user said stop -> interrupting")
+                session.interrupt_speech()
+                return
+
+            # filler-only → ignore
+            if is_filler_only():
+                logger.debug(f"[ignored filler] {transcript}")
+                return
+
+            # low-confidence background → ignore
+            if confidence is not None and confidence < min_conf:
+                logger.debug(f"[ignored low-conf] {transcript} ({confidence})")
+                return
+
+            # real speech → interrupt
+            logger.info("[interruption] valid user speech -> interrupting")
+            session.interrupt_speech()
+        else:
+            # agent is quiet → let it pass
+            logger.debug(f"[user speech while agent quiet] {transcript}")
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
