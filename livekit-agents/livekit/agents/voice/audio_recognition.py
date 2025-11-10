@@ -1,4 +1,7 @@
 from __future__ import annotations
+from livekit.agents.filler_handler import FillerHandler
+filler_handler = FillerHandler()
+
 
 import asyncio
 import json
@@ -298,8 +301,8 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
-        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            transcript = ev.alternatives[0].text
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
@@ -310,6 +313,39 @@ class AudioRecognition:
 
             if not transcript:
                 return
+
+            # NEW: consult filler handler to decide whether to ignore, interrupt, or register
+            try:
+                # call handler
+                decision = await filler_handler.handle_transcription(transcript, confidence)
+            except Exception:
+                logger.exception("Error running filler handler")
+                decision = "register"
+
+            if decision == "ignore":
+                # ignore filler while agent speaking, do nothing
+                logger.info("FillerHandler ignored transcript: %s", transcript)
+                return
+            elif decision == "interrupt":
+                # Best-effort: try to stop agent TTS if hook supports it
+                logger.info("FillerHandler detected interrupt: %s", transcript)
+                try:
+                    # prefer a specific interrupt hook if available
+                    stop_fn = getattr(self._hooks, "on_interrupt", None) or getattr(self._hooks, "stop_tts", None)
+                    if stop_fn:
+                        result = stop_fn(transcript)
+                        if asyncio.iscoroutine(result):
+                            await result
+                except Exception:
+                    logger.exception("Error while attempting to stop TTS on interrupt")
+
+                # forward this final transcript immediately for processing
+                try:
+                    self._hooks.on_final_transcript(ev)
+                except Exception:
+                    logger.exception("Error forwarding final transcript after interrupt")
+                return
+            # else decision == "register": proceed as normal
 
             self._hooks.on_final_transcript(ev)
             logger.debug(
@@ -325,6 +361,7 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
             self._final_transcript_received.set()
+
 
             if not self._vad or self._last_speaking_time == 0:
                 # vad disabled, use stt timestamp
