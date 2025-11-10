@@ -1,4 +1,5 @@
 import logging
+import weakref
 
 from dotenv import load_dotenv
 
@@ -18,6 +19,8 @@ from livekit.agents import (
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+from extensions.filler_aware_adapter import FillerAwareAdapter
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -85,7 +88,7 @@ async def entrypoint(ctx: JobContext):
         tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
+        turn_detection=MultilingualModel(unlikely_threshold=0.80),
         vad=ctx.proc.userdata["vad"],
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
@@ -93,10 +96,37 @@ async def entrypoint(ctx: JobContext):
         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
         # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
-        false_interruption_timeout=1.0,
+        false_interruption_timeout=0.2,
     )
 
-    # log metrics as they are emitted, and total usage after session is over
+    # ============================================================
+    # AGENT-SPEAKING DETECTION 
+    # ============================================================
+
+    session_ref = weakref.ref(session)
+    def is_agent_speaking():
+        s = session_ref()
+        if not s:
+            return False
+
+        ao = getattr(s, "_audio_out", None)
+        if ao and hasattr(ao, "is_speaking"):
+            return bool(ao.is_speaking)
+
+        return False
+
+
+    # ============================================================
+    # WRAP THE STT WITH FILLER-AWARE ADAPTER
+    # ============================================================
+
+    original_stt = session._stt
+    session._stt = FillerAwareAdapter(original_stt, is_agent_speaking)
+
+    # ============================================================
+    # METRICS & USAGE LOGGING
+    # ============================================================
+
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
