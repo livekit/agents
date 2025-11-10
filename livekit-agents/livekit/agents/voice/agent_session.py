@@ -454,6 +454,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        record: bool = True,
     ) -> RunResult: ...
 
     @overload
@@ -465,6 +466,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        record: bool = True,
     ) -> None: ...
 
     async def start(
@@ -487,6 +489,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
+            record: Whether to record the audio
         """
         async with self._lock:
             if self._started:
