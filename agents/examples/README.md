@@ -1,155 +1,79 @@
-# 🧠 SalesCode.ai Final Round — LiveKit Voice Interruption Handling Challenge
+# LiveKit Agents Examples
 
-**Author:** Ashvin Patidar (IIT Kanpur)  
-**Branch:** `feature/livekit-interrupt-handler-ashvin`
+This directory contains various examples demonstrating different capabilities and use cases for LiveKit agents. Each example showcases specific features, integrations, or workflows that can be built with the LiveKit Agents framework.
 
----
+## 📁 Example Categories
 
-## 1️⃣ What Changed
+### 🎙️ [Voice Agents](./voice_agents/)
 
-This project adds a new **extension layer** to the LiveKit agent for intelligent real-time voice interruption handling.
+A comprehensive collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, and advanced features like multi-agent workflows and push-to-talk agents.
 
-### 🔧 New Modules & Logic
-- **`agents/extensions/interrupt_handler.py`** — custom module implementing a class `InterruptHandler` to:
-  - Track when the AI agent is speaking (`set_agent_state()`).
-  - Handle transcription events from ASR and classify input as filler vs. real interruption.
-  - Maintain a configurable list of filler words (`ignored_words`).
-  - Return `None` for fillers or low-confidence inputs, and the text itself for valid user commands.
-  - Log every processed phrase for debugging (`ignored_filler`, `ignored_low_conf`, `valid_interrupt`).
+### 🖼️ [Avatar Agents](./avatar_agents/)
 
-- **Integration:**  
-  Inserted event-level logic inside  
-  `agents/examples/frontdesk/frontdesk_agent.py → entrypoint()`  
-  to call the `InterruptHandler` during live session events.
+Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Bey, BitHuman, Hedra, Simli, and Tavus.
 
-### 🧩 Code Added to `frontdesk_agent.py`
-```python
-# Initialize filler-word handler
-interrupt_handler = InterruptHandler()
+### 🔄 [Warm Transfer](./warm-transfer/)
 
-# Subscribe to LiveKit session events
-async for event in session.events():
-    if event.type == "playback_started":
-        interrupt_handler.set_agent_state(True)
-    elif event.type == "playback_finished":
-        interrupt_handler.set_agent_state(False)
-    elif event.type == "transcription":
-        text = event.text
-        confidence = getattr(event, "confidence", 0.9)
-        result = await interrupt_handler.handle_transcript(text, confidence)
-        if result:
-            print(f"🛑 Interruption detected: '{result}'")
-            await session.stop_playback()
-No changes were made to the LiveKit SDK or base logic — only an external extension layer was added.
+Demonstrates supervisor escalation workflows for call centers, showing how to implement warm transfers where agents can brief supervisors before connecting them to customers.
 
-2️⃣ What Works (Test Results)
-Feature	Verified Behavior
-Ignore filler words during agent speech	✅ “uh”, “umm”, “hmm”, “haan” ignored
-Detect real interruption commands	✅ “stop”, “wait”, “no not that one” stops playback
-Register fillers when agent is silent	✅ Works correctly
-Dynamic filler list modification	✅ Supported at runtime
-Logging and confidence thresholding	✅ Confirmed in console logs
-Async safety / concurrency	✅ Stable during multiple events
+### 🚗 [Drive-Thru](./drive-thru/)
 
-🧪 Local Simulation Test (voice_agent_interrupt.py)
-Output example:
+A complete drive-thru ordering system example that showcases interactive voice agents for food ordering with database integration and order management.
 
-csharp
-Copy code
-[STATE] Agent speaking: True
-[IGNORED: filler] 'uh'
-[IGNORED: filler] 'umm'
-[INTERRUPT] 'stop'
-✅ Detected real user interruption: stop
-[STATE] Agent speaking: False
-[INTERRUPT] 'umm'
-[INTERRUPT] 'haan okay'
-✅ Detected real user interruption: haan okay
-All tests confirm robust performance both standalone and integrated with LiveKit.
+### 🏢 [Front Desk](./frontdesk/)
 
-3️⃣ Known Issues
-Issue / Edge Case	Description
-Multi-language filler detection	Currently limited to English + small Hindi filler list (e.g., “haan”)
-Fixed confidence threshold	Static value (0.6) — could be user-configurable
-Background noise	May occasionally trigger low-confidence events if ASR misfires
-Real-time mic testing	Requires correct LiveKit setup and working audio device
+A front desk agent example demonstrating how to build customer service agents with calendar integration and appointment management capabilities.
 
-None of these affect core logic or functionality during evaluation.
+### 🔧 [Primitives](./primitives/)
 
-4️⃣ Steps to Test
-🧩 A. Test Logic Without LiveKit
-bash
-Copy code
-python -m agents.examples.voice_agent_interrupt
-Expected Behavior
+Basic building blocks and fundamental examples showing core LiveKit concepts like room connections, participant management, and basic audio/video handling.
 
-Input	Result
-“uh”, “umm”, “hmm”, “haan”	Ignored
-“stop”, “wait one second”	Interruption detected
-Filler while agent silent	Logged as normal text
+### 🛠️ [Other](./other/)
 
-🧩 B. Test Integrated LiveKit Agent
-bash
-Copy code
-python agents/examples/frontdesk/frontdesk_agent.py
-Then speak during playback:
+Additional examples including text-only agents, various TTS providers, transcription services, and translation utilities.
 
-You Say	Expected Outcome
-“uh”, “umm”, “haan”	AI continues speaking
-“stop”, “wait”, “no not that one”	AI stops immediately
-Random short noise	Ignored if low-confidence
+## Running Examples
 
-To verify:
+To run the examples, you'll need:
 
-Watch console logs for [IGNORED: filler] or 🛑 Interruption detected: messages.
+- A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
+- API keys for the model providers you want to use in a `.env` file
+- Python 3.9 or higher
+- [uv](https://docs.astral.sh/uv/)
 
-Ensure the AI’s TTS stops when valid command detected.
+### Environment file
 
-5️⃣ Environment Details
-Component	Version / Tool
-Python	3.10+
-LiveKit Agents	Latest (GitHub)
-ASR	Deepgram
-TTS	Cartesia
-LLM	OpenAI GPT-4o
-VAD	Silero
-Calendar API	Cal.com / FakeCalendar
-Additional Libs	dotenv, asyncio, numpy, sounddevice, pyaudio
+Create a `.env` file in the `examples` directory and add your API keys (see `examples/.env.example`):
 
-📦 Requirements File
-requirements.txt
+```bash
+LIVEKIT_URL="wss://your-project.livekit.cloud"
+LIVEKIT_API_KEY="your_api_key"
+LIVEKIT_API_SECRET="your_api_secret"
+OPENAI_API_KEY="sk-xxx" # or any other model provider API key
+# ... other model provider API keys as needed
+```
 
-txt
-Copy code
-livekit-agents>=0.5.0
-numpy>=1.24.0
-asyncio
-sounddevice
-SpeechRecognition
-pyaudio
-python-dotenv
-🖥️ Setup
-bash
-Copy code
-git clone https://github.com/ashvinpatidar13/agents.git
-cd agents
-python3 -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+### Install dependencies
 
+From the repository root, run the following command:
 
-💾 Submission
-Submission Link:
-🔗 https://github.com/ashvinpatidar13/agents/tree/feature/livekit-interrupt-handler-ashvin
+```bash
+uv sync --all-extras --dev
+```
 
+### Running an individual example
 
-🏁 Summary
-✅ Extension logic working end-to-end
-✅ Integrated cleanly into LiveKit example
-✅ No SDK modification
-✅ Fully documented, reproducible, and testable
+Run an example agent:
 
-Developed by:
-Ashvin Patidar
-Department of Civil Engineering, IIT Kanpur
-For SalesCode.ai Final Round Qualifier
+```bash
+uv run examples/voice_agents/basic_agent.py console
+```
+
+Your agent is now running in the console.
+
+For frontend support, use the [Agents playground](https://agents-playground.livekit.io) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
+
+## 📖 Additional Resources
+
+- [LiveKit Documentation](https://docs.livekit.io/)
+- [LiveKit Agents Documentation](https://docs.livekit.io/agents/)

@@ -9,7 +9,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 from agents.extensions.interrupt_handler import InterruptHandler
 
-
+# ensure relative imports resolve correctly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
@@ -65,16 +65,9 @@ class FrontDeskAgent(Agent):
 
     @function_tool
     async def schedule_appointment(
-        self,
-        ctx: RunContext[Userdata],
-        slot_id: str,
+        self, ctx: RunContext[Userdata], slot_id: str,
     ) -> str | None:
-        """
-        Schedule an appointment at the given slot.
-
-        Args:
-            slot_id: The identifier for the selected time slot (as shown in the list of available slots).
-        """
+        """Schedule an appointment at the given slot."""
         if not (slot := self._slots_map.get(slot_id)):
             raise ToolError(f"error: slot {slot_id} was not found")
 
@@ -90,8 +83,6 @@ class FrontDeskAgent(Agent):
                 start_time=slot.start_time, attendee_email=email_result.email_address
             )
         except SlotUnavailableError:
-            # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
-            # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
         local = slot.start_time.astimezone(self.tz)
@@ -99,20 +90,9 @@ class FrontDeskAgent(Agent):
 
     @function_tool
     async def list_available_slots(
-        self, ctx: RunContext[Userdata], range: Literal["+2week", "+1month", "+3month", "default"]
+        self, ctx: RunContext[Userdata], range: Literal["+2week", "+1month", "+3month", "default"],
     ) -> str:
-        """
-        Return a plain-text list of available slots, one per line.
-
-        <slot_id> – <Weekday>, <Month> <Day>, <Year> at <HH:MM> <TZ> (<relative time>)
-
-        You must infer the appropriate ``range`` implicitly from the
-        conversational context and **must not** prompt the user to pick a value
-        explicitly.
-
-        Args:
-            range: Determines how far ahead to search for free time slots.
-        """
+        """Return a plain-text list of available slots, one per line."""
         now = datetime.datetime.now(self.tz)
         lines: list[str] = []
 
@@ -122,6 +102,8 @@ class FrontDeskAgent(Agent):
             range_days = 30
         elif range == "+3month":
             range_days = 90
+        else:
+            range_days = 14
 
         for slot in await ctx.userdata.cal.list_available_slots(
             start_time=now, end_time=now + datetime.timedelta(days=range_days)
@@ -157,12 +139,14 @@ class FrontDeskAgent(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    # --- Initialize interrupt handler ---
     interrupt_handler = InterruptHandler()
 
     timezone = "utc"
 
+    # --- Calendar setup ---
     if cal_api_key := os.getenv("CAL_API_KEY", None):
-        logger.info("CAL_API_KEY detected, using cal.com calendar")
+        logger.info("CAL_API_KEY detected, using Cal.com calendar")
         cal = CalComCalendar(api_key=cal_api_key, timezone=timezone)
     else:
         logger.warning(
@@ -172,37 +156,42 @@ async def entrypoint(ctx: JobContext):
 
     await cal.initialize()
 
+    # --- Create Agent Session ---
     session = AgentSession[Userdata](
         userdata=Userdata(cal=cal),
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        tts=cartesia.TTS(voice="39b376fc-488e-4d0c-8b37-e00b72059fdd", speed="fast", api_key=os.getenv("CARTESIA_API_KEY")),
+        tts=cartesia.TTS(
+            voice="39b376fc-488e-4d0c-8b37-e00b72059fdd",
+            speed="fast",
+            api_key=os.getenv("CARTESIA_API_KEY"),
+        ),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,
     )
 
     await session.start(agent=FrontDeskAgent(timezone=timezone), room=ctx.room)
-        # Subscribe to events and integrate the interrupt handler
+
+    # --- Integrate interrupt handler with session events ---
     async for event in session.events():
-        # Track when the agent starts or stops speaking
         if event.type == "playback_started":
             interrupt_handler.set_agent_state(True)
 
         elif event.type == "playback_finished":
             interrupt_handler.set_agent_state(False)
 
-        # When user speech is transcribed
         elif event.type == "transcription":
-            text = event.text
+            text = getattr(event, "text", "").strip()
             confidence = getattr(event, "confidence", 0.9)
 
-            result = await interrupt_handler.handle_transcript(text, confidence)
+            if not text:
+                continue
 
+            result = await interrupt_handler.handle_transcript(text, confidence)
             if result:
                 print(f"🛑 Interruption detected: '{result}'")
-                await session.stop_playback()  # stop TTS immediately
-
+                await session.stop_playback()  # Immediately stop TTS
 
 
 if __name__ == "__main__":
