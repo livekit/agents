@@ -5,7 +5,7 @@ import click
 from .. import utils
 from ..log import logger
 from ..plugin import Plugin
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..worker import WorkerOptions, SimulateJobInfo
 from ..job import JobExecutorType
 from . import proto, _run

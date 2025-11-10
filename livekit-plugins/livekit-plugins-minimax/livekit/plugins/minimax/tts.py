@@ -20,7 +20,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.agents_types import NOT_GIVEN, NotGivenOr
 
 from .log import logger
 

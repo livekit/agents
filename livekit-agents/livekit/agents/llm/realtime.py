@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
 from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
 

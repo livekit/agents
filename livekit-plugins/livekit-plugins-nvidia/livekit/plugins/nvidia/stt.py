@@ -14,7 +14,7 @@ from livekit.agents import (
     APIConnectOptions,
     stt,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.agents_types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
 from . import auth

@@ -25,7 +25,7 @@ from opentelemetry import trace
 from .. import llm
 from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .speech_handle import SpeechHandle
 

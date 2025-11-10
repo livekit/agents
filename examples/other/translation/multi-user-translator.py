@@ -37,7 +37,7 @@ from livekit.agents import (
     utils,
     voice,
 )
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,

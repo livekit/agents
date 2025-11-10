@@ -20,7 +20,7 @@ from typing import Literal
 import aiohttp
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts, utils
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

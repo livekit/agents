@@ -25,7 +25,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.agents.agents_types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,

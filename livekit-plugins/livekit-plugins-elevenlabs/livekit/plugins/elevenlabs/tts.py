@@ -36,7 +36,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.tokenize.basic import split_words
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.agents_types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 

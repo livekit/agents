@@ -28,7 +28,7 @@ from ..metrics import (
 )
 from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .agent import (
     Agent,

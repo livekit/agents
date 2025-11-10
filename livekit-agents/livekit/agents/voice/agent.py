@@ -17,7 +17,7 @@ from ..llm import (
 )
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .speech_handle import SpeechHandle
 

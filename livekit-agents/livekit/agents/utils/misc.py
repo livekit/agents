@@ -7,7 +7,7 @@ from typing import TypeVar
 
 from typing_extensions import TypeGuard
 
-from ..types import NotGiven, NotGivenOr
+from ..agents_types import NotGiven, NotGivenOr
 
 _T = TypeVar("_T")
 

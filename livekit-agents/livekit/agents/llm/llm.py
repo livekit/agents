@@ -22,7 +22,7 @@ from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
 from ..telemetry.traces import _chat_ctx_to_otel_events
-from ..types import (
+from ..agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

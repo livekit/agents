@@ -8,7 +8,7 @@ import fal_client
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     NOT_GIVEN,
     NotGivenOr,
 )

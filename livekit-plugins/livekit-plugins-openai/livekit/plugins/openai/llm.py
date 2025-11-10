@@ -27,7 +27,7 @@ from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

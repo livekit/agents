@@ -28,7 +28,7 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.agents_types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
 from .models import TTSModels, TTSVoices

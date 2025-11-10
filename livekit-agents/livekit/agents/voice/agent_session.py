@@ -29,7 +29,7 @@ from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import (
+from ..agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

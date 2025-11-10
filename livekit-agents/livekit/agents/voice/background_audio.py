@@ -15,7 +15,7 @@ from livekit import rtc
 
 from ..cli import cli
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, log_exceptions
 from ..utils.aio import cancel_and_wait
 from ..utils.audio import audio_frames_from_file

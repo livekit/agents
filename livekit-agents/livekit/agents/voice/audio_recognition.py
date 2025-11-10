@@ -15,7 +15,7 @@ from livekit import rtc
 from .. import llm, stt, utils, vad
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from . import io
 from .agent import ModelSettings

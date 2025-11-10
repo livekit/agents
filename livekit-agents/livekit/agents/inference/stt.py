@@ -15,7 +15,7 @@ from livekit import rtc
 from .. import stt, utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..agents_types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._utils import create_access_token
 

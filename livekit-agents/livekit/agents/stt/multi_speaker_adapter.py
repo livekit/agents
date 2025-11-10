@@ -10,7 +10,7 @@ from livekit import rtc
 
 from .. import utils
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..agents_types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.audio import AudioByteStream
 from .stt import STT, RecognizeStream, SpeechData, SpeechEvent, SpeechEventType
 

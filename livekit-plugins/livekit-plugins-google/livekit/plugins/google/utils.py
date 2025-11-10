@@ -16,7 +16,7 @@ from livekit.agents.llm.tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.agents_types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger

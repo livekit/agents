@@ -12,7 +12,7 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
+from ..agents_types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
 from .stream_adapter import StreamAdapter
 from .tts import (

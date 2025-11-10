@@ -14,7 +14,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.agents_types import DEFAULT_API_CONNECT_OPTIONS
 
 from . import auth
 

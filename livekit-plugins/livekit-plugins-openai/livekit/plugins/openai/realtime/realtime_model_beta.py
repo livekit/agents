@@ -26,7 +26,7 @@ from livekit.agents.llm.tool_context import (
 )
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

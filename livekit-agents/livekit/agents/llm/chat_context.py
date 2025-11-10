@@ -25,7 +25,7 @@ from livekit import rtc
 
 from .. import utils
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import _provider_format
 

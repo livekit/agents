@@ -7,7 +7,7 @@ import openai
 from openai.types import ReasoningEffort
 
 from livekit.agents.llm import ToolChoice
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     NOT_GIVEN,
     NotGivenOr,
 )

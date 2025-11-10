@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..agents_types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import FunctionTool, RawFunctionTool, ToolChoice

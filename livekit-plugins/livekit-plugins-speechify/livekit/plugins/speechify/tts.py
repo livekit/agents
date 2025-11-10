@@ -30,7 +30,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,

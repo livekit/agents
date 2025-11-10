@@ -40,7 +40,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
+from livekit.agents.agents_types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 
 from .log import logger

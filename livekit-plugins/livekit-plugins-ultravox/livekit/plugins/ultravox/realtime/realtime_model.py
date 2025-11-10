@@ -23,7 +23,7 @@ from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
-from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
+from livekit.agents.agents_types import NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ..log import logger

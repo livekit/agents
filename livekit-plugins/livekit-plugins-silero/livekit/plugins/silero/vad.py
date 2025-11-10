@@ -27,7 +27,7 @@ import onnxruntime  # type: ignore
 
 from livekit import agents, rtc
 from livekit.agents import utils
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     NOT_GIVEN,
     NotGivenOr,
 )

@@ -32,7 +32,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     NOT_GIVEN,
     NotGivenOr,
 )

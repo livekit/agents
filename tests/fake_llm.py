@@ -18,7 +18,7 @@ from livekit.agents.llm import (
     RawFunctionTool,
     ToolChoice,
 )
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

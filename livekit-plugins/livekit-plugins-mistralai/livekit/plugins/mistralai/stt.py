@@ -25,7 +25,7 @@ from livekit.agents import (
     APITimeoutError,
     stt,
 )
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     NOT_GIVEN,
     NotGivenOr,
 )

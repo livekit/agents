@@ -5,7 +5,7 @@ from collections.abc import AsyncIterable
 from typing import Any
 
 from .. import tokenize, utils
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..agents_types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .stream_pacer import SentenceStreamPacer
 from .tts import (
     TTS,

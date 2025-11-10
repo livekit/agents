@@ -10,7 +10,7 @@ from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..agents_types import NOT_GIVEN, NotGivenOr
 from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?

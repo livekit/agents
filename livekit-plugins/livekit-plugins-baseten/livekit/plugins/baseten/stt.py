@@ -35,7 +35,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.stt import SpeechEvent
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.agents_types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger

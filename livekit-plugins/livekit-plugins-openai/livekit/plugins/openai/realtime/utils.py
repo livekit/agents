@@ -5,7 +5,7 @@ from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
-from livekit.agents.types import (
+from livekit.agents.agents_types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
