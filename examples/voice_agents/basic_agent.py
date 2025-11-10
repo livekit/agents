@@ -1,4 +1,7 @@
 import logging
+import os  # <-- ADD THIS
+import json  # <-- ADD THIS
+from typing import Optional, List  # <-- ADD THIS
 
 from dotenv import load_dotenv
 
@@ -24,17 +27,24 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
+# ADD THIS LINE TO ENABLE DEBUG LOGS
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)-8s %(message)s")
+
 load_dotenv()
 
 
 class MyAgent(Agent):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        ignored_fillers: Optional[List[str]] = None,  # <-- 1. ACCEPT THE LIST
+    ) -> None:
         super().__init__(
             instructions="Your name is Kelly. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
             "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor."
             "you will speak english to the user",
+            ignored_fillers=ignored_fillers,  # <-- 2. PASS TO BASE AGENT
         )
 
     async def on_enter(self):
@@ -73,6 +83,20 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+
+    # --- 3. READ THE ENVIRONMENT VARIABLE ---
+    ignored_fillers_json = os.environ.get("IGNORED_FILLERS")
+    ignored_fillers = None
+    if ignored_fillers_json:
+        try:
+            ignored_fillers = json.loads(ignored_fillers_json)
+            logger.info(f"Loaded ignored fillers: {ignored_fillers}")
+        except json.JSONDecodeError:
+            logger.warning("Could not parse IGNORED_FILLERS. Using defaults.")
+    else:
+        logger.info("IGNORED_FILLERS not set. Using defaults.")
+    # --- END NEW SECTION ---
+
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
@@ -112,7 +136,7 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=MyAgent(),
+        agent=MyAgent(ignored_fillers=ignored_fillers),  # <-- 4. PASS THE LIST HERE
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # uncomment to enable Krisp BVC noise cancellation

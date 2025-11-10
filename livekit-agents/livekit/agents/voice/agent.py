@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, List  # <-- MODIFY THIS LINE
 
 from livekit import rtc
 
@@ -49,6 +49,7 @@ class Agent:
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        ignored_fillers: NotGivenOr[List[str] | None] = NOT_GIVEN,  # <-- ADD THIS
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -74,6 +75,7 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
+        self._ignored_fillers = ignored_fillers  # <-- ADD THIS
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
@@ -559,6 +561,25 @@ class Agent:
         """
         return self._allow_interruptions
 
+    # <-- ADD THIS NEW PROPERTY -->
+    @property
+    def ignored_fillers(self) -> NotGivenOr[List[str] | None]:
+        """
+        Retrieves the list of filler words to ignore during an interruption.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a value,
+        the session's value will be used at runtime instead.
+
+        Returns:
+           NotGivenOr[list[str] | None]: An optional list of filler word
+        """   
+        return self._ignored_fillers   
+             
+        
+        
+    
+    # <-- END OF NEW PROPERTY -->
+
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:
         """
@@ -633,6 +654,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        ignored_fillers: NotGivenOr[List[str] | None] = NOT_GIVEN,  # <-- ADD THIS
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
@@ -648,6 +670,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             tts=tts,
             mcp_servers=mcp_servers,
             allow_interruptions=allow_interruptions,
+            ignored_fillers=ignored_fillers,  # <-- ADD THIS
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
         )

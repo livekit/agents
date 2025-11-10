@@ -8,7 +8,10 @@ import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
+import string  # <-- ADD THIS
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, List, Set  # <-- MODIFY THIS
 
+from opentelemetry import context as otel_context, trace
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
@@ -93,6 +96,21 @@ class AgentActivity(RecognitionHooks):
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
+
+        # --- ADDED FOR INTERRUPTIONS ---
+        self._pending_interruption: bool = False
+        self._ignored_fillers: Set[str]
+
+        default_fillers = {"uh", "umm", "hmm", "haan"}
+        ignored_fillers_config = self._agent.ignored_fillers
+
+        if is_given(ignored_fillers_config) and ignored_fillers_config is not None:
+            self._ignored_fillers = set(txt.lower().strip() for txt in ignored_fillers_config)
+            logger.debug(f"Loaded {len(self._ignored_fillers)} custom filler words.")
+        else:
+            self._ignored_fillers = default_fillers
+            logger.debug("Using default filler words.")
+        # --- END ADDED SECTION ---
 
         self._started = False
         self._closed = False
@@ -696,6 +714,33 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             self._agent._activity = None
+    # --- ADD THIS NEW METHOD ---
+    def _is_filler_only(self, text: str) -> bool:
+        """Check if the transcribed text contains only filler words."""
+        cleaned_text = text.lower().strip().strip(string.punctuation)
+        if not cleaned_text:
+            return True  # Ignore empty transcripts
+
+        words = cleaned_text.split()
+        if not words:
+            return True # No words, just filler
+
+        for word in words:
+            # Check if the transcribed word *starts with* any of our fillers.
+            # This handles "umm" as well as "ummmm" or "uhhh".
+            is_filler = False
+            for filler in self._ignored_fillers:
+                if word.startswith(filler):
+                    is_filler = True
+                    break  # This word is a filler, check the next word
+            
+            if not is_filler:
+                # This word is NOT a filler, so this is a real interruption
+                return False
+        
+        # If we got here, all words started with one of our fillers.
+        logger.debug(f"Detected filler-only text: {text}")
+        return True      
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
@@ -1155,6 +1200,14 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
 
+        if self._current_speech and not self._current_speech.interrupted:
+            # Agent is speaking, this is a *potential* interruption.
+            self._pending_interruption = True
+            logger.debug("Potential interruption detected, waiting for STT.")
+        else:
+            # Agent is quiet, this is a normal turn.
+            self._pending_interruption = False    
+
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
         if ev:
@@ -1163,6 +1216,11 @@ class AgentActivity(RecognitionHooks):
             "listening",
             last_speaking_time=speech_end_time,
         )
+        if self._pending_interruption:
+            # User stopped talking, and we were pending an interruption.
+            # This means they *only* said fillers (or nothing transcribed).
+            logger.debug("VAD ended on a pending (filler) interruption. Resetting.")
+            self._pending_interruption = False
 
         if (
             self._paused_speech
@@ -1177,25 +1235,81 @@ class AgentActivity(RecognitionHooks):
             return
 
         if ev.speech_duration >= self._session.options.min_interruption_duration:
-            self._interrupt_by_audio_activity()
+            # self._interrupt_by_audio_activity() # <-- REMOVED
+            logger.debug("VAD inference done, but waiting for STT to validate interruption.")
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
-        self._session._user_input_transcribed(
-            UserInputTranscribedEvent(
-                language=ev.alternatives[0].language,
-                transcript=ev.alternatives[0].text,
-                is_final=False,
-                speaker_id=ev.alternatives[0].speaker_id,
-            ),
-        )
+        # --- THIS IS THE MINIMUM CONFIDENCE FOR AN INTERRUPTION ---
+        MIN_CONFIDENCE_THRESHOLD = 0.5
 
-        if ev.alternatives[0].text:
+        if not ev.alternatives:
+            return  # No transcription data
+
+        alternative = ev.alternatives[0]
+        transcript = alternative.text
+        confidence = alternative.confidence
+
+        if not self._pending_interruption:
+            # --- AGENT IS QUIET ---
+            # This is a normal user turn. Emit the transcript.
+            self._session._user_input_transcribed(
+                UserInputTranscribedEvent(
+                    language=alternative.language,
+                    transcript=transcript,
+                    is_final=False,
+                    speaker_id=alternative.speaker_id,
+                ),
+            )
+            return  # Not an interruption, so we are done.
+
+        # --- AGENT IS SPEAKING (pending_interruption is True) ---
+
+        if not transcript:
+            return  # Nothing to check
+
+        if self._is_filler_only(transcript):
+            # --- SCENARIO 1: FILLER WORD ---
+            # User said "uh", "hmm". Log it and do nothing.
+            logger.debug(f"Ignored filler interruption: '{transcript}'")
+        
+        # --- NEW LOGIC ADDED BELOW ---
+        elif confidence < MIN_CONFIDENCE_THRESHOLD:
+            # --- SCENARIO 2: MURMURING / NOISE ---
+            # STT transcribed *something* (like "yeah") but has low confidence.
+            # Treat this as background noise and do nothing.
+            logger.debug(
+                f"Ignored low-confidence murmur: '{transcript}' (Confidence: {confidence:.2f})"
+            )
+        # --- END NEW LOGIC ---
+
+        else:
+            # --- SCENARIO 3: REAL INTERRUPTION ---
+            # User said a real word ("wait", "stop") with high confidence.
+            logger.info(
+                f"Valid interruption detected: '{transcript}' (Confidence: {confidence:.2f})"
+            )
+
+            # 1. Mark as no longer pending
+            self._pending_interruption = False
+
+            # 2. Emit the transcript that caused the interruption
+            self._session._user_input_transcribed(
+                UserInputTranscribedEvent(
+                    language=alternative.language,
+                    transcript=transcript,
+                    is_final=False,
+                    speaker_id=alternative.speaker_id,
+                ),
+            )
+
+            # 3. Perform the interruption
             self._interrupt_by_audio_activity()
 
+            # 4. Handle false interruption logic (from original code)
             if (
                 speaking is False
                 and self._paused_speech
@@ -1208,6 +1322,19 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
+        transcript = ev.alternatives[0].text
+        if self._pending_interruption:
+            # We were pending, and this is the final transcript.
+            # Check if it's *only* a filler.
+            if self._is_filler_only(transcript):
+                logger.debug(f"Ignored final filler transcript: '{transcript}'")
+                self._pending_interruption = False  # Reset flag
+                # DO NOT emit transcript, DO NOT interrupt.
+                return  # Stop here.
+
+        # If not pending, or if it was a real interruption (already handled by interim),
+        # proceed as normal.
+        self._pending_interruption = False  # Reset flag
 
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
