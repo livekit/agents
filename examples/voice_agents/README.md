@@ -210,7 +210,7 @@ nano .env
 **Configuration Options:**
 ```bash
 # Filler words to ignore (comma-separated)
-IGNORED_FILLER_WORDS=uh,um,umm,hmm,haan,yeah,huh,mhm,mm
+IGNORED_FILLER_WORDS=uh,um,umm,hmm,haan,yeah,huh,mhm,mm,acha,achha,ooh,oo,ah,oh,er,erm,theek,bas,arre,haan ji,oof,phew,hmph
 
 # Other settings
 FALSE_INTERRUPTION_TIMEOUT=1.0
@@ -486,10 +486,13 @@ Connected but no audio from agent.
 
 **Key Methods:**
 
-1. **`__init__(ignored_words)`**
+1. **`__init__(ignored_words, confidence_threshold, min_word_length)`**
    - Initializes handler with filler word list
    - Sets up statistics tracking
-   - Defaults: ['uh', 'um', 'umm', 'hmm', 'haan', 'yeah', 'huh', 'mhm', 'mm']
+   - Defaults: ['uh', 'um', 'umm', 'hmm', 'haan', 'yeah', 'huh', 'mhm', 'mm', 'acha', 'achha', 'ooh', 'oo', 'ah', 'oh', 'er', 'erm', 'theek', 'bas', 'arre', 'haan ji', 'oof', 'phew', 'hmph', 'ach']
+   - Confidence threshold: 0.5 (filters low-confidence background murmurs)
+   - Min word length: 3 (filters partial/incomplete words like "ach")
+   - Valid short words whitelist: {'stop', 'wait'} (always treated as valid)
 
 2. **`update_agent_state(new_state)`**
    - Called when agent state changes
@@ -860,8 +863,10 @@ TTS_PROVIDER=cartesia/sonic-2
 ```
 
 **Handler Configuration:**
-- `ignored_words: list[str]` - Filler words to filter
-- `confidence_threshold: float` - Minimum confidence (future use)
+- `ignored_words: list[str]` - Filler words to filter (default: 24 common fillers)
+- `confidence_threshold: float` - Minimum confidence for processing (default: 0.5)
+- `min_word_length: int` - Minimum word length to be considered valid (default: 3)
+- `valid_short_words: set[str]` - Whitelist of short valid words like "stop", "wait"
 
 #### **Logic Added**
 
@@ -869,11 +874,13 @@ TTS_PROVIDER=cartesia/sonic-2
 ```
 1. Normalize transcript (lowercase, remove punctuation, tokenize)
 2. Check if transcript is empty → IGNORE
-3. Check if agent is NOT speaking → PROCESS (allow all speech)
-4. Check if agent IS speaking:
+3. Check if confidence < threshold (0.5) during agent speech → IGNORE (low confidence)
+4. Check if agent is NOT speaking → PROCESS (allow all speech)
+5. Check if agent IS speaking:
    a. If transcript contains ONLY fillers → IGNORE
-   b. If transcript contains ANY real words → PROCESS
-5. Return InterruptionDecision with reasoning
+   b. If all words are short (< 3 chars) and not whitelisted → IGNORE (partial words)
+   c. If transcript contains ANY real words (≥3 chars or whitelisted) → PROCESS
+6. Return InterruptionDecision with reasoning
 ```
 
 **Event Integration:**

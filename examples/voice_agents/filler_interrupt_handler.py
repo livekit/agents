@@ -57,19 +57,28 @@ class FillerInterruptionHandler:
             logger.info(f"Ignoring filler: {decision.reason}")
     """
     
-    def __init__(self, ignored_words: list[str] | None = None, confidence_threshold: float = 0.0):
+    def __init__(self, ignored_words: list[str] | None = None, confidence_threshold: float = 0.5, min_word_length: int = 3):
         """
         Initialize the filler interruption handler.
         
         Args:
             ignored_words: List of filler words to ignore during agent speech.
                           Defaults to common English fillers.
-            confidence_threshold: Minimum confidence for processing (future use)
+            confidence_threshold: Minimum confidence for processing (0.0 to 1.0).
+                                 Transcripts below this are treated as background noise.
+                                 Default: 0.5
+            min_word_length: Minimum length for a word to be considered valid speech.
+                           Words shorter than this (except whitelisted ones) are ignored.
+                           Default: 3
         """
-        default_fillers = ['uh', 'um', 'umm', 'hmm', 'haan', 'yeah', 'huh', 'mhm', 'mm']
+        default_fillers = ['uh', 'um', 'umm', 'hmm', 'haan', 'yeah', 'huh', 'mhm', 'mm', 'acha', 'achha', 'ooh', 'oo', 'ah', 'oh', 'er', 'erm', 'theek', 'bas', 'arre', 'haan ji', 'oof', 'phew', 'hmph', 'ach']
         self.ignored_words: Set[str] = set(
             word.lower().strip() for word in (ignored_words or default_fillers)
         )
+        
+        # Whitelist of short words that ARE valid (even if < min_word_length)
+        self.valid_short_words: Set[str] = {'stop', 'wait'}
+        self.min_word_length = min_word_length
         self.confidence_threshold = confidence_threshold
         self.current_agent_state: str = "idle"
         
@@ -77,12 +86,15 @@ class FillerInterruptionHandler:
         self.stats = {
             'total_transcripts': 0,
             'ignored_fillers': 0,
+            'ignored_low_confidence': 0,
+            'ignored_short_words': 0,
             'valid_interruptions': 0,
             'processed_while_idle': 0,
         }
         
         logger.info(f"FillerInterruptionHandler initialized with {len(self.ignored_words)} filler words")
         logger.info(f"Ignored words: {sorted(self.ignored_words)}")
+        logger.info(f"Min word length: {min_word_length} (whitelisted short words: {self.valid_short_words})")
     
     def update_agent_state(self, new_state: str) -> None:
         """
@@ -160,9 +172,22 @@ class FillerInterruptionHandler:
             words: List of normalized words
             
         Returns:
-            True if any word is NOT in the ignored list
+            True if any word is NOT in the ignored list AND meets length requirements
         """
-        return any(word not in self.ignored_words for word in words)
+        for word in words:
+            # Skip if it's a known filler
+            if word in self.ignored_words:
+                continue
+            
+            # Accept if it's whitelisted (like "yes", "no", "stop")
+            if word in self.valid_short_words:
+                return True
+            
+            # Accept if it meets minimum length
+            if len(word) >= self.min_word_length:
+                return True
+        
+        return False
     
     def analyze_transcript(
         self, 
@@ -202,6 +227,22 @@ class FillerInterruptionHandler:
                 agent_state=self.current_agent_state
             )
         
+        # Low confidence transcript (background noise/murmur) -> ignore during agent speech
+        if self.current_agent_state == "speaking" and confidence < self.confidence_threshold:
+            self.stats['ignored_low_confidence'] += 1
+            logger.info(
+                f"[IGNORED LOW CONFIDENCE] '{transcript}' | "
+                f"Confidence: {confidence:.2f} (threshold: {self.confidence_threshold}) | "
+                f"Agent state: {self.current_agent_state} | "
+                f"Words: {words}"
+            )
+            return InterruptionDecision(
+                should_interrupt=False,
+                reason="low_confidence_during_agent_speech",
+                transcript=transcript,
+                agent_state=self.current_agent_state
+            )
+        
         # If agent is NOT speaking, always process the transcript
         if self.current_agent_state != "speaking":
             self.stats['processed_while_idle'] += 1
@@ -228,8 +269,24 @@ class FillerInterruptionHandler:
                 agent_state=self.current_agent_state
             )
         
+        # Check if transcript contains real speech (using length filter)
+        if not self._contains_real_speech(words):
+            # All words are either fillers or too short (likely partial transcriptions)
+            self.stats['ignored_short_words'] += 1
+            logger.info(
+                f"[IGNORED SHORT WORDS] '{transcript}' | "
+                f"Agent state: {self.current_agent_state} | "
+                f"Words: {words} (min length: {self.min_word_length})"
+            )
+            return InterruptionDecision(
+                should_interrupt=False,
+                reason="short_words_during_agent_speech",
+                transcript=transcript,
+                agent_state=self.current_agent_state
+            )
+        
         # Contains real speech - interrupt immediately
-        non_filler_words = [w for w in words if w not in self.ignored_words]
+        non_filler_words = [w for w in words if w not in self.ignored_words and (w in self.valid_short_words or len(w) >= self.min_word_length)]
         self.stats['valid_interruptions'] += 1
         logger.info(
             f"[VALID INTERRUPTION] '{transcript}' | "
@@ -263,6 +320,8 @@ class FillerInterruptionHandler:
         logger.info("=== Filler Handler Statistics ===")
         logger.info(f"Total transcripts: {stats['total_transcripts']}")
         logger.info(f"Ignored fillers: {stats['ignored_fillers']}")
+        logger.info(f"Ignored low confidence: {stats['ignored_low_confidence']}")
+        logger.info(f"Ignored short words: {stats['ignored_short_words']}")
         logger.info(f"Valid interruptions: {stats['valid_interruptions']}")
         logger.info(f"Processed while idle: {stats['processed_while_idle']}")
         logger.info(f"Current agent state: {stats['current_agent_state']}")
