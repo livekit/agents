@@ -20,7 +20,7 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from .api import DEFAULT_API_URL, AnamAPI
 from .errors import AnamException
 from .log import logger
-from .types import PersonaConfig
+from .agents_types import PersonaConfig
 
 SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "anam-avatar-agent"

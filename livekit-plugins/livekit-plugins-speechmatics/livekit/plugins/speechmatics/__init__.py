@@ -17,7 +17,7 @@ See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more infor
 
 from .stt import STT, SpeechStream
 from .tts import TTS
-from .types import (
+from .agents_types import (
     AdditionalVocabEntry,
     AudioSettings,
     DiarizationFocusMode,

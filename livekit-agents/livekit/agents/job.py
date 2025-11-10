@@ -34,7 +34,7 @@ from livekit.protocol import agent, models
 from .cli import cli
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .types import NotGivenOr
+from .agents_types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")

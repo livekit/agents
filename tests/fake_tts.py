@@ -14,7 +14,7 @@ from livekit.agents.tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.agents_types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 
 class FakeTTSResponse(BaseModel):

@@ -47,7 +47,7 @@ from .llm.chat_context import (
 )
 from .llm.tool_context import FunctionTool, StopResponse, ToolError, function_tool
 from .plugin import Plugin
-from .types import (
+from .agents_types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,

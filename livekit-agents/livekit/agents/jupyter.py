@@ -13,7 +13,7 @@ from livekit.rtc.jupyter import display_room
 
 from .cli import _run, proto
 from .job import JobExecutorType
-from .types import NOT_GIVEN, NotGivenOr
+from .agents_types import NOT_GIVEN, NotGivenOr
 from .worker import WorkerOptions
 
 
