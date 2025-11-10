@@ -356,6 +356,43 @@ python myagent.py start
 
 Runs the agent with production-ready optimizations.
 
+## Filler interruption handling (voice)
+
+This branch adds an extension layer that reduces false interruptions caused by filler sounds (e.g., "uh", "umm", "hmm", "haan") while preserving immediate responsiveness to real commands (e.g., "stop", "wait"). The core VAD algorithm remains unchanged.
+
+- **What changed**
+  - Introduced `livekit.agents.voice.interrupt_filter.InterruptionClassifier` to classify interim STT transcripts.
+  - Integrated the classifier in `AgentActivity.on_interim_transcript()` so fillers are ignored only when the agent is speaking.
+  - Structured debug logs for ignored vs. valid interruptions.
+
+- **What works**
+  - Filler-only/low-confidence murmurs are ignored during TTS playback.
+  - Commands containing stop keywords interrupt immediately.
+  - When the agent is quiet, all speech (including fillers) is registered normally.
+
+- **Known issues**
+  - Confidence availability depends on the STT provider; if not provided, a conservative default is used.
+  - Language-specific filler lists might need tuning; you can override via environment variables.
+
+- **Environment configuration**
+  - `AGENTS_IGNORED_FILLERS` (CSV): e.g. `uh,umm,um,hmm,haan`
+  - `AGENTS_STOP_KEYWORDS` (CSV): e.g. `stop,wait,hold,hold on,pause`
+  - `AGENTS_MIN_CONFIDENCE` (float): default `0.6`
+
+- **Steps to test**
+  1. Set environment variables (PowerShell):
+     - `setx AGENTS_IGNORED_FILLERS "uh,umm,um,hmm,haan"`
+     - `setx AGENTS_STOP_KEYWORDS "stop,wait,hold,hold on,pause"`
+     - `setx AGENTS_MIN_CONFIDENCE "0.6"`
+     - Restart the shell to apply.
+  2. Run the demo example: `python examples/voice_agents/filler_interrupt_demo.py console`
+  3. While the agent is speaking, say only fillers ("uh", "hmm") → agent should continue.
+  4. While the agent is speaking, say "wait" or "stop" → agent should stop immediately.
+  5. While the agent is quiet, say "umm" → transcription should register as usual.
+
+- **Example**
+  - `examples/voice_agents/filler_interrupt_demo.py`
+
 ## Contributing
 
 The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).

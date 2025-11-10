@@ -900,6 +900,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             transcript_timeout=transcript_timeout, stt_flush_duration=stt_flush_duration
         )
 
+    def update_interruption_filter(
+        self,
+        *,
+        fillers: list[str] | None = None,
+        stop_keywords: list[str] | None = None,
+        language: str | None = None,
+        min_confidence: float | None = None,
+    ) -> None:
+        """Hot-reload interruption filter configuration at runtime.
+
+        This delegates to the active AgentActivity and updates the classifier used
+        to suppress filler-only interruptions during agent speech.
+        """
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        self._activity.update_interruption_filter(
+            fillers=fillers,
+            stop_keywords=stop_keywords,
+            language=language,
+            min_confidence=min_confidence,
+        )
+
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
 

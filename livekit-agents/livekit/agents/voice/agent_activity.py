@@ -36,6 +36,7 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
+from .interrupt_filter import InterruptionClassifier
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
@@ -115,6 +116,9 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+
+        # interruption classification (extension layer over VAD/STT)
+        self._interrupt_classifier = InterruptionClassifier.from_env()
 
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None
@@ -204,6 +208,29 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
+
+    def _agent_is_speaking(self) -> bool:
+        return (
+            self._current_speech is not None
+            and not self._current_speech.interrupted
+            and self._current_speech.allow_interruptions
+        )
+
+    # Public: allow runtime updates from UI/RPC via AgentSession
+    def update_interruption_filter(
+        self,
+        *,
+        fillers: list[str] | None = None,
+        stop_keywords: list[str] | None = None,
+        language: str | None = None,
+        min_confidence: float | None = None,
+    ) -> None:
+        if fillers is not None:
+            self._interrupt_classifier.update_fillers(fillers, language=language)
+        if stop_keywords is not None:
+            self._interrupt_classifier.update_stop_keywords(stop_keywords, language=language)
+        if min_confidence is not None:
+            self._interrupt_classifier.update_min_confidence(min_confidence)
 
     @property
     def scheduling_paused(self) -> bool:
@@ -1194,7 +1221,56 @@ class AgentActivity(RecognitionHooks):
         )
 
         if ev.alternatives[0].text:
-            self._interrupt_by_audio_activity()
+            # classify interim transcript to avoid false interruptions during agent speech
+            confidence = getattr(ev.alternatives[0], "confidence", None)
+            agent_speaking = self._agent_is_speaking()
+            language = ev.alternatives[0].language
+            decision = self._interrupt_classifier.classify(
+                transcript=ev.alternatives[0].text,
+                confidence=confidence,
+                agent_speaking=agent_speaking,
+                language=language,
+            )
+
+            # always emit a classification log for clarity in console
+            logger.debug(
+                "user interim transcript classified",
+                extra={
+                    "speaker": "user",
+                    "agent_speaking": agent_speaking,
+                    "language": language,
+                    "decision": decision.kind,
+                    "reason": decision.reason,
+                    "user_transcript": ev.alternatives[0].text,
+                    "confidence": confidence if confidence is not None else -1,
+                },
+            )
+
+            if decision.kind == "ignore_filler":
+                # include which tokens were treated as fillers for visibility
+                text_l = ev.alternatives[0].text.strip().lower()
+                tokens = [t for t in text_l.split() if t]
+                lang_key = language.lower() if language else None
+                fillers_set = self._interrupt_classifier._fillers_by_lang.get(  # type: ignore[attr-defined]
+                    lang_key, self._interrupt_classifier._fillers_default  # type: ignore[attr-defined]
+                )
+                ignored_tokens = [t for t in tokens if t in fillers_set]
+
+                logger.debug(
+                    "ignored filler during agent speech",
+                    extra={
+                        "speaker": "user",
+                        "agent_speaking": agent_speaking,
+                        "language": language,
+                        "user_transcript": ev.alternatives[0].text,
+                        "confidence": confidence if confidence is not None else -1,
+                        "reason": decision.reason,
+                        "ignored_filler_tokens": ignored_tokens,
+                    },
+                )
+            else:
+                # real interrupt or passive (agent not speaking) -> proceed
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False
