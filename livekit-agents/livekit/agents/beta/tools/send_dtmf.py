@@ -10,7 +10,7 @@ DEFAULT_DTMF_PUBLISH_DELAY = 0.3  # seconds to wait between sending DTMF events
 @function_tool
 async def send_dtmf_events(
     events: list[DtmfEvent],
-) -> None:
+) -> str:
     """
     Send a list of DTMF events to the telephony provider.
 

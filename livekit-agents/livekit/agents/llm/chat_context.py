@@ -156,7 +156,7 @@ class ChatMessage(BaseModel):
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
-    metrics: MetricsReport = Field(default_factory=MetricsReport)
+    metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
 

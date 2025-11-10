@@ -65,7 +65,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools,
+            tools=tools or [],
             stt=stt,
             vad=vad,
             llm=llm,

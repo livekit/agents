@@ -149,7 +149,7 @@ class JobContext:
         if c.enabled:
             self._session_directory = c.session_directory
         else:
-            self._session_directory = self._tempdir.name
+            self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
         self._lock = asyncio.Lock()
@@ -159,6 +159,8 @@ class JobContext:
 
         if is_cloud:  # and not self.is_fake_job():  #  and self.job.enable_recording:
             cloud_hostname = urlparse(self._info.url).hostname
+            if cloud_hostname is None:
+                raise ValueError(f"invalid cloud hostname: {self._info.url}")
             _setup_cloud_tracer(
                 room_id=self._info.job.room.sid,
                 job_id=self._info.job.id,
@@ -191,6 +193,8 @@ class JobContext:
 
         try:
             cloud_hostname = urlparse(self._info.url).hostname
+            if cloud_hostname is None:
+                raise ValueError(f"invalid cloud hostname: {self._info.url}")
             await _upload_session_report(
                 room_id=self._info.job.room.sid,
                 job_id=self._info.job.id,

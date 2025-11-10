@@ -204,7 +204,7 @@ class AgentsConsole:
         return cls._instance
 
     def __init__(self) -> None:
-        theme = {
+        theme: dict[str, str | Style] = {
             "tag": "black on #1fd5f9",
             "label": "#8f83ff",
             "error": "red",
@@ -353,7 +353,7 @@ class AgentsConsole:
         mode: ConsoleMode,
         audio_input: ConsoleAudioInput,
         audio_output: ConsoleAudioOutput,
-    ):
+    ) -> None:
         if asyncio.get_running_loop() != self.io_loop:
             raise RuntimeError("_update_sess_io must be executed on the io_loop")
 
@@ -373,7 +373,9 @@ class AgentsConsole:
                 sess.output.audio = audio_output
                 self._log_handler.removeFilter(self._text_mode_log_filter)
 
-    def print(self, child: RenderableType, *, tag: str = "", tag_style: Style | None = None):
+    def print(
+        self, child: RenderableType, *, tag: str = "", tag_style: Style | None = None
+    ) -> None:
         self.console.print(self._render_tag(child, tag=tag, tag_style=tag_style))
 
     def _render_tag(
@@ -501,7 +503,7 @@ class AgentsConsole:
                 "To see available output devices, run: lk-agents console --list-devices"
             ) from None
 
-    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:
+    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time: Any, *_: Any) -> None:
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
 
@@ -569,7 +571,7 @@ class AgentsConsole:
 
             self._io_loop.call_soon_threadsafe(self._io_audio_input.push_frame, frame)
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time: Any, *_: Any) -> None:
         if not self.io_acquired:
             outdata[:] = 0
             return
@@ -611,7 +613,7 @@ class FrequencyVisualizer:
         self.height_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         self.c = agents_console
 
-    def update(self):
+    def update(self) -> None:
         with self.c._input_lock:
             lv = list(self.c._input_levels)
             self._levels_idx = [max(0, min(7, int(round(v * 7)))) for v in lv]
@@ -794,7 +796,7 @@ class RichLoggingHandler(logging.Handler):
         row.append(json.dumps(extra, cls=JsonEncoder, ensure_ascii=False) if extra else " ")
 
         output.add_row(*row)
-        output = self.c._render_tag(output, tag_width=2)
+        output = self.c._render_tag(output, tag_width=2)  # type: ignore
 
         try:
             self.c.console.print(output)
@@ -888,9 +890,9 @@ def _print_audio_devices() -> None:
     table.add_column("Default", justify="center")
 
     for idx, dev in enumerate(devices):
-        name = dev["name"]  # type: ignore
-        has_input = dev["max_input_channels"] > 0  # type: ignore
-        has_output = dev["max_output_channels"] > 0  # type: ignore
+        name = dev["name"]
+        has_input = dev["max_input_channels"] > 0
+        has_output = dev["max_output_channels"] > 0
 
         if has_input:
             default = Text("yes", style="#23de6b") if idx == default_input else ""
@@ -972,8 +974,8 @@ def live_status(
         yield update
 
 
-def _text_mode(c: AgentsConsole):
-    def _key_read(ch: str):
+def _text_mode(c: AgentsConsole) -> None:
+    def _key_read(ch: str) -> None:
         if ch == key.CTRL_T:
             raise _ToggleMode()
 
@@ -992,7 +994,7 @@ def _text_mode(c: AgentsConsole):
             continue
 
         async def _generate(text: str) -> list[RunEvent]:
-            sess = await c.io_session.run(user_input=text)
+            sess = await c.io_session.run(user_input=text)  # type: ignore
             return sess.events.copy()
 
         h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
@@ -1067,10 +1069,10 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
         logger.warning(f"unknown RunEvent type {event.type}")
 
 
-def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None):
+def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None) -> None:
     ctrl_t_e = threading.Event()
 
-    def _listen_for_toggle():
+    def _listen_for_toggle() -> None:
         while not ctrl_t_e.is_set():
             ch = readkey()
             if ch == key.CTRL_T:
@@ -1234,6 +1236,8 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     if args.devmode:
         c = AgentsConsole.get_instance()  # colored logs
 
+    exit_triggered = False
+
     if not jupyter:
 
         def _handle_exit(sig: int, frame: FrameType | None) -> None:
@@ -1251,7 +1255,6 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     asyncio.set_event_loop(loop)
 
     loop.slow_callback_duration = 0.1  # 100ms
-    exit_triggered = False
 
     async def _worker_run(worker: AgentServer) -> None:
         try:
@@ -1343,7 +1346,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             bool,
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
-        record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = None,
+        record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
