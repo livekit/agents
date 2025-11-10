@@ -23,7 +23,8 @@ def tokenize(text: str) -> List[str]:
     return re.findall(r"\w+", (text or "").lower())
 
 # Default configuration
-DEFAULT_IGNORED = ["uh", "umm", "hmm", "haan"]
+DEFAULT_IGNORED = ["uh", "umm", "hmm", "haan", "acha", "em"]
+
 DEFAULT_STOP_WORDS = ["stop", "wait", "hold on", "pause", "no not that one"]
 
 class AgentState:
@@ -70,15 +71,21 @@ class InterruptHandler:
         tokens = [t for t in tokens if len(t) > 1]  # new: ignore 1-letter tokens
 
         speaking = await self.agent_state.is_speaking()
+        # Immediate interrupt if a clear stop/command phrase exists
+        for sw in self.stop_words:
+            if sw and sw in text.lower():
+                self._log("INTERRUPT_STOP_WORD", text, confidence, metadata, {"matched": sw})
+                return Decision.INTERRUPT
+#above part if a phrase like "umm okay stop" or "hmm wait" appears — the agent instantly stops before doing other checks.
 
         # Case 1: agent is speaking and user sound is low-confidence (background murmur)
-        if speaking and confidence < self.low_confidence_threshold:
+        if speaking and confidence <= self.low_confidence_threshold:
             self._log("IGNORED_LOW_CONF", text, confidence, metadata)
             return Decision.IGNORED
         
         def is_filler(word, ignored):
             for ig in ignored:
-                if word.startswith(ig):  # e.g. "ummm" starts with "umm"
+                if word.startswith(ig) or ig in word:  # e.g. "ummm" starts with "umm"
                     return True
             return False
 
@@ -86,9 +93,19 @@ class InterruptHandler:
         # Case 2: agent is speaking — check if it's filler or real interruption
         if speaking:
             # Remove filler tokens
+            DISCOURSE = {"so", "anyway", "yeah", "well", "right", "like", "ok", "okay", "sure"}
+            tokens = [t for t in tokens if t not in DISCOURSE]
+#These are “flow” words — they don’t mean interruption but are often picked up as text.
+#This ensures sentences like "uh so anyway yeah" don’t cause interruption.
+            # Ignore incomplete short fragments like 'wa', 'st', 'wai' if confidence is low
+            if speaking and max((len(t) for t in tokens), default=0) <= 3 and confidence < 0.7:
+                self._log("IGNORED_PARTIAL_TOKENS", text, confidence, metadata, {"tokens": tokens})
+                return Decision.IGNORED
+
             meaningful = [t for t in tokens if not is_filler(t, self.ignored_words)]
             if not meaningful:
-                self._log("IGNORED_FILLER_ONLY", text, confidence, metadata)
+                self._log("IGNORED_FILLER_OR_DISCOURSE", text, confidence, metadata)
+
                 return Decision.IGNORED
 
             # If any stop/command word is present, interrupt immediately
