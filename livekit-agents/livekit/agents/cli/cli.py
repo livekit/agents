@@ -1325,13 +1325,13 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     def console(
         *,
         input_device: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007, required for python 3.9
             typer.Option(
                 help="Numeric input device ID or input device name substring(s)",
             ),
         ] = None,
         output_device: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="Numeric output device ID or output device name substring(s)",
             ),
@@ -1377,21 +1377,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Set the log level", case_sensitive=False),
         ] = LogLevel.info,
         url: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
@@ -1417,21 +1417,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Enable auto-reload of the server when (code) files change."),
         ] = True,
         url: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
