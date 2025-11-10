@@ -21,7 +21,7 @@ def job_process(event_loop):
     # Load .env once at test session start (idempotent if called multiple times)
     load_dotenv()
     # Then load 'config' to override with repo-level config file if present
-    load_dotenv('config', override=True)
+    load_dotenv("config", override=True)
     utils.http_context._new_session_ctx()
     yield
     event_loop.run_until_complete(utils.http_context._close_http_ctx())

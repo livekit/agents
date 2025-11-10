@@ -16,7 +16,7 @@ from livekit.agents.voice.interrupt_filter import InterruptionClassifier
 
 # Load environment after imports to satisfy linter (E402)
 load_dotenv()
-load_dotenv('config', override=True)
+load_dotenv("config", override=True)
 
 
 @function_tool
@@ -46,12 +46,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # Show active interruption filter config (from env/config)
     clf = InterruptionClassifier.from_env()
+
     def _fmt_set(s):
         return ", ".join(sorted(s)) if s else "(empty)"
+
     print("\n=== Interruption Filter Config ===")
     print(f"Default fillers: [{_fmt_set(clf._fillers_default)}]")  # type: ignore[attr-defined]
-    print(f"Default stops:   [{_fmt_set(clf._stop_default)}]")    # type: ignore[attr-defined]
-    print(f"Min confidence:  {clf._min_conf}")                     # type: ignore[attr-defined]
+    print(f"Default stops:   [{_fmt_set(clf._stop_default)}]")  # type: ignore[attr-defined]
+    print(f"Min confidence:  {clf._min_conf}")  # type: ignore[attr-defined]
     if getattr(clf, "_fillers_by_lang", None):
         for lang, s in clf._fillers_by_lang.items():
             print(f"Fillers[{lang}]:  [{_fmt_set(s)}]")
@@ -83,9 +85,7 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=inference.TTS(
-            model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
-        ),
+        tts=inference.TTS(model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
     await session.start(agent=agent, room=ctx.room)

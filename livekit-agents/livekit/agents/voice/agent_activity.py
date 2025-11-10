@@ -1252,7 +1252,8 @@ class AgentActivity(RecognitionHooks):
                 tokens = [t for t in text_l.split() if t]
                 lang_key = language.lower() if language else None
                 fillers_set = self._interrupt_classifier._fillers_by_lang.get(  # type: ignore[attr-defined]
-                    lang_key, self._interrupt_classifier._fillers_default  # type: ignore[attr-defined]
+                    lang_key,
+                    self._interrupt_classifier._fillers_default,  # type: ignore[attr-defined]
                 )
                 ignored_tokens = [t for t in tokens if t in fillers_set]
 
