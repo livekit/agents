@@ -1,0 +1,2 @@
+livekit-agents-hedra
+Pillow
