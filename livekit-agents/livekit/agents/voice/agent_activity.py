@@ -91,6 +91,16 @@ class _PreemptiveGeneration:
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
+
+        # --- FIX: Define local variables for properties ---
+        # This avoids using properties (like self.llm) before they are defined.
+        llm_instance = self._agent.llm if is_given(self._agent.llm) else self._session.llm
+        stt_instance = self._agent.stt if is_given(self._agent.stt) else self._session.stt
+        vad_instance = self._agent.vad if is_given(self._agent.vad) else self._session.vad
+        turn_detection_instance = self._agent.turn_detection if is_given(self._agent.turn_detection) else self._session.turn_detection
+        allow_interruptions_instance = self._agent.allow_interruptions if is_given(self._agent.allow_interruptions) else self._session.options.allow_interruptions
+        # --- END FIX ---
+
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
@@ -101,7 +111,7 @@ class AgentActivity(RecognitionHooks):
         self._pending_interruption: bool = False
         self._ignored_fillers: Set[str]
 
-        default_fillers = {"uh", "umm", "hmm", "haan"}
+        default_fillers = {"uh", "um", "hm", "haan"} # Use short "um" and "hm" for startswith
         ignored_fillers_config = self._agent.ignored_fillers
 
         if is_given(ignored_fillers_config) and ignored_fillers_config is not None:
@@ -135,24 +145,24 @@ class AgentActivity(RecognitionHooks):
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
         self._turn_detection_mode = (
-            self.turn_detection if isinstance(self.turn_detection, str) else None
+            turn_detection_instance if isinstance(turn_detection_instance, str) else None
         )
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
 
-        if self._turn_detection_mode == "vad" and not self.vad:
+        if self._turn_detection_mode == "vad" and not vad_instance: # <-- USED FIX
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
             self._turn_detection_mode = None
 
-        if self._turn_detection_mode == "stt" and not self.stt:
+        if self._turn_detection_mode == "stt" and not stt_instance: # <-- USED FIX
             logger.warning(
                 "turn_detection is set to 'stt', but no STT model is provided, "
                 "ignoring the turn_detection setting"
             )
             self._turn_detection_mode = None
 
-        if isinstance(self.llm, llm.RealtimeModel):
-            if self.llm.capabilities.turn_detection and not self.allow_interruptions:
+        if isinstance(llm_instance, llm.RealtimeModel): # <-- USED FIX
+            if llm_instance.capabilities.turn_detection and not allow_interruptions_instance: # <-- USED FIX
                 raise ValueError(
                     "the RealtimeModel uses a server-side turn detection, "
                     "allow_interruptions cannot be False, disable turn_detection in "
@@ -161,7 +171,7 @@ class AgentActivity(RecognitionHooks):
 
             if (
                 self._turn_detection_mode == "realtime_llm"
-                and not self.llm.capabilities.turn_detection
+                and not llm_instance.capabilities.turn_detection # <-- USED FIX
             ):
                 logger.warning(
                     "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
@@ -180,7 +190,7 @@ class AgentActivity(RecognitionHooks):
             elif (
                 self._turn_detection_mode
                 and self._turn_detection_mode != "realtime_llm"
-                and self.llm.capabilities.turn_detection
+                and llm_instance.capabilities.turn_detection # <-- USED FIX
             ):
                 logger.warning(
                     f"turn_detection is set to '{self._turn_detection_mode}', but the LLM "
@@ -191,8 +201,8 @@ class AgentActivity(RecognitionHooks):
 
             # fallback to VAD if server side turn detection is disabled and VAD is available
             if (
-                not self.llm.capabilities.turn_detection
-                and self.vad
+                not llm_instance.capabilities.turn_detection # <-- USED FIX
+                and vad_instance # <-- USED FIX
                 and self._turn_detection_mode is None
             ):
                 self._turn_detection_mode = "vad"
@@ -203,11 +213,11 @@ class AgentActivity(RecognitionHooks):
             self._turn_detection_mode = None
 
         if (
-            not self.vad
-            and self.stt
-            and not self.stt.capabilities.streaming
-            and isinstance(self.llm, llm.LLM)
-            and self.allow_interruptions
+            not vad_instance # <-- USED FIX
+            and stt_instance # <-- USED FIX
+            and not stt_instance.capabilities.streaming # <-- USED FIX
+            and isinstance(llm_instance, llm.LLM) # <-- USED FIX
+            and allow_interruptions_instance # <-- USED FIX
             and self._turn_detection_mode is None
         ):
             logger.warning(
@@ -222,7 +232,6 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
-
     @property
     def scheduling_paused(self) -> bool:
         return self._scheduling_paused
@@ -417,6 +426,12 @@ class AgentActivity(RecognitionHooks):
     async def start(self) -> None:
         # `start` must only be called by AgentSession
 
+        # --- FIX: Define local variables for properties ---
+        llm_instance = self._agent.llm if is_given(self._agent.llm) else self._session.llm
+        stt_instance = self._agent.stt if is_given(self._agent.stt) else self._session.stt
+        tts_instance = self._agent.tts if is_given(self._agent.tts) else self._session.tts
+        # --- END FIX ---
+
         async with self._lock:
             if self._started:
                 return
@@ -429,14 +444,14 @@ class AgentActivity(RecognitionHooks):
                 self._agent._activity = self
 
                 with trace.use_span(start_span, end_on_exit=False):
-                    if isinstance(self.llm, llm.LLM):
-                        self.llm.prewarm()
+                    if isinstance(llm_instance, llm.LLM): # <-- USED FIX
+                        llm_instance.prewarm() # <-- USED FIX
 
-                    if isinstance(self.stt, stt.STT):
-                        self.stt.prewarm()
+                    if isinstance(stt_instance, stt.STT): # <-- USED FIX
+                        stt_instance.prewarm() # <-- USED FIX
 
-                    if isinstance(self.tts, tts.TTS):
-                        self.tts.prewarm()
+                    if isinstance(tts_instance, tts.TTS): # <-- USED FIX
+                        tts_instance.prewarm() # <-- USED FIX
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session()
@@ -1254,6 +1269,12 @@ class AgentActivity(RecognitionHooks):
         confidence = alternative.confidence
 
         if not self._pending_interruption:
+            if self._is_filler_only(transcript):
+                logger.info(f"💬 USER FILLER (Agent Quiet) | Transcript: '{transcript}' | Agent: listening")
+            else:
+                logger.info(f"💬 USER SPEECH (Agent Quiet) | Transcript: '{transcript}' | Agent: listening")
+
+        # Emit the transcript to be processed
             # --- AGENT IS QUIET ---
             # This is a normal user turn. Emit the transcript.
             self._session._user_input_transcribed(
@@ -1272,26 +1293,11 @@ class AgentActivity(RecognitionHooks):
             return  # Nothing to check
 
         if self._is_filler_only(transcript):
-            # --- SCENARIO 1: FILLER WORD ---
-            # User said "uh", "hmm". Log it and do nothing.
-            logger.debug(f"Ignored filler interruption: '{transcript}'")
-        
-        # --- NEW LOGIC ADDED BELOW ---
+            logger.info(f"🚫 FILLER DETECTED | Transcript: '{transcript}' | Reason: filler_only_during_agent_speech | Agent: speaking")
         elif confidence < MIN_CONFIDENCE_THRESHOLD:
-            # --- SCENARIO 2: MURMURING / NOISE ---
-            # STT transcribed *something* (like "yeah") but has low confidence.
-            # Treat this as background noise and do nothing.
-            logger.debug(
-                f"Ignored low-confidence murmur: '{transcript}' (Confidence: {confidence:.2f})"
-            )
-        # --- END NEW LOGIC ---
-
+            logger.info(f"🚫 MURMUR DETECTED | Transcript: '{transcript}' | Reason: low_confidence_speech | Agent: speaking")
         else:
-            # --- SCENARIO 3: REAL INTERRUPTION ---
-            # User said a real word ("wait", "stop") with high confidence.
-            logger.info(
-                f"Valid interruption detected: '{transcript}' (Confidence: {confidence:.2f})"
-            )
+            logger.info(f"✅ VALID SPEECH | Transcript: '{transcript}' | Reason: real_speech_detected | Agent: speaking")
 
             # 1. Mark as no longer pending
             self._pending_interruption = False

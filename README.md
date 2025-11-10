@@ -1,3 +1,125 @@
+# SalesCode.ai Final Round Qualifier Submission
+**Candidate:** Kritnandan
+**Branch:** `feature/livekit-interrupt-handler-Kritnandan`
+
+This document details the implementation of the LiveKit Voice Interruption Handling Challenge.
+
+---
+
+## What Changed
+
+The core logic was integrated into the existing agent event loop by modifying three Python files and adding one necessary model file.
+
+* **`livekit-agents/livekit/agents/agent.py`**
+    * The `Agent` class constructor (`__init__`) was modified to accept a new `ignored_fillers: NotGivenOr[List[str] | None]` argument.
+    * A public `@property` named `ignored_fillers` was added to expose this list to the agent's runtime.
+    * (Bonus) A public method `async def update_ignored_fillers(self, new_fillers: list[str])` was added to support dynamic runtime updates.
+
+* **`livekit-agents/livekit/agents/agent_activity.py`**
+    * This file contains the core "extension layer" logic.
+    * `__init__`: Now reads the `ignored_fillers` list from the `Agent` object and stores it in a `set` (`self._ignored_fillers`) for efficient O(1) lookups.
+    * `on_start_of_speech`: Modified to set a `self._pending_interruption = True` flag, rather than immediately interrupting.
+    * `on_vad_inference_done`: This function's call to `_interrupt_by_audio_activity()` was removed to **disable** the default VAD-only interruption, ensuring only STT-verified speech causes a stop.
+    * `_is_filler_only(self, text: str) -> bool`: A new helper method was added. It uses `startswith()` logic to robustly check if a transcribed word (e.g., "ummm") matches a root filler (e.g., "um").
+    * `on_interim_transcript`: This is the new decision-making hub. It checks for three scenarios:
+        1.  **Filler:** If `_is_filler_only` is `True`, the speech is logged and ignored.
+        2.  **Murmur:** If ASR `confidence < 0.5`, the speech is logged as low-confidence and ignored.
+        3.  **Real Interruption:** If it's a non-filler with high confidence, `_interrupt_by_audio_activity()` is called.
+    * `on_final_transcript`: Modified to also use the `_is_filler_only` check to handle cases where only a final (non-interim) transcript is received.
+
+* **`examples/voice_agents/basic_agent.py`**
+    * Now reads `IGNORED_FILLERS` from a `.env` file using `os.environ.get()` and `json.loads()`.
+    * The `MyAgent` class constructor is updated to pass this list to the base `Agent`.
+    * (Bonus) A `@function_tool` named `update_filler_words` was added to demonstrate the dynamic runtime update bonus challenge.
+
+* **`livekit-plugins/livekit-plugins-silero/livekit/plugins/silero/resources/silero_vad.onnx`**
+    * This VAD model file was added to the repository. It was found to be missing and is required to "ensure the agent runs end-to-end" per the submission requirements.
+
+---
+
+## What Works
+
+* **Filler Ignoring:** The agent correctly ignores filler words (e.g., "uh", "umm", "haan") while it is speaking, as verified by live testing.
+* **Real Interruption:** The agent stops *immediately* when a non-filler word (e.g., "wait", "stop") is detected with high confidence.
+* **Murmur Ignoring:** Background noise and coughs transcribed with low confidence (e.g., "yeah" at 0.3) are successfully ignored.
+* **Normal Conversation:** When the agent is quiet, it correctly registers "umm" (or any other filler) as the start of a user turn.
+* **Configurability:** The list of fillers is fully configurable via the `.env` file, as demonstrated by the `basic_agent.py` implementation.
+* **Multi-Language (Bonus):** The system is language-agnostic. By adding Hindi words like `"haan"` and `"accha"` to the `.env` file, it correctly ignores them.
+* **Dynamic Updates (Bonus):** The new `update_filler_words` tool allows the filler list to be changed live during a conversation.
+
+---
+
+## Known Issues
+
+* The system's robustness is highly dependent on the ASR's transcription quality and its confidence scoring. If the ASR (e.g., AssemblyAI) provides an incorrect high-confidence score for a murmur, it may cause a false interruption.
+* There is a slight, unavoidable delay in "real-time" interruptions, as the system must wait for the ASR to process the audio and return the first interim transcript.
+
+---
+
+## Steps to Test
+
+1.  **Environment Setup:**
+    * Ensure Python 3.11+ is installed.
+    * Create and activate a virtual environment:
+        ```bash
+        python3.12 -m venv .venv
+        source .venv/bin/activate
+        ```
+
+2.  **Configure Environment:**
+    * Create a file named `.env` in the root `agents` directory.
+    * Add your API keys (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `ASSEMBLYAI_API_KEY`, `OPENAI_API_KEY`, `CARTESIA_API_KEY`).
+    * Add the multi-language filler list to your `.env` file:
+        ```ini
+        IGNORED_FILLERS='["uh", "um", "hm", "haan", "accha", "like", "you know"]'
+        ```
+
+3.  **Install Dependencies:**
+    * Install the modified local `livekit-agents` library:
+        ```bash
+        pip install -e livekit-agents
+        ```
+    * Install the local plugins:
+        ```bash
+        pip install -e livekit-plugins/livekit-plugins-silero
+        pip install -e livekit-plugins/livekit-plugins-turn-detector
+        ```
+    * Install the other required plugins:
+        ```bash
+        pip install livekit-plugins-openai livekit-plugins-cartesia livekit-plugins-assemblyai python-dotenv
+        ```
+
+4.  **Run the Agent:**
+    * Run the agent with the `start` command:
+        ```bash
+        python examples/voice_agents/basic_agent.py start
+        ```
+
+5.  **Join the Room:**
+    * Go to your LiveKit Cloud dashboard, click on **"Sandbox"**, and join a **"Video conference"** room. The agent (named `agent-AJ_...`) will join automatically.
+
+6.  **Test Scenarios:**
+    * **Test 1 (Filler Ignore):** While the agent speaks, say "ummm" or "haan".
+        * **Expected:** Agent ignores you and continues speaking. Your terminal logs will show `DEBUG - Ignored filler interruption...`
+    * **Test 2 (Real Interruption):** While the agent speaks, say "wait a second" or "stop".
+        * **Expected:** Agent stops immediately. Your logs will show `INFO - Valid interruption detected...`
+    * **Test 3 (Murmur Ignore):** Mumble, cough, or make a short noise.
+        * **Expected:** Agent ignores you. Logs will show `DEBUG - Ignored low-confidence murmur...`
+    * **Test 4 (Normal Filler):** While the agent is quiet, say "umm...".
+        * **Expected:** Agent treats this as a normal turn and responds.
+
+---
+
+## Environment Details
+
+* **Python Version:** 3.12 (Tested, 3.11+ recommended)
+* **Dependencies:** `livekit-agents` (from local branch), `livekit-plugins-silero`, `livekit-plugins-turn-detector`, `livekit-plugins-openai`, `livekit-plugins-cartesia`, `livekit-plugins-assemblyai`, `python-dotenv`
+* **Config:** All API keys and the `IGNORED_FILLERS` list are configured via a `.env` file in the project root.
+
+---
+
+*(Original LiveKit Agents README.md content follows below...)*
+
 <!--BEGIN_BANNER_IMAGE-->
 
 <picture>
