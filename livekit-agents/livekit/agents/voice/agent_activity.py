@@ -1,4 +1,5 @@
 from __future__ import annotations
+from agents.extensions.interrupt_handler import InterruptFilter, livekit_asr_adapter
 
 import asyncio
 import contextvars
@@ -87,6 +88,10 @@ class _PreemptiveGeneration:
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
+        self._interrupt_filter = InterruptFilter(
+            on_interrupt=lambda info: asyncio.create_task(self._handle_interrupt(info))
+        )
+
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
@@ -204,6 +209,19 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
+
+    async def _handle_interrupt(self, info: dict):
+        try:
+            if hasattr(self, "interrupt"):
+                await self.interrupt()
+            elif hasattr(self, "session") and hasattr(self.session, "interrupt"):
+                await self.session.interrupt()
+            else:
+                if hasattr(self, "logger"):
+                    self.logger.info("Interrupt requested but no interrupt() method found.")
+        except Exception:
+            if hasattr(self, "logger"):
+                self.logger.exception("Error handling interrupt")
 
     @property
     def scheduling_paused(self) -> bool:
@@ -1193,6 +1211,31 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
+        try:
+            raw_text = getattr(ev.alternatives[0], "text", "") or ""
+            raw_conf = getattr(ev.alternatives[0], "confidence", None)
+            if raw_conf is None:
+                raw_conf = 1.0
+
+            agent_speaking_flag = getattr(self, "is_agent_speaking", False) or getattr(self, "_agent_is_speaking", False) or getattr(self._session, "is_speaking", False)
+
+            adapter_out = livekit_asr_adapter({
+                "text": raw_text,
+                "confidence": float(raw_conf),
+                "agent_speaking": bool(agent_speaking_flag)
+            })
+
+            async def _call_filter_and_handle_interim():
+                res = await self._interrupt_filter.on_asr_event(adapter_out["text"], adapter_out["confidence"], adapter_out["agent_speaking"])
+                if res.get("should_stop_agent"):
+                    await self._handle_interrupt({"text": adapter_out["text"], "confidence": adapter_out["confidence"], "reason": res.get("reason")})
+
+            asyncio.create_task(_call_filter_and_handle_interim())
+        except Exception:
+            if hasattr(self, "logger"):
+                self.logger.exception("Error running interrupt filter on interim transcript")
+
+
         if ev.alternatives[0].text:
             self._interrupt_by_audio_activity()
 
@@ -1201,12 +1244,10 @@ class AgentActivity(RecognitionHooks):
                 and self._paused_speech
                 and (timeout := self._session.options.false_interruption_timeout) is not None
             ):
-                # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
-            # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
         self._session._user_input_transcribed(
@@ -1217,6 +1258,31 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+        
+        try:
+            raw_text = getattr(ev.alternatives[0], "text", "") or ""
+            raw_conf = getattr(ev.alternatives[0], "confidence", None)
+            if raw_conf is None:
+                raw_conf = 1.0
+
+            agent_speaking_flag = getattr(self, "is_agent_speaking", False) or getattr(self, "_agent_is_speaking", False) or getattr(self._session, "is_speaking", False)
+
+            adapter_out = livekit_asr_adapter({
+                "text": raw_text,
+                "confidence": float(raw_conf),
+                "agent_speaking": bool(agent_speaking_flag)
+            })
+
+            async def _call_filter_and_handle_final():
+                res = await self._interrupt_filter.on_asr_event(adapter_out["text"], adapter_out["confidence"], adapter_out["agent_speaking"])
+                if res.get("should_stop_agent"):
+                    await self._handle_interrupt({"text": adapter_out["text"], "confidence": adapter_out["confidence"], "reason": res.get("reason")})
+
+            asyncio.create_task(_call_filter_and_handle_final())
+        except Exception:
+            if hasattr(self, "logger"):
+                self.logger.exception("Error running interrupt filter on final transcript")
+
 
         self._interrupt_paused_speech_task = asyncio.create_task(
             self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
