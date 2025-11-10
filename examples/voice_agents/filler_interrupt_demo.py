@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import os
 from dotenv import load_dotenv
-load_dotenv()
-load_dotenv('config', override=True)
 
 from livekit.agents import (
     Agent,
@@ -12,13 +9,14 @@ from livekit.agents import (
     RunContext,
     WorkerOptions,
     cli,
-    inference,
     function_tool,
+    inference,
 )
-
-
-from livekit.plugins import deepgram, elevenlabs, openai, silero
 from livekit.agents.voice.interrupt_filter import InterruptionClassifier
+
+# Load environment after imports to satisfy linter (E402)
+load_dotenv()
+load_dotenv('config', override=True)
 
 
 @function_tool
@@ -49,7 +47,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Show active interruption filter config (from env/config)
     clf = InterruptionClassifier.from_env()
     def _fmt_set(s):
-        return ", ".join(sorted(list(s))) if s else "(empty)"
+        return ", ".join(sorted(s)) if s else "(empty)"
     print("\n=== Interruption Filter Config ===")
     print(f"Default fillers: [{_fmt_set(clf._fillers_default)}]")  # type: ignore[attr-defined]
     print(f"Default stops:   [{_fmt_set(clf._stop_default)}]")    # type: ignore[attr-defined]

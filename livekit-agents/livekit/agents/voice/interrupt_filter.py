@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Set
 
 
-def _csv_env(name: str, default: Iterable[str]) -> Set[str]:
+def _csv_env(name: str, default: Iterable[str]) -> set[str]:
     val = os.getenv(name)
     if not val:
         return {w.strip().lower() for w in default if w.strip()}
@@ -24,7 +24,7 @@ def _float_env(name: str, default: float) -> float:
 _WORD_RE = re.compile(r"[\w']+", re.UNICODE)
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     return [t.lower() for t in _WORD_RE.findall(text)]
 
 
@@ -50,26 +50,26 @@ class InterruptionClassifier:
         fillers: Iterable[str] | None = None,
         stop_keywords: Iterable[str] | None = None,
         min_confidence: float | None = None,
-        fillers_by_lang: Optional[Dict[str, Set[str]]] = None,
-        stop_by_lang: Optional[Dict[str, Set[str]]] = None,
+        fillers_by_lang: dict[str, set[str]] | None = None,
+        stop_by_lang: dict[str, set[str]] | None = None,
     ) -> None:
         # default/global sets
-        self._fillers_default: Set[str] = {f.lower() for f in (fillers or [])}
-        self._stop_default: Set[str] = {s.lower() for s in (stop_keywords or [])}
+        self._fillers_default: set[str] = {f.lower() for f in (fillers or [])}
+        self._stop_default: set[str] = {s.lower() for s in (stop_keywords or [])}
         # language-specific overrides
-        self._fillers_by_lang: Dict[str, Set[str]] = fillers_by_lang or {}
-        self._stop_by_lang: Dict[str, Set[str]] = stop_by_lang or {}
+        self._fillers_by_lang: dict[str, set[str]] = fillers_by_lang or {}
+        self._stop_by_lang: dict[str, set[str]] = stop_by_lang or {}
         self._min_conf = 0.6 if min_confidence is None else float(min_confidence)
 
     @classmethod
-    def from_env(cls) -> "InterruptionClassifier":
+    def from_env(cls) -> InterruptionClassifier:
         # default/global
         fillers = _csv_env("AGENTS_IGNORED_FILLERS", ["uh", "umm", "um", "hmm", "haan"])
         stops = _csv_env("AGENTS_STOP_KEYWORDS", ["stop", "wait", "hold", "hold on", "pause"])
         min_conf = _float_env("AGENTS_MIN_CONFIDENCE", 0.6)
         # language-specific from env: AGENTS_IGNORED_FILLERS_<lang>, AGENTS_STOP_KEYWORDS_<lang>
-        fillers_by_lang: Dict[str, Set[str]] = {}
-        stop_by_lang: Dict[str, Set[str]] = {}
+        fillers_by_lang: dict[str, set[str]] = {}
+        stop_by_lang: dict[str, set[str]] = {}
         for k, v in os.environ.items():
             if k.startswith("AGENTS_IGNORED_FILLERS_") and v:
                 lang = k.split("_", maxsplit=3)[-1].lower()
@@ -85,14 +85,14 @@ class InterruptionClassifier:
             stop_by_lang=stop_by_lang,
         )
 
-    def update_fillers(self, fillers: Iterable[str], language: Optional[str] = None) -> None:
+    def update_fillers(self, fillers: Iterable[str], language: str | None = None) -> None:
         if language:
             self._fillers_by_lang[language.lower()] = {f.lower() for f in fillers}
         else:
             self._fillers_default = {f.lower() for f in fillers}
 
     def update_stop_keywords(
-        self, stop_keywords: Iterable[str], language: Optional[str] = None
+        self, stop_keywords: Iterable[str], language: str | None = None
     ) -> None:
         if language:
             self._stop_by_lang[language.lower()] = {s.lower() for s in stop_keywords}
@@ -108,7 +108,7 @@ class InterruptionClassifier:
         transcript: str,
         confidence: float | None,
         agent_speaking: bool,
-        language: Optional[str] = None,
+        language: str | None = None,
     ) -> InterruptionDecision:
         if not transcript:
             return InterruptionDecision(kind="passive", reason="empty_transcript")

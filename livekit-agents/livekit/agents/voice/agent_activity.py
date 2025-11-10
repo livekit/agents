@@ -36,7 +36,6 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
-from .interrupt_filter import InterruptionClassifier
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
@@ -64,6 +63,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
+from .interrupt_filter import InterruptionClassifier
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:

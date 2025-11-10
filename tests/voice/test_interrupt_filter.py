@@ -1,7 +1,7 @@
-import os
-import importlib
 import contextlib
-from typing import Iterator
+import importlib
+import os
+from collections.abc import Iterator
 
 import pytest
 
