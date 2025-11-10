@@ -1,0 +1,14 @@
+# Core LiveKit packages
+livekit>=0.11.0
+livekit-agents>=0.8.0
+
+# LiveKit Plugins for AI services
+livekit-plugins-openai>=0.6.0
+livekit-plugins-deepgram>=0.6.0
+livekit-plugins-cartesia>=0.2.0
+livekit-plugins-silero>=0.6.0
+
+# Utilities
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+
