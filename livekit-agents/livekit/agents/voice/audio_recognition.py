@@ -650,3 +650,6 @@ class AudioRecognition:
 
         self._user_turn_span = tracer.start_span("user_turn")
         return self._user_turn_span
+
+# filler handler integration verified by Manisha
+
