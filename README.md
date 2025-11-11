@@ -42,6 +42,32 @@ agents that can see, hear, and understand.
 - **Builtin test framework**: Write tests and use judges to ensure your agent is performing as expected.
 - **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
 
+## Branch Summary
+
+### What Changed
+- Added `FillerOnlyTranscriptFilter` and filler-only transcript utilities under `livekit/agents/voice/transcription`.
+- Extended `AgentSession` voice options with filler-interruption toggles plus a `configure_filler_interruptions` API.
+- Updated `AgentActivity` interruption logic to classify transcripts, respect the new filter, and emit separate logs for ignored versus accepted interruptions.
+- Expanded tests in `tests/test_transcription_filter.py` and `tests/test_agent_session.py` to cover filter behaviour and dynamic updates.
+
+### What Works
+- New filler filtering logic passes targeted unit tests (`test_transcription_filter.py`, `test_agent_session.py::test_configure_filler_interruptions_updates_options`) once `pytest` is installed.
+- Manual inspection confirms debug logs differentiate filler-only skips from accepted interruptions.
+
+### Known Issues
+- The dev container lacks `pytest` by default; install it before running the suite.
+- Broader end-to-end voice scenarios were not exercised during this change set.
+
+### Steps to Test
+- `pip install -e .` from the repo root, then `pip install pytest` if it is missing.
+- Run `python3 -m pytest tests/test_transcription_filter.py tests/test_agent_session.py::test_configure_filler_interruptions_updates_options`.
+- Launch a voice agent (for example from `examples/voice_agents`) and speak filler-only utterances such as “um” followed by substantive speech to observe the updated logging.
+
+### Environment Details
+- Python 3.12.3
+- Dependencies installed via `pip install -e .`; add extras for your STT/LLM stack as needed.
+- Ensure `pytest` is available for running the new tests.
+
 ## Installation
 
 To install the core Agents library, along with plugins for popular model providers:

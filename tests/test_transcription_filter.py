@@ -1,5 +1,9 @@
 import pytest
 
+from livekit.agents.voice.transcription.filler_filter import (
+    DEFAULT_FILLER_TOKENS,
+    FillerOnlyTranscriptFilter,
+)
 from livekit.agents.voice.transcription.filters import filter_emoji, filter_markdown
 
 MARKDOWN_INPUT = """# Mathematics and Markdown Guide
@@ -240,3 +244,55 @@ async def test_emoji_filter(chunk_size: int):
     assert result == EMOJI_EXPECTED_OUTPUT
 
     print("\n=== EMOJI TEST COMPLETE ===")
+
+
+def test_filler_filter_defaults_match_constant():
+    filler_filter = FillerOnlyTranscriptFilter()
+    assert set(filler_filter.tokens) == set(DEFAULT_FILLER_TOKENS)
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "um",
+        "uh...",
+        "erm",
+        "ah!",
+        "mm",
+        "uh uh",
+        "mmm",
+    ],
+)
+def test_filler_filter_ignores_default_fillers(utterance: str):
+    filler_filter = FillerOnlyTranscriptFilter()
+    result = filler_filter.evaluate(utterance)
+    assert result.is_filler_only
+
+
+def test_filler_filter_keeps_contentful_transcript():
+    filler_filter = FillerOnlyTranscriptFilter()
+    result = filler_filter.evaluate("uh I have a real question")
+    assert not result.is_filler_only
+    assert result.tokens[0] == "uh"
+
+
+def test_filler_filter_update_and_extend_tokens():
+    filler_filter = FillerOnlyTranscriptFilter(tokens=["foo"])
+    assert filler_filter.evaluate("foo").is_filler_only
+    assert not filler_filter.evaluate("bar").is_filler_only
+
+    filler_filter.extend_tokens(["bar", "baz"])
+    assert filler_filter.evaluate("bar").is_filler_only
+    assert filler_filter.evaluate("baz").is_filler_only
+
+    filler_filter.update_tokens(["qux"])
+    assert not filler_filter.evaluate("foo").is_filler_only
+    assert filler_filter.evaluate("qux").is_filler_only
+
+
+def test_filler_filter_toggle_enabled():
+    filler_filter = FillerOnlyTranscriptFilter(tokens=["foo"], enabled=False)
+    assert not filler_filter.evaluate("foo").is_filler_only
+
+    filler_filter.enabled = True
+    assert filler_filter.evaluate("foo").is_filler_only

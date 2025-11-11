@@ -80,6 +80,30 @@ class MyAgent(Agent):
             await asyncio.sleep(self.on_user_turn_completed_delay)
 
 
+def test_configure_filler_interruptions_updates_options():
+    session = AgentSession()
+
+    assert session.options.ignore_filler_interruptions
+    default_tokens = session.options.filler_interrupt_tokens
+    assert len(default_tokens) > 0
+
+    session.configure_filler_interruptions(enabled=False)
+    assert not session.options.ignore_filler_interruptions
+
+    session.configure_filler_interruptions(filler_tokens=["foo", "bar"])
+    assert session.options.filler_interrupt_tokens == ("foo", "bar")
+
+    session.configure_filler_interruptions(filler_tokens=["baz"], extend=True)
+    assert session.options.filler_interrupt_tokens == ("foo", "bar", "baz")
+
+    session.configure_filler_interruptions(enabled=True)
+    assert session.options.ignore_filler_interruptions
+
+    result = session._classify_interruption_transcript("foo")
+    assert result.is_filler_only
+    assert not session._classify_interruption_transcript("hello there").is_filler_only
+
+
 SESSION_TIMEOUT = 60.0
 
 

@@ -51,6 +51,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .transcription import FillerOnlyTranscriptFilter, InterruptionFilterResult
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
 
@@ -85,6 +86,8 @@ class VoiceOptions:
     use_tts_aligned_transcript: NotGivenOr[bool]
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
+    ignore_filler_interruptions: bool
+    filler_interrupt_tokens: tuple[str, ...]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -158,6 +161,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
+        ignore_filler_interruptions: bool = True,
+        filler_interrupt_tokens: NotGivenOr[Sequence[str]] = NOT_GIVEN,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 3.0,
         max_tool_steps: int = 3,
@@ -212,8 +217,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 interrupted. Default ``True``.
             min_interruption_duration (float): Minimum speech length (s) to
                 register as an interruption. Default ``0.5`` s.
-            min_interruption_words (int): Minimum number of words to consider
-                an interruption, only used if stt enabled. Default ``0``.
+              min_interruption_words (int): Minimum number of words to consider
+                  an interruption, only used if stt enabled. Default ``0``.
+              ignore_filler_interruptions (bool): When ``True``, ignore interruption
+                  candidates whose transcript only contains filler speech (e.g. "um", "uh").
+                  Default ``True``.
+              filler_interrupt_tokens (Sequence[str], optional): Custom list of tokens
+                  or short phrases to treat as filler when ``ignore_filler_interruptions`` is
+                  enabled. Tokens are normalized and deduplicated. When *NOT_GIVEN* the
+                  built-in set is used.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
@@ -272,6 +284,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
+
+        self._filler_interruption_filter = FillerOnlyTranscriptFilter(
+            tokens=tuple(filler_interrupt_tokens)
+            if is_given(filler_interrupt_tokens)
+            else None,
+            enabled=ignore_filler_interruptions,
+        )
+
         self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
@@ -291,6 +311,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             use_tts_aligned_transcript=use_tts_aligned_transcript,
+            ignore_filler_interruptions=ignore_filler_interruptions,
+            filler_interrupt_tokens=self._filler_interruption_filter.tokens,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -771,6 +793,50 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
             )
+
+    def configure_filler_interruptions(
+        self,
+        *,
+        enabled: NotGivenOr[bool] = NOT_GIVEN,
+        filler_tokens: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        extend: bool = False,
+    ) -> None:
+        """
+        Update runtime behavior for filler-only interruption filtering.
+
+        Args:
+            enabled: Toggle the filler-only interruption filter on or off.
+            filler_tokens: New tokens or phrases to treat as filler.
+            extend: When ``True`` and ``filler_tokens`` are provided, merge the tokens with the
+                existing list instead of replacing it.
+        """
+
+        if is_given(enabled):
+            self._filler_interruption_filter.enabled = enabled
+            self._opts.ignore_filler_interruptions = enabled
+            logger.debug(
+                "filler interruption filter %s",
+                "enabled" if enabled else "disabled",
+                extra={"enabled": enabled},
+            )
+
+        if is_given(filler_tokens):
+            if extend:
+                self._filler_interruption_filter.extend_tokens(filler_tokens)
+            else:
+                self._filler_interruption_filter.update_tokens(filler_tokens)
+
+            self._opts.filler_interrupt_tokens = self._filler_interruption_filter.tokens
+            logger.debug(
+                "updated filler interruption tokens",
+                extra={
+                    "extend": extend,
+                    "token_count": len(self._opts.filler_interrupt_tokens),
+                },
+            )
+
+    def _classify_interruption_transcript(self, transcript: str) -> InterruptionFilterResult:
+        return self._filler_interruption_filter.evaluate(transcript)
 
     def say(
         self,
