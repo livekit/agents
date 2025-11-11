@@ -59,7 +59,7 @@ class BargeInDetectorONNX:
         i = np.arange(num_frames)
         return (i * hop_sz + win_sz) / sr
 
-    def predict(self, wavform, threshold=0.75, min_frames=2):
+    def predict(self, wavform, threshold=0.75, min_frames=3):
         # if prob > threshold for at least `min_frames` consecutive frames, call it a barge-in
         # - note: each frame is 25ms
         if self.enable_clipping:
@@ -389,20 +389,12 @@ class BargeInDetector:
                 assert in_resampler is not None
                 input_resampled.extend(in_resampler.push(frame))
 
-            if in_resampler:
-                input_resampled.extend(in_resampler.flush())
-
             output_resampled = []
             for frame in output_buf:
                 assert out_resampler is not None
                 if len(frame.data) <= 0:
                     continue
                 for f in out_resampler.push(frame):
-                    if len(f.data) > 0:
-                        output_resampled.append(f)
-
-            if out_resampler:
-                for f in out_resampler.flush():
                     if len(f.data) > 0:
                         output_resampled.append(f)
 
@@ -427,8 +419,9 @@ class BargeInDetector:
                     )
                     self.barge_in()
                     self.save_input_for_debug(inp, prefix="recordings/barge_in")
+                    self._in_record.write_to_file("recordings/barge_in/input.wav")
                 else:
-                    self.save_input_for_debug(inp, prefix="recording/not_barge_in")
+                    self.save_input_for_debug(inp, prefix="recordings/not_barge_in")
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._close_fut.set_result, None)
@@ -446,6 +439,7 @@ class SyncedAudioInput(io.AudioInput):
         self.__audio_input = source
         self.__recording_io = recording_io
         self.__acc_frames: deque[rtc.AudioFrame] = deque()
+        self.__acc_history: list[rtc.AudioFrame] = []
         self._started_at: float | None = None
 
     def take_buf(self) -> list[rtc.AudioFrame]:
@@ -464,6 +458,7 @@ class SyncedAudioInput(io.AudioInput):
 
         if self.__recording_io.recording:
             self.__acc_frames.append(frame)
+            self.__acc_history.append(frame)
 
         return frame
 
@@ -472,6 +467,18 @@ class SyncedAudioInput(io.AudioInput):
 
     def on_detached(self) -> None:
         pass
+
+    def write_to_file(self, filename: str) -> None:
+        import soundfile
+
+        with open(filename, "wb") as f:
+            ff = rtc.combine_audio_frames(self.__acc_history)
+            arr_i16 = np.frombuffer(ff.data, dtype=np.int16).reshape(-1, ff.num_channels)
+            arr_i16 = arr_i16.astype(np.float32) / 32768.0
+            f.write(ff.to_wav_bytes())
+            soundfile.write(filename.replace(".wav", "_float32.wav"), arr_i16, ff._sample_rate)
+
+
 
 
 class SyncedAudioOutput(io.AudioOutput):
