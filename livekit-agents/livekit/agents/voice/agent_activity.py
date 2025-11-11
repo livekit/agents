@@ -76,7 +76,7 @@ from .generation import (
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from ..llm import mcp, tool_context
+    from ..llm import mcp
     from .agent_session import AgentSession, TurnDetectionMode
 
 
