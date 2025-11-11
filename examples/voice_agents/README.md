@@ -70,6 +70,73 @@ This directory contains a comprehensive collection of voice-based agent examples
 - [`error_callback.py`](./error_callback.py) - Error handling callback
 - [`session_close_callback.py`](./session_close_callback.py) - Session lifecycle management
 
+### 🗣️ Voice Agent: Smart Interruption Handling (English + Hinglish)
+
+#### 1. What changed
+- [`basic_agent_interruption.py`](./basic_agent.py) - Integrates the interruption filter and controls stop/resume logic for agent speech.
+- [`basic_agent_interruption_handler.py`](./interruption_handler.py) - Classifies ASR text as filler, real interruption, or normal speech.
+
+This example extends the standard voice agent by adding **real-time interruption awareness**.  
+It uses a lightweight speech-level filter to **ignore filler expressions** while the agent is speaking, and **stop immediately** when the user expresses intent to interrupt.
+
+No changes were made to **LiveKit’s VAD** or turn detection models - instead, the logic operates on **transcription events**.
+
+#### 2. What Works (Behavior Summary)
+
+| User Says (While Agent is Speaking) | Result |
+|-------------------------------------|--------|
+| `uh … umm … hmm … haan`            | **Ignored** - agent continues speaking |
+| `wait` / `stop` / `hold on`        | **Immediate interruption** |
+| `umm okay stop`                    | **Immediate interruption** |
+| very soft “hmm” with low confidence | **Ignored as background murmur** |
+| `umm` when agent is silent         | Treated as normal user input |
+
+#### 3. Known Issues / Edge Cases
+| Case | Description | Status |
+|-------------------------------------|--------| ---------|
+|Heavy background noise   | May produce higher ASR confidence tokens | Can be mitigated by increasing `FILLER_LOW_CONF_THRESHOLD` |
+| Very fast real interruption phrases | If spoken extremely quickly after filler | Handled, but threshold tuning may further optimize behavior |
+| Different language filler sets | Current defaults support English + Hinglish | Additional languages can be added in `.env`
+
+#### 4. Steps to Test
+1. Start the agent in console mode
+```bash
+cd agents/examples/voice_agents
+python basic_agent.py console 
+```
+2. Ensure the agent begins speaking (e.g., greeting).
+3. While the agent is speaking:
+- Say: "umm hmm haan" - Agent should continue speaking.
+- Say: "wait" or "stop" - Agent should stop immediately.
+
+4. When the agent is silent:
+- Say: "umm" - Agent should treat it as input and respond normally.
+
+#### Configuration 
+
+##### 1. (`.env`)
+```env
+OPENAI_API_KEY =
+ASSEMBLY_API_KEY = 
+CARTESIA_API_KEY = 
+
+LIVEKIT_URL=
+LIVEKIT_API_KEY=
+LIVEKIT_API_SECRET=
+
+IGNORED_WORDS=uh,umm,um,hmm,er,ah,uhh,mm,mmm,haan,haina,achha,acha,arey
+HARD_INTERRUPTS=wait,stop,no,hold on,one second,pause,listen,excuse me
+FILLER_LOW_CONF_THRESHOLD=0.35
+FALSE_INTERRUPT_TIMEOUT=1.0
+
+STT_MODEL=assemblyai/universal-streaming:en
+LLM_MODEL=openai/gpt-4.1-mini
+TTS_MODEL=cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc
+```
+##### 2. `requirements.txt`
+```bash
+pip install -r examples/voice_agents/requirements.txt
+```
 ## 📖 Additional Resources
 
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
