@@ -370,7 +370,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
-    def emit(self, event: EventTypes, arg: AgentEvent) -> None:
+    def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
         super().emit(event, arg)
 

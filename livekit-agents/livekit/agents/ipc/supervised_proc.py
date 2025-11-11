@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import Any
@@ -25,7 +26,7 @@ from .log_queue import LogQueueListener
 
 
 @contextlib.contextmanager
-def _mask_ctrl_c():
+def _mask_ctrl_c() -> Generator[None, None, None]:
     """
     POSIX: block SIGINT on this thread (defer delivery).
     Windows/others: temporarily ignore SIGINT (best available), then restore.

@@ -1,8 +1,17 @@
+from __future__ import annotations
+
 import json
+import sys
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, Self
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
+
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -40,7 +49,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
 
         self._summarize_chat_ctx = summarize_chat_ctx
-        self._visited_tasks = set()
+        self._visited_tasks = set[str]()
         self._registered_factories: OrderedDict[str, _FactoryInfo] = OrderedDict()
 
     def add(self, task_factory: Callable[[], AgentTask], *, id: str, description: str) -> Self:
@@ -49,7 +58,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         )
         return self
 
-    async def on_enter(self):
+    async def on_enter(self) -> None:
         task_stack = list(self._registered_factories.keys())
         task_results: dict[str, Any] = {}
 
@@ -82,6 +91,8 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
         try:
             if self._summarize_chat_ctx:
+                assert isinstance(self.session.llm, llm.LLM)
+
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
                 summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(
@@ -120,7 +131,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     json_schema_extra={"items": {"enum": list(task_ids)}},
                 ),
             ],
-        ):
+        ) -> None:
             for task_id in task_ids:
                 if task_id not in self._registered_factories or task_id not in self._visited_tasks:
                     raise ToolError(f"unable to regress, invalid task id {task_id}")

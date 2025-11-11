@@ -274,7 +274,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         api_secret: str | None = None,
         host: str = "",  # default to all interfaces
         port: int | ServerEnvOption[int] = _default_port,
-        http_proxy: str | None = None,
+        http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
         multiprocessing_context: Literal["spawn", "forkserver"] = (
             "spawn" if not sys.platform.startswith("linux") else "forkserver"
         ),
@@ -311,9 +311,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
         self._mp_ctx = mp.get_context(multiprocessing_context)
-        self._http_proxy = (
-            http_proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None
-        )
+        if not is_given(http_proxy):
+            http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+        self._http_proxy = http_proxy
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -677,7 +677,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: NotGivenOr[float] = NOT_GIVEN,
         job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
-        drain_timeout: NotGivenOr[float] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,

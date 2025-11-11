@@ -26,7 +26,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import Span, TraceFlags, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
 
@@ -62,11 +62,11 @@ class _DynamicTracer(Tracer):
             yield span
 
 
-tracer: Tracer = _DynamicTracer("livekit-agents")
+tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    def __init__(self, metadata: dict[str, str]) -> None:
+    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
@@ -74,18 +74,18 @@ class _MetadataSpanProcessor(SpanProcessor):
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
-    def __init__(self, metadata: dict[str, str]) -> None:
+    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
     def emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)
+            log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
 
     def on_emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)
+            log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
 
@@ -119,8 +119,10 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     )
 
     otlp_compression = Compression.Gzip
-    headers = (("Authorization", f"Bearer {access_token.to_jwt()}"),)
-    metadata = {"room_id": room_id, "job_id": job_id}
+    headers = {
+        "Authorization": f"Bearer {access_token.to_jwt()}",
+    }
+    metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
 
     resource = Resource.create(
         {
@@ -283,7 +285,7 @@ async def _upload_session_report(
                 attributes=attributes,
                 trace_id=0,
                 span_id=0,
-                trace_flags=0,
+                trace_flags=TraceFlags.get_default(),
                 severity_number=SeverityNumber.UNSPECIFIED,
                 severity_text="unspecified",
             )

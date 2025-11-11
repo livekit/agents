@@ -561,7 +561,7 @@ class AudioRecognition:
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
-                    transcription_delay=transcription_delay,
+                    transcription_delay=transcription_delay or 0,
                     end_of_turn_delay=end_of_turn_delay,
                     started_speaking_at=started_speaking_at,
                     stopped_speaking_at=stopped_speaking_at,
@@ -572,8 +572,8 @@ class AudioRecognition:
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
-                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay,
-                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay,
+                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay or 0,
+                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
                     }
                 )
                 user_turn_span.end()
