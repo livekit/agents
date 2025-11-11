@@ -380,6 +380,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps({"event": "task_finish"}))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            # Initialize trace_id to ensure it's available in all code paths
+            current_trace_id = trace_id
+            
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -387,10 +390,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    error_msg = f"MiniMax connection closed unexpectedly (trace_id: {trace_id})"
+                    error_msg = f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
                     logger.error(error_msg)
                     raise APIStatusError(
-                        error_msg, request_id=trace_id
+                        error_msg, request_id=current_trace_id
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -402,15 +405,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # Extract trace_id (priority: root.trace_id > base_resp.trace_id)
                 # api.minimax.io returns trace_id in root.trace_id, api.minimaxi.com may return in base_resp.trace_id
                 msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
-                if msg_trace_id and msg_trace_id != trace_id:
-                    trace_id = msg_trace_id
+                if msg_trace_id and msg_trace_id != current_trace_id:
+                    current_trace_id = msg_trace_id
                     logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
 
                 base_resp = data.get("base_resp", {})
                 status_code = base_resp.get("status_code", 0)
                 if status_code != 0:
                     status_msg = base_resp.get("status_msg", "Unknown error")
-                    error_trace_id = msg_trace_id or trace_id
+                    error_trace_id = msg_trace_id or current_trace_id
 
                     logger.error(
                         f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
@@ -424,12 +427,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
 
                 if data.get("event") == "connected_success":
-                    logger.debug(f"MiniMax WebSocket connected, trace_id={trace_id}")
+                    logger.debug(f"MiniMax WebSocket connected, trace_id={current_trace_id}")
 
                 elif data.get("event") == "task_started":
                     task_started.set_result(None)
                     session_id = data.get("session_id", "")
-                    logger.debug(f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={trace_id}")
+                    logger.debug(f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={current_trace_id}")
                     output_emitter.start_segment(segment_id=session_id)
 
                 elif data.get("event") == "task_continued":
@@ -444,7 +447,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 elif data.get("event") == "task_failed":
-                    error_msg = f"MiniMax returned task failed (trace_id: {trace_id}): {msg.data}"
+                    error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id}): {msg.data}"
                     logger.error(error_msg)
                     raise APIError(error_msg)
 
