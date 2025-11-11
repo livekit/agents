@@ -333,6 +333,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._lock = asyncio.Lock()
 
+    if sys.version_info < (3, 10):
+        # Python 3.9 cannot pickle asyncio.Lock, customize for pickle support
+        def __getstate__(self) -> dict[str, Any]:
+            """Custom pickle support - exclude unpickleable asyncio objects."""
+            state = self.__dict__.copy()
+            # remove unpickleable asyncio.Lock (will be recreated in __setstate__)
+            state.pop("_lock", None)
+            return state
+
+        def __setstate__(self, state: dict[str, Any]) -> None:
+            """Restore state and recreate asyncio.Lock."""
+            self.__dict__.update(state)
+            # recreate the lock
+            self._lock = asyncio.Lock()
+
     @overload
     def rtc_session(
         self,
