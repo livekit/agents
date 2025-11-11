@@ -15,13 +15,27 @@ The agent can now **ignore meaningless interjections** (e.g., *“um”*, *“ha
 - Uses STT confidence score to ignore background murmurs.
 - Added `is_filler(transcript, confidence)` rule-based classifier.
 
-### 2. Modified Agent Behavior
+### 2. Interruption Handling & Auto-Resume
+
+This agent intelligently distinguishes between filler sounds (e.g., "umm", "haan", "hmm") and meaningful interruptions (e.g., "wait", "stop", "hold on") to provide natural turn-taking.
+
+- If the user makes filler sounds while the agent is speaking → the agent continues.
+- If the user speaks meaningful words → the agent stops immediately.
+- Once the user finishes speaking (VAD silence) → the agent automatically resumes its response.
+
+### Run the Agent
+```bash
+python interrupt_handler_agent.py dev
+```
+
+
+### 3. Modified Agent Behavior
 - Overrode `on_transcription()` inside an `InterruptAgent` class.
 - If agent is speaking:
   - Ignore filler-only speech.
   - Stop TTS instantly when meaningful speech is detected.
 
-### 3. Updated Voice Pipeline (to avoid quota + plugin issues)
+### 4. Updated Voice Pipeline (to avoid quota + plugin issues)
 | Component | Plugin Used | Model |
 |----------|------------|--------|
 | VAD | `silero` | default vad |
@@ -44,9 +58,14 @@ from livekit.agents import (
 )
 from livekit.plugins import silero, deepgram, groq
 
-# A multilingual dictionary of filler words.
-# These are ignored when deciding whether to interrupt.
+
+
+
 IGNORED_FILLERS = {
+     "hmm", "hmmm", "hmm", "hmmhmm", "mmm", "mmmm", "mmh", "mm-hmm",
+    "mm-mm", "mhm", "mhmm", "hm", "hm?", "hmh", "hmhmm", "uh", "uhh",
+    "uhhh", "um", "umm", "ummm", "uh-huh", "uh-uh", "huh", "huh",
+    "hnnn", "hunh", "humm", "hummm", "um-hmm", "mm", "mm", "mmhmm",
     "uh", "um", "umm", "hmm", "mmm", "er", "haan",
     "you know", "i mean", "like", "basically", "literally",
     "kinda", "sorta",
@@ -57,80 +76,98 @@ IGNORED_FILLERS = {
     "seri", "apdi", "athu", "enna",
     "ante", "andi", "em",
     "andre", "matte",
-    "appo", "alle", "entha"
+    "appo", "alle", "entha",
+    "continue", "go on", "carry on", "keep going", "keep it up", "proceed",
+    "move forward", "press on", "push on", "keep at it", "hold on",
+    "stay on it", "keep moving", "resume", "persist", "maintain",
+    "keep working", "follow through", "advance", "keep progressing",
+    "further", "stick with it", "march on", "keep doing", "remain at it",
+    "don't stop", "continue onward", "onward", "carry forward", "keep pushing",
+    "keep rolling", "go ahead", "take it forward", "move ahead", "back to it",
+    "keep steady", "keep going as is", "hold course", "stay the course",
+    "keep pace", "progress", "push forward", "maintain momentum",
+    "drive ahead", "keep advancing", "keep flowing", "continue the same",
+    "keep following", "keep the momentum", "move along",
 }
 
-# Minimum STT confidence required to consider a spoken interruption real.
 CONFIDENCE_THRESHOLD = 0.60
 
 
 def is_filler(transcript, confidence):
-    """
-    Returns True if the user's speech is likely just filler / hesitation.
-    Used to prevent false interruptions while the agent is speaking.
-    """
+
     words = transcript.lower().strip().split()
 
-    # If recognition confidence is very low → treat as background / irrelevant sound.
+    # Ignore low-confidence audio (breathing, background room noise)
     if confidence < CONFIDENCE_THRESHOLD:
         return True
 
-    # If every word is in the filler dictionary → ignore.
-    return all(word in IGNORED_FILLERS for word in words)
+    # Ignore very short hesitation sounds like "mhmm", "mm", "huh"
+    if len(words) == 1 and len(words[0]) <= 3:
+        return True
+
+    # Ignore utterances made entirely of filler tokens
+    if all(w in IGNORED_FILLERS for w in words):
+        return True
+
+    # Otherwise → contains meaningful speech → treat as interruption
+    return False
 
 
 class InterruptAgent(Agent):
-    """
-    Custom agent that listens while speaking and interrupts itself
-    only when the user's speech contains meaningful content.
-    """
     def __init__(self):
         super().__init__(
-            instructions="You are a polite assistant. Speak clearly and conversationally."
+            instructions="You are a polite assistant. Speak clearly and conversationally.",
         )
+        self.interrupted = False  # NEW
 
     async def on_transcription(self, event):
-        # Only react if the agent is currently speaking (i.e., performing TTS).
+        # Only consider interruptions while the agent is speaking
         if self.session.agent.is_speaking:
             transcript = event.text
             confidence = event.confidence or 1.0
 
-            # Check if the transcript is filler.
             if is_filler(transcript, confidence):
                 print(f"[IGNORED FILLER] {transcript}")
                 return
 
-            # If meaningful speech is detected → stop speaking immediately.
+            # Meaningful user speech → interrupt
             print(f"[VALID INTERRUPTION] {transcript}")
             self.session.stop_speaking()
+            self.interrupted = True  # NEW
+
+    async def on_vad(self, event):
+        # event.speech == False → silence detected
+        if self.interrupted and not event.speech:
+            print("[USER FINISHED SPEAKING] → Resuming agent response...")
+            self.interrupted = False
+            await self.session.generate_reply()
 
 
 async def entrypoint(ctx: JobContext):
-    """
-    This function initializes the audio pipeline and starts the agent session.
-    """
     await ctx.connect()
 
+
     session = AgentSession(
-        vad=silero.VAD.load(),                 # Voice activity detection
-        stt=deepgram.STT(model="nova"),        # Real-time speech-to-text
-        llm=groq.LLM(model="llama-3.1-8b-instant"),  # Reasoning + text generation
-        tts=deepgram.TTS(model="aura-asteria-en"),   # Natural speech synthesis
+        vad=silero.VAD.load(),
+        stt=deepgram.STT(model="nova"),
+        llm=groq.LLM(model="llama-3.1-8b-instant"),
+        tts=deepgram.TTS(model="aura-asteria-en"),  # ✅ NEW TTS
     )
 
-    agent = InterruptAgent()
 
-    # Begin voice session inside the room.
-    await session.start(agent=agent, room=ctx.room)
+    agent=InterruptAgent()
 
-    # Attach interruption handler.
+    await session.start(
+        agent=agent,
+        room=ctx.room
+    )
+
     session.on("transcription", agent.on_transcription)
+    session.on("vad", agent.on_vad)   # Auto resume on silence
 
 
 if __name__ == "__main__":
-    # CLI entrypoint — enables running `python interrupt_handler_agent.py dev`
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
-
 
 ```
 ## 🧪 Steps to Test
@@ -145,9 +182,13 @@ Connect to your room:
 Room name: test-room
 While the agent is speaking, try:
 
-User Speech	Expected Behavior
-ummm… / haan… / hmm…	✅ Agent continues speaking (filler ignored)
-wait one second / stop / hold on	✅ Agent stops speaking immediately (valid interruption)
+Expected Test Behavior
+User Says	Agent Speaking?	Expected Behavior
+"umm hmm haan"	Yes	Agent continues speaking
+"wait one second"	Yes	Agent stops immediately
+"umm okay stop"	Yes	Agent stops (contains meaning)
+"umm"	No	Agent waits for further speech
+You stop speaking	Yes → Silence	Agent resumes talking
 
 ## Known Limitations
 Issue	Notes
@@ -157,7 +198,7 @@ TTS may cut its final syllable when interrupted	Expected behavior when enforcing
 
 ## Environment Details
 Component	Version
-Python	3.10 (recommended)
+Python	3.10.11
 livekit-agents	1.2.18
 OS Tested	Windows 11
 Runtime	cli.run_app(dev) interactive mode
