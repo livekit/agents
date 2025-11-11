@@ -38,9 +38,9 @@ from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
 from .log import logger
-from .telemetry import _setup_cloud_tracer, _upload_session_report, trace_types, tracer
+from .telemetry import _upload_session_report, trace_types, tracer
 from .types import NotGivenOr
-from .utils import http_context, is_given, misc, wait_for_participant
+from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -155,17 +155,7 @@ class JobContext:
         self._lock = asyncio.Lock()
 
     def _on_setup(self) -> None:
-        is_cloud = misc.is_cloud(self._info.url)
-
-        if is_cloud:  # and not self.is_fake_job():  #  and self.job.enable_recording:
-            cloud_hostname = urlparse(self._info.url).hostname
-            if cloud_hostname is None:
-                raise ValueError(f"invalid cloud hostname: {self._info.url}")
-            _setup_cloud_tracer(
-                room_id=self._info.job.room.sid,
-                job_id=self._info.job.id,
-                cloud_hostname=cloud_hostname,
-            )
+        pass
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -175,6 +165,8 @@ class JobContext:
 
         c = AgentsConsole.get_instance()
         report = self.make_session_report(session)
+
+        # console recording, dump data to a local file
         if c.enabled and c.record:
             try:
                 report_json = json.dumps(report.to_dict(), indent=2)
@@ -191,19 +183,20 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        try:
-            cloud_hostname = urlparse(self._info.url).hostname
-            if cloud_hostname is None:
-                raise ValueError(f"invalid cloud hostname: {self._info.url}")
-            await _upload_session_report(
-                room_id=self._info.job.room.sid,
-                job_id=self._info.job.id,
-                cloud_hostname=cloud_hostname,
-                report=report,
-                http_session=http_context.http_session(),
-            )
-        except Exception:
-            logger.exception("failed to upload the session report to LiveKit Cloud")
+        if report.enable_recording:
+            try:
+                cloud_hostname = urlparse(self._info.url).hostname
+                if not cloud_hostname:
+                    raise ValueError(f"invalid cloud hostname: {self._info.url}")
+                await _upload_session_report(
+                    room_id=self._info.job.room.sid,
+                    job_id=self._info.job.id,
+                    cloud_hostname=cloud_hostname,
+                    report=report,
+                    http_session=http_context.http_session(),
+                )
+            except Exception:
+                logger.exception("failed to upload the session report to LiveKit Cloud")
 
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
@@ -256,7 +249,8 @@ class JobContext:
                 "Cannot create the AgentSession report, the RecorderIO is still recording"
             )
 
-        return SessionReport(
+        sr = SessionReport(
+            enable_recording=session._enable_recording,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
@@ -264,9 +258,16 @@ class JobContext:
             audio_recording_path=recorder_io.output_path if recorder_io else None,
             audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
             events=session._recorded_events,
-            enable_user_data_training=True,  # TODO
             chat_history=session.history.copy(),
         )
+
+        if recorder_io:
+            if recorder_io.output_path:
+                sr.audio_recording_path = recorder_io.output_path
+            if recorder_io.recording_started_at:
+                sr.audio_recording_started_at = recorder_io.recording_started_at
+                sr.duration = sr.timestamp - sr.audio_recording_started_at
+        return sr
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
