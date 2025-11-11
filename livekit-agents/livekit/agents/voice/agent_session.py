@@ -17,6 +17,7 @@ from typing import (
     overload,
     runtime_checkable,
 )
+from urllib.parse import urlparse
 
 from opentelemetry import context as otel_context, trace
 
@@ -26,14 +27,14 @@ from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
-from ..telemetry import trace_types, tracer
+from ..telemetry import _setup_cloud_tracer, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
-from ..utils.misc import is_given
+from ..utils.misc import is_cloud, is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent
@@ -84,7 +85,7 @@ class AgentSessionOptions:
     false_interruption_timeout: float | None
     resume_false_interruption: bool
     min_consecutive_speech_delay: float
-    use_tts_aligned_transcript: NotGivenOr[bool]
+    use_tts_aligned_transcript: bool | None
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
@@ -300,7 +301,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             ivr_detection=ivr_detection,
-            use_tts_aligned_transcript=use_tts_aligned_transcript,
+            use_tts_aligned_transcript=use_tts_aligned_transcript
+            if is_given(use_tts_aligned_transcript)
+            else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -366,6 +369,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._root_span_context: otel_context.Context | None = None
 
         self._recorded_events: list[AgentEvent] = []
+        self._enable_recording: bool = False
 
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
@@ -454,6 +458,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        record: bool = True,
     ) -> RunResult: ...
 
     @overload
@@ -465,6 +470,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        record: bool = True,
     ) -> None: ...
 
     async def start(
@@ -475,7 +481,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
-        record: bool = True,
+        record: NotGivenOr[bool] = NOT_GIVEN,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -487,10 +493,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
+            record: Whether to record the audio
         """
         async with self._lock:
             if self._started:
                 return None
+
+            # configure observability first
+            job_ctx = get_job_context()
+            if not is_given(record):
+                record = job_ctx.job.enable_recording
+            self._enable_recording = record
+            if is_cloud(job_ctx._info.url) and self._enable_recording:
+                cloud_hostname = urlparse(job_ctx._info.url).hostname
+                logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
+                if cloud_hostname:
+                    _setup_cloud_tracer(
+                        room_id=job_ctx.job.room.sid,
+                        job_id=job_ctx.job.id,
+                        cloud_hostname=cloud_hostname,
+                    )
+            else:
+                self._enable_recording = False
 
             self._session_span = current_span = tracer.start_span("agent_session")
 
@@ -556,10 +580,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             # session can be restarted, register the callbacks only once
             try:
-                job_ctx = get_job_context()
-
                 if self.input.audio and self.output.audio:
-                    if record:
+                    if self._enable_recording:
                         self._recorder_io = RecorderIO(agent_session=self)
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
@@ -899,6 +921,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(user_input)
             else NOT_GIVEN
         )
+        # even though it's not speech, we'd want this attribute to compute e2e latency
+        if user_message:
+            user_message.metrics["stopped_speaking_at"] = time.time()
 
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
@@ -913,7 +938,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         with use_span:
             handle = activity._generate_reply(
-                user_message=user_message,
+                user_message=user_message if user_message else None,
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,

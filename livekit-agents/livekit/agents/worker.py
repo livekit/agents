@@ -34,6 +34,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import jwt
 from aiohttp import web
+from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
@@ -331,6 +332,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
+
+    if sys.version_info < (3, 10):
+        # Python 3.9 cannot pickle asyncio.Lock, customize for pickle support
+        def __getstate__(self) -> dict[str, Any]:
+            """Custom pickle support - exclude unpickleable asyncio objects."""
+            state = self.__dict__.copy()
+            # remove unpickleable asyncio.Lock (will be recreated in __setstate__)
+            state.pop("_lock", None)
+            return state
+
+        def __setstate__(self, state: dict[str, Any]) -> None:
+            """Restore state and recreate asyncio.Lock."""
+            self.__dict__.update(state)
+            # recreate the lock
+            self._lock = asyncio.Lock()
 
     @classmethod
     def from_server_options(cls, options: ServerOptions) -> AgentServer:
@@ -1079,6 +1095,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         logger.info(
             "registered worker",
             extra={
+                "agent_name": self._agent_name,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,
@@ -1153,9 +1170,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             extra={
                 "job_id": msg.job.id,
                 "dispatch_id": msg.job.dispatch_id,
-                "room_name": msg.job.room.name,
+                "room": msg.job.room.name,
+                "room_id": msg.job.room.sid,
                 "agent_name": self._agent_name,
                 "resuming": msg.resuming,
+                "enable_recording": msg.job.enable_recording,
             },
         )
 
@@ -1182,6 +1201,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         user_task.add_done_callback(self._tasks.discard)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
+        logger.debug(
+            "received assignment",
+            extra={
+                "agent_name": self._agent_name,
+                "room_id": assignment.job.room.sid,
+                "room": assignment.job.room.name,
+                "job_id": assignment.job.id,
+                "dispatch_id": assignment.job.dispatch_id,
+                "enable_recording": assignment.job.enable_recording,
+            },
+        )
         if assignment.job.id in self._pending_assignments:
             with contextlib.suppress(asyncio.InvalidStateError):
                 fut = self._pending_assignments.pop(assignment.job.id)
@@ -1189,7 +1219,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         else:
             logger.warning(
                 "received assignment for an unknown job",
-                extra={"job": assignment.job, "agent_name": self._agent_name},
+                extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
 
     async def _handle_termination(self, msg: agent.JobTermination) -> None:

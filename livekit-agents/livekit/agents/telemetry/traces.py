@@ -96,6 +96,23 @@ class _MetadataLogProcessor(LogRecordProcessor):
         return True
 
 
+class _ExtraDetailsProcessor(LogRecordProcessor):
+    def emit(self, log_data: LogData) -> None:
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(  # type: ignore
+                {"logger.name": log_data.instrumentation_scope.name}
+            )
+
+    def on_emit(self, log_data: LogData) -> None:
+        self.emit(log_data)
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
 def set_tracer_provider(
     tracer_provider: TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
@@ -153,6 +170,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         compression=otlp_compression,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+    logger_provider.add_log_record_processor(_ExtraDetailsProcessor())
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
@@ -190,9 +208,13 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
 
         metrics = item.metrics
         if "started_speaking_at" in metrics:
-            msg.metrics.started_speaking_at.FromSeconds(int(metrics["started_speaking_at"]))
+            msg.metrics.started_speaking_at.FromMilliseconds(
+                int(metrics["started_speaking_at"] * 1000)
+            )
         if "stopped_speaking_at" in metrics:
-            msg.metrics.stopped_speaking_at.FromSeconds(int(metrics["stopped_speaking_at"]))
+            msg.metrics.stopped_speaking_at.FromMilliseconds(
+                int(metrics["stopped_speaking_at"] * 1000)
+            )
         if "transcription_delay" in metrics:
             msg.metrics.transcription_delay = metrics["transcription_delay"]
         if "end_of_turn_delay" in metrics:
@@ -205,8 +227,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
             msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
         if "e2e_latency" in metrics:
             msg.metrics.e2e_latency = metrics["e2e_latency"]
-
-        msg.created_at.FromSeconds(int(item.created_at))
+        msg.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call":
         fc = item_pb.function_call
@@ -214,7 +235,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fc.call_id = item.call_id
         fc.arguments = item.arguments
         fc.name = item.name
-        fc.created_at.FromSeconds(int(item.created_at))
+        fc.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "function_call_output":
         fco = item_pb.function_call_output
@@ -223,7 +244,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         fco.call_id = item.call_id
         fco.output = item.output
         fco.is_error = item.is_error
-        fco.created_at.FromSeconds(int(item.created_at))
+        fco.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     elif item.type == "agent_handoff":
         ah = item_pb.agent_handoff
@@ -231,7 +252,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         if item.old_agent_id is not None:
             ah.old_agent_id = item.old_agent_id
         ah.new_agent_id = item.new_agent_id
-        ah.created_at.FromSeconds(int(item.created_at))
+        ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
     item_dict = MessageToDict(item_pb)
 
@@ -273,11 +294,16 @@ async def _upload_session_report(
             "room_id": report.room_id,
             "job_id": report.job_id,
             "room": report.room,
-            "lk.enable_user_data_training": report.enable_user_data_training,
         },
     )
 
-    def _log(body: str, timestamp: int, attributes: dict) -> None:
+    def _log(
+        body: str,
+        timestamp: int,
+        attributes: dict,
+        severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
+        severity_text: str = "unspecified",
+    ) -> None:
         chat_logger.emit(
             LogRecord(
                 body=body,
@@ -285,27 +311,36 @@ async def _upload_session_report(
                 attributes=attributes,
                 trace_id=0,
                 span_id=0,
+                severity_number=severity,
+                severity_text=severity_text,
                 trace_flags=TraceFlags.get_default(),
-                severity_number=SeverityNumber.UNSPECIFIED,
-                severity_text="unspecified",
             )
         )
 
     _log(
         body="session report",
-        timestamp=int((report.audio_recording_started_at or 0) * 1e9),
+        timestamp=int((report.timestamp or 0) * 1e9),
         attributes={
-            "chat.options": vars(report.options),
-            "chat.report_timestamp": report.timestamp,
+            "session.options": vars(report.options),
+            "session.report_timestamp": report.timestamp,
         },
     )
 
     for item in report.chat_history.items:
         item_log = _to_proto_chat_item(item)
+        severity: SeverityNumber = SeverityNumber.UNSPECIFIED
+        severity_text: str = "unspecified"
+
+        if item.type == "function_call_output" and item.is_error:
+            severity = SeverityNumber.ERROR
+            severity_text = "error"
+
         _log(
             body="chat item",
             timestamp=int(item.created_at * 1e9),
             attributes={"chat.item": item_log},
+            severity=severity,
+            severity_text=severity_text,
         )
 
     # emit recording
@@ -317,8 +352,10 @@ async def _upload_session_report(
     jwt = access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=room_id, enable_user_data_training=report.enable_user_data_training
+        room_id=room_id,
+        duration=int((report.duration or 0) * 1000),
     )
+    header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
 
     mp = aiohttp.MultipartWriter("form-data")
@@ -354,7 +391,8 @@ async def _upload_session_report(
         "Content-Type": mp.content_type,
     }
 
+    logger.debug("uploading session report to LiveKit Cloud", extra={"headers": headers})
     async with http_session.post(url, data=mp, headers=headers) as resp:
         resp.raise_for_status()
 
-    logger.info("uploaded")
+    logger.debug("finished uploading")

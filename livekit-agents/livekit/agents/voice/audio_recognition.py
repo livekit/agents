@@ -43,6 +43,7 @@ class _EndOfTurnInfo:
 class _PreemptiveGenerationInfo:
     new_transcript: str
     transcript_confidence: float
+    started_speaking_at: float | None
 
 
 class _TurnDetector(Protocol):
@@ -323,10 +324,10 @@ class AudioRecognition:
                 return
 
             self._hooks.on_final_transcript(ev)
-            logger.debug(
-                "received user transcript",
-                extra={"user_transcript": transcript, "language": self._last_language},
-            )
+            extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
+            if self._last_speaking_time:
+                extra["transcript_delay"] = time.time() - self._last_speaking_time
+            logger.debug("received user transcript", extra=extra)
 
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
@@ -356,6 +357,7 @@ class AudioRecognition:
                                 if self._final_transcript_confidence
                                 else 0
                             ),
+                            started_speaking_at=self._speech_start_time,
                         )
                     )
 
@@ -398,6 +400,7 @@ class AudioRecognition:
                     _PreemptiveGenerationInfo(
                         new_transcript=self._audio_preflight_transcript,
                         transcript_confidence=sum(confidence_vals) / len(confidence_vals),
+                        started_speaking_at=self._speech_start_time,
                     )
                 )
 
@@ -421,6 +424,8 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(None)
 
             self._speaking = True
+            if self._speech_start_time is None:
+                self._speech_start_time = time.time()
             self._last_speaking_time = time.time()
 
             if self._end_of_turn_task is not None:
@@ -450,9 +455,6 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._speech_end_time = time.time()
-
-            # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._speaking = False
 
             if self._vad_base_turn_detection or (
