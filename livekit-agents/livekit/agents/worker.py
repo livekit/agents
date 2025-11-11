@@ -332,6 +332,36 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._lock = asyncio.Lock()
 
+    @classmethod
+    def from_server_options(cls, options: ServerOptions) -> AgentServer:
+        server = cls(
+            job_executor_type=options.job_executor_type,
+            load_threshold=options.load_threshold,
+            job_memory_limit_mb=options.job_memory_limit_mb,
+            job_memory_warn_mb=options.job_memory_warn_mb,
+            drain_timeout=options.drain_timeout,
+            num_idle_processes=options.num_idle_processes,
+            shutdown_process_timeout=options.shutdown_process_timeout,
+            initialize_process_timeout=options.initialize_process_timeout,
+            permissions=options.permissions,
+            max_retry=options.max_retry,
+            api_key=options.api_key,
+            api_secret=options.api_secret,
+            host=options.host,
+            port=options.port,
+            http_proxy=options.http_proxy,
+            multiprocessing_context=options.multiprocessing_context,
+            prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+        )
+        server.setup(options.prewarm_fnc)
+        server.rtc_session(
+            options.entrypoint_fnc,
+            agent_name=options.agent_name,
+            type=options.worker_type,
+            on_request=options.request_fnc,
+        )
+        return server
+
     @overload
     def rtc_session(
         self,
@@ -751,6 +781,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             else:
                 await _join_jobs()
 
+    @utils.log_exceptions(logger=logger)
     async def simulate_job(
         self,
         room: str,
@@ -758,8 +789,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         fake_job: bool = False,
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
+        token: str | None = None,
     ) -> None:
         async with self._lock:
+            if token is not None:
+                # read identity from token if provided
+                agent_identity = api.TokenVerifier().verify(token, verify_signature=False).identity
+
             if agent_identity is None:
                 if not fake_job:
                     raise ValueError("agent_identity is None but fake_job is False")
@@ -783,18 +819,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 participant=None,
             )
 
+            token = token or (
+                api.AccessToken(self._api_key, self._api_secret)
+                .with_identity(agent_identity)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
                 job=job,
                 url=self._ws_url,
-                token=(
-                    api.AccessToken(self._api_key, self._api_secret)
-                    .with_identity(agent_identity)
-                    .with_kind("agent")
-                    .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                    .to_jwt()
-                ),
+                token=token,
                 fake_job=fake_job,
             )
 

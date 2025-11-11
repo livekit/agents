@@ -41,7 +41,7 @@ from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
-from ..utils import aio, is_given
+from ..utils import aio
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..worker import AgentServer, WorkerOptions
@@ -1258,7 +1258,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
 
     async def _worker_run(worker: AgentServer) -> None:
         try:
-            await server.run(devmode=args.devmode)
+            await server.run(devmode=args.devmode, unregistered=jupyter)
         except Exception:
             logger.exception("worker failed")
 
@@ -1513,32 +1513,6 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
 def run_app(server: AgentServer | WorkerOptions) -> None:
     if isinstance(server, WorkerOptions):
-        s = AgentServer(
-            job_executor_type=server.job_executor_type,
-            load_threshold=server.load_threshold,
-            job_memory_limit_mb=server.job_memory_limit_mb,
-            job_memory_warn_mb=server.job_memory_warn_mb,
-            drain_timeout=server.drain_timeout,
-            num_idle_processes=server.num_idle_processes,
-            shutdown_process_timeout=server.shutdown_process_timeout,
-            initialize_process_timeout=server.initialize_process_timeout,
-            permissions=server.permissions,
-            max_retry=server.max_retry,
-            api_key=server.api_key,
-            api_secret=server.api_secret,
-            host=server.host,
-            port=server.port,
-            http_proxy=server.http_proxy,
-            multiprocessing_context=server.multiprocessing_context,
-            prometheus_port=server.prometheus_port if is_given(server.prometheus_port) else None,
-        )
-        s.setup(server.prewarm_fnc)
-        s.rtc_session(
-            server.entrypoint_fnc,
-            agent_name=server.agent_name,
-            type=server.worker_type,
-            on_request=server.request_fnc,
-        )
-        server = s
+        server = AgentServer.from_server_options(server)
 
     _build_cli(server)()
