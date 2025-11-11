@@ -399,6 +399,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
+            skip_aligning = False
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
@@ -432,8 +433,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     for word, start, end in zip(
                         word_timestamps["words"], word_timestamps["start"], word_timestamps["end"]
                     ):
-                        if not sent_tokens:
+                        if not sent_tokens or skip_aligning:
                             word = f"{word} "
+                            skip_aligning = True
                         else:
                             sent = sent_tokens.popleft()
                             if (idx := sent.find(word)) != -1:
@@ -444,10 +446,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                                     # merge the remaining whitespace to the next sentence
                                     sent_tokens[0] = sent + sent_tokens[0]
                             else:
-                                logger.warning(f"misaligned TTS word received: {word}, expecting {sent}")
                                 word = f"{word} "
-                                # give up aligning the rest of the run
-                                sent_tokens.clear()
+                                skip_aligning = True
 
                         output_emitter.push_timed_transcript(
                             TimedString(text=word, start_time=start, end_time=end)
