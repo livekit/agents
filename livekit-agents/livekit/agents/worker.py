@@ -1043,6 +1043,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         logger.info(
             "registered worker",
             extra={
+                "agent_name": self._agent_name,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,
