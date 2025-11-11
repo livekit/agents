@@ -405,13 +405,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if msg_trace_id and msg_trace_id != trace_id:
                     trace_id = msg_trace_id
                     logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
-                
+
                 base_resp = data.get("base_resp", {})
                 status_code = base_resp.get("status_code", 0)
                 if status_code != 0:
                     status_msg = base_resp.get("status_msg", "Unknown error")
                     error_trace_id = msg_trace_id or trace_id
-                    
+
                     logger.error(
                         f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
                         extra={"request_id": request_id, "full_response": data}
@@ -529,12 +529,12 @@ class ChunkedStream(tts.ChunkedStream):
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
-                
+
                 # Extract trace_id from response headers (all requests have this)
                 # Note: api.minimax.io also returns trace_id in response body root.trace_id
                 trace_id = resp.headers.get("Trace-Id") or resp.headers.get("X-Trace-Id")
                 minimax_request_id = resp.headers.get("Minimax-Request-Id")
-                
+
                 if trace_id:
                     logger.debug(f"MiniMax HTTP stream request started, trace_id={trace_id}, minimax_request_id={minimax_request_id}")
                 else:
