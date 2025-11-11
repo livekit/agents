@@ -130,3 +130,56 @@ async def entrypoint(ctx: JobContext):
 if __name__ == "__main__":
     # CLI entrypoint — enables running `python interrupt_handler_agent.py dev`
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+
+
+```
+## 🧪 Steps to Test
+
+1. Start the agent worker:
+   ```bash
+   python interrupt_handler_agent.py dev
+Open LiveKit Console → Sandbox → Web Voice Agent
+
+Connect to your room:
+
+Room name: test-room
+While the agent is speaking, try:
+
+User Speech	Expected Behavior
+ummm… / haan… / hmm…	✅ Agent continues speaking (filler ignored)
+wait one second / stop / hold on	✅ Agent stops speaking immediately (valid interruption)
+
+## Known Limitations
+Issue	Notes
+No ML-based filler detection yet	Currently rule-based filtering only
+Strong accents may misclassify as real speech	Could be improved via phoneme-based ASR or turn-taking models
+TTS may cut its final syllable when interrupted	Expected behavior when enforcing real-time immediate stop
+
+## Environment Details
+Component	Version
+Python	3.10 (recommended)
+livekit-agents	1.2.18
+OS Tested	Windows 11
+Runtime	cli.run_app(dev) interactive mode
+
+## Required Environment Variables
+Ensure these are exported before running:
+
+bash
+```
+export LIVEKIT_URL="wss://YOURPROJECT.livekit.cloud"
+export LIVEKIT_API_KEY="YOUR_KEY"
+export LIVEKIT_API_SECRET="YOUR_SECRET"
+export GROQ_API_KEY="YOUR_GROQ_KEY"
+export DEEPGRAM_API_KEY="YOUR_DEEPGRAM_KEY"
+If using Windows PowerShell:
+```
+
+powershell
+```
+setx LIVEKIT_URL "wss://YOURPROJECT.livekit.cloud"
+setx LIVEKIT_API_KEY "YOUR_KEY"
+setx LIVEKIT_API_SECRET "YOUR_SECRET"
+setx GROQ_API_KEY "YOUR_GROQ_KEY"
+setx DEEPGRAM_API_KEY "YOUR_DEEPGRAM_KEY"
+```
