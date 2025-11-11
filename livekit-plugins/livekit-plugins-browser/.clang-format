@@ -1,0 +1,21 @@
+# Defines the Chromium style for automatic reformatting.
+# http://clang.llvm.org/docs/ClangFormatStyleOptions.html
+BasedOnStyle: Chromium
+---
+Language: ObjC
+BasedOnStyle: Google
+BinPackParameters: false
+BinPackArguments: false
+ColumnLimit: 100
+ObjCBlockIndentWidth: 2
+AllowAllParametersOfDeclarationOnNextLine: true
+AlignOperands: false
+AlwaysBreakBeforeMultilineStrings: false
+AllowShortFunctionsOnASingleLine: Inline
+BreakBeforeTernaryOperators: false
+IndentWrappedFunctionNames: true
+ContinuationIndentWidth: 4
+ObjCSpaceBeforeProtocolList: true
+---
+Language: Cpp
+IncludeBlocks: Regroup

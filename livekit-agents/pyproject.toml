@@ -1,0 +1,119 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-agents"
+dynamic = ["version"]
+description = "A powerful framework for building realtime voice AI agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "click~=8.1",
+    "certifi>=2025.6.15",
+    "livekit>=1.0.12,<2",
+    "livekit-api>=1.0.5,<2",
+    "livekit-protocol~=1.0",
+    "livekit-blingfire~=1.0",
+    "protobuf>=3",
+    "pyjwt>=2.0",
+    "types-protobuf>=4",
+    "watchfiles>=1.0",
+    "psutil>=7.0",
+    "aiohttp~=3.10",
+    "typing-extensions>=4.12",
+    "sounddevice>=0.5",
+    "docstring_parser>=0.16",
+    "eval-type-backport",
+    "colorama>=0.4.6",
+    "av>=14.0.0,<16",
+    "numpy>=1.26.0",
+    "pydantic>=2.0,<3",
+    "nest-asyncio>=1.6.0",
+    "opentelemetry-api>=1.34",
+    "opentelemetry-sdk>=1.34.1",
+    "opentelemetry-exporter-otlp>=1.34.1",
+    "prometheus-client>=0.22",
+    "openai>=1.99.2",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.10.0, <2; python_version >= '3.10'"]
+codecs = ["av>=12.0.0", "numpy>=1.26.0"]
+images = ["pillow>=10.3.0"]
+anam = ["livekit-plugins-anam>=1.2.18"]
+anthropic = ["livekit-plugins-anthropic>=1.2.18"]
+assemblyai = ["livekit-plugins-assemblyai>=1.2.18"]
+aws = ["livekit-plugins-aws>=1.2.18"]
+azure = ["livekit-plugins-azure>=1.2.18"]
+baseten = ["livekit-plugins-baseten>=1.2.18"]
+bey = ["livekit-plugins-bey>=1.2.18"]
+bithuman = ["livekit-plugins-bithuman>=1.2.18"]
+cartesia = ["livekit-plugins-cartesia>=1.2.18"]
+clova = ["livekit-plugins-clova>=1.2.18"]
+deepgram = ["livekit-plugins-deepgram>=1.2.18"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.2.18"]
+fal = ["livekit-plugins-fal>=1.2.18"]
+fishaudio = ["livekit-plugins-fishaudio>=1.2.17; python_version >= '3.10'"]
+fireworksai = ["livekit-plugins-fireworksai>=1.2.18"]
+gladia = ["livekit-plugins-gladia>=1.2.18"]
+google = ["livekit-plugins-google>=1.2.18"]
+groq = ["livekit-plugins-groq>=1.2.18"]
+hedra = ["livekit-plugins-hedra>=1.2.18"]
+hume = ["livekit-plugins-hume>=1.2.18"]
+inworld = ["livekit-plugins-inworld>=1.2.18"]
+langchain = ["livekit-plugins-langchain>=1.2.18"]
+lmnt = ["livekit-plugins-lmnt>=1.2.18"]
+minimax = ["livekit-plugins-minimax-ai>=1.2.15"]
+mistralai = ["livekit-plugins-mistralai>=1.2.18"]
+neuphonic = ["livekit-plugins-neuphonic>=1.2.18"]
+nltk = ["livekit-plugins-nltk>=1.2.18"]
+openai = ["livekit-plugins-openai>=1.2.18"]
+resemble = ["livekit-plugins-resemble>=1.2.18"]
+rime = ["livekit-plugins-rime>=1.2.18"]
+sarvam = ["livekit-plugins-sarvam>=1.2.18"]
+silero = ["livekit-plugins-silero>=1.2.18"]
+simli = ["livekit-plugins-simli>=1.2.18"]
+smallestai = ["livekit-plugins-smallestai>=1.2.18"]
+soniox = ["livekit-plugins-soniox>=1.2.18"]
+speechify = ["livekit-plugins-speechify>=1.2.18"]
+speechmatics = ["livekit-plugins-speechmatics>=1.2.18"]
+spitch = ["livekit-plugins-spitch>=1.2.18"]
+tavus = ["livekit-plugins-tavus>=1.2.18"]
+turn-detector = ["livekit-plugins-turn-detector>=1.2.18"]
+ultravox = ["livekit-plugins-ultravox>=1.2.18"]
+upliftai = ["livekit-plugins-upliftai>=1.2.18"]
+
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/agents/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
+
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]

@@ -1,0 +1,59 @@
+name: Publish docs
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      DOCS_DEPLOY_AWS_ACCESS_KEY: {}
+      DOCS_DEPLOY_AWS_API_SECRET: {}
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install package, plugins, and docs dependencies
+        run: |
+          uv sync --all-extras --group docs
+
+      - name: Build Docs
+        run: |
+          uv run --active pdoc --skip-errors --html --output-dir=docs livekit
+
+      - name: S3 Upload
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          # If branch is not 0.x, upload to /v1
+          if [[ $BRANCH != "0.x" ]]; then
+            aws s3 cp docs/ s3://livekit-docs/python/v1 --recursive
+          # Else, upload to root, preserving the v1 directory
+          else
+            aws s3 sync docs/ s3://livekit-docs/python --exclude "v1/*" --delete
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"
+
+      - name: Expire cloudfront cache
+        run: |
+          aws cloudfront create-invalidation --distribution-id EJJ40KLJ3TRY9 --paths "/python/*"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
+          AWS_DEFAULT_REGION: "us-east-1"

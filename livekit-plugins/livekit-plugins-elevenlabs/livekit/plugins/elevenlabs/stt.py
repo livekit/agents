@@ -1,0 +1,172 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import asyncio
+import os
+from dataclasses import dataclass
+
+import aiohttp
+
+from livekit import rtc
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+)
+from livekit.agents.stt import SpeechEventType, STTCapabilities
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import AudioBuffer, http_context, is_given
+
+API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
+AUTHORIZATION_HEADER = "xi-api-key"
+
+
+@dataclass
+class _STTOptions:
+    api_key: str
+    base_url: str
+    language_code: str | None = None
+    tag_audio_events: bool = True
+
+
+class STT(stt.STT):
+    def __init__(
+        self,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
+        tag_audio_events: bool = True,
+    ) -> None:
+        """
+        Create a new instance of ElevenLabs STT.
+
+        Args:
+            api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
+            base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
+            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            language_code (NotGivenOr[str]): Language code for the STT model. Optional.
+            tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription. Default is True.
+        """  # noqa: E501
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
+
+        elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
+        if not elevenlabs_api_key:
+            raise ValueError(
+                "ElevenLabs API key is required, either as argument or "
+                "set ELEVEN_API_KEY environmental variable"
+            )
+        self._opts = _STTOptions(
+            api_key=elevenlabs_api_key,
+            base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
+            tag_audio_events=tag_audio_events,
+        )
+        if is_given(language_code):
+            self._opts.language_code = language_code
+        self._session = http_session
+
+    @property
+    def model(self) -> str:
+        return "Scribe"
+
+    @property
+    def provider(self) -> str:
+        return "ElevenLabs"
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = http_context.http_session()
+
+        return self._session
+
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt.SpeechEvent:
+        if is_given(language):
+            self._opts.language_code = language
+
+        wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
+        form = aiohttp.FormData()
+        form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
+        form.add_field("model_id", "scribe_v1")
+        form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
+        if self._opts.language_code:
+            form.add_field("language_code", self._opts.language_code)
+
+        try:
+            async with self._ensure_session().post(
+                f"{self._opts.base_url}/speech-to-text",
+                data=form,
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+            ) as response:
+                response_json = await response.json()
+                extracted_text = response_json.get("text")
+                language_code = response_json.get("language_code")
+                speaker_id = None
+                start_time, end_time = 0, 0
+                words = response_json.get("words")
+                if words:
+                    speaker_id = words[0].get("speaker_id", None)
+                    start_time = min(w.get("start", 0) for w in words)
+                    end_time = max(w.get("end", 0) for w in words)
+
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
+
+        return self._transcription_to_speech_event(
+            language_code=language_code,
+            text=extracted_text,
+            start_time=start_time,
+            end_time=end_time,
+            speaker_id=speaker_id,
+        )
+
+    def _transcription_to_speech_event(
+        self,
+        language_code: str,
+        text: str,
+        start_time: float,
+        end_time: float,
+        speaker_id: str | None,
+    ) -> stt.SpeechEvent:
+        return stt.SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[
+                stt.SpeechData(
+                    text=text,
+                    language=language_code,
+                    speaker_id=speaker_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            ],
+        )
