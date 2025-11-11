@@ -64,6 +64,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
+from .transcription.filler_filter import InterruptionFilterResult
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -1110,15 +1111,40 @@ class AgentActivity(RecognitionHooks):
             # ignore if realtime model has turn detection enabled
             return
 
-        if (
-            self.stt is not None
-            and opt.min_interruption_words > 0
-            and self._audio_recognition is not None
-        ):
-            text = self._audio_recognition.current_transcript
+        transcript: str | None = None
+        classification: InterruptionFilterResult | None = None
 
-            # TODO(long): better word splitting for multi-language
-            if len(split_words(text, split_character=True)) < opt.min_interruption_words:
+        if self.stt is not None and self._audio_recognition is not None:
+            transcript = self._audio_recognition.current_transcript
+            classification = self._session._classify_interruption_transcript(transcript)
+            filter_enabled = opt.ignore_filler_interruptions
+
+            if classification.is_filler_only:
+                reason = "empty_transcript" if classification.token_count == 0 else "filler_only"
+                logger.debug(
+                    "ignored potential interruption candidate",
+                    extra={
+                        "transcript": transcript,
+                        "normalized_tokens": classification.tokens,
+                        "reason": reason,
+                        "filter_enabled": filter_enabled,
+                    },
+                )
+                if filter_enabled or classification.token_count == 0:
+                    return
+
+            if (
+                opt.min_interruption_words > 0
+                and classification.token_count < opt.min_interruption_words
+            ):
+                logger.debug(
+                    "ignored potential interruption candidate: below min_interruption_words",
+                    extra={
+                        "transcript": transcript,
+                        "token_count": classification.token_count,
+                        "min_interruption_words": opt.min_interruption_words,
+                    },
+                )
                 return
 
         if self._rt_session is not None:
@@ -1129,6 +1155,16 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
+            logger.debug(
+                "accepting user interruption",
+                extra={
+                    "transcript": transcript,
+                    "normalized_tokens": classification.tokens if classification else None,
+                    "token_count": classification.token_count if classification else None,
+                    "min_interruption_words": opt.min_interruption_words,
+                },
+            )
+
             self._paused_speech = self._current_speech
 
             # reset the false interruption timer
