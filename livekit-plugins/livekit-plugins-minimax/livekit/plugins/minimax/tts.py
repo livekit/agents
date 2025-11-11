@@ -187,7 +187,7 @@ class TTS(tts.TTS):
             raise ValueError(f"intensity must be between -100 and 100, but got {intensity}")
         if timbre is not None and not (-100 <= timbre <= 100):
             raise ValueError(f"timbre must be between -100 and 100, but got {timbre}")
-        
+
         # Validate fluent emotion is only used with speech-2.6-* models
         if emotion == "fluent" and not model.startswith("speech-2.6"):
             raise ValueError(
@@ -298,10 +298,10 @@ class TTS(tts.TTS):
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
         session = self._ensure_session()
         ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
-        
+
         # Log WebSocket connection establishment
         logger.debug(f"MiniMax WebSocket connected to {url}")
-        
+
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -336,7 +336,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Initialize with temporary ID, will be updated from WebSocket messages
         request_id = utils.shortuuid()
         trace_id = request_id  # Use trace_id directly instead of creating a dict
-        
+
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
@@ -398,7 +398,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data: dict[str, Any] = json.loads(msg.data)
-                
+
                 # Extract trace_id (priority: root.trace_id > base_resp.trace_id)
                 # api.minimax.io returns trace_id in root.trace_id, api.minimaxi.com may return in base_resp.trace_id
                 msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
@@ -416,7 +416,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
                         extra={"request_id": request_id, "full_response": data}
                     )
-                    
+
                     raise APIStatusError(
                         f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
                         request_id=error_trace_id,
@@ -557,12 +557,12 @@ class ChunkedStream(tts.ChunkedStream):
                         continue
 
                     data = json.loads(line[5:])
-                    
+
                     # api.minimax.io returns trace_id in response body root level
                     body_trace_id = data.get("trace_id")
                     if body_trace_id and body_trace_id != trace_id:
                         logger.debug(f"Found trace_id in response body: {body_trace_id}")
-                    
+
                     if audio := data.get("data", {}).get("audio"):
                         output_emitter.push(bytes.fromhex(audio))
                     else:
@@ -572,12 +572,12 @@ class ChunkedStream(tts.ChunkedStream):
                             status_msg = base_resp.get("status_msg", "Unknown error")
                             # trace_id priority: response body top level > response headers
                             error_trace_id = body_trace_id or trace_id
-                            
+
                             logger.error(
                                 f"MiniMax HTTP stream error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
                                 extra={"full_response": data}
                             )
-                            
+
                             raise APIStatusError(
                                 f"MiniMax error [{status_code}]: {status_msg} (trace_id: {error_trace_id})",
                                 request_id=error_trace_id,
