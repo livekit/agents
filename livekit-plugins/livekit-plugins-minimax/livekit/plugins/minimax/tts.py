@@ -142,10 +142,10 @@ class TTS(tts.TTS):
 
         Args:
             model (TTSModel | str, optional): The Minimax TTS model to use. Defaults to DEFAULT_MODEL.
-                Available models: speech-2.6-hd, speech-2.6-turbo, speech-2.5-hd-preview, 
+                Available models: speech-2.6-hd, speech-2.6-turbo, speech-2.5-hd-preview,
                 speech-2.5-turbo-preview, speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo.
             voice (TTSVoice | str, optional): The voice to use. Defaults to DEFAULT_VOICE_ID.
-            emotion (TTSEmotion | None, optional): Emotion control for speech synthesis. 
+            emotion (TTSEmotion | None, optional): Emotion control for speech synthesis.
                 Options: "happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral", "fluent".
                 Note: "fluent" emotion is only supported by speech-2.6-* models. Defaults to None.
             speed (float, optional): Speech speed, higher values speak faster. Range is [0.5, 2.0].
