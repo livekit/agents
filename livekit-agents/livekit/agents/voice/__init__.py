@@ -17,6 +17,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
+from .filler_filter import FillerFilterConfig, FillerFilteredAgentActivity
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
@@ -47,6 +48,8 @@ __all__ = [
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
     "TranscriptSynchronizer",
+    "FillerFilterConfig",
+    "FillerFilteredAgentActivity",
     "io",
     "room_io",
     "run_result",
