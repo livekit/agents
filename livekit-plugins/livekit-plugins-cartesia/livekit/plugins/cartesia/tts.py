@@ -173,7 +173,12 @@ class TTS(tts.TTS):
             self._stream_pacer = text_pacing
 
         if word_timestamps:
-            if "preview" not in self._opts.model and self._opts.language not in {"en", "de", "es", "fr"}:
+            if "preview" not in self._opts.model and self._opts.language not in {
+                "en",
+                "de",
+                "es",
+                "fr",
+            }:
                 # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
                 logger.warning(
                     "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
@@ -439,7 +444,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         else:
                             sent = sent_tokens.popleft()
                             if (idx := sent.find(word)) != -1:
-                                word, sent = sent[:idx + len(word)], sent[idx + len(word):]
+                                word, sent = sent[: idx + len(word)], sent[idx + len(word) :]
                                 if sent.strip():
                                     sent_tokens.appendleft(sent)
                                 elif sent and sent_tokens:
