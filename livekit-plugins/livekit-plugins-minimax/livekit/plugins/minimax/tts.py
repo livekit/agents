@@ -382,7 +382,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Initialize trace_id to ensure it's available in all code paths
             current_trace_id = trace_id
-            
+
             while True:
                 msg = await ws.receive()
                 if msg.type in (
