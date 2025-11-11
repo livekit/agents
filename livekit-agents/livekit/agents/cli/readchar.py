@@ -262,7 +262,7 @@ def _win_readkey() -> str:
     return ch
 
 
-key: type[_BaseKey]
+key: type[_PosixKey | _WinKey]
 readchar: Callable[[], str]
 readkey: Callable[[], str]
 

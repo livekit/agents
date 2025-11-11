@@ -82,8 +82,7 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
             "content": msg.output,
         }
 
-    else:
-        raise ValueError(f"unsupported message type: {msg.type}")
+    raise ValueError(f"unsupported message type: {msg.type}")
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:

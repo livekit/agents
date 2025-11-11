@@ -312,6 +312,8 @@ async def _upload_session_report(
                 body=body,
                 timestamp=timestamp,
                 attributes=attributes,
+                trace_id=0,
+                span_id=0,
                 severity_number=severity,
                 severity_text=severity_text,
                 trace_flags=TraceFlags.get_default(),

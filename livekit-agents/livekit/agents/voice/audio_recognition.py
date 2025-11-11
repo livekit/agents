@@ -563,7 +563,7 @@ class AudioRecognition:
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
-                    transcription_delay=transcription_delay,
+                    transcription_delay=transcription_delay or 0,
                     end_of_turn_delay=end_of_turn_delay,
                     started_speaking_at=started_speaking_at,
                     stopped_speaking_at=stopped_speaking_at,

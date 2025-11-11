@@ -186,14 +186,15 @@ class JobContext:
         if report.enable_recording:
             try:
                 cloud_hostname = urlparse(self._info.url).hostname
-                if cloud_hostname:
-                    await _upload_session_report(
-                        room_id=self._info.job.room.sid,
-                        job_id=self._info.job.id,
-                        cloud_hostname=cloud_hostname,
-                        report=report,
-                        http_session=http_context.http_session(),
-                    )
+                if not cloud_hostname:
+                    raise ValueError(f"invalid cloud hostname: {self._info.url}")
+                await _upload_session_report(
+                    room_id=self._info.job.room.sid,
+                    job_id=self._info.job.id,
+                    cloud_hostname=cloud_hostname,
+                    report=report,
+                    http_session=http_context.http_session(),
+                )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 

@@ -19,6 +19,8 @@ from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import (
     StopResponse,
     ToolFlag,
+    _FunctionToolInfo,
+    _RawFunctionToolInfo,
     get_function_info,
     get_raw_function_info,
     is_function_tool,
@@ -835,9 +837,7 @@ class AgentActivity(RecognitionHooks):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
                 filtered_tools = []
                 for tool in tools:
-                    info: (
-                        tool_context._FunctionToolInfo | tool_context._RawFunctionToolInfo | None
-                    ) = None
+                    info: _RawFunctionToolInfo | _FunctionToolInfo
                     if is_raw_function_tool(tool):
                         info = get_raw_function_info(tool)
                     elif is_function_tool(tool):
