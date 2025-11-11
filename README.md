@@ -73,7 +73,8 @@ Here’s how the final system fits within LiveKit’s voice agent pipeline:
           │ Continue Speaking  OR  Stop gracefully        │
           └───────────────────────────────────────────────┘
 ```
-## 🎯 Video
+## 🎥 Video
+[Watch Demo](https://drive.google.com/file/d/1RS9-F7PXJw2MAxE3jSzB1eVZh-iViieU/view?usp=sharing)
 
 ## 🧪 How to Test or Recreate It  
 
