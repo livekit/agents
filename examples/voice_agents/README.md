@@ -137,6 +137,7 @@ TTS_MODEL=cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc
 ```bash
 pip install -r examples/voice_agents/requirements.txt
 ```
+##### 3. Python - 3.10+
 ## 📖 Additional Resources
 
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
