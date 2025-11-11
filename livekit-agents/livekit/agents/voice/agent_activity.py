@@ -607,19 +607,18 @@ class AgentActivity(RecognitionHooks):
         # `resume` must only be called by AgentSession
 
         async with self._lock:
-            start_span = tracer.start_span(
+            span = tracer.start_span(
                 "resume_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
                 await self._start_session()
             finally:
-                start_span.end()
+                span.end()
 
     def _wake_up_scheduling_task(self) -> None:
         self._q_updated.set()
 
-    @tracer.start_as_current_span("pause_agent_activity")
     async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
         # `pause` must only be called by AgentSession
 
@@ -629,8 +628,15 @@ class AgentActivity(RecognitionHooks):
 
         # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
-            await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
-            await self._close_session()
+            span = tracer.start_span(
+                "pause_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+            )
+            try:
+                await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+                await self._close_session()
+            finally:
+                span.end()
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."

@@ -3,28 +3,28 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-playai"
+name = "livekit-plugins-fishaudio"
 dynamic = ["version"]
-description = "Agent Framework plugin for voice synthesis with PlayAI's API."
+description = "Agent Framework plugin for voice synthesis with Fish Audio's API."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "livekit", "playHT", "playAI"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "fishaudio"]
 classifiers = [
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.2.15",
-    "pyht>=0.1.14",
-    "aiohttp",
-    "livekit",
+    "livekit-agents[codecs]>=1.2.18",
+    "fish-audio-sdk; python_version >= '3.10'",
 ]
 
 [project.urls]
@@ -33,7 +33,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/playai/version.py"
+path = "livekit/plugins/fishaudio/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

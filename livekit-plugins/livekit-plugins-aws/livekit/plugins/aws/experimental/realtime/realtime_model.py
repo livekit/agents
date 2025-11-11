@@ -12,7 +12,6 @@ import uuid
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Callable, Literal, cast
 
 import boto3
@@ -124,38 +123,35 @@ class _MessageGeneration:
 
 @dataclass
 class _ResponseGeneration:
-    """Book-keeping dataclass tracking the lifecycle of a Sonic turn.
+    """Book-keeping dataclass tracking the lifecycle of a Nova Sonic completion.
 
-    This object is created whenever we receive a *completion_start* event from the model
-    and is disposed of once the assistant turn finishes (e.g. *END_TURN*).
+    Nova Sonic uses a completion model where one completionStart event begins a cycle
+    that may contain multiple content blocks (USER ASR, TOOL, ASSISTANT text/audio).
+    This generation stays open for the entire completion cycle.
 
     Attributes:
-        message_ch (utils.aio.Chan[llm.MessageGeneration]): Multiplexed stream for all assistant messages.
+        completion_id (str): Nova Sonic's completionId that ties all events together.
+        message_ch (utils.aio.Chan[llm.MessageGeneration]): Stream for assistant messages.
         function_ch (utils.aio.Chan[llm.FunctionCall]): Stream that emits function tool calls.
-        input_id (str): Synthetic message id for the user input of the current turn.
-        response_id (str): Synthetic message id for the assistant reply of the current turn.
-        messages (dict[str, _MessageGeneration]): Map of message_id -> per-message stream containers.
-        user_messages (dict[str, str]): Map Bedrock content_id -> input_id.
-        speculative_messages (dict[str, str]): Map Bedrock content_id -> response_id (assistant side).
-        tool_messages (dict[str, str]): Map Bedrock content_id -> response_id for tool calls.
-        output_text (str): Accumulated assistant text (only used for metrics / debugging).
-        _created_timestamp (str): ISO-8601 timestamp when the generation record was created.
+        response_id (str): LiveKit response_id for the assistant's response.
+        message_gen (_MessageGeneration | None): Current message generation for assistant output.
+        content_id_map (dict[str, str]): Map Nova Sonic contentId -> type (USER/ASSISTANT/TOOL).
+        _created_timestamp (float): Wall-clock time when the generation record was created.
         _first_token_timestamp (float | None): Wall-clock time of first token emission.
         _completed_timestamp (float | None): Wall-clock time when the turn fully completed.
+        _restart_attempts (int): Number of restart attempts for this specific completion.
     """  # noqa: E501
 
+    completion_id: str
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
-    input_id: str  # corresponds to user's portion of the turn
-    response_id: str  # corresponds to agent's portion of the turn
-    messages: dict[str, _MessageGeneration] = field(default_factory=dict)
-    user_messages: dict[str, str] = field(default_factory=dict)
-    speculative_messages: dict[str, str] = field(default_factory=dict)
-    tool_messages: dict[str, str] = field(default_factory=dict)
-    output_text: str = ""  # agent ASR text
-    _created_timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    response_id: str
+    message_gen: _MessageGeneration | None = None
+    content_id_map: dict[str, str] = field(default_factory=dict)
+    _created_timestamp: float = field(default_factory=time.time)
     _first_token_timestamp: float | None = None
     _completed_timestamp: float | None = None
+    _restart_attempts: int = 0
 
 
 class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
@@ -272,16 +268,12 @@ class RealtimeModel(llm.RealtimeModel):
     def session(self) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
         sess = RealtimeSession(self)
-
-        # note: this is a hack to get the session to initialize itself
-        # TODO: change how RealtimeSession is initialized by creating a single task main_atask that spawns subtasks  # noqa: E501
-        asyncio.create_task(sess.initialize_streams())
         self._sessions.add(sess)
         return sess
 
-        # stub b/c RealtimeSession.aclose() is invoked directly
-        async def aclose(self) -> None:
-            pass
+    async def aclose(self) -> None:
+        """Close all active sessions."""
+        pass
 
 
 class RealtimeSession(  # noqa: F811
@@ -327,16 +319,15 @@ class RealtimeSession(  # noqa: F811
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
-        self._tools_ready = asyncio.get_running_loop().create_future()
-        self._instructions_ready = asyncio.get_running_loop().create_future()
-        self._chat_ctx_ready = asyncio.get_running_loop().create_future()
+        # CRITICAL: Initialize futures as None for lazy creation
+        # Creating futures in __init__ causes race conditions during session restart.
+        # Futures are created in initialize_streams() when the event loop is guaranteed to exist.
+        self._tools_ready: asyncio.Future[bool] | None = None
+        self._instructions_ready: asyncio.Future[bool] | None = None
+        self._chat_ctx_ready: asyncio.Future[bool] | None = None
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
         self._current_generation: _ResponseGeneration | None = None
-
-        # note: currently tracks session restart attempts across all sessions
-        # TODO: track restart attempts per turn
-        self._session_restart_attempts = 0
 
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
@@ -356,6 +347,11 @@ class RealtimeSession(  # noqa: F811
         self._turn_tracker = _TurnTracker(
             cast(Callable[[str, Any], None], self.emit),
             cast(Callable[[], None], self.emit_generation_event),
+        )
+
+        # Create main task to manage session lifecycle
+        self._main_atask = asyncio.create_task(
+            self.initialize_streams(), name="RealtimeSession.initialize_streams"
         )
 
     @utils.log_exceptions(logger=logger)
@@ -491,6 +487,14 @@ class RealtimeSession(  # noqa: F811
             )
 
             if not is_restart:
+                # Lazy-initialize futures if needed
+                if self._tools_ready is None:
+                    self._tools_ready = asyncio.get_running_loop().create_future()
+                if self._instructions_ready is None:
+                    self._instructions_ready = asyncio.get_running_loop().create_future()
+                if self._chat_ctx_ready is None:
+                    self._chat_ctx_ready = asyncio.get_running_loop().create_future()
+
                 pending_events: list[asyncio.Future] = []
                 if not self.tools.function_tools:
                     pending_events.append(self._tools_ready)
@@ -506,14 +510,14 @@ class RealtimeSession(  # noqa: F811
                     if pending_events:
                         await asyncio.wait_for(asyncio.gather(*pending_events), timeout=0.5)
                 except asyncio.TimeoutError:
-                    if not self._tools_ready.done():
+                    if self._tools_ready and not self._tools_ready.done():
                         logger.warning("Tools not ready after 500ms, continuing without them")
 
-                    if not self._instructions_ready.done():
+                    if self._instructions_ready and not self._instructions_ready.done():
                         logger.warning(
                             "Instructions not received after 500ms, proceeding with default instructions"  # noqa: E501
                         )
-                    if not self._chat_ctx_ready.done():
+                    if self._chat_ctx_ready and not self._chat_ctx_ready.done():
                         logger.warning(
                             "Chat context not received after 500ms, proceeding with empty chat context"  # noqa: E501
                         )
@@ -560,9 +564,11 @@ class RealtimeSession(  # noqa: F811
     @utils.log_exceptions(logger=logger)
     def emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers."""
-        logger.debug("Emitting generation event")
-        assert self._current_generation is not None, "current_generation is None"
+        if self._current_generation is None:
+            logger.debug("emit_generation_event called but no generation exists - ignoring")
+            return
 
+        logger.debug("Emitting generation event")
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -583,21 +589,38 @@ class RealtimeSession(  # noqa: F811
             logger.warning(f"No event handler found for event type: {event_type}")
 
     async def _handle_completion_start_event(self, event_data: dict) -> None:
+        """Handle completionStart - create new generation for this completion cycle."""
         log_event_data(event_data)
         self._create_response_generation()
 
     def _create_response_generation(self) -> None:
-        """Instantiate _ResponseGeneration and emit the GenerationCreated event."""
+        """Instantiate _ResponseGeneration and emit the GenerationCreated event.
+
+        Can be called multiple times - will reuse existing generation but ensure
+        message structure exists.
+        """
+        generation_created = False
         if self._current_generation is None:
+            completion_id = "unknown"  # Will be set from events
+            response_id = str(uuid.uuid4())
+
+            logger.debug(f"Creating new generation, response_id={response_id}")
             self._current_generation = _ResponseGeneration(
+                completion_id=completion_id,
                 message_ch=utils.aio.Chan(),
                 function_ch=utils.aio.Chan(),
-                input_id=str(uuid.uuid4()),
-                response_id=str(uuid.uuid4()),
-                messages={},
-                user_messages={},
-                speculative_messages={},
-                _created_timestamp=datetime.now().isoformat(),
+                response_id=response_id,
+            )
+            generation_created = True
+        else:
+            logger.debug(
+                f"Generation already exists: response_id={self._current_generation.response_id}"
+            )
+
+        # Always ensure message structure exists (even if generation already exists)
+        if self._current_generation.message_gen is None:
+            logger.debug(
+                f"Creating message structure for response_id={self._current_generation.response_id}"
             )
             msg_gen = _MessageGeneration(
                 message_id=self._current_generation.response_id,
@@ -608,6 +631,8 @@ class RealtimeSession(  # noqa: F811
             msg_modalities.set_result(
                 ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
             )
+
+            self._current_generation.message_gen = msg_gen
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=msg_gen.message_id,
@@ -616,77 +641,97 @@ class RealtimeSession(  # noqa: F811
                     modalities=msg_modalities,
                 )
             )
-            self._current_generation.messages[self._current_generation.response_id] = msg_gen
+        else:
+            logger.debug(
+                f"Message structure already exists for response_id={self._current_generation.response_id}"
+            )
+
+        # Only emit generation event if we created a new generation
+        if generation_created:
+            self.emit_generation_event()
 
     # will be completely ignoring post-ASR text events
     async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
-        """Handle text_output_content_start for both user and assistant roles."""
+        """Handle text_output_content_start - track content type."""
         log_event_data(event_data)
+
         role = event_data["event"]["contentStart"]["role"]
-        self._create_response_generation()
 
-        # note: does not work if you emit llm.GCE too early (for some reason)
-        if role == "USER":
-            assert self._current_generation is not None, "current_generation is None"
+        # CRITICAL: Create NEW generation for each ASSISTANT SPECULATIVE response
+        # Nova Sonic sends ASSISTANT SPECULATIVE for each new assistant turn, including after tool calls.
+        # Without this, audio frames get routed to the wrong generation and don't play.
+        if role == "ASSISTANT":
+            additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
+            if "SPECULATIVE" in additional_fields:
+                # This is a new assistant response - close previous and create new
+                logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
+                if self._current_generation is not None:
+                    logger.debug("Closing previous generation for new assistant response")
+                    self._close_current_generation()
+                self._create_response_generation()
+        else:
+            # For USER and FINAL, just ensure generation exists
+            self._create_response_generation()
 
-            content_id = event_data["event"]["contentStart"]["contentId"]
-            self._current_generation.user_messages[content_id] = self._current_generation.input_id
-
-        elif (
-            role == "ASSISTANT"
-            and "SPECULATIVE" in event_data["event"]["contentStart"]["additionalModelFields"]
-        ):
-            assert self._current_generation is not None, "current_generation is None"
-
-            text_content_id = event_data["event"]["contentStart"]["contentId"]
-            self._current_generation.speculative_messages[text_content_id] = (
-                self._current_generation.response_id
-            )
-
-    async def _handle_text_output_content_event(self, event_data: dict) -> None:
-        """Stream partial text tokens into the current _MessageGeneration."""
-        log_event_data(event_data)
-        text_content_id = event_data["event"]["textOutput"]["contentId"]
-        text_content = f"{event_data['event']['textOutput']['content']}\n"
-
-        # currently only agent can be interrupted
-        if text_content == '{ "interrupted" : true }\n':
-            # the interrupted flag is not being set correctly in chat_ctx
-            # this is b/c audio playback is desynced from text transcription
-            # TODO: fix this; possibly via a playback timer
-            idx = self._chat_ctx.find_insertion_index(created_at=time.time()) - 1
-            if idx < 0:
-                logger.warning("Barge-in DETECTED but no previous message found")
-                return
-
-            logger.debug(
-                f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}"
-            )
-            if (item := self._chat_ctx.items[idx]).type == "message":
-                item.interrupted = True
-            self._close_current_generation()
+        # CRITICAL: Check if generation exists before accessing
+        # Barge-in can set _current_generation to None between the creation above and here.
+        # Without this check, we crash on interruptions.
+        if self._current_generation is None:
+            logger.debug("No generation exists - ignoring content_start event")
             return
 
-        # ignore events until turn starts
-        if self._current_generation is not None:
-            # TODO: rename event to llm.InputTranscriptionUpdated
-            if (
-                self._current_generation.user_messages.get(text_content_id)
-                == self._current_generation.input_id
-            ):
-                logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
-                # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)  # noqa: E501
-                # TODO: fix this
-                self._update_chat_ctx(role="user", text_content=text_content)
+        content_id = event_data["event"]["contentStart"]["contentId"]
 
-            elif (
-                self._current_generation.speculative_messages.get(text_content_id)
-                == self._current_generation.response_id
-            ):
-                curr_gen = self._current_generation.messages[self._current_generation.response_id]
-                curr_gen.text_ch.send_nowait(text_content)
-                # note: this update is per utterance, not per turn
-                self._update_chat_ctx(role="assistant", text_content=text_content)
+        # Track what type of content this is
+        if role == "USER":
+            self._current_generation.content_id_map[content_id] = "USER_ASR"
+        elif role == "ASSISTANT":
+            additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
+            if "SPECULATIVE" in additional_fields:
+                self._current_generation.content_id_map[content_id] = "ASSISTANT_TEXT"
+            elif "FINAL" in additional_fields:
+                self._current_generation.content_id_map[content_id] = "ASSISTANT_FINAL"
+
+    async def _handle_text_output_content_event(self, event_data: dict) -> None:
+        """Stream partial text tokens into the current generation."""
+        log_event_data(event_data)
+
+        if self._current_generation is None:
+            logger.debug("No generation exists - ignoring text_output event")
+            return
+
+        content_id = event_data["event"]["textOutput"]["contentId"]
+        text_content = f"{event_data['event']['textOutput']['content']}\n"
+
+        # Nova Sonic's automatic barge-in detection
+        if text_content == '{ "interrupted" : true }\n':
+            idx = self._chat_ctx.find_insertion_index(created_at=time.time()) - 1
+            if idx >= 0 and (item := self._chat_ctx.items[idx]).type == "message":
+                item.interrupted = True
+                logger.debug("Barge-in detected - marked message as interrupted")
+
+            # Close generation on barge-in unless tools are pending
+            if not self._pending_tools:
+                self._close_current_generation()
+            else:
+                logger.debug(f"Keeping generation open - {len(self._pending_tools)} pending tools")
+            return
+
+        content_type = self._current_generation.content_id_map.get(content_id)
+
+        if content_type == "USER_ASR":
+            logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
+            self._update_chat_ctx(role="user", text_content=text_content)
+
+        elif content_type == "ASSISTANT_TEXT":
+            # Set first token timestamp if not already set
+            if self._current_generation._first_token_timestamp is None:
+                self._current_generation._first_token_timestamp = time.time()
+
+            # Stream text to LiveKit
+            if self._current_generation.message_gen:
+                self._current_generation.message_gen.text_ch.send_nowait(text_content)
+            self._update_chat_ctx(role="assistant", text_content=text_content)
 
     def _update_chat_ctx(self, role: llm.ChatRole, text_content: str) -> None:
         """
@@ -716,107 +761,72 @@ class RealtimeSession(  # noqa: F811
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
-        """Mark the assistant message closed when Bedrock signals END_TURN."""
-        stop_reason = event_data["event"]["contentEnd"]["stopReason"]
-        text_content_id = event_data["event"]["contentEnd"]["contentId"]
-        if (
-            self._current_generation
-            is not None  # means that first utterance in the turn was an interrupt
-            and self._current_generation.speculative_messages.get(text_content_id)
-            == self._current_generation.response_id
-            and stop_reason == "END_TURN"
-        ):
-            log_event_data(event_data)
-            self._close_current_generation()
+        """Handle text content end - log but don't close generation yet."""
+        # Nova Sonic sends multiple content blocks within one completion
+        # Don't close generation here - wait for completionEnd or audio_output_content_end
+        log_event_data(event_data)
 
     async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
-        """Track mapping content_id -> response_id for upcoming tool use."""
+        """Track tool content start."""
         log_event_data(event_data)
-        assert self._current_generation is not None, "current_generation is None"
 
-        tool_use_content_id = event_data["event"]["contentStart"]["contentId"]
-        self._current_generation.tool_messages[tool_use_content_id] = (
-            self._current_generation.response_id
-        )
+        # Ensure generation exists
+        self._create_response_generation()
 
-    # note: tool calls are synchronous for now
+        if self._current_generation is None:
+            return
+
+        content_id = event_data["event"]["contentStart"]["contentId"]
+        self._current_generation.content_id_map[content_id] = "TOOL"
+
     async def _handle_tool_output_content_event(self, event_data: dict) -> None:
-        """Execute the referenced tool locally and forward results back to Bedrock."""
+        """Execute the referenced tool locally and queue results."""
         log_event_data(event_data)
-        assert self._current_generation is not None, "current_generation is None"
 
-        tool_use_content_id = event_data["event"]["toolUse"]["contentId"]
+        if self._current_generation is None:
+            logger.warning("tool_output_content received without active generation")
+            return
+
         tool_use_id = event_data["event"]["toolUse"]["toolUseId"]
         tool_name = event_data["event"]["toolUse"]["toolName"]
-        if (
-            self._current_generation.tool_messages.get(tool_use_content_id)
-            == self._current_generation.response_id
-        ):
-            args = event_data["event"]["toolUse"]["content"]
-            self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
-            )
-            self._pending_tools.add(tool_use_id)
+        args = event_data["event"]["toolUse"]["content"]
 
-            # performing these acrobatics in order to release the deadlock
-            # LiveKit will not accept a new generation until the previous one is closed
-            # the issue is that audio data cannot be generated until toolResult is received
-            # however, toolResults only arrive after update_chat_ctx() is invoked
-            # which will only occur after agent speech has completed
-            # therefore we introduce an artificial turn to trigger update_chat_ctx()
-            # TODO: this is messy-- investigate if there is a better way to handle this
-            curr_gen = self._current_generation.messages[self._current_generation.response_id]
-            curr_gen.audio_ch.close()
-            curr_gen.text_ch.close()
-            self._current_generation.message_ch.close()
-            self._current_generation.message_ch = utils.aio.Chan()
-            self._current_generation.function_ch.close()
-            self._current_generation.function_ch = utils.aio.Chan()
-            msg_gen = _MessageGeneration(
-                message_id=self._current_generation.response_id,
-                text_ch=utils.aio.Chan(),
-                audio_ch=utils.aio.Chan(),
-            )
-            self._current_generation.messages[self._current_generation.response_id] = msg_gen
-            msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-            msg_modalities.set_result(
-                ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
-            )
-            self._current_generation.message_ch.send_nowait(
-                llm.MessageGeneration(
-                    message_id=msg_gen.message_id,
-                    text_stream=msg_gen.text_ch,
-                    audio_stream=msg_gen.audio_ch,
-                    modalities=msg_modalities,
-                )
-            )
-            self.emit_generation_event()
+        # Emit function call to LiveKit framework
+        self._current_generation.function_ch.send_nowait(
+            llm.FunctionCall(call_id=tool_use_id, name=tool_name, arguments=args)
+        )
+        self._pending_tools.add(tool_use_id)
+        logger.debug(f"Tool call emitted: {tool_name} (id={tool_use_id})")
+
+        # CRITICAL: Close generation after tool call emission
+        # The LiveKit framework expects the generation to close so it can call update_chat_ctx()
+        # with the tool results. A new generation will be created when Nova Sonic sends the next
+        # ASSISTANT SPECULATIVE text event with the tool response.
+        logger.debug("Closing generation to allow tool result delivery")
+        self._close_current_generation()
 
     async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
         log_event_data(event_data)
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
-        """Associate the upcoming audio chunk with the active assistant message."""
+        """Track audio content start."""
         if self._current_generation is not None:
             log_event_data(event_data)
-            audio_content_id = event_data["event"]["contentStart"]["contentId"]
-            self._current_generation.speculative_messages[audio_content_id] = (
-                self._current_generation.response_id
-            )
+            content_id = event_data["event"]["contentStart"]["contentId"]
+            self._current_generation.content_id_map[content_id] = "ASSISTANT_AUDIO"
 
     async def _handle_audio_output_content_event(self, event_data: dict) -> None:
         """Decode base64 audio from Bedrock and forward it to the audio stream."""
-        if (
-            self._current_generation is not None
-            and self._current_generation.speculative_messages.get(
-                event_data["event"]["audioOutput"]["contentId"]
-            )
-            == self._current_generation.response_id
-        ):
+        if self._current_generation is None or self._current_generation.message_gen is None:
+            return
+
+        content_id = event_data["event"]["audioOutput"]["contentId"]
+        content_type = self._current_generation.content_id_map.get(content_id)
+
+        if content_type == "ASSISTANT_AUDIO":
             audio_content = event_data["event"]["audioOutput"]["content"]
             audio_bytes = base64.b64decode(audio_content)
-            curr_gen = self._current_generation.messages[self._current_generation.response_id]
-            curr_gen.audio_ch.send_nowait(
+            self._current_generation.message_gen.audio_ch.send_nowait(
                 rtc.AudioFrame(
                     data=audio_bytes,
                     sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,
@@ -826,62 +836,89 @@ class RealtimeSession(  # noqa: F811
             )
 
     async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
-        """Close the assistant message streams once Bedrock finishes audio for the turn."""
-        if (
-            self._current_generation is not None
-            and event_data["event"]["contentEnd"]["stopReason"] == "END_TURN"
-            and self._current_generation.speculative_messages.get(
-                event_data["event"]["contentEnd"]["contentId"]
-            )
-            == self._current_generation.response_id
-        ):
-            log_event_data(event_data)
-            self._close_current_generation()
+        """Handle audio content end - log but don't close generation."""
+        log_event_data(event_data)
+        # Nova Sonic uses one completion for entire session
+        # Don't close generation here - wait for new completionStart or session end
 
     def _close_current_generation(self) -> None:
-        """Helper that closes all channels of the active _ResponseGeneration."""
-        if self._current_generation is not None:
-            if self._current_generation.response_id in self._current_generation.messages:
-                curr_gen = self._current_generation.messages[self._current_generation.response_id]
-                if not curr_gen.audio_ch.closed:
-                    curr_gen.audio_ch.close()
-                if not curr_gen.text_ch.closed:
-                    curr_gen.text_ch.close()
+        """Helper that closes all channels of the active generation."""
+        if self._current_generation is None:
+            return
 
-            # TODO: seems not needed, tool_messages[id] is a str, function_ch is closed below?
-            # if self._current_generation.response_id in self._current_generation.tool_messages:
-            #     curr_gen = self._current_generation.tool_messages[
-            #         self._current_generation.response_id
-            #     ]
-            #     if not curr_gen.function_ch.closed:
-            #         curr_gen.function_ch.close()
+        # Set completed timestamp
+        if self._current_generation._completed_timestamp is None:
+            self._current_generation._completed_timestamp = time.time()
 
-            if not self._current_generation.message_ch.closed:
-                self._current_generation.message_ch.close()
-            if not self._current_generation.function_ch.closed:
-                self._current_generation.function_ch.close()
+        # Close message channels
+        if self._current_generation.message_gen:
+            if not self._current_generation.message_gen.audio_ch.closed:
+                self._current_generation.message_gen.audio_ch.close()
+            if not self._current_generation.message_gen.text_ch.closed:
+                self._current_generation.message_gen.text_ch.close()
 
-            self._current_generation = None
+        # Close generation channels
+        if not self._current_generation.message_ch.closed:
+            self._current_generation.message_ch.close()
+        if not self._current_generation.function_ch.closed:
+            self._current_generation.function_ch.close()
+
+        logger.debug(
+            f"Closed generation for completion_id={self._current_generation.completion_id}"
+        )
+        self._current_generation = None
 
     async def _handle_completion_end_event(self, event_data: dict) -> None:
+        """Handle completionEnd - close the generation for this completion cycle."""
         log_event_data(event_data)
+
+        # Close generation if still open
+        if self._current_generation:
+            logger.debug("completionEnd received, closing generation")
+            self._close_current_generation()
 
     async def _handle_other_event(self, event_data: dict) -> None:
         log_event_data(event_data)
 
     async def _handle_usage_event(self, event_data: dict) -> None:
         # log_event_data(event_data)
-        # TODO: implement duration and ttft
         input_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["input"]
         output_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["output"]
-        # Q: should we be counting per turn or utterance?
+
+        # Calculate metrics from timestamps
+        duration = 0.0
+        ttft = 0.0
+        tokens_per_second = 0.0
+
+        if self._current_generation is not None:
+            created_ts = self._current_generation._created_timestamp
+            first_token_ts = self._current_generation._first_token_timestamp
+            completed_ts = self._current_generation._completed_timestamp
+
+            # Calculate TTFT (time to first token)
+            if first_token_ts is not None and isinstance(created_ts, (int, float)):
+                ttft = first_token_ts - created_ts
+
+            # Calculate duration (total time from creation to completion)
+            if completed_ts is not None and isinstance(created_ts, (int, float)):
+                duration = completed_ts - created_ts
+
+            # Calculate tokens per second
+            total_tokens = (
+                input_tokens["speechTokens"]
+                + input_tokens["textTokens"]
+                + output_tokens["speechTokens"]
+                + output_tokens["textTokens"]
+            )
+            if duration > 0:
+                tokens_per_second = total_tokens / duration
+
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
-            # TODO: pass in the correct request_id
             request_id=event_data["event"]["usageEvent"]["completionId"],
             timestamp=time.monotonic(),
-            duration=0,
-            ttft=0,
+            duration=duration,
+            ttft=ttft,
             cancelled=False,
             input_tokens=input_tokens["speechTokens"] + input_tokens["textTokens"],
             output_tokens=output_tokens["speechTokens"] + output_tokens["textTokens"],
@@ -889,8 +926,7 @@ class RealtimeSession(  # noqa: F811
             + input_tokens["textTokens"]
             + output_tokens["speechTokens"]
             + output_tokens["textTokens"],
-            # need duration to calculate this
-            tokens_per_second=0,
+            tokens_per_second=tokens_per_second,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 text_tokens=input_tokens["textTokens"],
                 audio_tokens=input_tokens["speechTokens"],
@@ -1016,8 +1052,13 @@ class RealtimeSession(  # noqa: F811
             self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
-        if self._session_restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
-            logger.error("Max session restart attempts reached, exiting")
+        # Get restart attempts from current generation, or 0 if no generation
+        restart_attempts = (
+            self._current_generation._restart_attempts if self._current_generation else 0
+        )
+
+        if restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
+            logger.error("Max restart attempts reached for this turn, exiting")
             err_msg = getattr(ex, "message", str(ex))
             request_id = None
             try:
@@ -1041,13 +1082,20 @@ class RealtimeSession(  # noqa: F811
             )
             self._is_sess_active.clear()
             return
-        self._session_restart_attempts += 1
+
+        # Increment restart counter for current generation
+        if self._current_generation:
+            self._current_generation._restart_attempts += 1
+            restart_attempts = self._current_generation._restart_attempts
+        else:
+            restart_attempts = 1
+
         self._is_sess_active.clear()
-        delay = 2 ** (self._session_restart_attempts - 1) - 1
+        delay = 2 ** (restart_attempts - 1) - 1
         await asyncio.sleep(min(delay, DEFAULT_MAX_SESSION_RESTART_DELAY))
         await self.initialize_streams(is_restart=True)
         logger.info(
-            f"Session restarted successfully ({self._session_restart_attempts}/{DEFAULT_MAX_SESSION_RESTART_ATTEMPTS})"  # noqa: E501
+            f"Turn restarted successfully ({restart_attempts}/{DEFAULT_MAX_SESSION_RESTART_ATTEMPTS})"
         )
 
     @property
@@ -1061,7 +1109,10 @@ class RealtimeSession(  # noqa: F811
     async def update_instructions(self, instructions: str) -> None:
         """Injects the system prompt at the start of the session."""
         self._instructions = instructions
-        self._instructions_ready.set_result(True)
+        if self._instructions_ready is None:
+            self._instructions_ready = asyncio.get_running_loop().create_future()
+        if not self._instructions_ready.done():
+            self._instructions_ready.set_result(True)
         logger.debug(f"Instructions updated: {instructions}")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
@@ -1069,15 +1120,25 @@ class RealtimeSession(  # noqa: F811
         # sometimes fires randomly
         # add a guard here to only allow chat_ctx to be updated on
         # the very first session initialization
+        if self._chat_ctx_ready is None:
+            self._chat_ctx_ready = asyncio.get_running_loop().create_future()
+
         if not self._chat_ctx_ready.done():
             self._chat_ctx = chat_ctx.copy()
             logger.debug(f"Chat context updated: {self._chat_ctx.items}")
             self._chat_ctx_ready.set_result(True)
 
         # for each function tool, send the result to aws
+        logger.debug(
+            f"update_chat_ctx called with {len(chat_ctx.items)} items, pending_tools: {self._pending_tools}"
+        )
         for item in chat_ctx.items:
             if item.type != "function_call_output":
                 continue
+
+            logger.debug(
+                f"Found function_call_output: call_id={item.call_id}, in_pending={item.call_id in self._pending_tools}"
+            )
 
             if item.call_id not in self._pending_tools:
                 continue
@@ -1128,7 +1189,10 @@ class RealtimeSession(  # noqa: F811
             retained_tools.append(tool)
         self._tools = llm.ToolContext(retained_tools)
         if retained_tools:
-            self._tools_ready.set_result(True)
+            if self._tools_ready is None:
+                self._tools_ready = asyncio.get_running_loop().create_future()
+            if not self._tools_ready.done():
+                self._tools_ready.set_result(True)
             logger.debug("Tool list has been injected")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
@@ -1164,54 +1228,62 @@ class RealtimeSession(  # noqa: F811
         """Background task that feeds audio and tool results into the Bedrock stream."""
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
         logger.info("Starting audio input processing loop")
+
+        # Create tasks for both channels so we can wait on either
+        audio_task = asyncio.create_task(self._audio_input_chan.recv())
+        tool_task = asyncio.create_task(self._tool_results_ch.recv())
+        pending = {audio_task, tool_task}
+
         while self._is_sess_active.is_set():
             try:
-                # note: could potentially pull this out into a separate task
-                try:
-                    val = self._tool_results_ch.recv_nowait()
-                    tool_result = val["tool_result"]
-                    tool_use_id = val["tool_use_id"]
-                    if not isinstance(tool_result, str):
-                        tool_result = json.dumps(tool_result)
-                    else:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+
+                for task in done:
+                    if task == audio_task:
                         try:
-                            json.loads(tool_result)
-                        except json.JSONDecodeError:
-                            try:
-                                tool_result = json.dumps(ast.literal_eval(tool_result))
-                            except Exception:
-                                # return the original value
-                                pass
+                            audio_bytes = cast(bytes, task.result())
+                            blob = base64.b64encode(audio_bytes)
+                            audio_event = self._event_builder.create_audio_input_event(
+                                audio_content=blob.decode("utf-8"),
+                            )
+                            await self._send_raw_event(audio_event)
+                            # Create new task for next audio
+                            audio_task = asyncio.create_task(self._audio_input_chan.recv())
+                            pending.add(audio_task)
+                        except utils.aio.channel.ChanClosed:
+                            logger.warning("audio input channel closed")
+                            break
 
-                    logger.debug(f"Sending tool result: {tool_result}")
-                    await self._send_tool_events(tool_use_id, tool_result)
+                    elif task == tool_task:
+                        try:
+                            val = cast(dict[str, str], task.result())
+                            tool_result = val["tool_result"]
+                            tool_use_id = val["tool_use_id"]
+                            if not isinstance(tool_result, str):
+                                tool_result = json.dumps(tool_result)
+                            else:
+                                try:
+                                    json.loads(tool_result)
+                                except json.JSONDecodeError:
+                                    try:
+                                        tool_result = json.dumps(ast.literal_eval(tool_result))
+                                    except Exception:
+                                        pass
 
-                except utils.aio.channel.ChanEmpty:
-                    pass
-                except utils.aio.channel.ChanClosed:
-                    logger.warning(
-                        "tool results channel closed, exiting audio input processing loop"
-                    )
-                    break
-
-                try:
-                    audio_bytes = await self._audio_input_chan.recv()
-                    blob = base64.b64encode(audio_bytes)
-                    audio_event = self._event_builder.create_audio_input_event(
-                        audio_content=blob.decode("utf-8"),
-                    )
-
-                    await self._send_raw_event(audio_event)
-                except utils.aio.channel.ChanEmpty:
-                    pass
-                except utils.aio.channel.ChanClosed:
-                    logger.warning(
-                        "audio input channel closed, exiting audio input processing loop"
-                    )
-                    break
+                            logger.debug(f"Sending tool result: {tool_result}")
+                            await self._send_tool_events(tool_use_id, tool_result)
+                            # Create new task for next tool result
+                            tool_task = asyncio.create_task(self._tool_results_ch.recv())
+                            pending.add(tool_task)
+                        except utils.aio.channel.ChanClosed:
+                            logger.warning("tool results channel closed")
+                            break
 
             except asyncio.CancelledError:
                 logger.info("Audio processing loop cancelled")
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
                 self._audio_input_chan.close()
                 self._tool_results_ch.close()
                 raise
@@ -1262,7 +1334,24 @@ class RealtimeSession(  # noqa: F811
         logger.warning("video is not supported by Nova Sonic's Realtime API")
 
     def interrupt(self) -> None:
-        logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
+        """Nova Sonic handles interruption automatically via barge-in detection.
+
+        Unlike OpenAI's client-initiated interrupt, Nova Sonic automatically detects
+        when the user starts speaking while the model is generating audio. When this
+        happens, the model:
+        1. Immediately stops generating speech
+        2. Switches to listening mode
+        3. Sends a text event with content: { "interrupted" : true }
+
+        The plugin already handles this event (see _handle_text_output_content_event).
+        No client action is needed - interruption works automatically.
+
+        See AWS docs: https://docs.aws.amazon.com/nova/latest/userguide/output-events.html
+        """
+        logger.info(
+            "Nova Sonic handles interruption automatically via barge-in detection. "
+            "The model detects when users start speaking and stops generation automatically."
+        )
 
     def truncate(
         self,
@@ -1311,6 +1400,11 @@ class RealtimeSession(  # noqa: F811
             tasks.append(self._audio_input_task)
         if self._stream_response and not self._stream_response.input_stream.closed:
             await self._stream_response.input_stream.close()
+
+        # cancel main task to prevent pending task warnings
+        if self._main_atask and not self._main_atask.done():
+            self._main_atask.cancel()
+            tasks.append(self._main_atask)
 
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.debug(f"CHAT CONTEXT: {self._chat_ctx.items}")

@@ -108,10 +108,11 @@ def get_tool_results_for_realtime(
             res = types.FunctionResponse(
                 name=msg.name,
                 response={"output": msg.output},
-                scheduling=tool_response_scheduling
-                if is_given(tool_response_scheduling)
-                else types.FunctionResponseScheduling.WHEN_IDLE,
             )
+            if is_given(tool_response_scheduling):
+                # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle
+                # it's the user's responsibility to avoid this parameter when using vertexai
+                res.scheduling = tool_response_scheduling
             if not vertexai:
                 # vertexai does not support id in FunctionResponse
                 # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435

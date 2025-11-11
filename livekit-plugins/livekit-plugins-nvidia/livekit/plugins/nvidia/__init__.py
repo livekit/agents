@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,28 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PlayAI plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/playai/ for more information.
-"""
-
-from .tts import TTS
+from .stt import STT, SpeechStream
+from .tts import TTS, SynthesizeStream
 from .version import __version__
 
-__all__ = [
-    "TTS",
-    "__version__",
-]
+__all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "__version__"]
+
 
 from livekit.agents import Plugin
 
+from .log import logger
 
-class PlayAIPlugin(Plugin):
+
+class NVIDIAPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(PlayAIPlugin())
+Plugin.register_plugin(NVIDIAPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

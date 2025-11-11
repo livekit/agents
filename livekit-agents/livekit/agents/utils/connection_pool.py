@@ -41,6 +41,7 @@ class ConnectionPool(Generic[T]):
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
+        self._connect_lock = asyncio.Lock()
 
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
@@ -90,23 +91,24 @@ class ConnectionPool(Generic[T]):
         Returns:
             An active connection object
         """
-        await self._drain_to_close()
-        now = time.time()
+        async with self._connect_lock:
+            await self._drain_to_close()
+            now = time.time()
 
-        # try to reuse an available connection that hasn't expired
-        while self._available:
-            conn = self._available.pop()
-            if (
-                self._max_session_duration is None
-                or now - self._connections[conn] <= self._max_session_duration
-            ):
-                if self._mark_refreshed_on_get:
-                    self._connections[conn] = now
-                return conn
-            # connection expired; mark it for resetting.
-            self.remove(conn)
+            # try to reuse an available connection that hasn't expired
+            while self._available:
+                conn = self._available.pop()
+                if (
+                    self._max_session_duration is None
+                    or now - self._connections[conn] <= self._max_session_duration
+                ):
+                    if self._mark_refreshed_on_get:
+                        self._connections[conn] = now
+                    return conn
+                # connection expired; mark it for resetting.
+                self.remove(conn)
 
-        return await self._connect(timeout)
+            return await self._connect(timeout)
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.
@@ -161,9 +163,10 @@ class ConnectionPool(Generic[T]):
             return
 
         async def _prewarm_impl() -> None:
-            if not self._connections:
-                conn = await self._connect(timeout=self._connect_timeout)
-                self._available.add(conn)
+            async with self._connect_lock:
+                if not self._connections:
+                    conn = await self._connect(timeout=self._connect_timeout)
+                    self._available.add(conn)
 
         task = asyncio.create_task(_prewarm_impl())
         self._prewarm_task = weakref.ref(task)

@@ -1,3 +1,3 @@
 from typing import Literal
 
-TTSLangs = Literal["eng", "spa", "fra", "ger"]
+TTSLangs = Literal["eng", "spa", "fra", "ger", "hin"]

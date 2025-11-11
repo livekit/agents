@@ -58,9 +58,11 @@ class STT(stt.STT):
         try:
             config = self._sanitize_options(language=language or None)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
+            model = "mansa_v1" if config.language == "en" else "legacy"
             resp = await self._client.speech.transcribe(
                 language=config.language,  # type: ignore
                 content=data,
+                model=model,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
