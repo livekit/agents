@@ -42,6 +42,7 @@ from .audio_recognition import (
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
 )
+from .interruption_filter import InterruptionFilter
 from .events import (
     AgentFalseInterruptionEvent,
     ErrorEvent,
@@ -539,7 +540,7 @@ class AgentActivity(RecognitionHooks):
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
-            hooks=self,
+            hooks=InterruptionFilter(hooks=self, session=self._session),
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
