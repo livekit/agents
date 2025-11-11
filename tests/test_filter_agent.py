@@ -58,9 +58,6 @@ async def entrypoint(ctx: JobContext):
     DEEPGRAM_KEY = os.getenv("DEEPGRAM_API_KEY")
     OPENAI_KEY = os.getenv("OPENAI_API_KEY")
     CARTESIA_KEY = os.getenv("CARTESIA_API_KEY")
-    # DEEPGRAM_KEY = "cf32a5498ba37e960e4bb84456d391cf11d9f3ce"
-    # OPENAI_KEY = "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"
-    # CARTESIA_KEY = "sk_car_fQJmjHsm8Wt85WyNEwVFKr"
 
     if not DEEPGRAM_KEY:
         raise ValueError("Missing DEEPGRAM_API_KEY")
