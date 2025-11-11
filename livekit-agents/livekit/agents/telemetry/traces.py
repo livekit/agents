@@ -102,9 +102,6 @@ class _ExtraDetailsProcessor(LogRecordProcessor):
             log_data.log_record.attributes.update(  # type: ignore
                 {"logger.name": log_data.instrumentation_scope.name}
             )
-        context = trace.get_current_span().get_span_context()
-        log_data.log_record.span_id = context.span_id
-        log_data.log_record.trace_id = context.trace_id
 
     def on_emit(self, log_data: LogData) -> None:
         self.emit(log_data)
