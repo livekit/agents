@@ -1,3 +1,5 @@
+### LiveKit is an open-source platform for building real-time audio and video applications using WebRTC. It provides the necessary infrastructure for applications that need scalable, low-latency communication, such as video conferencing, and also includes tools for building more advanced AI-powered applications like voice agents. Developers can use the self-hosted or cloud-managed deployments, client SDKs, and features like selective forwarding to create and customize their real-time
+
 # LiveKit Interrupt-Aware Voice Agent  
 **Branch:** `feature/livekit-interrupt-handler-ahmad-raza`
 
@@ -6,7 +8,7 @@ The agent can now **ignore meaningless interjections** (e.g., *“um”*, *“ha
 
 ---
 
-## 🎯 What Changed
+## What Changed
 
 ### 1. Added **Filler Detection Logic**
 - Maintains a **custom dictionary** of culturally diverse filler words.
@@ -25,11 +27,11 @@ The agent can now **ignore meaningless interjections** (e.g., *“um”*, *“ha
 | VAD | `silero` | default vad |
 | Speech-to-Text (STT) | `deepgram.STT` | `"nova"` |
 | Language Model (LLM) | `groq.LLM` | `"llama-3.1-8b-instant"` |
-| Text-to-Speech (TTS) | `deepgram.TTS` | `"aura-asteria-en"` ✅ Stable + free tier usable |
+| Text-to-Speech (TTS) | `deepgram.TTS` | `"aura-asteria-en"` Stable + free tier usable |
 
 ---
 
-## ✅ Final Working Code
+## Final Working Code
 
 ```python
 import os
