@@ -3,6 +3,7 @@ project(lk_blingfire)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(PYBIND11_FINDPYTHON ON)
 
 find_package(PythonInterp REQUIRED)
 find_package(pybind11 REQUIRED)

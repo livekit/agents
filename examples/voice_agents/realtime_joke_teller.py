@@ -29,6 +29,7 @@ from jokeapi import Jokes
 from livekit import agents, rtc
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     RoomInputOptions,
@@ -181,6 +182,10 @@ class Assistant(Agent):
         return {"user_name": context.userdata.user_name, "age": context.userdata.age}
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: agents.JobContext):
     session: AgentSession | None = None
     try:
@@ -260,4 +265,4 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(server)

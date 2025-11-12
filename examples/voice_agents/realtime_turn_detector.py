@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 from google.genai import types  # noqa: F401
 
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli
 from livekit.plugins import deepgram, google, openai, silero  # noqa: F401
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -17,7 +17,10 @@ load_dotenv()
 ## with a STT model, even though the audio is going directly to the Realtime API.
 ## In this example, speech is being processed in parallel by both the STT and the realtime API
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         allow_interruptions=True,
@@ -33,7 +36,7 @@ async def entrypoint(ctx: JobContext):
             input_audio_transcription=None,  # we use Deepgram STT instead
         ),
         # To use Gemini Live API
-        # llm=google.beta.realtime.RealtimeModel(
+        # llm=google.realtime.RealtimeModel(
         #     realtime_input_config=types.RealtimeInputConfig(
         #         automatic_activity_detection=types.AutomaticActivityDetection(
         #             disabled=True,
@@ -45,9 +48,10 @@ async def entrypoint(ctx: JobContext):
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
 
+@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

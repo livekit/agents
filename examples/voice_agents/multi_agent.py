@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from livekit import api
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     ChatContext,
     JobContext,
@@ -14,7 +15,6 @@ from livekit.agents import (
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
-    WorkerOptions,
     cli,
     metrics,
 )
@@ -85,7 +85,7 @@ class IntroAgent(Agent):
         story_agent = StoryAgent(name, location)
         # by default, StoryAgent will start with a new context, to carry through the current
         # chat history, pass in the chat_ctx
-        # story_agent = StoryAgent(name, location, chat_ctx=context.chat_ctx)
+        # story_agent = StoryAgent(name, location, chat_ctx=self.chat_ctx)
 
         logger.info(
             "switching to the story agent with the provided user data: %s", context.userdata
@@ -132,10 +132,15 @@ class StoryAgent(Agent):
         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
 
 
+server = AgentServer()
+
+
+@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
         vad=ctx.proc.userdata["vad"],
@@ -172,4 +177,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

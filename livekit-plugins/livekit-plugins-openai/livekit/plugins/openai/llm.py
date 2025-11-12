@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -40,9 +40,12 @@ from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_cr
 from .models import (
     CerebrasChatModels,
     ChatModels,
+    CometAPIChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
+    OpenRouterProviderPreferences,
+    OpenRouterWebPlugin,
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
@@ -72,6 +75,9 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+    extra_body: NotGivenOr[dict[str, Any]]
+    extra_headers: NotGivenOr[dict[str, str]]
+    extra_query: NotGivenOr[dict[str, str]]
 
 
 class LLM(llm.LLM):
@@ -97,6 +103,9 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
@@ -126,6 +135,9 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            extra_body=extra_body,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
@@ -148,8 +160,11 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        """Get the model name for this LLM instance."""
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return self._client._base_url.netloc.decode("utf-8")
 
     @staticmethod
     def with_azure(
@@ -347,6 +362,78 @@ class LLM(llm.LLM):
         )
 
     @staticmethod
+    def with_openrouter(
+        *,
+        model: str = "auto",
+        api_key: str | None = None,
+        base_url: str = "https://openrouter.ai/api/v1",
+        client: openai.AsyncClient | None = None,
+        site_url: str | None = None,
+        app_name: str | None = None,
+        fallback_models: list[str] | None = None,
+        provider: OpenRouterProviderPreferences | None = None,
+        plugins: list[OpenRouterWebPlugin] | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of OpenRouter LLM.
+
+        ``api_key`` must be set to your OpenRouter API key, either using the argument or by setting
+        the ``OPENROUTER_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "OpenRouter API key is required, either as argument or set OPENROUTER_API_KEY environment variable"
+            )
+
+        # Set up analytics headers for OpenRouter
+        default_headers: dict[str, str] = {}
+        if site_url:
+            default_headers["HTTP-Referer"] = site_url
+        if app_name:
+            default_headers["X-Title"] = app_name
+
+        # Build OpenRouter-specific request body
+        or_body: dict[str, Any] = {}
+        if provider:
+            or_body["provider"] = provider
+        if fallback_models:
+            # Set fallback models for routing
+            or_body["models"] = [model, *fallback_models]
+        if plugins:
+            or_body["plugins"] = [
+                {k: v for k, v in asdict(p).items() if v is not None} for p in plugins
+            ]
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            client=client,
+            base_url=base_url,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_body=or_body,
+            extra_headers=default_headers,
+            timeout=timeout,
+        )
+
+    @staticmethod
     def with_deepseek(
         *,
         model: str | DeepSeekChatModels = "deepseek-chat",
@@ -373,6 +460,56 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
+    @staticmethod
+    def with_cometapi(
+        *,
+        model: str | CometAPIChatModels = "gpt-5-chat-latest",
+        api_key: str | None = None,
+        base_url: str = "https://api.cometapi.com/v1/",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of CometAPI LLM.
+
+        ``api_key`` must be set to your CometAPI API key, either using the argument or by setting
+        the ``COMETAPI_API_KEY`` environmental variable.
+
+        CometAPI provides access to 500+ AI models from multiple providers including OpenAI,
+        Anthropic, Google, xAI, DeepSeek, and Qwen through a unified API.
+
+        Get your API key at: https://api.cometapi.com/console/token
+        Learn more: https://www.cometapi.com/?utm_source=livekit&utm_campaign=integration&utm_medium=integration&utm_content=integration
+        """
+
+        api_key = api_key or os.environ.get("COMETAPI_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -646,7 +783,7 @@ class LLM(llm.LLM):
     def with_letta(
         *,
         agent_id: str,
-        base_url: str = "https://api.letta.com/v1/voice-beta",
+        base_url: str = "https://api.letta.com/v1/chat/completions",
         api_key: str | None = None,
     ) -> LLM:
         """
@@ -654,7 +791,7 @@ class LLM(llm.LLM):
 
         Args:
             agent_id (str): The Letta agent ID (must be prefixed with 'agent-').
-            base_url (str): The URL of the Letta server (e.g., from ngrok or Letta Cloud).
+            base_url (str): The URL of the Letta server (e.g., http://localhost:8283/v1/chat/completions for local or https://api.letta.com/v1/chat/completions for cloud).
             api_key (str | None, optional): Optional API key for authentication, required if
                                             the Letta server enforces auth.
 
@@ -662,7 +799,6 @@ class LLM(llm.LLM):
             LLM: A configured LLM instance for interacting with the given Letta agent.
         """
 
-        base_url = f"{base_url}/{agent_id}"
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"}:
             raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
@@ -676,7 +812,7 @@ class LLM(llm.LLM):
             )
 
         return LLM(
-            model="letta-fast",
+            model=agent_id,
             api_key=api_key,
             base_url=base_url,
             client=None,
@@ -702,6 +838,15 @@ class LLM(llm.LLM):
         extra = {}
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
+
+        if is_given(self._opts.extra_body):
+            extra["extra_body"] = self._opts.extra_body
+
+        if is_given(self._opts.extra_headers):
+            extra["extra_headers"] = self._opts.extra_headers
+
+        if is_given(self._opts.extra_query):
+            extra["extra_query"] = self._opts.extra_query
 
         if is_given(self._opts.metadata):
             extra["metadata"] = self._opts.metadata

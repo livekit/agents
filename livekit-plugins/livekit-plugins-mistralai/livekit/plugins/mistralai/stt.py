@@ -71,6 +71,14 @@ class STT(stt.STT):
             api_key=api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY"),
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "MistralAI"
+
     def update_options(
         self,
         *,

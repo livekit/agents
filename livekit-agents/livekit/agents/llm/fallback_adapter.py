@@ -73,6 +73,17 @@ class FallbackAdapter(
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
         ]
 
+        for llm_instance in self._llm_instances:
+            llm_instance.on("metrics_collected", self._on_metrics_collected)
+
+    @property
+    def model(self) -> str:
+        return "FallbackAdapter"
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
+
     def chat(
         self,
         *,
@@ -92,6 +103,13 @@ class FallbackAdapter(
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
         )
+
+    async def aclose(self) -> None:
+        for llm_instance in self._llm_instances:
+            llm_instance.off("metrics_collected", self._on_metrics_collected)
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
 
 
 class FallbackLLMStream(LLMStream):
@@ -267,3 +285,6 @@ class FallbackLLMStream(LLMStream):
         raise APIConnectionError(
             f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
+        return

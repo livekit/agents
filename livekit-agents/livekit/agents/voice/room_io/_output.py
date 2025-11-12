@@ -142,6 +142,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     await self._playback_enabled.wait()
 
                 await self._audio_source.wait_for_playout()
+                # avoid deadlock when clear_buffer called before capture_frame
+                await asyncio.sleep(0)
 
         wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         await asyncio.wait(

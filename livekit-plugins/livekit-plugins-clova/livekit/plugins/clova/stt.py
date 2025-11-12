@@ -75,6 +75,14 @@ class STT(stt.STT):
         self._secret = clova_secret
         self.threshold = threshold
 
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Clova"
+
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
             self._language = clova_languages_mapping.get(language, language)

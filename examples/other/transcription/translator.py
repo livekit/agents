@@ -5,13 +5,13 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
     MetricsCollectedEvent,
     RoomOutputOptions,
     StopResponse,
-    WorkerOptions,
     cli,
     llm,
     metrics,
@@ -67,6 +67,10 @@ class Translator(Agent):
         raise StopResponse()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -95,4 +99,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

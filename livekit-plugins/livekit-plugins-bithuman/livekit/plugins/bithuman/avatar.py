@@ -195,6 +195,10 @@ class AvatarSession:
 
         if self._runtime:
             runtime = self._runtime
+            logger.debug("previous transaction id: %s", runtime.transaction_id)
+            runtime._regenerate_transaction_id()
+            logger.debug("new transaction id: %s", runtime.transaction_id)
+            await runtime._initialize_token()
         else:
             kwargs = {
                 "model_path": self._model_path,

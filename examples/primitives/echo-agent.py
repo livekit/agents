@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import (
+    AgentServer,
     AutoSubscribe,
     JobContext,
-    WorkerOptions,
     cli,
 )
 from livekit.agents.vad import VADEventType
@@ -20,6 +20,11 @@ logger = logging.getLogger("echo-agent")
 # An example agent that echos each utterance from the user back to them
 # the example uses a queue to buffer incoming streams, and uses VAD to detect
 # when the user is done speaking.
+
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -99,8 +104,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-        ),
-    )
+    cli.run_app(server)

@@ -231,6 +231,8 @@ class RoomInputOptions:
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
+    delete_room_on_close: bool = False
+    """Delete the room when the AgentSession is closed, default to False"""
 
 
 @dataclass

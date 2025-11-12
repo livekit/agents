@@ -27,13 +27,17 @@ DeepgramModels = Literal[
     "deepgram/nova-2",
     "deepgram/nova-2-general",
     "deepgram/nova-2-medical",
+    "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
 CartesiaModels = Literal[
     "cartesia",
     "cartesia/ink-whisper",
 ]
-AssemblyaiModels = Literal["assemblyai"]
+AssemblyAIModels = Literal[
+    "assemblyai",
+    "assemblyai/universal-streaming",
+]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -62,8 +66,15 @@ class AssemblyaiOptions(TypedDict, total=False):
     keyterms_prompt: list[str]  # default: not specified
 
 
-STTModels = Union[DeepgramModels, CartesiaModels, AssemblyaiModels]
-STTLanguages = Literal["en", "de", "es", "fr", "ja", "pt", "zh"]
+STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
+
+
+STTModels = Union[
+    DeepgramModels,
+    CartesiaModels,
+    AssemblyAIModels,
+    Literal["auto"],  # automatically select a provider based on the language
+]
 STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
@@ -117,7 +128,7 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
-        model: AssemblyaiModels,
+        model: AssemblyAIModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -216,6 +227,31 @@ class STT(stt.STT):
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
+    @classmethod
+    def from_model_string(cls, model: str) -> STT:
+        """Create a STT instance from a model string
+
+        Args:
+            model (str): STT model to use, in "provider/model[:language]" format
+
+        Returns:
+            STT: STT instance
+        """
+
+        language: NotGivenOr[str] = NOT_GIVEN
+        if (idx := model.rfind(":")) != -1:
+            language = model[idx + 1 :]
+            model = model[:idx]
+        return cls(model, language=language)
+
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -299,12 +335,11 @@ class SpeechStream(stt.SpeechStream):
             self._opts.model = model
         if is_given(language):
             self._opts.language = language
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
         closing_ws = False
-
-        self._reconnect_event.set()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -418,7 +453,7 @@ class SpeechStream(stt.SpeechStream):
             },
         }
 
-        if self._opts.model:
+        if self._opts.model and self._opts.model != "auto":
             params["model"] = self._opts.model
 
         if self._opts.language:

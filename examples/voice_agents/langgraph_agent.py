@@ -9,11 +9,11 @@ from langgraph.graph.message import add_messages
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
     RoomInputOptions,
-    WorkerOptions,
     cli,
 )
 from livekit.plugins import deepgram, langchain, silero
@@ -32,7 +32,10 @@ load_dotenv()
 # - langgraph
 # - livekit-agents[openai,silero,langchain,deepgram,turn_detector]
 
+server = AgentServer()
 
+
+@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
@@ -56,6 +59,7 @@ def create_graph() -> StateGraph:
     return builder.compile()
 
 
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     graph = create_graph()
 
@@ -86,4 +90,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)
