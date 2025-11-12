@@ -29,12 +29,13 @@ TTSLocales = Literal[
     "bg-BG",
 ]
 
-TTSModels = Literal["GEN2",]
+TTSModels = Literal["GEN2", "FALCON"]
 
 TTSStyles = Literal[
     "Promo",
     "Narration",
     "Calm",
+    "Conversation",
     "Conversational",
     "Sad",
     "Angry",
@@ -56,5 +57,5 @@ TTSEncoding = Literal[
     "pcm",  # pcm_s16le
 ]
 
-TTSDefaultVoiceId = "en-US-amara"
-TTSDefaultVoiceStyle = "Conversational"
+TTSDefaultVoiceId = "en-US-matthew"
+TTSDefaultVoiceStyle = "Conversation"

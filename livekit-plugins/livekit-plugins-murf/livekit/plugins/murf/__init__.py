@@ -28,12 +28,12 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class MurfAIPlugin(Plugin):
+class MurfPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(MurfAIPlugin())
+Plugin.register_plugin(MurfPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

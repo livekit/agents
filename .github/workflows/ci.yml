@@ -100,4 +100,4 @@ jobs:
               -p livekit.plugins.ultravox
               -p livekit.plugins.fireworksai
               -p livekit.plugins.minimax
-              -p livekit.plugins.murfai
+              -p livekit.plugins.murf
