@@ -39,7 +39,6 @@ class MyAgent(Agent):
             "You are curious and friendly, and have a sense of humor.",
         )
         self.should_hold_transcript: NotGivenOr[bool] = NOT_GIVEN
-        self.should_emit_transcript: NotGivenOr[bool] = NOT_GIVEN
         self.transcript_buffer: list[stt.SpeechEvent] = []
         self.last_inference_time: NotGivenOr[float] = NOT_GIVEN
         self._stream_started_at: NotGivenOr[float] = NOT_GIVEN
@@ -120,7 +119,7 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
         # when it's detected, you may resume the agent's speech
-        resume_false_interruption=False,
+        resume_false_interruption=True,
         false_interruption_timeout=1.0,
     )
 
@@ -132,7 +131,9 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(),
+        room_input_options=RoomInputOptions(
+            audio_enabled=True,
+        ),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 

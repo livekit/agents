@@ -59,11 +59,13 @@ class BargeInDetectorONNX:
         i = np.arange(num_frames)
         return (i * hop_sz + win_sz) / sr
 
-    def predict(self, wavform, threshold=0.75, min_frames=3):
+    def predict(self, wavform, threshold=0.75, min_frames=2):
         # if prob > threshold for at least `min_frames` consecutive frames, call it a barge-in
         # - note: each frame is 25ms
         if self.enable_clipping:
             wavform[1, np.abs(wavform[1]) < self.clipping_threshold] = 0.0
+        if wavform.shape[1] == 0:
+            return False
         probs = self.predict_prob(wavform) > threshold
         running_true_counts = np.convolve(probs.astype(int), np.ones(min_frames), mode="valid")
         return np.any(running_true_counts >= min_frames)
@@ -188,16 +190,19 @@ class BargeInDetector:
     @utils.log_exceptions(logger=logger)
     def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         logger.info(f"[BARGEIN] agent state changed: {ev.new_state}")
-        self._agent_speaking = ev.new_state == "speaking"
-        if ev.new_state == "speaking":
-            logger.info(f"[BARGEIN] agent speaking started at {ev.created_at}")
-            self._agent_speech_started_at = ev.created_at
-            self._out_record.reset(self._agent_speech_started_at)
-            self.on_enter()
-        elif ev.old_state == "speaking":
-            self._agent_speech_started_at = NOT_GIVEN
-            self._last_agent_speech_ended_at = ev.created_at
-            self.on_exit()
+        try:
+            self._agent_speaking = ev.new_state == "speaking"
+            if ev.new_state == "speaking":
+                logger.info(f"[BARGEIN] agent speaking started at {ev.created_at}")
+                self._agent_speech_started_at = ev.created_at
+                self._out_record.reset(self._agent_speech_started_at)
+                self.on_enter()
+            elif ev.old_state == "speaking":
+                self._agent_speech_started_at = NOT_GIVEN
+                self._last_agent_speech_ended_at = ev.created_at
+                self.on_exit()
+        except Exception as e:
+            logger.error(f"Failed to update agent state: {e}")
 
     @utils.log_exceptions(logger=logger)
     def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
@@ -218,8 +223,6 @@ class BargeInDetector:
     def pause_inference(self) -> None:
         if self._agent_speaking:
             logger.info("[BARGEIN] Pausing inference")
-            if is_given(self._barged_in):
-                logger.info(f"[BARGEIN] Barge in detected: {self._barged_in}")
         self._conditions_met.clear()
         self._barged_in = NOT_GIVEN
 
@@ -323,18 +326,19 @@ class BargeInDetector:
 
         in_resampler: rtc.AudioResampler | None = None
         out_resampler: rtc.AudioResampler | None = None
+        input_frames_history: list[rtc.AudioFrame] = []
 
         def remix_and_resample(frames: list[rtc.AudioFrame], channel_idx: int) -> int:
-            total_samples = sum(f.samples_per_channel * f.num_channels for f in frames)
+            total_output_samples = sum(f.samples_per_channel for f in frames)
             dest = self._stereo_buf[channel_idx]
 
-            if total_samples == 0:
+            if total_output_samples == 0:
                 return 0
 
-            if total_samples > self._capacity:
+            if total_output_samples > self._capacity:
                 pos = 0
             else:
-                pos = self._capacity - total_samples
+                pos = self._capacity - total_output_samples
                 # shift the buffer to the left to make room
                 dest[:pos] = dest[-pos:]
 
@@ -398,6 +402,7 @@ class BargeInDetector:
                     if len(f.data) > 0:
                         output_resampled.append(f)
 
+            input_frames_history.extend(input_resampled)
             _ = remix_and_resample(input_resampled, 0)
             len_right = remix_and_resample(output_resampled, 1)
             self._silence_samples -= len_right
@@ -417,9 +422,10 @@ class BargeInDetector:
                     logger.info(
                         f"Barge in detected: {self._user_speaking=} and {self._agent_speaking=}"
                     )
-                    self.barge_in()
+                    self._loop.call_soon_threadsafe(self.barge_in)
                     self.save_input_for_debug(inp, prefix="recordings/barge_in")
                     self._in_record.write_to_file("recordings/barge_in/input.wav")
+                    self.save_frames_to_file(input_frames_history, "recordings/barge_in/input_frames.pkl")
                 else:
                     self.save_input_for_debug(inp, prefix="recordings/not_barge_in")
 
@@ -431,6 +437,18 @@ class BargeInDetector:
 
         file_name = f"{prefix}/{time.strftime('%Y-%m-%d_%H-%M-%S')}.wav"
         soundfile.write(file_name, data.T, self._sample_rate)
+        soundfile.write(file_name.replace(".wav", "_user_speech.wav"), data[1], self._sample_rate)
+        soundfile.write(file_name.replace(".wav", "_agent_speech.wav"), data[0], self._sample_rate)
+
+    def save_frames_to_file(self, frames: list[rtc.AudioFrame], filename: str) -> None:
+        import pickle
+
+        with open(filename, "wb") as f:
+            pickle.dump([
+                f.to_wav_bytes()
+                for f in frames
+            ], f)
+
 
 
 class SyncedAudioInput(io.AudioInput):
@@ -463,10 +481,10 @@ class SyncedAudioInput(io.AudioInput):
         return frame
 
     def on_attached(self) -> None:
-        pass
+        self.__audio_input.on_attached()
 
     def on_detached(self) -> None:
-        pass
+        self.__audio_input.on_detached()
 
     def write_to_file(self, filename: str) -> None:
         import soundfile
