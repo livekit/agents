@@ -261,7 +261,7 @@ class LLM(llm.LLM):
                 extra["tool_config"] = gemini_tool_choice
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)  # type: ignore
+            extra["response_json_schema"] = to_response_format(response_format)  # type: ignore
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
