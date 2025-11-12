@@ -67,7 +67,9 @@ python my_agent.py download-files
 
 ## Downloaded model files
 
-Model files are downloaded to and loaded from the location specified by the `HF_HUB_CACHE` environment variable. If not set, this defaults to `$HF_HOME/hub`, which is typically `~/.cache/huggingface/hub`.
+Model files are downloaded to and loaded from the location specified by the `HF_HUB_CACHE` environment variable. If not set, this defaults to `$HF_HOME/hub` (typically `~/.cache/huggingface/hub`).
+
+For offline deployment, download the model files first while connected to the internet, then copy the cache directory to your deployment environment.
 
 ## Model system requirements
 
