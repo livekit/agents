@@ -42,7 +42,9 @@ class MyAgent(Agent):
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+
 tasks = set()
+
 
 async def entrypoint(ctx: JobContext):
     # each log entry will include these fields
@@ -85,7 +87,6 @@ async def entrypoint(ctx: JobContext):
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
-
     async def record_stereo_audio(recorder: StereoAudioRecorder):
         while session.input.audio is None or session.output.audio is None:
             await asyncio.sleep(0.05)
@@ -98,7 +99,6 @@ async def entrypoint(ctx: JobContext):
             session.output.audio = recorder.record_output(session.output.audio)  # type: ignore[arg-type]
         except Exception as e:
             logger.warning(f"RecorderIO record_output failed: {e}")
-
 
         try:
             await recorder.start(output_path="output.wav")

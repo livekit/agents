@@ -42,22 +42,22 @@ class StereoAudioRecorder(RecorderIO):
     def started(self) -> bool:
         return self._started
 
-    @utils.log_exceptions(logger=logger)
     def start_agent_speech(self, start_time: float) -> None:
+        if self._out_record is None:
+            return
         self._out_record.speech_started_at = start_time
         self._out_record._speech_taken = 0.0
 
-    @utils.log_exceptions(logger=logger)
     def end_agent_speech(self) -> None:
+        if self._out_record is None:
+            return
         self._out_record.speech_started_at = None
         self._out_record._speech_taken = 0.0
 
-    @utils.log_exceptions(logger=logger)
     def record_input(self, audio_input: io.AudioInput) -> UserAudioInput:
         self._in_record = UserAudioInput(audio_recorder=self, source=audio_input)
         return self._in_record
 
-    @utils.log_exceptions(logger=logger)
     def record_output(self, audio_output: io.AudioOutput) -> AgentAudioOutput:
         self._out_record = AgentAudioOutput(audio_recorder=self, audio_output=audio_output)
         return self._out_record
@@ -167,12 +167,12 @@ class StereoAudioRecorder(RecorderIO):
             # TEMPORARY: Write to the output file
             if speech_sample_written > 0:
                 import soundfile as sf
+
                 sf.write(self._output_path, inp.T, self._sample_rate)
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._close_fut.set_result, None)
 
-    @utils.log_exceptions(logger=logger)
     def reset(self) -> None:
         with self._thread_lock:
             self._agent_speech_written = 0
@@ -210,6 +210,7 @@ class UserAudioInput(io.AudioInput):
 
     def on_detached(self) -> None:
         self.__audio_input.on_detached()
+
 
 class AgentAudioOutput(io.AudioOutput):
     def __init__(
