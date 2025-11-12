@@ -65,6 +65,10 @@ This plugin requires model files. Before starting your agent for the first time,
 python my_agent.py download-files
 ```
 
+## Downloaded model files
+
+Model files are downloaded to and loaded from the location specified by the `HF_HUB_CACHE` environment variable. If not set, this defaults to `$HF_HOME/hub`, which is typically `~/.cache/huggingface/hub`.
+
 ## Model system requirements
 
 The end-of-turn model is optimized to run on CPUs with modest system requirements. It is designed to run on the same server hosting your agents.
