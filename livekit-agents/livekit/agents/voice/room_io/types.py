@@ -107,20 +107,25 @@ class RoomOptions:
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
+    delete_room_on_close: bool = False
+    """Delete the room when the AgentSession is closed, default to False"""
 
     def get_text_input_options(self) -> TextInputOptions | None:
         if isinstance(self.text_input, TextInputOptions):
             return self.text_input
+        # if text_input is not given, default to enabled
         return TextInputOptions() if self.text_input is not False else None
 
     def get_audio_input_options(self) -> AudioInputOptions | None:
         if isinstance(self.audio_input, AudioInputOptions):
             return self.audio_input
+        # if audio_input is not given, default to enabled
         return AudioInputOptions() if self.audio_input is not False else None
 
     def get_video_input_options(self) -> VideoInputOptions | None:
         if isinstance(self.video_input, VideoInputOptions):
             return self.video_input
+        # if video_input is not given, default to disabled
         return VideoInputOptions() if self.video_input is True else None
 
     def get_audio_output_options(self) -> AudioOutputOptions | None:
@@ -180,6 +185,7 @@ class RoomOptions:
 
             opts.video_input = input_options.video_enabled
             opts.close_on_disconnect = input_options.close_on_disconnect
+            opts.delete_room_on_close = input_options.delete_room_on_close
 
         if output_options:
             opts.audio_output = (

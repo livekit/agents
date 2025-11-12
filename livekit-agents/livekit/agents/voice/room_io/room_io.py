@@ -428,7 +428,7 @@ class RoomIO:
         def _on_delete_room_task_done(task: asyncio.Future[api.DeleteRoomResponse]) -> None:
             self._delete_room_task = None
 
-        if self._input_options.delete_room_on_close and self._delete_room_task is None:
+        if self._options.delete_room_on_close and self._delete_room_task is None:
             job_ctx = get_job_context()
             logger.info(
                 "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)"
