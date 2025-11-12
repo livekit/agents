@@ -56,7 +56,6 @@ def to_chat_ctx(
             parts.append(
                 {
                     "function_call": {
-                        "id": msg.call_id,
                         "name": msg.name,
                         "args": json.loads(msg.arguments or "{}"),
                     }
@@ -67,7 +66,6 @@ def to_chat_ctx(
             parts.append(
                 {
                     "function_response": {
-                        "id": msg.call_id,
                         "name": msg.name,
                         "response": response,
                     }
