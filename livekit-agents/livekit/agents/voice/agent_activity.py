@@ -2292,7 +2292,7 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         current_span.set_attribute(
             trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
-            json.dumps([fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]),
+            vars([fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]),
         )
 
         if audio_output is not None:

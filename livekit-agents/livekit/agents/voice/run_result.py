@@ -851,7 +851,7 @@ class ChatMessageAssert:
         current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, "judge_evaluation")
         current_span.set_attribute(
             trace_types.ATTR_FUNCTION_TOOL_ARGS,
-            json.dumps({"intent": intent, "message": msg_content}),
+            {"intent": intent, "message": msg_content},
         )
 
         if not msg_content:

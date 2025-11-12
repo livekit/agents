@@ -100,12 +100,10 @@ async def _llm_inference_task(
 
     current_span.set_attribute(
         trace_types.ATTR_CHAT_CTX,
-        json.dumps(
-            chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
-        ),
+        vars(chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)),
     )
     current_span.set_attribute(
-        trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
+        trace_types.ATTR_FUNCTION_TOOLS, vars(list(tool_ctx.function_tools.keys()))
     )
 
     llm_node = node(chat_ctx, tools, model_settings)
@@ -167,9 +165,7 @@ async def _llm_inference_task(
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
         trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
-        json.dumps(
-            [fnc.model_dump(exclude={"type", "created_at"}) for fnc in data.generated_functions]
-        ),
+        vars([fnc.model_dump(exclude={"type", "created_at"}) for fnc in data.generated_functions]),
     )
     return True
 
