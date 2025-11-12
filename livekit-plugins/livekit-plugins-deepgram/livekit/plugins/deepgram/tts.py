@@ -123,8 +123,12 @@ class TTS(tts.TTS):
             ),
             timeout,
         )
-        ws_headers = {k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"}
-        logger.debug(f"Established new Deepgram TTS WebSocket connection with headers: {ws_headers}")
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            f"Established new Deepgram TTS WebSocket connection with headers: {ws_headers}"
+        )
 
         return ws
 
