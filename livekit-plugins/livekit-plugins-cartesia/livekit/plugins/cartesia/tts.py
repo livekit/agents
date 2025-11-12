@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import weakref
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Union, cast
 
@@ -47,12 +48,14 @@ from .models import (
     TTSVoiceSpeed,
     _is_sonic_3,
 )
+from .version import __version__
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2025-04-16"
 API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "2024-11-13"
 MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "sonic-2-2025-03-07"
+USER_AGENT = f"LiveKit Agents Cartesia Plugin/{__version__}"
 
 
 @dataclass
@@ -169,6 +172,19 @@ class TTS(tts.TTS):
         elif isinstance(text_pacing, tts.SentenceStreamPacer):
             self._stream_pacer = text_pacing
 
+        if word_timestamps:
+            if "preview" not in self._opts.model and self._opts.language not in {
+                "en",
+                "de",
+                "es",
+                "fr",
+            }:
+                # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
+                logger.warning(
+                    "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
+                    " or all languages with `preview` models"
+                )
+
     @property
     def model(self) -> str:
         return self._opts.model
@@ -182,7 +198,9 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
         )
-        return await asyncio.wait_for(session.ws_connect(url), timeout)
+        return await asyncio.wait_for(
+            session.ws_connect(url, headers={"User-Agent": USER_AGENT}), timeout
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -300,6 +318,7 @@ class ChunkedStream(tts.ChunkedStream):
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
                     API_VERSION_HEADER: API_VERSION,
+                    "User-Agent": USER_AGENT,
                 },
                 json=json,
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
@@ -343,6 +362,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
         input_sent_event = asyncio.Event()
+        sent_tokens = deque[str]()
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
         if self._tts._stream_pacer:
@@ -358,6 +378,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = context_id
                 token_pkt["transcript"] = ev.token + " "
+                sent_tokens.append(ev.token + " ")
                 token_pkt["continue"] = True
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
@@ -366,6 +387,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = context_id
             end_pkt["transcript"] = " "
+            sent_tokens.append(" ")
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
             input_sent_event.set()
@@ -382,6 +404,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
+            skip_aligning = False
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
@@ -411,10 +434,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.end_input()
                         break
                 elif word_timestamps := data.get("word_timestamps"):
+                    # assuming Cartesia echos the sent text in the original format and order.
                     for word, start, end in zip(
                         word_timestamps["words"], word_timestamps["start"], word_timestamps["end"]
                     ):
-                        word = f"{word} "  # TODO(long): any better way to format the words?
+                        if not sent_tokens or skip_aligning:
+                            word = f"{word} "
+                            skip_aligning = True
+                        else:
+                            sent = sent_tokens.popleft()
+                            if (idx := sent.find(word)) != -1:
+                                word, sent = sent[: idx + len(word)], sent[idx + len(word) :]
+                                if sent.strip():
+                                    sent_tokens.appendleft(sent)
+                                elif sent and sent_tokens:
+                                    # merge the remaining whitespace to the next sentence
+                                    sent_tokens[0] = sent + sent_tokens[0]
+                            else:
+                                word = f"{word} "
+                                skip_aligning = True
+
                         output_emitter.push_timed_transcript(
                             TimedString(text=word, start_time=start, end_time=end)
                         )

@@ -54,7 +54,7 @@ from .types import (
     SpeakerFragments,
     SpeechFragment,
 )
-from .utils import get_endpoint_url
+from .utils import get_stt_url
 
 
 @dataclasses.dataclass
@@ -448,7 +448,7 @@ class SpeechStream(stt.RecognizeStream):
         """Run the STT stream."""
         self._client = AsyncClient(
             api_key=self._stt._api_key,
-            url=get_endpoint_url(self._stt._base_url),
+            url=get_stt_url(self._stt._base_url),
         )
 
         logger.debug("Connected to Speechmatics STT service")
