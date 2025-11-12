@@ -34,8 +34,9 @@ from livekit.agents import (
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import AudioBuffer, is_given
 
+from .log import logger
 from .models import STTAudioFormat, STTCommitStrategy, STTModels
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
@@ -137,6 +138,17 @@ class STTv2(stt.STT):
 
         return self._session
 
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt.SpeechEvent:
+        raise NotImplementedError(
+            "Scribe v2 API does not support non-streaming recognize. Use stream() instead or use the original STT class for Scribe v1"
+        )
+
     def stream(
         self,
         *,
@@ -171,10 +183,12 @@ class SpeechStreamv2(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
+        logger.info("STTv2: Starting streaming session")
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            logger.info("STTv2: Send task started")
 
             # Buffer audio into chunks (50ms chunks)
             samples_per_chunk = self._opts.sample_rate // 20
@@ -184,8 +198,10 @@ class SpeechStreamv2(stt.SpeechStream):
                 samples_per_channel=samples_per_chunk,
             )
 
+            frame_count = 0
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
+                    logger.debug("STTv2: Received flush sentinel")
                     frames = audio_bstream.flush()
                     # Send any remaining frames
                     for frame in frames:
@@ -202,6 +218,7 @@ class SpeechStreamv2(stt.SpeechStream):
                         )
                     # Send commit message if using manual commit strategy
                     if self._opts.commit_strategy == "manual":
+                        logger.debug("STTv2: Sending manual commit")
                         await ws.send_str(
                             json.dumps(
                                 {
@@ -214,6 +231,9 @@ class SpeechStreamv2(stt.SpeechStream):
                         )
                 else:
                     frames = audio_bstream.write(data.data.tobytes())
+                    frame_count += len(frames)
+                    if frame_count % 100 == 0:
+                        logger.debug(f"STTv2: Sent {frame_count} audio frames")
                     for frame in frames:
                         audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                         await ws.send_str(
@@ -227,15 +247,18 @@ class SpeechStreamv2(stt.SpeechStream):
                             )
                         )
 
+            logger.info(f"STTv2: Send task complete, sent {frame_count} total frames")
             closing_ws = True
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            logger.info("STTv2: Recv task started")
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
+                        logger.info("STTv2: Recv task closing due to timeout")
                         break
                     continue
 
@@ -245,20 +268,24 @@ class SpeechStreamv2(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws:
+                        logger.info("STTv2: WebSocket closed normally")
                         return
 
+                    logger.error(f"STTv2: ElevenLabs connection closed unexpectedly, msg type: {msg.type}")
                     raise APIStatusError(
                         message="ElevenLabs connection closed unexpectedly",
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning(f"STTv2: Unexpected message type: {msg.type}")
                     continue
 
                 try:
                     data = json.loads(msg.data)
+                    logger.debug(f"STTv2: Received message: {data}")
                     self._process_stream_event(data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.exception(f"STTv2: Error processing message: {e}")
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -304,6 +331,8 @@ class SpeechStreamv2(stt.SpeechStream):
         base_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{base_url}/speech-to-text/realtime?{query_string}"
 
+        logger.info(f"STTv2: Connecting to WebSocket URL: {ws_url}")
+
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -312,7 +341,9 @@ class SpeechStreamv2(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            logger.info("STTv2: WebSocket connected successfully")
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            logger.error(f"STTv2: Failed to connect to ElevenLabs: {e}")
             raise APIConnectionError("Failed to connect to ElevenLabs") from e
 
         return ws
@@ -320,10 +351,12 @@ class SpeechStreamv2(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
         message_type = data.get("message_type")
+        logger.debug(f"STTv2: Processing event type: {message_type}")
 
         if message_type == "partial_transcript":
             # Interim/partial transcripts
-            text = data.get("transcript", "")
+            text = data.get("text", "")
+            logger.debug(f"STTv2: Partial transcript: '{text}'")
             if text:
                 interim_event = stt.SpeechEvent(
                     type=SpeechEventType.INTERIM_TRANSCRIPT,
@@ -335,10 +368,12 @@ class SpeechStreamv2(stt.SpeechStream):
                     ],
                 )
                 self._event_ch.send_nowait(interim_event)
+                logger.info(f"STTv2: Sent interim transcript: '{text}'")
 
         elif message_type == "committed_transcript":
             # Final committed transcripts
-            text = data.get("transcript", "")
+            text = data.get("text", "")
+            logger.info(f"STTv2: Final transcript: '{text}'")
             if text:
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -353,10 +388,12 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 # Send end of speech event
                 self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                logger.info("STTv2: Sent FINAL_TRANSCRIPT and END_OF_SPEECH events")
 
         elif message_type == "committed_transcript_with_timestamps":
             # Committed transcript with word-level timestamps
-            text = data.get("transcript", "")
+            text = data.get("text", "")
+            logger.info(f"STTv2: Final transcript with timestamps: '{text}'")
             if text:
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -371,3 +408,12 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 # Send end of speech event
                 self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                logger.info("STTv2: Sent FINAL_TRANSCRIPT and END_OF_SPEECH events")
+
+        elif message_type == "session_started":
+            # Session initialization message - informational only
+            session_id = data.get("session_id", "unknown")
+            logger.info(f"STTv2: Session started with ID: {session_id}")
+
+        else:
+            logger.warning(f"STTv2: Unknown message type: {message_type}, data: {data}")
