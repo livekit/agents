@@ -335,8 +335,11 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streamed API using websockets
 
-    Uses multi-stream API:
+    Uses multi-stream-input API for most models:
     https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-multi-stream-input
+    
+    For eleven_v3, uses stream-input API:
+    https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input
     """
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
@@ -520,7 +523,11 @@ class _Connection:
         if self._ws or self._closed:
             return
 
-        url = _multi_stream_url(self._opts)
+        # Use stream-input for eleven_v3, multi-stream-input for others
+        if self._opts.model == "eleven_v3":
+            url = _stream_input_url(self._opts)
+        else:
+            url = _multi_stream_url(self._opts)
         headers = {AUTHORIZATION_HEADER: self._opts.api_key}
         self._ws = await self._session.ws_connect(url, headers=headers)
 
@@ -550,6 +557,7 @@ class _Connection:
 
     async def _send_loop(self) -> None:
         """Send loop - processes messages from input queue"""
+        is_single_stream = self._opts.model == "eleven_v3"
         try:
             while not self._closed:
                 try:
@@ -576,15 +584,19 @@ class _Connection:
                         init_pkt = {
                             "text": " ",
                             "voice_settings": voice_settings,
-                            "context_id": msg.context_id,
                         }
+                        # Only include context_id for multi-stream endpoint
+                        if not is_single_stream:
+                            init_pkt["context_id"] = msg.context_id
                         await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
                     pkt: dict[str, Any] = {
                         "text": msg.text,
-                        "context_id": msg.context_id,
                     }
+                    # Only include context_id for multi-stream endpoint
+                    if not is_single_stream:
+                        pkt["context_id"] = msg.context_id
                     if msg.flush:
                         pkt["flush"] = True
 
@@ -595,10 +607,12 @@ class _Connection:
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
-                        close_pkt = {
-                            "context_id": msg.context_id,
+                        close_pkt: dict[str, Any] = {
                             "close_context": True,
                         }
+                        # Only include context_id for multi-stream endpoint
+                        if not is_single_stream:
+                            close_pkt["context_id"] = msg.context_id
                         await self._ws.send_json(close_pkt)
 
         except Exception as e:
@@ -609,6 +623,7 @@ class _Connection:
 
     async def _recv_loop(self) -> None:
         """Receive loop - processes messages from WebSocket"""
+        is_single_stream = self._opts.model == "eleven_v3"
         try:
             while not self._closed and self._ws and not self._ws.closed:
                 msg = await self._ws.receive()
@@ -627,10 +642,17 @@ class _Connection:
                     continue
 
                 data = json.loads(msg.data)
-                context_id = data.get("contextId")
-
-                if not context_id or context_id not in self._context_data:
-                    continue
+                
+                # For single-stream endpoint (eleven_v3), there's no contextId
+                # Use the first (and only) context in context_data
+                if is_single_stream:
+                    if not self._context_data:
+                        continue
+                    context_id = next(iter(self._context_data.keys()))
+                else:
+                    context_id = data.get("contextId")
+                    if not context_id or context_id not in self._context_data:
+                        continue
 
                 ctx = self._context_data[context_id]
 
@@ -787,7 +809,26 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     return url
 
 
+def _stream_input_url(opts: _TTSOptions) -> str:
+    """Create WebSocket URL for single stream-input endpoint (compatible with eleven_v3)"""
+    base_url = opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
+    voice_id = opts.voice_id
+    url = f"{base_url}/text-to-speech/{voice_id}/stream-input?"
+    params = []
+    params.append(f"model_id={opts.model}")
+    params.append(f"output_format={opts.encoding}")
+    if is_given(opts.language):
+        params.append(f"language_code={opts.language}")
+    params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
+    params.append(f"enable_logging={str(opts.enable_logging).lower()}")
+    if is_given(opts.streaming_latency):
+        params.append(f"optimize_streaming_latency={opts.streaming_latency}")
+    url += "&".join(params)
+    return url
+
+
 def _multi_stream_url(opts: _TTSOptions) -> str:
+    """Create WebSocket URL for multi-stream-input endpoint (not compatible with eleven_v3)"""
     base_url = opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
     voice_id = opts.voice_id
     url = f"{base_url}/text-to-speech/{voice_id}/multi-stream-input?"
