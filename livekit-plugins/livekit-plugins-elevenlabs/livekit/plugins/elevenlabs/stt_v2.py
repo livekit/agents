@@ -180,6 +180,8 @@ class SpeechStreamv2(stt.SpeechStream):
         self._opts = opts
         self._language = language
         self._session = http_session
+        self._speaking = False  # Track if we're currently in a speech segment
+        self._last_committed_text = ""  # Track last committed text to filter stale partials
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -357,7 +359,21 @@ class SpeechStreamv2(stt.SpeechStream):
             # Interim/partial transcripts
             text = data.get("text", "")
             logger.debug(f"STTv2: Partial transcript: '{text}'")
+
+            # Ignore stale partial transcripts that match the last committed text
+            # (ElevenLabs sometimes sends partials after commits)
+            if text and text == self._last_committed_text:
+                logger.debug(f"STTv2: Ignoring stale partial transcript matching last committed: '{text}'")
+                return
+
             if text:
+                # Send START_OF_SPEECH if this is the first transcript in a new segment
+                if not self._speaking:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                    self._speaking = True
+                    self._last_committed_text = ""  # Clear on new segment
+                    logger.info("STTv2: Sent START_OF_SPEECH")
+
                 interim_event = stt.SpeechEvent(
                     type=SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=[
@@ -375,6 +391,11 @@ class SpeechStreamv2(stt.SpeechStream):
             text = data.get("text", "")
             logger.info(f"STTv2: Final transcript: '{text}'")
             if text:
+                # Send START_OF_SPEECH if we get a FINAL without any INTERIM first
+                if not self._speaking:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                    logger.info("STTv2: Sent START_OF_SPEECH (before FINAL)")
+
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
@@ -386,15 +407,27 @@ class SpeechStreamv2(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(final_event)
 
-                # Send end of speech event
+                # Send end of speech event and mark speaking as false
                 self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                self._speaking = False
+                self._last_committed_text = text  # Store to filter stale partials
                 logger.info("STTv2: Sent FINAL_TRANSCRIPT and END_OF_SPEECH events")
+            else:
+                # Empty commit - just reset state without sending events
+                self._speaking = False
+                self._last_committed_text = ""
+                logger.debug("STTv2: Received empty committed_transcript, resetting state")
 
         elif message_type == "committed_transcript_with_timestamps":
             # Committed transcript with word-level timestamps
             text = data.get("text", "")
             logger.info(f"STTv2: Final transcript with timestamps: '{text}'")
             if text:
+                # Send START_OF_SPEECH if we get a FINAL without any INTERIM first
+                if not self._speaking:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                    logger.info("STTv2: Sent START_OF_SPEECH (before FINAL with timestamps)")
+
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
@@ -406,8 +439,10 @@ class SpeechStreamv2(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(final_event)
 
-                # Send end of speech event
+                # Send end of speech event and mark speaking as false
                 self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                self._speaking = False
+                self._last_committed_text = text  # Store to filter stale partials
                 logger.info("STTv2: Sent FINAL_TRANSCRIPT and END_OF_SPEECH events")
 
         elif message_type == "session_started":
