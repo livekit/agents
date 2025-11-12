@@ -140,6 +140,7 @@ class AudioRecognition:
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._sample_rate = frame.sample_rate
+        logger.info(f"Pushing audio frame: {frame.duration}")
         if self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
