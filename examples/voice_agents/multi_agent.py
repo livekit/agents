@@ -12,8 +12,6 @@ from livekit.agents import (
     ChatContext,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    RoomOutputOptions,
     RunContext,
     cli,
     metrics,
@@ -168,11 +166,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=IntroAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # uncomment to enable Krisp BVC noise cancellation
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

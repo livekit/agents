@@ -7,9 +7,8 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    RoomInputOptions,
-    RoomOutputOptions,
     cli,
+    room_io,
 )
 from livekit.plugins import openai
 
@@ -46,8 +45,12 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(text_enabled=True, audio_enabled=False),
-        room_output_options=RoomOutputOptions(transcription_enabled=True, audio_enabled=False),
+        room_options=room_io.RoomOptions(
+            text_input=True,
+            text_output=True,
+            audio_input=False,
+            audio_output=False,
+        ),
     )
 
 

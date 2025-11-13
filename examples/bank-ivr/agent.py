@@ -24,7 +24,6 @@ from livekit.agents import (
     AgentTask,
     JobContext,
     MetricsCollectedEvent,
-    RoomOutputOptions,
     cli,
     metrics,
 )
@@ -651,7 +650,6 @@ async def bank_ivr_session(ctx: JobContext) -> None:
     await session.start(
         agent=RootBankIVRAgent(service=service, state=state),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

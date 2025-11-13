@@ -13,7 +13,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    RoomInputOptions,
     cli,
 )
 from livekit.plugins import deepgram, langchain, silero
@@ -80,11 +79,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # to use Krisp background voice cancellation, install livekit-plugins-noise-cancellation
-            # and `from livekit.plugins import noise_cancellation`
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
     await session.generate_reply(instructions="ask the user how they are doing?")
 

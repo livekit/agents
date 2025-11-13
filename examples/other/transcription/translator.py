@@ -10,11 +10,11 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     MetricsCollectedEvent,
-    RoomOutputOptions,
     StopResponse,
     cli,
     llm,
     metrics,
+    room_io,
     utils,
 )
 from livekit.plugins import openai, silero
@@ -86,13 +86,12 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Translator(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            transcription_enabled=True,
+        room_options=room_io.RoomOptions(
+            text_output=room_io.TextOutputOptions(sync_transcription=False),
             # audio track is created to emit legacy transcription events for agent
             # you can disable audio output if you are using the text stream
             # https://docs.livekit.io/agents/build/text/
-            audio_enabled=True,
-            sync_transcription=False,
+            audio_output=True,
         ),
     )
     session.output.set_audio_enabled(False)
