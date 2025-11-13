@@ -228,7 +228,7 @@ class AgentAudioOutput(io.AudioOutput):
         super().__init__(
             label="AgentAudioOutput",
             next_in_chain=audio_output,
-            sample_rate=audio_output.sample_rate,
+            sample_rate=audio_output.sample_rate if audio_output is not None else None,
             capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self.__recorder = audio_recorder
