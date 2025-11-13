@@ -52,6 +52,8 @@ class TextInputOptions:
 class AudioInputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
+    frame_size_ms: int = 50
+    """The frame size in milliseconds for the audio input."""
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
@@ -175,6 +177,7 @@ class RoomOptions:
                 AudioInputOptions(
                     sample_rate=input_options.audio_sample_rate,
                     num_channels=input_options.audio_num_channels,
+                    frame_size_ms=input_options.audio_frame_size_ms,
                     noise_cancellation=input_options.noise_cancellation,
                     pre_connect_audio=input_options.pre_connect_audio,
                     pre_connect_audio_timeout=input_options.pre_connect_audio_timeout,
@@ -224,6 +227,8 @@ class RoomInputOptions:
     """If not given, default to False."""
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
+    audio_frame_size_ms: int = 50
+    """The frame size in milliseconds for the audio input."""
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN

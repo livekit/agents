@@ -819,6 +819,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
+            self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
@@ -1018,7 +1019,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent = agent
 
             if new_activity == "start":
-                if agent._activity is not None:
+                previous_agent = self._activity.agent if self._activity else None
+                if agent._activity is not None and (
+                    # allow updating the same agent that is running
+                    agent is not previous_agent or previous_activity != "close"
+                ):
                     raise RuntimeError("cannot start agent: an activity is already running")
 
                 self._next_activity = AgentActivity(agent, self)

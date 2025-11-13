@@ -37,10 +37,12 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
+from .version import __version__
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2025-04-16"
+USER_AGENT = f"LiveKit Agents Cartesia Plugin/{__version__}"
 
 
 @dataclass
@@ -333,7 +335,7 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(ws_url),
+                self._session.ws_connect(ws_url, headers={"User-Agent": USER_AGENT}),
                 self._conn_options.timeout,
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
