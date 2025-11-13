@@ -125,14 +125,7 @@ class AvatarSession:
             0
         ].track
 
-        @self._room.on("local_track_published")
-        def on_local_track_published(publication, track):
-            self._agent_publication = publication
-            self._agent_audio_track = track
-            self._main_atask = asyncio.create_task(
-                self._main_task(), name="AvatarSession._main_task"
-            )
-            return
+        self._main_atask = asyncio.create_task(self._main_task(), name="AvatarSession._main_task")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._audio_resampler:
