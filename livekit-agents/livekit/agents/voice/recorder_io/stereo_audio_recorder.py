@@ -16,7 +16,7 @@ from livekit.agents.voice.agent_session import AgentSession
 
 from ...log import logger
 from .. import io
-from .recorder_io import RecorderIO
+from .recorder_io import RecorderAudioInput, RecorderAudioOutput, RecorderIO
 
 WRITE_INTERVAL = 0.1
 
@@ -184,9 +184,11 @@ class StereoAudioRecorder(RecorderIO):
             self._agent_speech_written = 0
 
 
-class UserAudioInput(io.AudioInput):
+class UserAudioInput(RecorderAudioInput, io.AudioInput):
     def __init__(self, *, audio_recorder: StereoAudioRecorder, source: io.AudioInput) -> None:
-        super().__init__(
+        RecorderAudioInput.__init__(self, recording_io=audio_recorder, source=source)
+        io.AudioInput.__init__(
+            self,
             label="UserAudioInput",
             source=source,
         )
@@ -218,14 +220,18 @@ class UserAudioInput(io.AudioInput):
         self.__audio_input.on_detached()
 
 
-class AgentAudioOutput(io.AudioOutput):
+class AgentAudioOutput(RecorderAudioOutput, io.AudioOutput):
     def __init__(
         self,
         *,
         audio_recorder: StereoAudioRecorder,
         audio_output: io.AudioOutput | None = None,
     ) -> None:
-        super().__init__(
+        RecorderAudioOutput.__init__(
+            self, recording_io=audio_recorder, audio_output=audio_output, write_fnc=lambda _: None
+        )
+        io.AudioOutput.__init__(
+            self,
             label="AgentAudioOutput",
             next_in_chain=audio_output,
             sample_rate=None,

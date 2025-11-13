@@ -119,6 +119,7 @@ async def entrypoint(ctx: JobContext):
     # This is a placeholder for now.
     def inference_callback(wav: np.ndarray) -> None:
         import soundfile as sf
+
         sf.write(output_path, wav.T, 16000)
 
     recorder = StereoAudioRecorder(agent_session=session, inference_callback=inference_callback)
