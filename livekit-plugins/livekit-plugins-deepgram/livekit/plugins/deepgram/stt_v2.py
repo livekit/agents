@@ -415,7 +415,8 @@ class SpeechStreamv2(stt.SpeechStream):
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }
             logger.debug(
-                f"Established new Deepgram STT WebSocket connection with headers: {ws_headers}"
+                "Established new Deepgram STT WebSocket connection:",
+                extra={"headers": ws_headers},
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to deepgram") from e
