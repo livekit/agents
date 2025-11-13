@@ -16,7 +16,7 @@ from livekit.agents.voice.agent_session import AgentSession
 
 from ...log import logger
 from .. import io
-from .recorder_io import RecorderAudioInput, RecorderAudioOutput, RecorderIO
+from .recorder_io import RecorderIO
 
 WRITE_INTERVAL = 0.1
 
@@ -32,8 +32,8 @@ class StereoAudioRecorder(RecorderIO):
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__(agent_session=agent_session, sample_rate=sample_rate, loop=loop)
-        self._in_record: UserAudioInput | None = None
-        self._out_record: AgentAudioOutput | None = None
+        self._in_record: UserAudioInput | None = None  # type: ignore[assignment]
+        self._out_record: AgentAudioOutput | None = None  # type: ignore[assignment]
 
         self._thread_lock = threading.Lock()
         # number of agent speech samples collected for the current turn
@@ -58,11 +58,11 @@ class StereoAudioRecorder(RecorderIO):
         self._out_record._speech_taken = 0.0
         self.reset()
 
-    def record_input(self, audio_input: io.AudioInput) -> UserAudioInput:
+    def record_input(self, audio_input: io.AudioInput) -> UserAudioInput:  # type: ignore[override]
         self._in_record = UserAudioInput(audio_recorder=self, source=audio_input)
         return self._in_record
 
-    def record_output(self, audio_output: io.AudioOutput) -> AgentAudioOutput:
+    def record_output(self, audio_output: io.AudioOutput) -> AgentAudioOutput:  # type: ignore[override]
         self._out_record = AgentAudioOutput(audio_recorder=self, audio_output=audio_output)
         return self._out_record
 
@@ -184,11 +184,9 @@ class StereoAudioRecorder(RecorderIO):
             self._agent_speech_written = 0
 
 
-class UserAudioInput(RecorderAudioInput, io.AudioInput):
+class UserAudioInput(io.AudioInput):
     def __init__(self, *, audio_recorder: StereoAudioRecorder, source: io.AudioInput) -> None:
-        RecorderAudioInput.__init__(self, recording_io=audio_recorder, source=source)
-        io.AudioInput.__init__(
-            self,
+        super().__init__(
             label="UserAudioInput",
             source=source,
         )
@@ -220,18 +218,14 @@ class UserAudioInput(RecorderAudioInput, io.AudioInput):
         self.__audio_input.on_detached()
 
 
-class AgentAudioOutput(RecorderAudioOutput, io.AudioOutput):
+class AgentAudioOutput(io.AudioOutput):
     def __init__(
         self,
         *,
         audio_recorder: StereoAudioRecorder,
         audio_output: io.AudioOutput | None = None,
     ) -> None:
-        RecorderAudioOutput.__init__(
-            self, recording_io=audio_recorder, audio_output=audio_output, write_fnc=lambda _: None
-        )
-        io.AudioOutput.__init__(
-            self,
+        super().__init__(
             label="AgentAudioOutput",
             next_in_chain=audio_output,
             sample_rate=None,
