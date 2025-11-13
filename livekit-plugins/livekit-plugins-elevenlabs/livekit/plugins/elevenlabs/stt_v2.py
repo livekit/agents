@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -214,7 +215,9 @@ class SpeechStreamv2(stt.SpeechStream):
         # So 5 tokens ≈ 3-4 words. We add a small buffer for safety.
         max_search_len = min(
             len(words) // 2,  # Don't search more than half the text
-            max(1, int(self._max_tokens_to_recompute * 0.75) + 2),  # ~3-4 words for 5 tokens + buffer
+            max(
+                1, int(self._max_tokens_to_recompute * 0.75) + 2
+            ),  # ~3-4 words for 5 tokens + buffer
         )
 
         if max_search_len < 1:
@@ -278,11 +281,16 @@ class SpeechStreamv2(stt.SpeechStream):
             frame_count = 0
             total_samples = 0
             import time
+
             start_time = time.time()
 
             async for data in self._input_ch:
                 # Write audio bytes to buffer and get 50ms frames
-                frames = audio_bstream.write(data.data.tobytes())
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                elif isinstance(data, self._FlushSentinel):
+                    frames.extend(audio_bstream.flush())
 
                 for frame in frames:
                     frame_count += 1
@@ -319,6 +327,7 @@ class SpeechStreamv2(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             import time
+
             recv_start_time = time.time()
             msg_count = 0
 
@@ -333,7 +342,9 @@ class SpeechStreamv2(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws or self._session.closed:
-                        logger.info(f"STTv2: Received {msg_count} messages in {elapsed:.2f}s before close")
+                        logger.info(
+                            f"STTv2: Received {msg_count} messages in {elapsed:.2f}s before close"
+                        )
                         return
                     raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
 
