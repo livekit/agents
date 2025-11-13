@@ -181,7 +181,63 @@ class SpeechStreamv2(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
-        self._last_committed_text = ""  # Track last committed text to filter stale partials
+        self._max_tokens_to_recompute = 5  # Default from ElevenLabs, updated from session_started
+
+    def _deduplicate_transcript(self, text: str) -> str:
+        """
+        Remove duplicated suffixes from ElevenLabs committed transcripts.
+
+        ElevenLabs Scribe v2 recomputes the last N tokens for context accuracy
+        (controlled by max_tokens_to_recompute). This causes duplicated phrases:
+        - "for tomorrow for tomorrow" -> "for tomorrow"
+        - "i would like to know i would like to know" -> "i would like to know"
+        - "have a swimming pool, have a swimming pool?" -> "have a swimming pool?"
+
+        This function detects and removes these duplicated suffixes, limiting the
+        search to approximately max_tokens_to_recompute words.
+        """
+        if not text:
+            return text
+
+        # Split into words, preserving punctuation at the end
+        words = text.split()
+        if len(words) < 2:
+            return text
+
+        # Limit search based on max_tokens_to_recompute
+        # Note: tokens ≠ words. Typically 1 token ≈ 0.75 words in English
+        # So 5 tokens ≈ 3-4 words. We add a small buffer for safety.
+        max_search_len = min(
+            len(words) // 2,  # Don't search more than half the text
+            max(1, int(self._max_tokens_to_recompute * 0.75) + 2),  # ~3-4 words for 5 tokens + buffer
+        )
+
+        if max_search_len < 1:
+            return text
+
+        # Try increasingly larger suffix lengths (from max down to 1)
+        for suffix_len in range(max_search_len, 0, -1):
+            suffix = words[-suffix_len:]
+            prefix_end = len(words) - suffix_len
+
+            # Check if the suffix appears immediately before itself
+            if prefix_end >= suffix_len:
+                potential_duplicate = words[prefix_end - suffix_len : prefix_end]
+
+                # Normalize for comparison (ignore punctuation differences)
+                suffix_normalized = [w.rstrip(",.!?") for w in suffix]
+                potential_normalized = [w.rstrip(",.!?") for w in potential_duplicate]
+
+                if suffix_normalized == potential_normalized:
+                    # Found a duplicate - return text without the suffix
+                    deduplicated = " ".join(words[:prefix_end])
+                    if deduplicated != text:
+                        logger.debug(
+                            f"STTv2: Deduplicated transcript (max_tokens_to_recompute={self._max_tokens_to_recompute}): '{text}' -> '{deduplicated}'"
+                        )
+                    return deduplicated
+
+        return text
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -240,9 +296,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(
-                        message="ElevenLabs STT connection closed unexpectedly"
-                    )
+                    raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
 
                 # TODO: In production, change this to logger.warning and continue
                 # For now, raise exception to catch any unexpected message types during development
@@ -336,66 +390,48 @@ class SpeechStreamv2(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
         message_type = data.get("message_type")
-        logger.debug(f"STTv2: Processing event type: {message_type}")
+        logger.debug(f"STTv2: Processing event type: {message_type}, {data}")
 
         if message_type == "partial_transcript":
-            # Interim/partial transcripts
+            # Ignore partial transcripts - only use committed transcripts for voice agents.
+            # Partial transcripts are only used for UI feedback and don't trigger agent responses.
+            # ElevenLabs doesn't provide correlation IDs, so we can't reliably track which audio
+            # chunks correspond to which partial transcripts. This causes issues with stale
+            # partials appearing after commits and duplicate text.
+            logger.debug(f"STTv2: Ignoring partial transcript: '{data.get('text', '')}'")
+            return
+
+        elif message_type == "committed_transcript":
+            # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
+            # and trigger agent responses (unlike partial transcripts which are UI-only)
             text = data.get("text", "")
-            logger.debug(f"STTv2: Partial transcript: '{text}'")
 
-            # Ignore stale partial transcripts that match the last committed text
-            # (ElevenLabs sometimes sends partials after commits with minor punctuation differences)
-            if text and self._last_committed_text:
-                # Normalize whitespace and punctuation for comparison
-                normalized_text = (
-                    text.replace(" ?", "?").replace(" !", "!").replace(" .", ".").strip()
-                )
-                normalized_committed = (
-                    self._last_committed_text.replace(" ?", "?")
-                    .replace(" !", "!")
-                    .replace(" .", ".")
-                    .strip()
-                )
-                if normalized_text == normalized_committed:
-                    logger.debug(
-                        f"STTv2: Ignoring stale partial transcript matching last committed: '{text}'"
-                    )
-                    return
+            # Log full message structure to investigate duplication
+            # TODO: Remove after understanding the duplication issue
+            logger.debug(f"STTv2: Full committed_transcript data: {data}")
 
+            # Deduplicate text to work around ElevenLabs API duplication behavior
+            # ElevenLabs may include recomputed tokens (see max_tokens_to_recompute in config)
+            # which causes duplicated phrases like "for tomorrow for tomorrow"
+            original_text = text
+            text = self._deduplicate_transcript(text)
+            if original_text != text:
+                logger.info(
+                    f"STTv2: Deduplicated committed transcript: '{original_text}' -> '{text}'"
+                )
+
+            logger.info(f"STTv2: Committed transcript: '{text}'")
             if text:
-                # Send START_OF_SPEECH if this is the first transcript in a new segment
+                # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                     )
                     self._speaking = True
-                    self._last_committed_text = ""  # Clear on new segment
                     logger.info("STTv2: Sent START_OF_SPEECH")
 
-                interim_event = stt.SpeechEvent(
-                    type=SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._language or "en",
-                            text=text,
-                        )
-                    ],
-                )
-                self._event_ch.send_nowait(interim_event)
-                logger.info(f"STTv2: Sent interim transcript: '{text}'")
-
-        elif message_type == "committed_transcript":
-            # Final committed transcripts
-            text = data.get("text", "")
-            logger.info(f"STTv2: Final transcript: '{text}'")
-            if text:
-                # Send START_OF_SPEECH if we get a FINAL without any INTERIM first
-                if not self._speaking:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                    )
-                    logger.info("STTv2: Sent START_OF_SPEECH (before FINAL)")
-
+                # Send FINAL_TRANSCRIPT but keep speaking=True
+                # Multiple commits can occur within the same speech segment
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
@@ -406,30 +442,45 @@ class SpeechStreamv2(stt.SpeechStream):
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
-
-                # Send end of speech event and mark speaking as false
-                self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-                self._speaking = False
-                self._last_committed_text = text  # Store to filter stale partials
-                logger.info("STTv2: Sent FINAL_TRANSCRIPT and END_OF_SPEECH events")
+                logger.info(f"STTv2: Sent FINAL_TRANSCRIPT: '{text}'")
             else:
-                # Empty commit - just reset state without sending events
-                self._speaking = False
-                self._last_committed_text = ""
-                logger.debug("STTv2: Received empty committed_transcript, resetting state")
+                # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
+                # This groups multiple committed transcripts into one speech segment
+                if self._speaking:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                    self._speaking = False
+                    logger.info("STTv2: Sent END_OF_SPEECH (empty commit)")
+                else:
+                    logger.debug("STTv2: Received empty commit but not speaking, ignoring")
 
         elif message_type == "committed_transcript_with_timestamps":
-            # Committed transcript with word-level timestamps
+            # Final committed transcript with word-level timestamps - sent to LLM/TTS layer
             text = data.get("text", "")
-            logger.info(f"STTv2: Final transcript with timestamps: '{text}'")
+
+            # Log full message structure to see available metadata
+            # TODO: Remove after understanding available fields
+            logger.debug(f"STTv2: Full committed_transcript_with_timestamps data: {data}")
+
+            # Deduplicate text (same issue as committed_transcript)
+            original_text = text
+            text = self._deduplicate_transcript(text)
+            if original_text != text:
+                logger.info(
+                    f"STTv2: Deduplicated transcript with timestamps: '{original_text}' -> '{text}'"
+                )
+
+            logger.info(f"STTv2: Committed transcript with timestamps: '{text}'")
             if text:
-                # Send START_OF_SPEECH if we get a FINAL without any INTERIM first
+                # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                     )
-                    logger.info("STTv2: Sent START_OF_SPEECH (before FINAL with timestamps)")
+                    self._speaking = True
+                    logger.info("STTv2: Sent START_OF_SPEECH")
 
+                # Send FINAL_TRANSCRIPT but keep speaking=True
+                # Multiple commits can occur within the same speech segment
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
@@ -440,17 +491,43 @@ class SpeechStreamv2(stt.SpeechStream):
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
-
-                # Send end of speech event and mark speaking as false
-                self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-                self._speaking = False
-                self._last_committed_text = text  # Store to filter stale partials
-                logger.info("STTv2: Sent FINAL_TRANSCRIPT and END_OF_SPEECH events")
+                logger.info(f"STTv2: Sent FINAL_TRANSCRIPT with timestamps: '{text}'")
 
         elif message_type == "session_started":
             # Session initialization message - informational only
             session_id = data.get("session_id", "unknown")
-            logger.info(f"STTv2: Session started with ID: {session_id}")
+            config = data.get("config", {})
+
+            # Capture max_tokens_to_recompute for deduplication logic
+            if "max_tokens_to_recompute" in config:
+                self._max_tokens_to_recompute = config["max_tokens_to_recompute"]
+                logger.info(
+                    f"STTv2: Session started with ID: {session_id}, "
+                    f"max_tokens_to_recompute={self._max_tokens_to_recompute}"
+                )
+            else:
+                logger.info(f"STTv2: Session started with ID: {session_id}")
+
+        # Error handling for known ElevenLabs error types
+        elif message_type in (
+            "auth_error",
+            "quota_exceeded",
+            "transcriber_error",
+            "input_error",
+            "error",
+        ):
+            error_msg = data.get("message", "Unknown error")
+            error_details = data.get("details", "")
+            logger.error(
+                f"STTv2: ElevenLabs error [{message_type}]: {error_msg}"
+                + (f" - {error_details}" if error_details else "")
+            )
+            # Error events don't interrupt the stream, but log them for debugging
 
         else:
+            # TODO: Remove exception before PR - used during development to catch new message types
             logger.warning(f"STTv2: Unknown message type: {message_type}, data: {data}")
+            raise ValueError(
+                f"Unexpected message type from ElevenLabs STTv2: {message_type}. "
+                f"Data: {data}. Please update _process_stream_event to handle this type."
+            )
