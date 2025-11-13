@@ -38,26 +38,26 @@ class MyAgent(Agent):
         )
         self.recording_started_fut = recording_started
 
-    async def on_enter(self):
+    async def on_enter(self) -> None:
         # This is needed to ensure all audio is recorded before the agent starts speaking
         # as detaching and attaching the audio might take place after the on_enter call
         await self.recording_started_fut
         self.session.generate_reply()
 
 
-def prewarm(proc: JobProcess):
+def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
 tasks = set()
 
 
-async def entrypoint(ctx: JobContext):
+async def entrypoint(ctx: JobContext) -> None:
     # each log entry will include these fields
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-    session = AgentSession(
+    session: AgentSession = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
         stt="assemblyai/universal-streaming:en",
@@ -89,7 +89,7 @@ async def entrypoint(ctx: JobContext):
     recording_started: asyncio.Future[None] = asyncio.Future[None]()
     output_path: str = "output.wav"
 
-    async def record_stereo_audio(recorder: StereoAudioRecorder):
+    async def record_stereo_audio(recorder: StereoAudioRecorder) -> None:
         while session.input.audio is None or session.output.audio is None:
             await asyncio.sleep(0.05)
 
@@ -128,7 +128,7 @@ async def entrypoint(ctx: JobContext):
     task.add_done_callback(tasks.discard)
 
     @session.on("agent_state_changed")
-    def on_agent_state_changed(ev: AgentStateChangedEvent):
+    def on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
         nonlocal recorder
         if ev.new_state == "speaking":
             recorder.start_agent_speech(ev.created_at)
