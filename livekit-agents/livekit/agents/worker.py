@@ -27,7 +27,6 @@ import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
-from multiprocessing.context import ForkServerContext
 from typing import Any, Callable, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
@@ -300,6 +299,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._permissions = permissions
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
+        self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
         if not is_given(http_proxy):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
@@ -626,7 +626,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 extra={"version": __version__, "rtc-version": rtc.__version__},
             )
 
-            if isinstance(self._mp_ctx, ForkServerContext):
+            if self._mp_ctx_str == "forkserver":
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
