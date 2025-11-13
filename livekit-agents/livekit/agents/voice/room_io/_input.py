@@ -18,6 +18,7 @@ from .types import NoiseCancellationSelector
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
+
 class _ParticipantInputStream(Generic[T], ABC):
     """
     A stream that dynamically transitions between new audio and video feeds from a connected
