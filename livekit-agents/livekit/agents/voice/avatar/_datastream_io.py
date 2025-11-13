@@ -187,6 +187,9 @@ class DataStreamAudioOutput(AudioOutput):
             self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
             self._reset_playback_count()
 
+        if self._clear_buffer_timeout_handler:
+            self._clear_buffer_timeout_handler.cancel()
+
         if timeout is not None:
             self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
                 timeout, _on_timeout
