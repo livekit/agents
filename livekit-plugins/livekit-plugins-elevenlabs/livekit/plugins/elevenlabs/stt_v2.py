@@ -411,7 +411,5 @@ class SpeechStreamv2(stt.SpeechStream):
                 f"STTv2: ElevenLabs error [{message_type}]: {error_msg}"
                 + (f" - {error_details}" if error_details else "")
             )
-            # Error events don't interrupt the stream, but log them for debugging
-
         else:
             logger.warning(f"STTv2: Unknown message type: {message_type}, data: {data}")
