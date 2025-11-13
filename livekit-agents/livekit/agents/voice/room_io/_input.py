@@ -13,8 +13,8 @@ from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 from ...log import logger
 from ...utils import aio, log_exceptions
 from ..io import AudioInput, VideoInput
-from .types import NoiseCancellationSelector
 from ._pre_connect_audio import PreConnectAudioHandler
+from .types import NoiseCancellationSelector
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
