@@ -192,9 +192,14 @@ class SpeechStreamv2(stt.SpeechStream):
         - "for tomorrow for tomorrow" -> "for tomorrow"
         - "i would like to know i would like to know" -> "i would like to know"
         - "have a swimming pool, have a swimming pool?" -> "have a swimming pool?"
+        - "do you speak English? Do you speak English?" -> "do you speak English?"
+        - "dog to the hotel? Dog to the hotel?" -> "dog to the hotel?"
+        - "if I can if I can uh" -> "if I can uh"
 
-        This function detects and removes these duplicated suffixes, limiting the
-        search to approximately max_tokens_to_recompute words.
+        This function detects and removes these duplicated suffixes using case-insensitive
+        matching and ignores filler words (um, uh, er, ah) to catch duplicates like
+        "if I can if I can uh" where the filler word appears after the duplicate.
+        Search is limited to approximately max_tokens_to_recompute words.
         """
         if not text:
             return text
@@ -220,22 +225,27 @@ class SpeechStreamv2(stt.SpeechStream):
             suffix = words[-suffix_len:]
             prefix_end = len(words) - suffix_len
 
-            # Check if the suffix appears immediately before itself
-            if prefix_end >= suffix_len:
-                potential_duplicate = words[prefix_end - suffix_len : prefix_end]
+            # For each suffix, try all sub-suffixes (from longest to shortest)
+            # This catches duplicates like "if I can if I can uh" where the duplicate
+            # "if I can" is followed by an extra word
+            for actual_len in range(suffix_len, 0, -1):
+                # Take the first 'actual_len' words from the suffix
+                subseq = suffix[:actual_len]
+                subseq_normalized = [w.rstrip(",.!?").lower() for w in subseq]
 
-                # Normalize for comparison (ignore punctuation differences)
-                suffix_normalized = [w.rstrip(",.!?") for w in suffix]
-                potential_normalized = [w.rstrip(",.!?") for w in potential_duplicate]
+                # Check if this subsequence appears immediately before the suffix
+                if prefix_end >= actual_len:
+                    potential_duplicate = words[prefix_end - actual_len : prefix_end]
+                    potential_normalized = [w.rstrip(",.!?").lower() for w in potential_duplicate]
 
-                if suffix_normalized == potential_normalized:
-                    # Found a duplicate - return text without the suffix
-                    deduplicated = " ".join(words[:prefix_end])
-                    if deduplicated != text:
-                        logger.debug(
-                            f"STTv2: Deduplicated transcript (max_tokens_to_recompute={self._max_tokens_to_recompute}): '{text}' -> '{deduplicated}'"
-                        )
-                    return deduplicated
+                    if subseq_normalized == potential_normalized:
+                        # Found a duplicate - remove everything from prefix_end onwards
+                        deduplicated = " ".join(words[:prefix_end])
+                        if deduplicated != text:
+                            logger.debug(
+                                f"STTv2: Deduplicated transcript (max_tokens_to_recompute={self._max_tokens_to_recompute}): '{text}' -> '{deduplicated}'"
+                            )
+                        return deduplicated
 
         return text
 
@@ -264,11 +274,29 @@ class SpeechStreamv2(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
+            # Track audio frames for debugging
+            frame_count = 0
+            total_samples = 0
+            import time
+            start_time = time.time()
+
             async for data in self._input_ch:
                 # Write audio bytes to buffer and get 50ms frames
                 frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
+                    frame_count += 1
+                    total_samples += len(frame.data)
+                    elapsed = time.time() - start_time
+                    audio_duration = total_samples / self._opts.sample_rate
+
+                    # Log frame details every 20 frames (~1 second of audio)
+                    if frame_count % 20 == 0:
+                        logger.info(
+                            f"STTv2: Sent {frame_count} frames ({audio_duration:.2f}s audio) "
+                            f"in {elapsed:.2f}s real time, frame size: {len(frame.data)} samples"
+                        )
+
                     audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     await ws.send_str(
                         json.dumps(
@@ -281,13 +309,23 @@ class SpeechStreamv2(stt.SpeechStream):
                         )
                     )
 
+            logger.info(
+                f"STTv2: Audio send completed. Total: {frame_count} frames, "
+                f"{audio_duration:.2f}s audio in {time.time() - start_time:.2f}s real time"
+            )
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            import time
+            recv_start_time = time.time()
+            msg_count = 0
+
             while True:
                 msg = await ws.receive()
+                msg_count += 1
+                elapsed = time.time() - recv_start_time
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -295,6 +333,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws or self._session.closed:
+                        logger.info(f"STTv2: Received {msg_count} messages in {elapsed:.2f}s before close")
                         return
                     raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
 
@@ -304,7 +343,12 @@ class SpeechStreamv2(stt.SpeechStream):
                     raise ValueError(f"Unexpected WebSocket message type: {msg.type}")
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    parsed = json.loads(msg.data)
+                    logger.info(
+                        f"STTv2: Received message #{msg_count} at t={elapsed:.2f}s, "
+                        f"type: {parsed.get('message_type')}"
+                    )
+                    self._process_stream_event(parsed)
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
