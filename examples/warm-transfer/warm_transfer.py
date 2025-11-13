@@ -14,10 +14,10 @@ from livekit.agents import (
     BackgroundAudioPlayer,
     JobContext,
     PlayHandle,
-    RoomInputOptions,
     RunContext,
     cli,
     llm,
+    room_io,
     stt,
     tts,
 )
@@ -122,7 +122,7 @@ class SessionManager:
             await self.supervisor_session.start(
                 agent=supervisor_agent,
                 room=self.supervisor_room,
-                room_input_options=RoomInputOptions(
+                room_options=room_io.RoomOptions(
                     close_on_disconnect=True,
                 ),
             )
@@ -332,9 +332,11 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=support_agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # enable Krisp BVC noise cancellation
-            noise_cancellation=noise_cancellation.BVCTelephony(),
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                # enable Krisp BVC noise cancellation
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+            ),
         ),
     )
 

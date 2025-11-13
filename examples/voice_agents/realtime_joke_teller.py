@@ -32,11 +32,10 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     AutoSubscribe,
-    RoomInputOptions,
-    RoomOutputOptions,
     RunContext,
     ToolError,
     llm,
+    room_io,
 )
 from livekit.agents.llm import function_tool
 from livekit.agents.llm.chat_context import ChatContext
@@ -226,12 +225,12 @@ async def entrypoint(ctx: agents.JobContext):
             await session.start(
                 room=ctx.room,
                 agent=Assistant(tools=[get_weather, get_median_home_price, search_web, tell_joke]),
-                room_input_options=RoomInputOptions(close_on_disconnect=False),
-                room_output_options=RoomOutputOptions(
-                    audio_enabled=True,
-                    audio_sample_rate=24000,
-                    audio_num_channels=1,
-                    transcription_enabled=True,
+                room_options=room_io.RoomOptions(
+                    audio_input=room_io.AudioInputOptions(
+                        sample_rate=24000,
+                        num_channels=1,
+                    ),
+                    close_on_disconnect=False,
                 ),
             )
 

@@ -456,6 +456,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
@@ -468,6 +470,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
@@ -479,6 +483,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: NotGivenOr[bool] = NOT_GIVEN,
@@ -542,40 +548,35 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 c.acquire_io(loop=self._loop, session=self)
             elif is_given(room) and not self._room_io:
-                room_input_options = copy.copy(
-                    room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
+                room_options = room_io.RoomOptions._ensure_options(
+                    room_options,
+                    room_input_options=room_input_options,
+                    room_output_options=room_output_options,
                 )
-                room_output_options = copy.copy(
-                    room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
-                )
+                room_options = copy.copy(room_options)  # shadow copy is enough
 
                 if self.input.audio is not None:
-                    if room_input_options.audio_enabled:
+                    if room_options.audio_input:
                         logger.warning(
                             "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
                         )
-                    room_input_options.audio_enabled = False
+                    room_options.audio_input = False
 
                 if self.output.audio is not None:
-                    if room_output_options.audio_enabled:
+                    if room_options.audio_output:
                         logger.warning(
                             "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
                         )
-                    room_output_options.audio_enabled = False
+                    room_options.audio_output = False
 
                 if self.output.transcription is not None:
-                    if room_output_options.transcription_enabled:
+                    if room_options.text_output:
                         logger.warning(
                             "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                         )
-                    room_output_options.transcription_enabled = False
+                    room_options.text_output = False
 
-                self._room_io = room_io.RoomIO(
-                    room=room,
-                    agent_session=self,
-                    input_options=room_input_options,
-                    output_options=room_output_options,
-                )
+                self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
             # session can be restarted, register the callbacks only once

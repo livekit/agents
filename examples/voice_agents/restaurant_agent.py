@@ -9,7 +9,6 @@ from pydantic import Field
 from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
-from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
@@ -336,9 +335,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=userdata.agents["greeter"],
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
 
     # await agent.say("Welcome to our restaurant! How may I assist you today?")

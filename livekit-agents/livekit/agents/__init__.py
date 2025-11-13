@@ -75,6 +75,7 @@ from .voice import (
     UserStateChangedEvent,
     avatar,
     io,
+    room_io,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -126,6 +127,7 @@ __all__ = [
     "function_tool",
     "ChatContext",
     "ChatItem",
+    "room_io",
     "RoomIO",
     "RoomInputOptions",
     "RoomOutputOptions",

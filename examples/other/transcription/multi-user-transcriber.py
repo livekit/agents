@@ -11,12 +11,10 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    RoomIO,
-    RoomOutputOptions,
     StopResponse,
     cli,
     llm,
+    room_io,
     utils,
 )
 from livekit.plugins import deepgram, silero
@@ -95,26 +93,21 @@ class MultiUserTranscriber:
         session = AgentSession(
             vad=self.ctx.proc.userdata["vad"],
         )
-        room_io = RoomIO(
-            agent_session=session,
-            room=self.ctx.room,
-            participant=participant,
-            input_options=RoomInputOptions(
-                # text input is not supported for multiple room participants
-                # if needed, register the text stream handler by yourself
-                # and route the text to different sessions based on the participant identity
-                text_enabled=False,
-            ),
-            output_options=RoomOutputOptions(
-                transcription_enabled=True,
-                audio_enabled=False,
-            ),
-        )
-        await room_io.start()
         await session.start(
             agent=Transcriber(
                 participant_identity=participant.identity,
-            )
+            ),
+            room=self.ctx.room,
+            room_options=room_io.RoomOptions(
+                audio_input=True,
+                text_output=True,
+                audio_output=False,
+                participant_identity=participant.identity,
+                # text input is not supported for multiple room participants
+                # if needed, register the text stream handler by yourself
+                # and route the text to different sessions based on the participant identity
+                text_input=False,
+            ),
         )
         return session
 

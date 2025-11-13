@@ -8,21 +8,18 @@ import httpx
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents import AgentServer, JobContext, cli
-from livekit.agents.voice import Agent, AgentSession
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomOutputOptions
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins import openai
+
+load_dotenv()
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
 
 server = AgentServer()
-
-load_dotenv()
-
-
 AVATAR_IDENTITY = "avatar_worker"
 
 
@@ -85,10 +82,6 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            audio_enabled=False,
-            transcription_enabled=True,
-        ),
     )
 
     @session.output.audio.on("playback_finished")

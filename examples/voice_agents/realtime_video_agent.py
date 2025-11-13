@@ -7,9 +7,8 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    RoomInputOptions,
-    RoomOutputOptions,
     cli,
+    room_io,
     voice,  # noqa: F401
 )
 from livekit.plugins import google, silero
@@ -40,8 +39,9 @@ async def entrypoint(ctx: JobContext):
         agent=agent,
         room=ctx.room,
         # by default, video is disabled
-        room_input_options=RoomInputOptions(video_enabled=True),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
+        room_options=room_io.RoomOptions(
+            video_input=True,
+        ),
     )
 
     await session.generate_reply(
