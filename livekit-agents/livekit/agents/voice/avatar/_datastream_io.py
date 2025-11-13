@@ -169,6 +169,7 @@ class DataStreamAudioOutput(AudioOutput):
         )
 
     async def _clear_buffer_task(self, pushed_duration: float) -> None:
+        timeout = self._clear_buffer_timeout
         try:
             await self._room.local_participant.perform_rpc(
                 destination_identity=self._destination_identity,
@@ -177,6 +178,7 @@ class DataStreamAudioOutput(AudioOutput):
             )
         except Exception as e:
             logger.error("failed to perform clear buffer rpc", exc_info=e)
+            timeout = 0  # mark playout done immediately if clear buffer rpc fails
 
         def _on_timeout() -> None:
             logger.warning(
@@ -185,9 +187,10 @@ class DataStreamAudioOutput(AudioOutput):
             self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
             self._reset_playback_count()
 
-        self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
-            self._clear_buffer_timeout, _on_timeout
-        )
+        if timeout is not None:
+            self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
+                timeout, _on_timeout
+            )
 
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
