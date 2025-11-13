@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -22,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 
 import openai
-from livekit.agents import llm
+from livekit.agents import llm, utils
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
@@ -157,6 +158,7 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def model(self) -> str:
@@ -911,6 +913,26 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
         )
+
+    def prewarm(self) -> None:
+        """Pre-warm the HTTP connection pool to reduce first-request latency."""
+
+        async def _prewarm_impl() -> None:
+            try:
+                await self._client.get("/", cast_to=str)
+            except Exception:
+                pass
+
+        # Cancel any existing prewarm task before creating a new one
+        if self._prewarm_task is not None and not self._prewarm_task.done():
+            self._prewarm_task.cancel()
+
+        self._prewarm_task = asyncio.create_task(_prewarm_impl())
+
+    async def aclose(self) -> None:
+        """Clean up resources including any pending prewarm tasks."""
+        if self._prewarm_task is not None:
+            await utils.aio.gracefully_cancel(self._prewarm_task)
 
 
 class LLMStream(_LLMStream):
