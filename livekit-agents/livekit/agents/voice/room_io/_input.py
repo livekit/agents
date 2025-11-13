@@ -148,7 +148,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         logger.debug("stream closed", extra=extra)
 
     @abstractmethod
-    def _create_stream(self, track: rtc.RemoteTrack, participant: rtc.Participant) -> rtc.VideoStream | rtc.AudioStream: ...
+    def _create_stream(
+        self, track: rtc.RemoteTrack, participant: rtc.Participant
+    ) -> rtc.VideoStream | rtc.AudioStream: ...
 
     def _close_stream(self) -> None:
         if self._stream is not None:
