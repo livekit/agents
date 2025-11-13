@@ -37,7 +37,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
-from .models import STTAudioFormat, STTCommitStrategy, STTModels
+from .models import STTAudioFormat, STTModels
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
@@ -51,7 +51,6 @@ class STTOptions:
     model_id: STTModels = "scribe_v2_realtime"
     audio_format: STTAudioFormat = "pcm_16000"
     sample_rate: int = 16000
-    commit_strategy: STTCommitStrategy = "vad"
     vad_silence_threshold_secs: float | None = None
     vad_threshold: float | None = None
     min_speech_duration_ms: int | None = None
@@ -67,7 +66,6 @@ class STTv2(stt.STT):
         language_code: NotGivenOr[str] = NOT_GIVEN,
         model_id: STTModels = "scribe_v2_realtime",
         sample_rate: int = 16000,
-        commit_strategy: STTCommitStrategy = "vad",
         vad_silence_threshold_secs: NotGivenOr[float] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -76,6 +74,9 @@ class STTv2(stt.STT):
         """
         Create a new instance of ElevenLabs STT v2 with streaming support.
 
+        Uses Voice Activity Detection (VAD) to automatically detect speech segments
+        and commit transcriptions when the user stops speaking.
+
         Args:
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
@@ -83,7 +84,6 @@ class STTv2(stt.STT):
             language_code (NotGivenOr[str]): Language code for the STT model. Optional.
             model_id (STTModels): Model ID for Scribe. Default is "scribe_v2_realtime".
             sample_rate (int): Audio sample rate in Hz. Default is 16000.
-            commit_strategy (STTCommitStrategy): Strategy for committing transcriptions. "vad" commits automatically when speech ends, "manual" requires explicit commits. Default is "vad".
             vad_silence_threshold_secs (NotGivenOr[float]): Silence threshold in seconds for VAD (must be between 0.3 and 3.0). Optional.
             vad_threshold (NotGivenOr[float]): Threshold for voice activity detection (must be between 0.1 and 0.9). Optional.
             min_speech_duration_ms (NotGivenOr[int]): Minimum speech duration in milliseconds (must be between 50 and 2000). Optional.
@@ -107,7 +107,6 @@ class STTv2(stt.STT):
             model_id=model_id,
             audio_format=audio_format,
             sample_rate=sample_rate,
-            commit_strategy=commit_strategy,
             vad_silence_threshold_secs=vad_silence_threshold_secs
             if is_given(vad_silence_threshold_secs)
             else None,
@@ -190,66 +189,32 @@ class SpeechStreamv2(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            logger.info("STTv2: Send task started")
 
             # Buffer audio into chunks (50ms chunks)
-            samples_per_chunk = self._opts.sample_rate // 20
+            samples_50ms = self._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
-                samples_per_channel=samples_per_chunk,
+                samples_per_channel=samples_50ms,
             )
 
-            frame_count = 0
             async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    logger.debug("STTv2: Received flush sentinel")
-                    frames = audio_bstream.flush()
-                    # Send any remaining frames
-                    for frame in frames:
-                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "message_type": "input_audio_chunk",
-                                    "audio_base_64": audio_b64,
-                                    "commit": False,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            )
-                        )
-                    # Send commit message if using manual commit strategy
-                    if self._opts.commit_strategy == "manual":
-                        logger.debug("STTv2: Sending manual commit")
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "message_type": "input_audio_chunk",
-                                    "audio_base_64": "",
-                                    "commit": True,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            )
-                        )
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
-                    frame_count += len(frames)
-                    if frame_count % 100 == 0:
-                        logger.debug(f"STTv2: Sent {frame_count} audio frames")
-                    for frame in frames:
-                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "message_type": "input_audio_chunk",
-                                    "audio_base_64": audio_b64,
-                                    "commit": False,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            )
-                        )
+                # Write audio bytes to buffer and get 50ms frames
+                frames = audio_bstream.write(data.data.tobytes())
 
-            logger.info(f"STTv2: Send task complete, sent {frame_count} total frames")
+                for frame in frames:
+                    audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": audio_b64,
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                            }
+                        )
+                    )
+
             closing_ws = True
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -258,6 +223,7 @@ class SpeechStreamv2(stt.SpeechStream):
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    logger.debug(f"--------------msg type {type(msg)}: {msg}")
                 except asyncio.TimeoutError:
                     if closing_ws:
                         logger.info("STTv2: Recv task closing due to timeout")
@@ -273,7 +239,9 @@ class SpeechStreamv2(stt.SpeechStream):
                         logger.info("STTv2: WebSocket closed normally")
                         return
 
-                    logger.error(f"STTv2: ElevenLabs connection closed unexpectedly, msg type: {msg.type}")
+                    logger.error(
+                        f"STTv2: ElevenLabs connection closed unexpectedly, msg type: {msg.type}"
+                    )
                     raise APIStatusError(
                         message="ElevenLabs connection closed unexpectedly",
                     )
@@ -313,7 +281,7 @@ class SpeechStreamv2(stt.SpeechStream):
             f"model_id={self._opts.model_id}",
             f"encoding={self._opts.audio_format}",
             f"sample_rate={self._opts.sample_rate}",
-            f"commit_strategy={self._opts.commit_strategy}",
+            "commit_strategy=vad",  # Always use VAD for automatic speech detection
         ]
 
         if self._opts.vad_silence_threshold_secs is not None:
@@ -361,15 +329,30 @@ class SpeechStreamv2(stt.SpeechStream):
             logger.debug(f"STTv2: Partial transcript: '{text}'")
 
             # Ignore stale partial transcripts that match the last committed text
-            # (ElevenLabs sometimes sends partials after commits)
-            if text and text == self._last_committed_text:
-                logger.debug(f"STTv2: Ignoring stale partial transcript matching last committed: '{text}'")
-                return
+            # (ElevenLabs sometimes sends partials after commits with minor punctuation differences)
+            if text and self._last_committed_text:
+                # Normalize whitespace and punctuation for comparison
+                normalized_text = (
+                    text.replace(" ?", "?").replace(" !", "!").replace(" .", ".").strip()
+                )
+                normalized_committed = (
+                    self._last_committed_text.replace(" ?", "?")
+                    .replace(" !", "!")
+                    .replace(" .", ".")
+                    .strip()
+                )
+                if normalized_text == normalized_committed:
+                    logger.debug(
+                        f"STTv2: Ignoring stale partial transcript matching last committed: '{text}'"
+                    )
+                    return
 
             if text:
                 # Send START_OF_SPEECH if this is the first transcript in a new segment
                 if not self._speaking:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
                     self._speaking = True
                     self._last_committed_text = ""  # Clear on new segment
                     logger.info("STTv2: Sent START_OF_SPEECH")
@@ -393,7 +376,9 @@ class SpeechStreamv2(stt.SpeechStream):
             if text:
                 # Send START_OF_SPEECH if we get a FINAL without any INTERIM first
                 if not self._speaking:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
                     logger.info("STTv2: Sent START_OF_SPEECH (before FINAL)")
 
                 final_event = stt.SpeechEvent(
@@ -425,7 +410,9 @@ class SpeechStreamv2(stt.SpeechStream):
             if text:
                 # Send START_OF_SPEECH if we get a FINAL without any INTERIM first
                 if not self._speaking:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
                     logger.info("STTv2: Sent START_OF_SPEECH (before FINAL with timestamps)")
 
                 final_event = stt.SpeechEvent(
