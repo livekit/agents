@@ -20,6 +20,7 @@ import json
 import os
 import typing
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiohttp
@@ -56,6 +57,7 @@ class STTOptions:
     vad_threshold: float | None = None
     min_speech_duration_ms: int | None = None
     min_silence_duration_ms: int | None = None
+    on_committed_transcript: Callable[[str, int], str] | None = None
 
 
 class STTv2(stt.STT):
@@ -71,6 +73,7 @@ class STTv2(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        on_committed_transcript: Callable[[str, int], str] | None = None,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT v2 with streaming support.
@@ -89,6 +92,7 @@ class STTv2(stt.STT):
             vad_threshold (NotGivenOr[float]): Threshold for voice activity detection (must be between 0.1 and 0.9). Optional.
             min_speech_duration_ms (NotGivenOr[int]): Minimum speech duration in milliseconds (must be between 50 and 2000). Optional.
             min_silence_duration_ms (NotGivenOr[int]): Minimum silence duration in milliseconds (must be between 50 and 2000). Optional.
+            on_committed_transcript (Callable[[str, int], str] | None): Optional callback to process committed transcripts. Receives text and max_tokens_to_recompute, returns processed text.
         """  # noqa: E501
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
 
@@ -118,6 +122,7 @@ class STTv2(stt.STT):
             min_silence_duration_ms=min_silence_duration_ms
             if is_given(min_silence_duration_ms)
             else None,
+            on_committed_transcript=on_committed_transcript,
         )
         if is_given(language_code):
             self._opts.language_code = language_code
@@ -184,77 +189,8 @@ class SpeechStreamv2(stt.SpeechStream):
         self._speaking = False  # Track if we're currently in a speech segment
         self._max_tokens_to_recompute = 5  # Default from ElevenLabs, updated from session_started
 
-    def _deduplicate_transcript(self, text: str) -> str:
-        """
-        Remove duplicated suffixes from ElevenLabs committed transcripts.
-
-        ElevenLabs Scribe v2 recomputes the last N tokens for context accuracy
-        (controlled by max_tokens_to_recompute). This causes duplicated phrases:
-        - "for tomorrow for tomorrow" -> "for tomorrow"
-        - "i would like to know i would like to know" -> "i would like to know"
-        - "have a swimming pool, have a swimming pool?" -> "have a swimming pool?"
-        - "do you speak English? Do you speak English?" -> "do you speak English?"
-        - "dog to the hotel? Dog to the hotel?" -> "dog to the hotel?"
-        - "if I can if I can uh" -> "if I can uh"
-
-        This function detects and removes these duplicated suffixes using case-insensitive
-        matching and ignores filler words (um, uh, er, ah) to catch duplicates like
-        "if I can if I can uh" where the filler word appears after the duplicate.
-        Search is limited to approximately max_tokens_to_recompute words.
-        """
-        if not text:
-            return text
-
-        # Split into words, preserving punctuation at the end
-        words = text.split()
-        if len(words) < 2:
-            return text
-
-        # Limit search based on max_tokens_to_recompute
-        # Note: tokens ≠ words. Typically 1 token ≈ 0.75 words in English
-        # So 5 tokens ≈ 3-4 words. We add a small buffer for safety.
-        max_search_len = min(
-            len(words) // 2,  # Don't search more than half the text
-            max(
-                1, int(self._max_tokens_to_recompute * 0.75) + 2
-            ),  # ~3-4 words for 5 tokens + buffer
-        )
-
-        if max_search_len < 1:
-            return text
-
-        # Try increasingly larger suffix lengths (from max down to 1)
-        for suffix_len in range(max_search_len, 0, -1):
-            suffix = words[-suffix_len:]
-            prefix_end = len(words) - suffix_len
-
-            # For each suffix, try all sub-suffixes (from longest to shortest)
-            # This catches duplicates like "if I can if I can uh" where the duplicate
-            # "if I can" is followed by an extra word
-            for actual_len in range(suffix_len, 0, -1):
-                # Take the first 'actual_len' words from the suffix
-                subseq = suffix[:actual_len]
-                subseq_normalized = [w.rstrip(",.!?").lower() for w in subseq]
-
-                # Check if this subsequence appears immediately before the suffix
-                if prefix_end >= actual_len:
-                    potential_duplicate = words[prefix_end - actual_len : prefix_end]
-                    potential_normalized = [w.rstrip(",.!?").lower() for w in potential_duplicate]
-
-                    if subseq_normalized == potential_normalized:
-                        # Found a duplicate - remove everything from prefix_end onwards
-                        deduplicated = " ".join(words[:prefix_end])
-                        if deduplicated != text:
-                            logger.debug(
-                                f"STTv2: Deduplicated transcript (max_tokens_to_recompute={self._max_tokens_to_recompute}): '{text}' -> '{deduplicated}'"
-                            )
-                        return deduplicated
-
-        return text
-
     async def _run(self) -> None:
         """Run the streaming transcription session"""
-        logger.info("STTv2: Starting streaming session")
         closing_ws = False
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -277,13 +213,6 @@ class SpeechStreamv2(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
-            # Track audio frames for debugging
-            frame_count = 0
-            total_samples = 0
-            import time
-
-            start_time = time.time()
-
             async for data in self._input_ch:
                 # Write audio bytes to buffer and get 50ms frames
                 frames: list[rtc.AudioFrame] = []
@@ -293,18 +222,6 @@ class SpeechStreamv2(stt.SpeechStream):
                     frames.extend(audio_bstream.flush())
 
                 for frame in frames:
-                    frame_count += 1
-                    total_samples += len(frame.data)
-                    elapsed = time.time() - start_time
-                    audio_duration = total_samples / self._opts.sample_rate
-
-                    # Log frame details every 20 frames (~1 second of audio)
-                    if frame_count % 20 == 0:
-                        logger.info(
-                            f"STTv2: Sent {frame_count} frames ({audio_duration:.2f}s audio) "
-                            f"in {elapsed:.2f}s real time, frame size: {len(frame.data)} samples"
-                        )
-
                     audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     await ws.send_str(
                         json.dumps(
@@ -317,24 +234,14 @@ class SpeechStreamv2(stt.SpeechStream):
                         )
                     )
 
-            logger.info(
-                f"STTv2: Audio send completed. Total: {frame_count} frames, "
-                f"{audio_duration:.2f}s audio in {time.time() - start_time:.2f}s real time"
-            )
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            import time
-
-            recv_start_time = time.time()
-            msg_count = 0
 
             while True:
                 msg = await ws.receive()
-                msg_count += 1
-                elapsed = time.time() - recv_start_time
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -342,23 +249,15 @@ class SpeechStreamv2(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws or self._session.closed:
-                        logger.info(
-                            f"STTv2: Received {msg_count} messages in {elapsed:.2f}s before close"
-                        )
                         return
                     raise APIStatusError(message="ElevenLabs STT connection closed unexpectedly")
 
-                # TODO: In production, change this to logger.warning and continue
-                # For now, raise exception to catch any unexpected message types during development
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    raise ValueError(f"Unexpected WebSocket message type: {msg.type}")
+                    logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
+                    continue
 
                 try:
                     parsed = json.loads(msg.data)
-                    logger.info(
-                        f"STTv2: Received message #{msg_count} at t={elapsed:.2f}s, "
-                        f"type: {parsed.get('message_type')}"
-                    )
                     self._process_stream_event(parsed)
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
@@ -425,8 +324,6 @@ class SpeechStreamv2(stt.SpeechStream):
         base_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{base_url}/speech-to-text/realtime?{query_string}"
 
-        logger.info(f"STTv2: Connecting to WebSocket URL: {ws_url}")
-
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -435,9 +332,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            logger.info("STTv2: WebSocket connected successfully")
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            logger.error(f"STTv2: Failed to connect to ElevenLabs: {e}")
             raise APIConnectionError("Failed to connect to ElevenLabs") from e
 
         return ws
@@ -445,15 +340,10 @@ class SpeechStreamv2(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
         message_type = data.get("message_type")
-        logger.debug(f"STTv2: Processing event type: {message_type}, {data}")
 
         if message_type == "partial_transcript":
             # Ignore partial transcripts - only use committed transcripts for voice agents.
             # Partial transcripts are only used for UI feedback and don't trigger agent responses.
-            # ElevenLabs doesn't provide correlation IDs, so we can't reliably track which audio
-            # chunks correspond to which partial transcripts. This causes issues with stale
-            # partials appearing after commits and duplicate text.
-            logger.debug(f"STTv2: Ignoring partial transcript: '{data.get('text', '')}'")
             return
 
         elif message_type == "committed_transcript":
@@ -461,21 +351,10 @@ class SpeechStreamv2(stt.SpeechStream):
             # and trigger agent responses (unlike partial transcripts which are UI-only)
             text = data.get("text", "")
 
-            # Log full message structure to investigate duplication
-            # TODO: Remove after understanding the duplication issue
-            logger.debug(f"STTv2: Full committed_transcript data: {data}")
+            # Process transcript with callback if provided
+            if self._opts.on_committed_transcript:
+                text = self._opts.on_committed_transcript(text, self._max_tokens_to_recompute)
 
-            # Deduplicate text to work around ElevenLabs API duplication behavior
-            # ElevenLabs may include recomputed tokens (see max_tokens_to_recompute in config)
-            # which causes duplicated phrases like "for tomorrow for tomorrow"
-            original_text = text
-            text = self._deduplicate_transcript(text)
-            if original_text != text:
-                logger.info(
-                    f"STTv2: Deduplicated committed transcript: '{original_text}' -> '{text}'"
-                )
-
-            logger.info(f"STTv2: Committed transcript: '{text}'")
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
@@ -483,7 +362,6 @@ class SpeechStreamv2(stt.SpeechStream):
                         stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                     )
                     self._speaking = True
-                    logger.info("STTv2: Sent START_OF_SPEECH")
 
                 # Send FINAL_TRANSCRIPT but keep speaking=True
                 # Multiple commits can occur within the same speech segment
@@ -497,56 +375,12 @@ class SpeechStreamv2(stt.SpeechStream):
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
-                logger.info(f"STTv2: Sent FINAL_TRANSCRIPT: '{text}'")
             else:
                 # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
                 # This groups multiple committed transcripts into one speech segment
                 if self._speaking:
                     self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
-                    logger.info("STTv2: Sent END_OF_SPEECH (empty commit)")
-                else:
-                    logger.debug("STTv2: Received empty commit but not speaking, ignoring")
-
-        elif message_type == "committed_transcript_with_timestamps":
-            # Final committed transcript with word-level timestamps - sent to LLM/TTS layer
-            text = data.get("text", "")
-
-            # Log full message structure to see available metadata
-            # TODO: Remove after understanding available fields
-            logger.debug(f"STTv2: Full committed_transcript_with_timestamps data: {data}")
-
-            # Deduplicate text (same issue as committed_transcript)
-            original_text = text
-            text = self._deduplicate_transcript(text)
-            if original_text != text:
-                logger.info(
-                    f"STTv2: Deduplicated transcript with timestamps: '{original_text}' -> '{text}'"
-                )
-
-            logger.info(f"STTv2: Committed transcript with timestamps: '{text}'")
-            if text:
-                # Send START_OF_SPEECH if we're not already speaking
-                if not self._speaking:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                    )
-                    self._speaking = True
-                    logger.info("STTv2: Sent START_OF_SPEECH")
-
-                # Send FINAL_TRANSCRIPT but keep speaking=True
-                # Multiple commits can occur within the same speech segment
-                final_event = stt.SpeechEvent(
-                    type=SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._language or "en",
-                            text=text,
-                        )
-                    ],
-                )
-                self._event_ch.send_nowait(final_event)
-                logger.info(f"STTv2: Sent FINAL_TRANSCRIPT with timestamps: '{text}'")
 
         elif message_type == "session_started":
             # Session initialization message - informational only
@@ -580,9 +414,4 @@ class SpeechStreamv2(stt.SpeechStream):
             # Error events don't interrupt the stream, but log them for debugging
 
         else:
-            # TODO: Remove exception before PR - used during development to catch new message types
             logger.warning(f"STTv2: Unknown message type: {message_type}, data: {data}")
-            raise ValueError(
-                f"Unexpected message type from ElevenLabs STTv2: {message_type}. "
-                f"Data: {data}. Please update _process_stream_event to handle this type."
-            )
