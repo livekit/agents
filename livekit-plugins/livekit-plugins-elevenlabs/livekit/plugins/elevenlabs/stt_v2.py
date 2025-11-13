@@ -179,6 +179,7 @@ class SpeechStreamv2(stt.SpeechStream):
         self._opts = opts
         self._language = language
         self._session = http_session
+        self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
         self._last_committed_text = ""  # Track last committed text to filter stale partials
 
@@ -187,6 +188,15 @@ class SpeechStreamv2(stt.SpeechStream):
         logger.info("STTv2: Starting streaming session")
         closing_ws = False
 
+        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            try:
+                while True:
+                    await ws.ping()
+                    await asyncio.sleep(30)
+            except Exception:
+                return
+
+        @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
@@ -217,62 +227,67 @@ class SpeechStreamv2(stt.SpeechStream):
 
             closing_ws = True
 
+        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            logger.info("STTv2: Recv task started")
             while True:
-                try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                    logger.debug(f"--------------msg type {type(msg)}: {msg}")
-                except asyncio.TimeoutError:
-                    if closing_ws:
-                        logger.info("STTv2: Recv task closing due to timeout")
-                        break
-                    continue
+                msg = await ws.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        logger.info("STTv2: WebSocket closed normally")
+                    if closing_ws or self._session.closed:
                         return
-
-                    logger.error(
-                        f"STTv2: ElevenLabs connection closed unexpectedly, msg type: {msg.type}"
-                    )
                     raise APIStatusError(
-                        message="ElevenLabs connection closed unexpectedly",
+                        message="ElevenLabs STT connection closed unexpectedly"
                     )
 
+                # TODO: In production, change this to logger.warning and continue
+                # For now, raise exception to catch any unexpected message types during development
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning(f"STTv2: Unexpected message type: {msg.type}")
-                    continue
+                    raise ValueError(f"Unexpected WebSocket message type: {msg.type}")
 
                 try:
-                    data = json.loads(msg.data)
-                    logger.debug(f"STTv2: Received message: {data}")
-                    self._process_stream_event(data)
-                except Exception as e:
-                    logger.exception(f"STTv2: Error processing message: {e}")
+                    self._process_stream_event(json.loads(msg.data))
+                except Exception:
+                    logger.exception("failed to process ElevenLabs STT message")
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
-        try:
-            ws = await self._connect_ws()
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-            ]
-
+        while True:
             try:
-                await asyncio.gather(*tasks)
+                ws = await self._connect_ws()
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    asyncio.create_task(keepalive_task(ws)),
+                ]
+                tasks_group = asyncio.gather(*tasks)
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                try:
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
+                    if wait_reconnect_task not in done:
+                        break
+
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    tasks_group.exception()  # Retrieve exception to prevent it from being logged
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
-        finally:
-            if ws is not None:
-                await ws.close()
+                if ws is not None:
+                    await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
