@@ -17,7 +17,7 @@
 See https://docs.livekit.io/agents/integrations/tts/elevenlabs/ for more information.
 """
 
-from .models import STTAudioFormat, STTCommitStrategy, STTModels, TTSEncoding, TTSModels
+from .models import STTAudioFormat, STTModels, TTSEncoding, TTSModels
 from .stt import STT
 from .stt_v2 import SpeechStreamv2, STTv2
 from .tts import DEFAULT_VOICE_ID, TTS, Voice, VoiceSettings
@@ -34,7 +34,6 @@ __all__ = [
     "TTSModels",
     "STTModels",
     "STTAudioFormat",
-    "STTCommitStrategy",
     "DEFAULT_VOICE_ID",
     "__version__",
 ]

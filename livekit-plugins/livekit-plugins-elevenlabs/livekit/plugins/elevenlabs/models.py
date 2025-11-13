@@ -31,8 +31,3 @@ STTAudioFormat = Literal[
     "pcm_44100",
     "pcm_48000",
 ]
-
-STTCommitStrategy = Literal[
-    "vad",
-    "manual",
-]
