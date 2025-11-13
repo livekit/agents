@@ -182,8 +182,10 @@ class RoomOptions:
                 if input_options.audio_enabled is not False
                 else False
             )
-
             opts.video_input = input_options.video_enabled
+
+            opts.participant_kinds = input_options.participant_kinds
+            opts.participant_identity = input_options.participant_identity
             opts.close_on_disconnect = input_options.close_on_disconnect
             opts.delete_room_on_close = input_options.delete_room_on_close
 
