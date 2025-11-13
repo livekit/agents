@@ -391,7 +391,7 @@ async def _upload_session_report(
         "Content-Type": mp.content_type,
     }
 
-    logger.debug("uploading session report to LiveKit Cloud", extra={"headers": headers})
+    logger.debug("uploading session report to LiveKit Cloud")
     async with http_session.post(url, data=mp, headers=headers) as resp:
         resp.raise_for_status()
 

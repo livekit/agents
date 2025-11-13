@@ -287,17 +287,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
 
-        if not self._ws_url:
-            raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
-
-        if not self._api_key:
-            raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
-
-        if not self._api_secret:
-            raise ValueError(
-                "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
-            )
-
         self._host = host
         self._port = port
         self._job_executor_type = job_executor_type
@@ -620,6 +609,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
             self._worker_load: float = 0.0
+
+            if not self._ws_url:
+                raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
+
+            if not self._api_key:
+                raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
+
+            if not self._api_secret:
+                raise ValueError(
+                    "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+                )
 
             logger.info(
                 "starting worker",
