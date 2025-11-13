@@ -68,6 +68,8 @@ class RoomInputOptions:
     """If not given, default to False."""
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
+    audio_frame_size_ms: int = 50
+    """The frame size in milliseconds for the input audio frames."""
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
@@ -183,6 +185,7 @@ class RoomIO:
                 self._room,
                 sample_rate=self._input_options.audio_sample_rate,
                 num_channels=self._input_options.audio_num_channels,
+                frame_size_ms=self._input_options.audio_frame_size_ms,
                 noise_cancellation=self._input_options.noise_cancellation,
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
             )

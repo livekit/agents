@@ -208,13 +208,18 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
+        frame_size_ms: int = 50,
     ) -> None:
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
         )
         AudioInput.__init__(self, label="RoomIO")
+        if frame_size_ms <= 0:
+            raise ValueError("frame_size_ms must be greater than 0")
+
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+        self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
         self._pre_connect_audio_handler = pre_connect_audio_handler
 
@@ -225,7 +230,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
             noise_cancellation=self._noise_cancellation,
-            frame_size_ms=50,
+            frame_size_ms=self._frame_size_ms,
         )
 
     @override
