@@ -13,10 +13,10 @@ from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 from ...log import logger
 from ...utils import aio, log_exceptions
 from ..io import AudioInput, VideoInput
+from .types import NoiseCancellationSelector
 from ._pre_connect_audio import PreConnectAudioHandler
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
-
 
 class _ParticipantInputStream(Generic[T], ABC):
     """
@@ -148,7 +148,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         logger.debug("stream closed", extra=extra)
 
     @abstractmethod
-    def _create_stream(self, track: rtc.RemoteTrack) -> rtc.VideoStream | rtc.AudioStream: ...
+    def _create_stream(self, track: rtc.RemoteTrack, participant: rtc.Participant) -> rtc.VideoStream | rtc.AudioStream: ...
 
     def _close_stream(self) -> None:
         if self._stream is not None:
@@ -172,7 +172,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             return False
 
         self._close_stream()
-        self._stream = self._create_stream(track)
+        self._stream = self._create_stream(track, participant)
         self._publication = publication
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
@@ -206,7 +206,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         *,
         sample_rate: int,
         num_channels: int,
-        noise_cancellation: rtc.NoiseCancellationOptions | None,
+        noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
@@ -224,12 +224,18 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._pre_connect_audio_handler = pre_connect_audio_handler
 
     @override
-    def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
+    def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
+        noise_cancellation = (
+            self._noise_cancellation(participant, track)
+            if callable(self._noise_cancellation)
+            else self._noise_cancellation
+        )
+
         return rtc.AudioStream.from_track(
             track=track,
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
-            noise_cancellation=self._noise_cancellation,
+            noise_cancellation=noise_cancellation,
             frame_size_ms=self._frame_size_ms,
         )
 
@@ -324,5 +330,5 @@ class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], Vide
         VideoInput.__init__(self, label="RoomIO")
 
     @override
-    def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
+    def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.VideoStream:
         return rtc.VideoStream.from_track(track=track)

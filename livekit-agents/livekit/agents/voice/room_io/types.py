@@ -37,6 +37,9 @@ TextInputCallback = Callable[
     ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
 ]
 
+NoiseCancellationSelector = Callable[
+    [rtc.Participant, rtc.Track], rtc.NoiseCancellationOptions | None
+]
 
 def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     sess.interrupt()
@@ -54,7 +57,7 @@ class AudioInputOptions:
     num_channels: int = 1
     frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | None = None
+    noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None = None
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
