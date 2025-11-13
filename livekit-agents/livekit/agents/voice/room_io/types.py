@@ -41,6 +41,7 @@ NoiseCancellationSelector = Callable[
     [rtc.Participant, rtc.Track], rtc.NoiseCancellationOptions | None
 ]
 
+
 def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     sess.interrupt()
     sess.generate_reply(user_input=ev.text)
