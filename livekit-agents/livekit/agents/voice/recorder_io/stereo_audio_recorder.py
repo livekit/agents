@@ -6,6 +6,7 @@ import math
 import threading
 import time
 from collections import deque
+from typing import Callable
 
 import numpy as np
 
@@ -27,6 +28,7 @@ class StereoAudioRecorder(RecorderIO):
         agent_session: AgentSession,
         sample_rate: int = 16000,
         capacity: int = 30,
+        inference_callback: Callable[[np.ndarray], None] | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__(agent_session=agent_session, sample_rate=sample_rate, loop=loop)
@@ -37,6 +39,7 @@ class StereoAudioRecorder(RecorderIO):
         # number of agent speech samples collected for the current turn
         self._agent_speech_written: int = 0
         self._capacity = sample_rate * capacity
+        self._inference_callback = inference_callback
 
     @property
     def started(self) -> bool:
@@ -53,6 +56,7 @@ class StereoAudioRecorder(RecorderIO):
             return
         self._out_record.speech_started_at = None
         self._out_record._speech_taken = 0.0
+        self.reset()
 
     def record_input(self, audio_input: io.AudioInput) -> UserAudioInput:
         self._in_record = UserAudioInput(audio_recorder=self, source=audio_input)
@@ -95,11 +99,15 @@ class StereoAudioRecorder(RecorderIO):
                 stop_pos = 0
             else:
                 stop_pos = capacity - total_output_samples
-                # shift the buffer to the left to make room
+                # shift the existing buffer to the left to make room for the new audio
+                # this makes sure the audio is continuous
                 dest[:stop_pos] = dest[-stop_pos:]
 
             written = 0
             end_pos = len(dest)
+            # process the audio frames in reverse order to ensure channel alignment
+            # |--------silence--------|----agent speech----|
+            # |----------------------------|--user speech--|
             for f in frames[::-1]:
                 count = f.samples_per_channel * f.num_channels
                 arr_i16 = np.frombuffer(f.data, dtype=np.int16, count=count).reshape(
@@ -155,20 +163,18 @@ class StereoAudioRecorder(RecorderIO):
                 if self._agent_speech_written == 0 and output_buf:
                     stereo_buf[:, :] = 0.0
 
-                _ = remix_and_resample(input_resampled, 1)
+                # agent speech on channel 0, user speech on channel 1
                 speech_sample_written = remix_and_resample(output_resampled, 0)
-
+                _ = remix_and_resample(input_resampled, 1)
                 self._agent_speech_written += speech_sample_written
+                # trim silence from both channels based on agent speech
                 if self._agent_speech_written < capacity:
                     inp = stereo_buf[:, -self._agent_speech_written :]
                 else:
                     inp = stereo_buf
 
-            # TEMPORARY: Write to the output file
-            if speech_sample_written > 0:
-                import soundfile as sf
-
-                sf.write(self._output_path, inp.T, self._sample_rate)
+            if speech_sample_written > 0 and self._inference_callback is not None:
+                self._loop.call_soon_threadsafe(self._inference_callback, inp)
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._close_fut.set_result, None)
