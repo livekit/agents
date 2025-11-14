@@ -80,6 +80,9 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
+            log_data.log_record.attributes.update(  # type: ignore
+                {"logger.name": log_data.instrumentation_scope.name}
+            )
         else:
             log_data.log_record.attributes = self._metadata
 
@@ -88,23 +91,6 @@ class _MetadataLogProcessor(LogRecordProcessor):
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
-
-    def shutdown(self) -> None:
-        pass
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        return True
-
-
-class _ExtraDetailsProcessor(LogRecordProcessor):
-    def emit(self, log_data: LogData) -> None:
-        if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(  # type: ignore
-                {"logger.name": log_data.instrumentation_scope.name}
-            )
-
-    def on_emit(self, log_data: LogData) -> None:
-        self.emit(log_data)
 
     def shutdown(self) -> None:
         pass
@@ -170,7 +156,6 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         compression=otlp_compression,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
-    logger_provider.add_log_record_processor(_ExtraDetailsProcessor())
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
@@ -282,8 +267,7 @@ def _to_rfc3339(value: int | float | datetime) -> str:
 
 async def _upload_session_report(
     *,
-    room_id: str,
-    job_id: str,
+    agent_name: str,
     cloud_hostname: str,
     report: SessionReport,
     http_session: aiohttp.ClientSession,
@@ -319,10 +303,11 @@ async def _upload_session_report(
 
     _log(
         body="session report",
-        timestamp=int((report.timestamp or 0) * 1e9),
+        timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
         attributes={
             "session.options": vars(report.options),
             "session.report_timestamp": report.timestamp,
+            "agent_name": agent_name,
         },
     )
 
@@ -352,7 +337,7 @@ async def _upload_session_report(
     jwt = access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=room_id,
+        room_id=report.room_id,
         duration=int((report.duration or 0) * 1000),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))

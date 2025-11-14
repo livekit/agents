@@ -1288,9 +1288,6 @@ class AgentActivity(RecognitionHooks):
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
         )
-        # for observability, created_at of messages should match when speech began
-        if info.started_speaking_at is not None:
-            user_message.created_at = info.started_speaking_at
 
         chat_ctx = self._agent.chat_ctx.copy()
         speech_handle = self._generate_reply(
@@ -1328,8 +1325,6 @@ class AgentActivity(RecognitionHooks):
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
-                if info.started_speaking_at is not None:
-                    user_message.created_at = info.started_speaking_at
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
 
@@ -1405,8 +1400,6 @@ class AgentActivity(RecognitionHooks):
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
         )
-        if info.started_speaking_at is not None:
-            user_message.created_at = info.started_speaking_at
 
         if self._scheduling_paused:
             logger.warning(
@@ -1827,8 +1820,6 @@ class AgentActivity(RecognitionHooks):
                 interrupted=False,
                 created_at=reply_started_at,
             )
-            if started_speaking_at is not None:
-                generated_msg.created_at = started_speaking_at
             speech_handle._item_added([generated_msg])
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
