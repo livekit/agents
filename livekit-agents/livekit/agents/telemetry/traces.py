@@ -275,7 +275,6 @@ async def _upload_session_report(
     chat_logger = get_logger_provider().get_logger(
         name="chat_history",
         attributes={
-            "agent_name": agent_name,
             "room_id": report.room_id,
             "job_id": report.job_id,
             "room": report.room,
@@ -308,6 +307,7 @@ async def _upload_session_report(
         attributes={
             "session.options": vars(report.options),
             "session.report_timestamp": report.timestamp,
+            "agent_name": agent_name,
         },
     )
 
