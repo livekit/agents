@@ -378,12 +378,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 audio_emitter=output_emitter,
             )
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            context_id = utils.shortuuid()
+        async def _sentence_stream_task(
+            ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str
+        ) -> None:
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = context_id
+                token_pkt["context_id"] = cartesia_context_id
                 token_pkt["transcript"] = ev.token + " "
                 sent_tokens.append(ev.token + " ")
                 token_pkt["continue"] = True
@@ -392,7 +393,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 input_sent_event.set()
 
             end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = context_id
+            end_pkt["context_id"] = cartesia_context_id
             end_pkt["transcript"] = " "
             sent_tokens.append(" ")
             end_pkt["continue"] = False
@@ -408,7 +409,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sent_tokenizer_stream.push_text(data)
             sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
             skip_aligning = False
@@ -419,6 +420,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    logger.error(
+                        "Cartesia connection closed unexpectedly. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
+                        extra={"cartesia_context_id": cartesia_context_id},
+                    )
                     raise APIStatusError(
                         "Cartesia connection closed unexpectedly", request_id=request_id
                     )
@@ -465,16 +470,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                             TimedString(text=word, start_time=start, end_time=end)
                         )
                 elif data.get("type") == "error":
+                    logger.error(
+                        "Cartesia returned error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
+                        extra={"cartesia_context_id": cartesia_context_id, "error": data},
+                    )
                     raise APIError(f"Cartesia returned error: {data}")
                 else:
                     logger.warning("unexpected message %s", data)
 
+        cartesia_context_id = utils.shortuuid()
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
+                    asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),
+                    asyncio.create_task(_recv_task(ws, cartesia_context_id)),
                 ]
 
                 try:
@@ -490,6 +500,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
+            logger.error(
+                "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
+                extra={"cartesia_context_id": cartesia_context_id, "error": e},
+            )
             raise APIConnectionError() from e
 
 
