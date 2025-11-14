@@ -21,33 +21,158 @@ TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eight
 # Known acronyms that should be lowercased for TTS
 KNOWN_ACRONYMS = {
     # Organizations & Countries
-    "NASA", "FBI", "CIA", "USA", "UK", "EU", "UN", "NATO", "WHO",
+    "NASA",
+    "FBI",
+    "CIA",
+    "USA",
+    "UK",
+    "EU",
+    "UN",
+    "NATO",
+    "WHO",
     # Web & Protocols
-    "API", "REST", "SOAP", "URL", "URI", "HTTP", "HTTPS", "FTP", "SMTP", "SSH",
-    "SSL", "TLS", "TCP", "UDP", "IP", "DNS", "CORS", "AJAX", "RPC", "GRPC",
-    "MQTT", "AMQP", "RTMP", "RTSP", "SIP",
+    "API",
+    "REST",
+    "SOAP",
+    "URL",
+    "URI",
+    "HTTP",
+    "HTTPS",
+    "FTP",
+    "SMTP",
+    "SSH",
+    "SSL",
+    "TLS",
+    "TCP",
+    "UDP",
+    "IP",
+    "DNS",
+    "CORS",
+    "AJAX",
+    "RPC",
+    "GRPC",
+    "MQTT",
+    "AMQP",
+    "RTMP",
+    "RTSP",
+    "SIP",
     # Languages & Markup
-    "HTML", "CSS", "XML", "JSON", "YAML", "TOML", "SVG", "PHP", "SQL", "JSX", "TSX",
+    "HTML",
+    "CSS",
+    "XML",
+    "JSON",
+    "YAML",
+    "TOML",
+    "SVG",
+    "PHP",
+    "SQL",
+    "JSX",
+    "TSX",
     # Databases
-    "RDBMS", "OLAP", "OLTP", "ACID", "CRUD", "ORM",
+    "RDBMS",
+    "OLAP",
+    "OLTP",
+    "ACID",
+    "CRUD",
+    "ORM",
     # Cloud & Services
-    "AWS", "GCP", "SaaS", "PaaS", "IaaS", "CDN", "VPN", "S3", "EC2", "ECS", "EKS",
-    "RDS", "IAM", "SDK",
+    "AWS",
+    "GCP",
+    "SaaS",
+    "PaaS",
+    "IaaS",
+    "CDN",
+    "VPN",
+    "S3",
+    "EC2",
+    "ECS",
+    "EKS",
+    "RDS",
+    "IAM",
+    "SDK",
     # DevOps & Tools
-    "CI", "CD", "CICD", "CLI", "IDE", "GIT", "NPM", "YARN", "JWT", "OAuth", "SAML", "LDAP",
+    "CI",
+    "CD",
+    "CICD",
+    "CLI",
+    "IDE",
+    "GIT",
+    "NPM",
+    "YARN",
+    "JWT",
+    "OAuth",
+    "SAML",
+    "LDAP",
     # Architecture & Patterns
-    "MVC", "MVVM", "MVP", "SPA", "SSR", "CSR", "SSG", "PWA", "WYSIWYG", "REPL",
+    "MVC",
+    "MVVM",
+    "MVP",
+    "SPA",
+    "SSR",
+    "CSR",
+    "SSG",
+    "PWA",
+    "WYSIWYG",
+    "REPL",
     # AI & ML
-    "AI", "ML", "NLP", "CNN", "RNN", "GAN", "LLM", "GPT", "GPU", "CPU", "TPU",
+    "AI",
+    "ML",
+    "NLP",
+    "CNN",
+    "RNN",
+    "GAN",
+    "LLM",
+    "GPT",
+    "GPU",
+    "CPU",
+    "TPU",
     # Technologies
-    "IoT", "VR", "AR", "GPS", "NFC", "RFID", "QR", "OCR", "TTS", "ASR",
+    "IoT",
+    "VR",
+    "AR",
+    "GPS",
+    "NFC",
+    "RFID",
+    "QR",
+    "OCR",
+    "TTS",
+    "ASR",
     # Standards & Specs
-    "IEEE", "ISO", "ANSI", "RFC", "W3C", "ECMA", "POSIX", "UTF", "ASCII", "UUID",
-    "GUID", "MIME",
+    "IEEE",
+    "ISO",
+    "ANSI",
+    "RFC",
+    "W3C",
+    "ECMA",
+    "POSIX",
+    "UTF",
+    "ASCII",
+    "UUID",
+    "GUID",
+    "MIME",
     # Software Development
-    "TDD", "BDD", "DDD", "SOLID", "DRY", "KISS", "YAGNI", "FIFO", "LIFO", "LGTM",
+    "TDD",
+    "BDD",
+    "DDD",
+    "SOLID",
+    "DRY",
+    "KISS",
+    "YAGNI",
+    "FIFO",
+    "LIFO",
+    "LGTM",
     # Performance & Monitoring
-    "SLA", "SLO", "SLI", "APM", "RPS", "QPS", "TTL", "TTFB", "LCP", "FCP", "CLS",
+    "SLA",
+    "SLO",
+    "SLI",
+    "APM",
+    "RPS",
+    "QPS",
+    "TTL",
+    "TTFB",
+    "LCP",
+    "FCP",
+    "CLS",
 }
 
 # Common street abbreviations
@@ -86,7 +211,7 @@ async def _buffered_regex_filter(
     pattern: Union[str, re.Pattern[str]],
     process_match: Callable[[re.Match[str]], str],
     preprocess_chunk: Optional[Callable[[str], str]] = None,
-    flags: int = 0
+    flags: int = 0,
 ) -> AsyncIterable[str]:
     """
     Generic helper for buffered regex-based text filtering.
@@ -109,7 +234,7 @@ async def _buffered_regex_filter(
         # Look for sentence-ending punctuation followed by space or newline
         last_safe_pos = 0
         for i in range(len(buffer) - 1):
-            if buffer[i] in ".!?" and (buffer[i+1] in " \n\t" or buffer[i+1].isupper()):
+            if buffer[i] in ".!?" and (buffer[i + 1] in " \n\t" or buffer[i + 1].isupper()):
                 last_safe_pos = i + 1
 
         # Also check if buffer ends with newline
@@ -410,9 +535,7 @@ async def format_numbers(text: AsyncIterable[str]) -> AsyncIterable[str]:
     pattern = r"(?:^|(?<=\s))-?\d+(?:\.\d+)?(?=\s|[^\w:]|$)"
 
     async for chunk in _buffered_regex_filter(
-        text, pattern, process_number,
-        preprocess_chunk=remove_commas,
-        flags=re.MULTILINE
+        text, pattern, process_number, preprocess_chunk=remove_commas, flags=re.MULTILINE
     ):
         yield chunk
 
@@ -435,7 +558,9 @@ async def format_dollar_amounts(text: AsyncIterable[str]) -> AsyncIterable[str]:
         if cents_str and len(cents_str) > 2:
             # Convert to "zero point zero two three dollars"
             dollar_words = number_to_words(dollars) if dollars < 100 else str(dollars)
-            decimal_digits = " ".join(number_to_words(int(d)) if d != "0" else "zero" for d in cents_str)
+            decimal_digits = " ".join(
+                number_to_words(int(d)) if d != "0" else "zero" for d in cents_str
+            )
             return f"{dollar_words} point {decimal_digits} dollars"
 
         result = number_to_words(dollars) if dollars < 100 else str(dollars)
@@ -460,7 +585,9 @@ async def format_percentages(text: AsyncIterable[str]) -> AsyncIterable[str]:
     - 67% -> "67 percent"
     - 89.5% -> "89.5 percent" (keep decimal numeric to avoid mixed format)
     """
-    async for chunk in _buffered_regex_filter(text, r"\b(\d+(?:\.\d+)?)%", lambda m: f"{m.group(1)} percent"):
+    async for chunk in _buffered_regex_filter(
+        text, r"\b(\d+(?:\.\d+)?)%", lambda m: f"{m.group(1)} percent"
+    ):
         yield chunk
 
 
@@ -490,7 +617,7 @@ async def format_distances(text: AsyncIterable[str]) -> AsyncIterable[str]:
         text,
         r"\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(km|mi|m|ft|yd)\b",
         process_distance,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     ):
         yield chunk
 
@@ -533,7 +660,7 @@ async def format_units(text: AsyncIterable[str]) -> AsyncIterable[str]:
         text,
         r"\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(lb|lbs|oz|kg|g|mg|l|ml|gal)\b",
         process_unit,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     ):
         yield chunk
 
@@ -543,15 +670,14 @@ async def format_emails(text: AsyncIterable[str]) -> AsyncIterable[str]:
     Format email addresses for TTS:
     - john.doe@example.com -> "john dot doe at example dot com"
     """
+
     def process_email(match: re.Match[str]) -> str:
         local = match.group(1).replace(".", " dot ")
         domain = match.group(2).replace(".", " dot ")
         return f"{local} at {domain}"
 
     async for chunk in _buffered_regex_filter(
-        text,
-        r"([a-zA-Z0-9._+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
-        process_email
+        text, r"([a-zA-Z0-9._+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", process_email
     ):
         yield chunk
 
@@ -561,11 +687,14 @@ async def format_phone_numbers(text: AsyncIterable[str]) -> AsyncIterable[str]:
     Format phone numbers for TTS:
     - 555-123-4567 -> "5 5 5 1 2 3 4 5 6 7"
     """
+
     def process_phone(match: re.Match[str]) -> str:
         digits = match.group(1) + match.group(2) + match.group(3)
         return " ".join(list(digits))
 
-    async for chunk in _buffered_regex_filter(text, r"\b(\d{3})[-.]?(\d{3})[-.]?(\d{4})\b", process_phone):
+    async for chunk in _buffered_regex_filter(
+        text, r"\b(\d{3})[-.]?(\d{3})[-.]?(\d{4})\b", process_phone
+    ):
         yield chunk
 
 
@@ -575,8 +704,18 @@ async def format_dates(text: AsyncIterable[str]) -> AsyncIterable[str]:
     - 2024-12-25 -> "Wednesday, December 25, 2024"
     """
     months = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ]
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -595,7 +734,9 @@ async def format_dates(text: AsyncIterable[str]) -> AsyncIterable[str]:
         except (ValueError, IndexError):
             return str(match.group(0))
 
-    async for chunk in _buffered_regex_filter(text, r"\b(\d{4})[\s-](\d{2})[\s-](\d{2})\b", process_date):
+    async for chunk in _buffered_regex_filter(
+        text, r"\b(\d{4})[\s-](\d{2})[\s-](\d{2})\b", process_date
+    ):
         yield chunk
 
 
@@ -610,6 +751,7 @@ async def format_times(text: AsyncIterable[str]) -> AsyncIterable[str]:
     - "14:30" -> "14:30" (kept as-is)
     - "Meeting at 2:00" -> "Meeting at 2"
     """
+
     def process_time(match: re.Match[str]) -> str:
         hours = match.group(1)
         minutes = match.group(2)
@@ -622,7 +764,9 @@ async def format_times(text: AsyncIterable[str]) -> AsyncIterable[str]:
         # Otherwise keep as-is
         return str(match.group(0))
 
-    async for chunk in _buffered_regex_filter(text, r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b", process_time):
+    async for chunk in _buffered_regex_filter(
+        text, r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b", process_time
+    ):
         yield chunk
 
 
@@ -632,6 +776,7 @@ async def format_acronyms(text: AsyncIterable[str]) -> AsyncIterable[str]:
     - NASA, API -> lowercase (nasa, api)
     - XYZ (no vowels) -> space out (X Y Z)
     """
+
     def process_acronym(match: re.Match[str]) -> str:
         stripped = match.group(0).replace(".", "")
         if len(stripped) < 2:
@@ -655,10 +800,7 @@ async def format_acronyms(text: AsyncIterable[str]) -> AsyncIterable[str]:
 async def remove_angle_bracket_content(text: AsyncIterable[str]) -> AsyncIterable[str]:
     """Remove HTML-like tags except special TTS tags like <break>."""
     async for chunk in _buffered_regex_filter(
-        text,
-        r"<(?!break|spell|<)(?![^>]*>>)[^>]*>",
-        lambda m: "",
-        flags=re.IGNORECASE
+        text, r"<(?!break|spell|<)(?![^>]*>>)[^>]*>", lambda m: "", flags=re.IGNORECASE
     ):
         yield chunk
 
@@ -683,5 +825,3 @@ async def replace_newlines_with_periods(text: AsyncIterable[str]) -> AsyncIterab
         # Single newline -> space
         result = result.replace("\n", " ")
         yield result
-
-

@@ -384,6 +384,7 @@ def test_split_paragraphs(test_case):
 
 async def apply_filters(text: str, filter_names: list[str]) -> str:
     """Helper to apply filters to text."""
+
     async def text_stream():
         yield text
 
@@ -593,6 +594,7 @@ class TestStreamingFilters:
     @pytest.mark.asyncio
     async def test_streaming_numbers(self):
         """Test number formatting with streaming input."""
+
         async def text_stream():
             yield "I have "
             yield "5"
@@ -611,6 +613,7 @@ class TestStreamingFilters:
     @pytest.mark.asyncio
     async def test_streaming_currency(self):
         """Test currency formatting with streaming input."""
+
         async def text_stream():
             yield "It costs $"
             yield "42"
@@ -626,6 +629,7 @@ class TestStreamingFilters:
     @pytest.mark.asyncio
     async def test_streaming_email(self):
         """Test email formatting with streaming input."""
+
         async def text_stream():
             yield "Email john"
             yield ".doe@"
@@ -648,8 +652,7 @@ class TestMultipleFilters:
         """Test multiple filters applied in sequence."""
         text = "Meeting on 2024-12-25 with 15% discount. Call 555-123-4567."
         result = await apply_filters(
-            text,
-            ["format_dates", "format_percentages", "format_phone_numbers"]
+            text, ["format_dates", "format_percentages", "format_phone_numbers"]
         )
 
         assert "December" in result
