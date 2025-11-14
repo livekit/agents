@@ -118,7 +118,10 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            reasoning_effort = "minimal"
+            if model == "gpt-5.1":
+                reasoning_effort = None
+            else:
+                reasoning_effort = "minimal"
 
         self._opts = _LLMOptions(
             model=model,
