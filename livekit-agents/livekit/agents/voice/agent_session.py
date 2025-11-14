@@ -144,7 +144,24 @@ class VoiceActivityVideoSampler:
         return False
 
 
-DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
+DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = [
+    "filter_markdown",
+    "filter_emoji",
+    "remove_angle_bracket_content",
+    "replace_newlines_with_periods",
+    "format_dates",
+    "format_times",
+    "format_emails",
+    "format_phone_numbers",
+    "format_acronyms",
+    "format_dollar_amounts",
+    "format_distances",
+    "format_units",
+    "format_percentages",
+    "format_numbers",
+    "replace_colons_with_periods",
+    "restore_colons",
+]
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
