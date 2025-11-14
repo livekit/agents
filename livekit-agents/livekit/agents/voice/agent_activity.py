@@ -205,6 +205,10 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
+        # barge-in will disable this until the agent speech is done or barge-in is detected.
+        # This is different from the allow_interruptions option, since we still want STT to be running.
+        self._allow_interruption_by_audio_activity: bool = True
+
     @property
     def scheduling_paused(self) -> bool:
         return self._scheduling_paused
@@ -330,6 +334,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        allow_interruption_by_audio_activity: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if utils.is_given(tool_choice):
             self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
@@ -342,6 +347,9 @@ class AgentActivity(RecognitionHooks):
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
             )
+
+        if utils.is_given(allow_interruption_by_audio_activity):
+            self._allow_interruption_by_audio_activity = allow_interruption_by_audio_activity
 
     def _create_speech_task(
         self,
@@ -1103,6 +1111,10 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
+        # barge-in holds off interruptions only if there is no realtime session
+        if not self._allow_interruption_by_audio_activity and self._rt_session is None:
+            return
+
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
