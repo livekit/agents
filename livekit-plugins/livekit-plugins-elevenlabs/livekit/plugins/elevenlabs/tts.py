@@ -337,7 +337,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     Uses multi-stream-input API for most models:
     https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-multi-stream-input
-    
+
     For eleven_v3, uses stream-input API:
     https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input
     """
@@ -642,7 +642,7 @@ class _Connection:
                     continue
 
                 data = json.loads(msg.data)
-                
+
                 # For single-stream endpoint (eleven_v3), there's no contextId
                 # Use the first (and only) context in context_data
                 if is_single_stream:
