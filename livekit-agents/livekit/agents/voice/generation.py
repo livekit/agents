@@ -4,7 +4,7 @@ import asyncio
 import functools
 import inspect
 import json
-from collections.abc import AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
 
@@ -29,9 +29,10 @@ from ..llm.tool_context import (
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
-from ..utils import aio
+from ..utils import aio, is_given
 from . import io
 from .speech_handle import SpeechHandle
+from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -46,7 +47,7 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str]
+    text_ch: aio.Chan[str | llm.FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
@@ -61,7 +62,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[str]()
+    text_ch = aio.Chan[str | llm.FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -149,6 +150,9 @@ async def _llm_inference_task(
                 if chunk.delta.content:
                     data.generated_text += chunk.delta.content
                     text_ch.send_nowait(chunk.delta.content)
+
+            elif isinstance(chunk, llm.FlushSentinel):
+                text_ch.send_nowait(chunk)
             else:
                 logger.warning(
                     f"LLM node returned an unexpected type: {type(chunk)}",
@@ -176,7 +180,7 @@ class _TTSGenerationData:
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str],
+    input: AsyncIterable[str | llm.FlushSentinel],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
@@ -184,12 +188,9 @@ def perform_tts_inference(
     timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
-    if text_transforms:
-        from .transcription.filters import apply_text_transforms
-
-        input = apply_text_transforms(input, text_transforms)
-
-    tts_task = asyncio.create_task(_tts_inference_task(node, input, model_settings, data))
+    tts_task = asyncio.create_task(
+        _tts_inference_task(node, input, model_settings, data, text_transforms)
+    )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
@@ -203,31 +204,72 @@ def perform_tts_inference(
 
 
 @utils.log_exceptions(logger=logger)
-@tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str],
+    input: AsyncIterable[str | llm.FlushSentinel],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
+    text_transforms: Sequence[TextTransforms] | None,
 ) -> bool:
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
-    tts_node = node(input, model_settings)
-    if asyncio.iscoroutine(tts_node):
-        tts_node = await tts_node
 
-    if isinstance(tts_node, AsyncIterable):
-        timed_text_ch = aio.Chan[io.TimedString]()
-        timed_texts_fut.set_result(timed_text_ch)
+    @tracer.start_as_current_span("tts_node")
+    async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
+        if text_transforms:
+            input = apply_text_transforms(input, text_transforms)
+
+        tts_node = node(input, model_settings)
+        if asyncio.iscoroutine(tts_node):
+            tts_node = await tts_node
+
+        audio_duration: float = 0.0
+        if not isinstance(tts_node, AsyncIterable):
+            if not timed_texts_fut.done():
+                timed_texts_fut.set_result(None)
+            return audio_duration
+
+        if timed_texts_fut.done():
+            timed_text_ch = timed_texts_fut.result()
+        else:
+            timed_text_ch = aio.Chan[io.TimedString]()
+            timed_texts_fut.set_result(timed_text_ch)
 
         async for audio_frame in tts_node:
-            for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                timed_text_ch.send_nowait(text)
+            if timed_text_ch is not None:
+                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                    if isinstance(text, io.TimedString):
+                        if is_given(text.start_time):
+                            text.start_time += pushed_duration
+                        if is_given(text.end_time):
+                            text.end_time += pushed_duration
+                        timed_text_ch.send_nowait(text)
 
             audio_ch.send_nowait(audio_frame)
-        return True
+            audio_duration += audio_frame.duration
+        return audio_duration
 
-    timed_texts_fut.set_result(None)
-    return False
+    # convert to generator to avoid closing the input iterable
+    async def _input() -> AsyncGenerator[str | llm.FlushSentinel, None]:
+        async for chunk in input:
+            yield chunk
+
+    input_gen = _input()
+    finished = False
+
+    async def _input_segment() -> AsyncIterable[str]:
+        async for chunk in input_gen:
+            if isinstance(chunk, llm.FlushSentinel):
+                return
+            yield chunk
+
+        nonlocal finished
+        finished = True
+
+    pushed_duration: float = 0.0
+    while not finished:
+        pushed_duration += await _tts_node_inference(_input_segment(), pushed_duration)
+
+    return pushed_duration > 0
 
 
 @dataclass

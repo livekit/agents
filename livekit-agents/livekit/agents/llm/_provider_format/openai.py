@@ -35,6 +35,9 @@ def to_chat_ctx(
         for tool_output in group.tool_outputs:
             messages.append(_to_chat_item(tool_output))
 
+    import pprint
+
+    pprint.pprint(messages)
     return messages, None
 
 

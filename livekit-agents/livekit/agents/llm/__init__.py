@@ -16,6 +16,7 @@ from .llm import (
     ChatChunk,
     ChoiceDelta,
     CompletionUsage,
+    FlushSentinel,
     FunctionToolCall,
     LLMError,
     LLMStream,
@@ -89,6 +90,7 @@ __all__ = [
     "RealtimeSessionReconnectedEvent",
     "RealtimeSessionRestoredEvent",
     "LLMError",
+    "FlushSentinel",
 ]
 
 # Cleanup docs of unexported modules

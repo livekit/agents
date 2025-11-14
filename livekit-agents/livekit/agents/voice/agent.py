@@ -246,8 +246,8 @@ class Agent:
         tools: list[FunctionTool | RawFunctionTool],
         model_settings: ModelSettings,
     ) -> (
-        AsyncIterable[llm.ChatChunk | str]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        AsyncIterable[llm.ChatChunk | str | llm.FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | llm.FlushSentinel]]
         | Coroutine[Any, Any, str]
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
@@ -384,7 +384,7 @@ class Agent:
             chat_ctx: llm.ChatContext,
             tools: list[FunctionTool | RawFunctionTool],
             model_settings: ModelSettings,
-        ) -> AsyncGenerator[llm.ChatChunk | str, None]:
+        ) -> AsyncGenerator[llm.ChatChunk | str | llm.FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"

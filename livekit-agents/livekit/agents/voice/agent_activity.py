@@ -1688,7 +1688,15 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
-        tr_node = self._agent.transcription_node(tr_input, model_settings)
+        async def _read_text(
+            llm_output: AsyncIterable[str | llm.FlushSentinel],
+        ) -> AsyncIterable[str]:
+            async for chunk in llm_output:
+                if isinstance(chunk, llm.FlushSentinel):
+                    continue
+                yield chunk
+
+        tr_node = self._agent.transcription_node(_read_text(tr_input), model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
         text_out: _TextOutput | None = None
         text_forward_task: asyncio.Task | None = None
