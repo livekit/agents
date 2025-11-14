@@ -1,6 +1,6 @@
 import re
-from collections.abc import AsyncIterable, Sequence
-from typing import Literal
+from collections.abc import AsyncIterable, Callable, Sequence
+from typing import Literal, Optional, Union
 
 # Number to word mappings for TTS preprocessing
 ONES = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
@@ -83,14 +83,14 @@ def number_to_words(num: int) -> str:
 
 async def _buffered_regex_filter(
     text: AsyncIterable[str],
-    pattern: str | re.Pattern,
-    process_match,
-    preprocess_chunk=None,
-    flags=0
+    pattern: Union[str, re.Pattern[str]],
+    process_match: Callable[[re.Match[str]], str],
+    preprocess_chunk: Optional[Callable[[str], str]] = None,
+    flags: int = 0
 ) -> AsyncIterable[str]:
     """
     Generic helper for buffered regex-based text filtering.
-    
+
     Args:
         text: Input text stream
         pattern: Regex pattern to match
@@ -100,30 +100,30 @@ async def _buffered_regex_filter(
     """
     if isinstance(pattern, str):
         pattern = re.compile(pattern, flags)
-    
+
     buffer = ""
-    
+
     async for chunk in text:
         buffer += chunk
-        
+
         # Look for sentence-ending punctuation followed by space or newline
         last_safe_pos = 0
         for i in range(len(buffer) - 1):
             if buffer[i] in ".!?" and (buffer[i+1] in " \n\t" or buffer[i+1].isupper()):
                 last_safe_pos = i + 1
-        
+
         # Also check if buffer ends with newline
         if buffer and buffer[-1] == "\n":
             last_safe_pos = len(buffer)
-        
+
         if last_safe_pos > 0:
             processable = buffer[:last_safe_pos]
             rest = buffer[last_safe_pos:]
-            
+
             # Apply preprocessing if provided
             if preprocess_chunk:
                 processable = preprocess_chunk(processable)
-            
+
             # Process all matches with offset tracking
             result = processable
             offset = 0
@@ -133,15 +133,15 @@ async def _buffered_regex_filter(
                 end_pos = match.end() + offset
                 result = result[:start_pos] + replacement + result[end_pos:]
                 offset += len(replacement) - len(match.group(0))
-            
+
             yield result
             buffer = rest
-    
+
     # Process remaining buffer
     if buffer:
         if preprocess_chunk:
             buffer = preprocess_chunk(buffer)
-        
+
         result = buffer
         offset = 0
         for match in pattern.finditer(buffer):
@@ -365,53 +365,53 @@ async def format_numbers(text: AsyncIterable[str]) -> AsyncIterable[str]:
     - Years (1900-2099) remain unchanged
     - Commas removed from numbers
     """
-    
+
     def remove_commas(text_chunk: str) -> str:
         """Remove commas from number sequences."""
         for _ in range(4):  # Handle up to 4 comma groups
             text_chunk = re.sub(r"(\d),(\d{3})", r"\1\2", text_chunk)
         return text_chunk
-    
-    def process_number(match) -> str:
+
+    def process_number(match: re.Match[str]) -> str:
         """Process a single number match."""
         num_str = match.group(0)
         num = float(num_str)
-        
+
         # Handle negative numbers
         if num_str.startswith("-"):
             positive = abs(num)
             if positive < 100:
                 return "minus " + number_to_words(int(positive))
             return "minus " + str(int(positive))
-        
+
         # Handle decimals
         if "." in num_str:
             parts = num_str.split(".")
             whole = parts[0] or "0"
             decimal = parts[1] or ""
-            
+
             # Protect time-like formats (e.g., "14.00" for 2pm)
             if decimal == "00" and 0 <= int(whole) <= 23:
                 return num_str
-            
+
             return f"{whole} point {' '.join(list(decimal))}"
-        
+
         # Preserve years
         if 1900 <= num <= 2099:
-            return num_str
-        
+            return str(num_str)
+
         # Small numbers to words
         if 0 <= num < 100:
-            return number_to_words(int(num))
-        
-        return num_str
-    
+            return str(number_to_words(int(num)))
+
+        return str(num_str)
+
     # Match negative numbers, decimals, and integers
     pattern = r"(?:^|(?<=\s))-?\d+(?:\.\d+)?(?=\s|[^\w:]|$)"
-    
+
     async for chunk in _buffered_regex_filter(
-        text, pattern, process_number, 
-        preprocess_chunk=remove_commas, 
+        text, pattern, process_number,
+        preprocess_chunk=remove_commas,
         flags=re.MULTILINE
     ):
         yield chunk
@@ -422,34 +422,34 @@ async def format_dollar_amounts(text: AsyncIterable[str]) -> AsyncIterable[str]:
     Format dollar amounts for TTS:
     - $5 -> "five dollars"
     - $12.50 -> "twelve dollars and fifty cents"
-    - $0.023 -> "0.023 dollars" (keep small decimals numeric)
+    - $0.023 -> "zero point zero two three dollars" (speaks out each decimal digit)
     - Handles singular/plural correctly
     """
-    
-    def process_dollar(match) -> str:
+
+    def process_dollar(match: re.Match[str]) -> str:
         """Process a single dollar amount."""
         dollars = int(match.group(1))
         cents_str = match.group(2)
-        
-        # For small amounts with many decimal places, keep numeric
+
+        # For small amounts with many decimal places, speak out each decimal digit
         if cents_str and len(cents_str) > 2:
-            return f"{dollars}.{cents_str} dollars"
-        
+            # Convert to "zero point zero two three dollars"
+            dollar_words = number_to_words(dollars) if dollars < 100 else str(dollars)
+            decimal_digits = " ".join(number_to_words(int(d)) if d != "0" else "zero" for d in cents_str)
+            return f"{dollar_words} point {decimal_digits} dollars"
+
         result = number_to_words(dollars) if dollars < 100 else str(dollars)
         result += " dollar" if dollars == 1 else " dollars"
-        
+
         if cents_str and int(cents_str) > 0:
             cent_num = int(cents_str)
             # Only format as cents if exactly 2 digits
             if len(cents_str) == 2:
                 result += " and " + number_to_words(cent_num)
                 result += " cent" if cent_num == 1 else " cents"
-            else:
-                # For non-standard cent amounts, return as decimal
-                return f"{dollars}.{cents_str} dollars"
-        
+
         return result
-    
+
     async for chunk in _buffered_regex_filter(text, r"\$(\d+)(?:\.(\d+))?", process_dollar):
         yield chunk
 
@@ -478,17 +478,17 @@ async def format_distances(text: AsyncIterable[str]) -> AsyncIterable[str]:
         "ft": "feet",
         "yd": "yards",
     }
-    
-    def process_distance(match) -> str:
+
+    def process_distance(match: re.Match[str]) -> str:
         """Process a single distance measurement."""
         num = match.group(1).replace(",", "")  # Remove commas
         unit = match.group(2).lower()
         full_unit = units.get(unit, unit)
         return f"{num} {full_unit}"
-    
+
     async for chunk in _buffered_regex_filter(
-        text, 
-        r"\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(km|mi|m|ft|yd)\b", 
+        text,
+        r"\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(km|mi|m|ft|yd)\b",
         process_distance,
         flags=re.IGNORECASE
     ):
@@ -513,25 +513,25 @@ async def format_units(text: AsyncIterable[str]) -> AsyncIterable[str]:
         "ml": "milliliters",
         "gal": "gallons",
     }
-    
-    def process_unit(match) -> str:
+
+    def process_unit(match: re.Match[str]) -> str:
         """Process a single unit measurement."""
         num_str = match.group(1).replace(",", "")  # Remove commas
         unit = match.group(2).lower()
         full_unit = units.get(unit, unit)
-        
+
         # Keep decimals numeric; for small integers, convert to words
         if "." in num_str:
             return f"{num_str} {full_unit}"
-        
+
         num = int(num_str)
         if num < 100:
             return f"{number_to_words(num)} {full_unit}"
         return f"{num_str} {full_unit}"
-    
+
     async for chunk in _buffered_regex_filter(
-        text, 
-        r"\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(lb|lbs|oz|kg|g|mg|l|ml|gal)\b", 
+        text,
+        r"\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(lb|lbs|oz|kg|g|mg|l|ml|gal)\b",
         process_unit,
         flags=re.IGNORECASE
     ):
@@ -543,14 +543,14 @@ async def format_emails(text: AsyncIterable[str]) -> AsyncIterable[str]:
     Format email addresses for TTS:
     - john.doe@example.com -> "john dot doe at example dot com"
     """
-    def process_email(match) -> str:
+    def process_email(match: re.Match[str]) -> str:
         local = match.group(1).replace(".", " dot ")
         domain = match.group(2).replace(".", " dot ")
         return f"{local} at {domain}"
-    
+
     async for chunk in _buffered_regex_filter(
-        text, 
-        r"([a-zA-Z0-9._+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", 
+        text,
+        r"([a-zA-Z0-9._+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
         process_email
     ):
         yield chunk
@@ -561,10 +561,10 @@ async def format_phone_numbers(text: AsyncIterable[str]) -> AsyncIterable[str]:
     Format phone numbers for TTS:
     - 555-123-4567 -> "5 5 5 1 2 3 4 5 6 7"
     """
-    def process_phone(match) -> str:
+    def process_phone(match: re.Match[str]) -> str:
         digits = match.group(1) + match.group(2) + match.group(3)
         return " ".join(list(digits))
-    
+
     async for chunk in _buffered_regex_filter(text, r"\b(\d{3})[-.]?(\d{3})[-.]?(\d{4})\b", process_phone):
         yield chunk
 
@@ -579,22 +579,22 @@ async def format_dates(text: AsyncIterable[str]) -> AsyncIterable[str]:
         "July", "August", "September", "October", "November", "December"
     ]
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    
-    def process_date(match) -> str:
+
+    def process_date(match: re.Match[str]) -> str:
         from datetime import datetime
-        
+
         year = int(match.group(1))
         month = int(match.group(2))
         day = int(match.group(3))
-        
+
         try:
             date = datetime(year, month, day)
             day_name = days[date.weekday()]
             month_name = months[date.month - 1]
             return f"{day_name}, {month_name} {day}, {year}"
         except (ValueError, IndexError):
-            return match.group(0)
-    
+            return str(match.group(0))
+
     async for chunk in _buffered_regex_filter(text, r"\b(\d{4})[\s-](\d{2})[\s-](\d{2})\b", process_date):
         yield chunk
 
@@ -602,26 +602,26 @@ async def format_dates(text: AsyncIterable[str]) -> AsyncIterable[str]:
 async def format_times(text: AsyncIterable[str]) -> AsyncIterable[str]:
     """
     Format times for TTS.
-    
+
     This filter simplifies time formats when minutes/seconds are 00.
-    
+
     Examples:
     - "14:00" -> "14" (simplified when minutes are 00)
     - "14:30" -> "14:30" (kept as-is)
     - "Meeting at 2:00" -> "Meeting at 2"
     """
-    def process_time(match) -> str:
+    def process_time(match: re.Match[str]) -> str:
         hours = match.group(1)
         minutes = match.group(2)
         seconds = match.group(3)
-        
+
         # If minutes and seconds are 00, just return hours
         if minutes == "00" and (not seconds or seconds == "00"):
-            return hours
-        
+            return str(hours)
+
         # Otherwise keep as-is
-        return match.group(0)
-    
+        return str(match.group(0))
+
     async for chunk in _buffered_regex_filter(text, r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b", process_time):
         yield chunk
 
@@ -632,22 +632,22 @@ async def format_acronyms(text: AsyncIterable[str]) -> AsyncIterable[str]:
     - NASA, API -> lowercase (nasa, api)
     - XYZ (no vowels) -> space out (X Y Z)
     """
-    def process_acronym(match) -> str:
+    def process_acronym(match: re.Match[str]) -> str:
         stripped = match.group(0).replace(".", "")
         if len(stripped) < 2:
-            return match.group(0)
-        
+            return str(match.group(0))
+
         # Known acronyms -> lowercase
         if stripped in KNOWN_ACRONYMS:
-            return match.group(0).lower()
-        
+            return str(match.group(0).lower())
+
         # Has vowels -> lowercase
         if re.search(r"[AEIOUY]", stripped, re.IGNORECASE):
-            return match.group(0).lower()
-        
+            return str(match.group(0).lower())
+
         # No vowels -> space out
-        return " ".join(list(stripped))
-    
+        return str(" ".join(list(stripped)))
+
     async for chunk in _buffered_regex_filter(text, r"\b[A-Z]+(?:\.[A-Z]+)*\b", process_acronym):
         yield chunk
 
@@ -655,8 +655,8 @@ async def format_acronyms(text: AsyncIterable[str]) -> AsyncIterable[str]:
 async def remove_angle_bracket_content(text: AsyncIterable[str]) -> AsyncIterable[str]:
     """Remove HTML-like tags except special TTS tags like <break>."""
     async for chunk in _buffered_regex_filter(
-        text, 
-        r"<(?!break|spell|<)(?![^>]*>>)[^>]*>", 
+        text,
+        r"<(?!break|spell|<)(?![^>]*>>)[^>]*>",
         lambda m: "",
         flags=re.IGNORECASE
     ):
@@ -666,14 +666,14 @@ async def remove_angle_bracket_content(text: AsyncIterable[str]) -> AsyncIterabl
 async def replace_newlines_with_periods(text: AsyncIterable[str]) -> AsyncIterable[str]:
     """
     Replace newlines with periods or spaces for smoother TTS flow.
-    
+
     This filter helps create natural speech pauses by converting line breaks
     into punctuation that TTS engines can interpret.
-    
+
     Examples:
     - "Hello\n\nWorld" -> "Hello. World" (multiple newlines become period+space)
     - "Hello\nWorld" -> "Hello World" (single newline becomes space)
-    
+
     This is particularly useful for processing LLM outputs that may include
     markdown-style formatting with line breaks.
     """
