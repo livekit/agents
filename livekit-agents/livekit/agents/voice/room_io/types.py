@@ -38,7 +38,7 @@ TextInputCallback = Callable[
 ]
 
 NoiseCancellationSelector = Callable[
-    [rtc.Participant, rtc.Track], rtc.NoiseCancellationOptions | None
+    [rtc.Participant, rtc.Track], Optional[rtc.NoiseCancellationOptions]
 ]
 
 
