@@ -304,7 +304,7 @@ async def _upload_session_report(
 
     _log(
         body="session report",
-        timestamp=int((report.timestamp or 0) * 1e9),
+        timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
         attributes={
             "session.options": vars(report.options),
             "session.report_timestamp": report.timestamp,
