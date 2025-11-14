@@ -75,6 +75,7 @@ class STTOptions:
     sample_rate: int
     min_confidence_threshold: float
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
+    denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
         if is_given(self.keywords):
@@ -113,6 +114,7 @@ class STT(stt.STT):
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
@@ -139,6 +141,7 @@ class STT(stt.STT):
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
+            denoiser_config(DenoiserConfig): configuration for audio denoising (default: None)
         """
         if not is_given(use_streaming):
             use_streaming = True
@@ -176,6 +179,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
+            denoiser_config=denoiser_config,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClient](
@@ -265,6 +269,7 @@ class STT(stt.STT):
             ),
             model=config.model,
             language_codes=config.languages,
+            denoiser_config=config.denoiser_config,
         )
 
         try:
@@ -516,6 +521,7 @@ class SpeechStream(stt.SpeechStream):
                                 enable_word_time_offsets=self._config.enable_word_time_offsets,
                                 enable_spoken_punctuation=self._config.spoken_punctuation,
                             ),
+                            denoiser_config=self._config.denoiser_config,
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
                             interim_results=self._config.interim_results,
