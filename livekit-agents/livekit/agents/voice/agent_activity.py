@@ -1111,7 +1111,7 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
-        # barge-in holds off interruptions only if there is no realtime session
+        # barge-in only works if there is no realtime session
         if not self._allow_interruption_by_audio_activity and self._rt_session is None:
             return
 
