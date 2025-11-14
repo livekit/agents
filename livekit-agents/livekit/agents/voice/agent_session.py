@@ -159,8 +159,6 @@ DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = [
     "format_units",
     "format_percentages",
     "format_numbers",
-    "replace_colons_with_periods",
-    "restore_colons",
 ]
 
 
@@ -267,8 +265,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``. When NOT_GIVEN, it's disabled.
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
-                to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
-                Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
+                to the tts input text. Available built-in transforms include: ``"filter_markdown"``, 
+                ``"filter_emoji"``, ``"format_numbers"``, ``"format_dates"``, ``"format_times"``, 
+                ``"format_emails"``, ``"format_phone_numbers"``, ``"format_acronyms"``, 
+                ``"format_dollar_amounts"``, ``"format_distances"``, ``"format_units"``, 
+                ``"format_percentages"``, ``"remove_angle_bracket_content"``, 
+                ``"replace_newlines_with_periods"``.
+                Set to ``None`` to disable. When NOT_GIVEN, a default set of filters will be applied.
             preemptive_generation (bool):
                 Whether to speculatively begin LLM and TTS requests before an end-of-turn is
                 detected. When True, the agent sends inference calls as soon as a user

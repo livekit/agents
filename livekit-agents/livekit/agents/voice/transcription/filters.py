@@ -168,8 +168,6 @@ TextTransforms = Literal[
     "format_phone_numbers",
     "remove_angle_bracket_content",
     "replace_newlines_with_periods",
-    "replace_colons_with_periods",
-    "restore_colons",
 ]
 
 
@@ -191,8 +189,6 @@ def apply_text_transforms(
         "format_phone_numbers": format_phone_numbers,
         "remove_angle_bracket_content": remove_angle_bracket_content,
         "replace_newlines_with_periods": replace_newlines_with_periods,
-        "replace_colons_with_periods": replace_colons_with_periods,
-        "restore_colons": restore_colons,
     }
 
     for transform in transforms:
@@ -605,9 +601,14 @@ async def format_dates(text: AsyncIterable[str]) -> AsyncIterable[str]:
 
 async def format_times(text: AsyncIterable[str]) -> AsyncIterable[str]:
     """
-    Format times for TTS:
-    - Protect times from being formatted as decimals
-    - 14:00 -> "14", 14:30 -> "14COLON30" (to be restored later)
+    Format times for TTS.
+    
+    This filter simplifies time formats when minutes/seconds are 00.
+    
+    Examples:
+    - "14:00" -> "14" (simplified when minutes are 00)
+    - "14:30" -> "14:30" (kept as-is)
+    - "Meeting at 2:00" -> "Meeting at 2"
     """
     def process_time(match) -> str:
         hours = match.group(1)
@@ -618,8 +619,8 @@ async def format_times(text: AsyncIterable[str]) -> AsyncIterable[str]:
         if minutes == "00" and (not seconds or seconds == "00"):
             return hours
         
-        # Otherwise, replace colons with placeholder to protect from later replacement
-        return match.group(0).replace(":", "COLON")
+        # Otherwise keep as-is
+        return match.group(0)
     
     async for chunk in _buffered_regex_filter(text, r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b", process_time):
         yield chunk
@@ -663,7 +664,19 @@ async def remove_angle_bracket_content(text: AsyncIterable[str]) -> AsyncIterabl
 
 
 async def replace_newlines_with_periods(text: AsyncIterable[str]) -> AsyncIterable[str]:
-    """Replace newlines with periods/spaces."""
+    """
+    Replace newlines with periods or spaces for smoother TTS flow.
+    
+    This filter helps create natural speech pauses by converting line breaks
+    into punctuation that TTS engines can interpret.
+    
+    Examples:
+    - "Hello\n\nWorld" -> "Hello. World" (multiple newlines become period+space)
+    - "Hello\nWorld" -> "Hello World" (single newline becomes space)
+    
+    This is particularly useful for processing LLM outputs that may include
+    markdown-style formatting with line breaks.
+    """
     async for chunk in text:
         # Multiple newlines -> period + space
         result = re.sub(r"\n\s*\n+", ". ", chunk)
@@ -672,17 +685,3 @@ async def replace_newlines_with_periods(text: AsyncIterable[str]) -> AsyncIterab
         yield result
 
 
-async def replace_colons_with_periods(text: AsyncIterable[str]) -> AsyncIterable[str]:
-    """Replace colons with periods (but not COLON placeholder from time formatting)."""
-    async for chunk in text:
-        # Don't replace COLON placeholder
-        if "COLON" not in chunk:
-            yield chunk.replace(":", ".")
-        else:
-            yield chunk
-
-
-async def restore_colons(text: AsyncIterable[str]) -> AsyncIterable[str]:
-    """Restore COLON placeholders back to colons."""
-    async for chunk in text:
-        yield chunk.replace("COLON", ":")

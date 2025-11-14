@@ -270,7 +270,14 @@ Meeting at 14:30 today. Temperature: 72 degrees.
 _Important_: This costs $5 and takes 3 hours.
 I have 5 apples and 23 oranges.
 
-HTML & CSS files on AWS S3 — $0.023/GB cost."""
+HTML & CSS files on AWS S3 — $0.023/GB cost.
+
+Edge cases:
+- Screen ratio is 16:9 aspect ratio
+- Mixing ratio: 3:1 for best results
+- Visit http://localhost:8080 for docs
+- Video at https://example.com:443/video.mp4
+- Meeting at 14:30 with 21:9 display"""
 
 TTS_EXPECTED_OUTPUT = """Meeting on Wednesday, December twenty five, 2024 with fifteen percent discount! 
 Call five five five one two three four five six seven or email john dot doe at example dot com for details.
@@ -295,7 +302,14 @@ Meeting at 14:30 today. Temperature: seventy two degrees.
 Important: This costs five dollars and takes three hours.
 I have five apples and twenty three oranges.
 
-html & css files on aws S3 — 0 point 0 2 3 dollars/G B cost."""
+html & css files on aws S3 — 0 point 0 2 3 dollars/G B cost.
+
+Edge cases:
+Screen ratio is 16:9 aspect ratio
+Mixing ratio: 3:1 for best results
+Visit http://localhost:8080 for docs
+Video at https://example.com:443/video.mp4
+Meeting at 14:30 with 21:9 display"""
 
 
 @pytest.mark.parametrize("chunk_size", [15, 50, 100])
@@ -313,6 +327,7 @@ async def test_tts_preprocessing_combined(chunk_size: int):
         "filter_markdown",
         "filter_emoji",
         "format_dates",
+        "format_times",
         "format_phone_numbers",
         "format_emails",
         "format_dollar_amounts",
