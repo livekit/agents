@@ -39,8 +39,10 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, tracer
+from .telemetry.traces import _setup_cloud_tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
+from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -189,8 +191,7 @@ class JobContext:
                 if not cloud_hostname:
                     raise ValueError(f"invalid cloud hostname: {self._info.url}")
                 await _upload_session_report(
-                    room_id=self._info.job.room.sid,
-                    job_id=self._info.job.id,
+                    agent_name=self._info.job.agent_name,
                     cloud_hostname=cloud_hostname,
                     report=report,
                     http_session=http_context.http_session(),
@@ -536,6 +537,19 @@ class JobContext:
             raise ValueError("entrypoints cannot be added more than once")
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
+
+    def init_recording(self) -> None:
+        if not is_cloud(self._info.url):
+            return
+
+        cloud_hostname = urlparse(self._info.url).hostname
+        logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
+        if cloud_hostname:
+            _setup_cloud_tracer(
+                room_id=self.job.room.sid,
+                job_id=self.job.id,
+                cloud_hostname=cloud_hostname,
+            )
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:
