@@ -3,6 +3,7 @@ import pytest
 from livekit.agents import tokenize
 from livekit.agents.tokenize import basic, blingfire
 from livekit.agents.tokenize._basic_paragraph import split_paragraphs
+from livekit.agents.voice.transcription import filters
 from livekit.plugins import nltk
 
 # Download the punkt tokenizer, will only download if not already present
@@ -379,8 +380,6 @@ def test_split_paragraphs(test_case):
 # ============================================================================
 # TTS Preprocessing Filter Tests
 # ============================================================================
-
-from livekit.agents.voice.transcription import filters
 
 
 async def apply_filters(text: str, filter_names: list[str]) -> str:
