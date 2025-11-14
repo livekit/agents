@@ -290,6 +290,7 @@ XAIChatModels = Literal[
 
 def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
     return model in [
+        "gpt-5.1",
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",
