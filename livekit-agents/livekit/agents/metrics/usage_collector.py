@@ -6,12 +6,6 @@ from .base import AgentMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TT
 
 @dataclass
 class UsageSummary:
-    """
-    Summary of usage metrics for the LLM.
-
-    Attributes:
-    """
-
     llm_prompt_tokens: int = 0
     llm_prompt_cached_tokens: int = 0
     llm_input_audio_tokens: int = 0
