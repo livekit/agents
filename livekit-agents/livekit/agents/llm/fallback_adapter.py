@@ -286,5 +286,46 @@ class FallbackLLMStream(LLMStream):
             f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )
 
+    # Overriding the parent class method to skip nested duplicate traces
+    async def _main_task(self) -> None:
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                try:
+                    return await self._run()
+                except Exception:
+                    raise
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+
+                if self._conn_options.max_retry == 0 or not e.retryable:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif i == self._conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
+                    ) from e
+
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
+                        exc_info=e,
+                        extra={
+                            "llm": self._llm._label,
+                            "attempt": i + 1,
+                        },
+                    )
+
+                if retry_interval > 0:
+                    await asyncio.sleep(retry_interval)
+
+                # reset the flag when retrying
+                self._current_attempt_has_error = False
+
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
         return
