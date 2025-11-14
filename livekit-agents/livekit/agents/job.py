@@ -258,6 +258,7 @@ class JobContext:
             options=session.options,
             audio_recording_path=recorder_io.output_path if recorder_io else None,
             audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
+            started_at=session._started_at,
             events=session._recorded_events,
             chat_history=session.history.copy(),
         )

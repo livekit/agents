@@ -369,6 +369,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._recorded_events: list[AgentEvent] = []
         self._enable_recording: bool = False
+        self._started_at: float | None = None
 
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
@@ -503,6 +504,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._lock:
             if self._started:
                 return None
+
+            self._started_at = time.time()
 
             # configure observability first
             job_ctx: JobContext | None = None
