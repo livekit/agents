@@ -391,11 +391,12 @@ class SpeechStreamv2(stt.SpeechStream):
             if "max_tokens_to_recompute" in config:
                 self._max_tokens_to_recompute = config["max_tokens_to_recompute"]
                 logger.info(
-                    f"STTv2: Session started with ID: {session_id}, "
-                    f"max_tokens_to_recompute={self._max_tokens_to_recompute}"
+                    "STTv2: Session started with ID: %s, max_tokens_to_recompute=%s",
+                    session_id,
+                    self._max_tokens_to_recompute,
                 )
             else:
-                logger.info(f"STTv2: Session started with ID: {session_id}")
+                logger.info("STTv2: Session started with ID: %s", session_id)
 
         # Error handling for known ElevenLabs error types
         elif message_type in (
@@ -407,9 +408,12 @@ class SpeechStreamv2(stt.SpeechStream):
         ):
             error_msg = data.get("message", "Unknown error")
             error_details = data.get("details", "")
+            details_suffix = " - " + error_details if error_details else ""
             logger.error(
-                f"STTv2: ElevenLabs error [{message_type}]: {error_msg}"
-                + (f" - {error_details}" if error_details else "")
+                "STTv2: ElevenLabs error [%s]: %s%s",
+                message_type,
+                error_msg,
+                details_suffix,
             )
         else:
-            logger.warning(f"STTv2: Unknown message type: {message_type}, data: {data}")
+            logger.warning("STTv2: Unknown message type: %s, data: %s", message_type, data)
