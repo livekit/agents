@@ -39,6 +39,15 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
+from .constants import (
+    API_AUTH_HEADER,
+    API_VERSION,
+    API_VERSION_HEADER,
+    API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
+    MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
+    REQUEST_ID_HEADER,
+    USER_AGENT,
+)
 from .log import logger
 from .models import (
     TTSDefaultVoiceId,
@@ -48,14 +57,6 @@ from .models import (
     TTSVoiceSpeed,
     _is_sonic_3,
 )
-from .version import __version__
-
-API_AUTH_HEADER = "X-API-Key"
-API_VERSION_HEADER = "Cartesia-Version"
-API_VERSION = "2025-04-16"
-API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "2024-11-13"
-MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "sonic-2-2025-03-07"
-USER_AGENT = f"LiveKit Agents Cartesia Plugin/{__version__}"
 
 
 @dataclass
@@ -198,9 +199,15 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
         )
-        return await asyncio.wait_for(
+        ws = await asyncio.wait_for(
             session.ws_connect(url, headers={"User-Agent": USER_AGENT}), timeout
         )
+        c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
+        logger.debug(
+            "Established new Cartesia TTS WebSocket connection",
+            extra={"cartesia_request_id": c_request_id},
+        )
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
