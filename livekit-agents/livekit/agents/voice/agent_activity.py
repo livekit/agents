@@ -1190,6 +1190,8 @@ class AgentActivity(RecognitionHooks):
                 transcript=ev.alternatives[0].text,
                 is_final=False,
                 speaker_id=ev.alternatives[0].speaker_id,
+                start_time=ev.alternatives[0].start_time,
+                end_time=ev.alternatives[0].end_time,
             ),
         )
 
@@ -1215,6 +1217,8 @@ class AgentActivity(RecognitionHooks):
                 transcript=ev.alternatives[0].text,
                 is_final=True,
                 speaker_id=ev.alternatives[0].speaker_id,
+                start_time=ev.alternatives[0].start_time,
+                end_time=ev.alternatives[0].end_time,
             ),
         )
 

@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterable
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents.voice import UserInputTranscribedEvent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.io import TimedString
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -15,9 +16,10 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-# This example shows how to obtain the timed transcript from the TTS.
-# Right now, it's supported for Cartesia and ElevenLabs TTS (word level timestamps)
-# and non-streaming TTS with StreamAdapter (sentence level timestamps).
+# This example shows how to obtain timing information from both:
+# 1. TTS-aligned transcripts (agent output): supported for Cartesia and ElevenLabs TTS (word level timestamps)
+#    and non-streaming TTS with StreamAdapter (sentence level timestamps).
+# 2. User input transcripts: start_time and end_time from STT providers that support timing information.
 
 
 class MyAgent(Agent):
@@ -44,6 +46,17 @@ async def entrypoint(ctx: JobContext):
         # enable TTS-aligned transcript, can be configured at the Agent level as well
         use_tts_aligned_transcript=True,
     )
+
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(event: UserInputTranscribedEvent):
+        timing_info = ""
+        if event.start_time is not None and event.end_time is not None:
+            duration = event.end_time - event.start_time
+            timing_info = f" (start: {event.start_time:.3f}s, end: {event.end_time:.3f}s, duration: {duration:.3f}s)"
+
+        logger.info(
+            f"User {'FINAL' if event.is_final else 'INTERIM'} transcript: '{event.transcript}'{timing_info}"
+        )
 
     await session.start(agent=MyAgent(), room=ctx.room)
 
