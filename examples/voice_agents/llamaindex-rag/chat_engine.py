@@ -11,7 +11,7 @@ from llama_index.core import (
 from llama_index.core.chat_engine.types import ChatMode
 from llama_index.core.llms import ChatMessage, MessageRole
 
-from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentServer, AgentSession, AutoSubscribe, JobContext, cli, llm
 from livekit.agents.voice.agent import ModelSettings
 from livekit.plugins import deepgram, openai, silero
 
@@ -75,6 +75,10 @@ class ChatEngineAgent(Agent):
             yield delta
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -86,4 +90,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -4,6 +4,11 @@ ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
 
+
+ATTR_PARTICIPANT_ID = "lk.participant_id"
+ATTR_PARTICIPANT_IDENTITY = "lk.participant_identity"
+ATTR_PARTICIPANT_KIND = "lk.participant_kind"
+
 # session start
 ATTR_JOB_ID = "lk.job_id"
 ATTR_AGENT_NAME = "lk.agent_name"
@@ -40,7 +45,7 @@ ATTR_EOU_LANGUAGE = "lk.eou.language"
 ATTR_USER_TRANSCRIPT = "lk.user_transcript"
 ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
-ATTR_END_OF_UTTERANCE_DELAY = "lk.end_of_utterance_delay"
+ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"

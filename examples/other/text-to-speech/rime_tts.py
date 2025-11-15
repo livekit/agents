@@ -4,7 +4,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from livekit.agents.tokenize import blingfire
 from livekit.agents.tts import StreamAdapter
 from livekit.plugins import rime
@@ -16,7 +16,10 @@ logger.setLevel(logging.INFO)
 
 tokenizer = blingfire.SentenceTokenizer()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     """
     Main entrypoint for the TTS demo agent.
@@ -112,4 +115,4 @@ async def entrypoint(ctx: JobContext) -> None:
 
 if __name__ == "__main__":
     # Run the application using LiveKit's CLI utilities
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

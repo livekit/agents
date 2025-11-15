@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
-    WorkerOptions,
     cli,
     llm,
 )
@@ -71,6 +71,10 @@ class PreResponseAgent(Agent):
         turn_ctx.add_message(role="assistant", content=filler_response, interrupted=False)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -81,4 +85,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

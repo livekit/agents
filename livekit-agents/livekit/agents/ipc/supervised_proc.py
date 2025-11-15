@@ -4,12 +4,13 @@ import asyncio
 import contextlib
 import logging
 import multiprocessing as mp
-import os
+import signal
 import socket
 import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import Any
@@ -22,6 +23,27 @@ from ..utils import aio, log_exceptions, time_ms
 from ..utils.aio import duplex_unix
 from . import channel, proto
 from .log_queue import LogQueueListener
+
+
+@contextlib.contextmanager
+def _mask_ctrl_c() -> Generator[None, None, None]:
+    """
+    POSIX: block SIGINT on this thread (defer delivery).
+    Windows/others: temporarily ignore SIGINT (best available), then restore.
+    Keep the critical section *tiny* (just around Process.start()).
+    """
+    if hasattr(signal, "pthread_sigmask"):  # POSIX
+        signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGINT])
+        try:
+            yield
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGINT])
+    else:
+        old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            yield
+        finally:
+            signal.signal(signal.SIGINT, old)
 
 
 @dataclass
@@ -122,7 +144,13 @@ class SupervisedProc(ABC):
             log_listener.start()
 
             self._proc = self._create_process(mp_cch, mp_log_cch)
-            await self._loop.run_in_executor(None, self._proc.start)
+
+            # the signal handler isn't directly run when starting the process
+            # using pthread_sigmask to avoid annoying cancellation errors when pressing
+            # CTRL-C in bad timings
+            with _mask_ctrl_c():
+                await self._loop.run_in_executor(None, self._proc.start)
+
             mp_log_cch.close()
             mp_cch.close()
 
@@ -184,10 +212,7 @@ class SupervisedProc(ABC):
             metrics.proc_initialized(time_elapsed=elapsed_time)
             logger.info(
                 "process initialized",
-                extra={
-                    **self.logging_extra(),
-                    "elapsed_time": round(elapsed_time, 2),
-                },
+                extra={**self.logging_extra(), "elapsed_time": round(elapsed_time, 2)},
             )
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
@@ -212,8 +237,7 @@ class SupervisedProc(ABC):
         try:
             if self._supervise_atask:
                 await asyncio.wait_for(
-                    asyncio.shield(self._supervise_atask),
-                    timeout=self._opts.close_timeout,
+                    asyncio.shield(self._supervise_atask), timeout=self._opts.close_timeout
                 )
         except asyncio.TimeoutError:
             logger.error(
@@ -279,24 +303,6 @@ class SupervisedProc(ABC):
 
         await self._join_fut
         self._exitcode = self._proc.exitcode
-
-        # Mark process as dead for prometheus multiprocess mode.
-        # This is required to clean up stale metrics.
-        if "PROMETHEUS_MULTIPROC_DIR" in os.environ and self._pid:
-            try:
-                from prometheus_client import multiprocess
-
-                multiprocess.mark_process_dead(self._pid)  # type: ignore[no-untyped-call]
-                logger.debug(
-                    "marked process as dead for prometheus multiprocess mode",
-                    extra=self.logging_extra(),
-                )
-            except Exception as e:
-                logger.warning(
-                    f"failed to mark process as dead for prometheus: {e}",
-                    extra=self.logging_extra(),
-                )
-
         self._proc.close()
         await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
 
@@ -345,6 +351,7 @@ class SupervisedProc(ABC):
     async def _ping_pong_task(self, pong_timeout: aio.Sleep) -> None:
         ping_interval = aio.interval(self._opts.ping_interval)
 
+        @log_exceptions(logger=logger)
         async def _send_ping_co() -> None:
             while True:
                 await ping_interval.tick()
@@ -353,15 +360,14 @@ class SupervisedProc(ABC):
                 except duplex_unix.DuplexClosed:
                     break
 
+        @log_exceptions(logger=logger)
         async def _pong_timeout_co() -> None:
             await pong_timeout
             logger.error("process is unresponsive, killing process", extra=self.logging_extra())
             self._send_kill_signal()
 
-        tasks = [
-            asyncio.create_task(_send_ping_co()),
-            asyncio.create_task(_pong_timeout_co()),
-        ]
+        tasks = [asyncio.create_task(_send_ping_co()), asyncio.create_task(_pong_timeout_co())]
+
         try:
             await asyncio.gather(*tasks)
         finally:

@@ -8,16 +8,16 @@ from dotenv import load_dotenv
 from livekit import api, rtc
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AudioConfig,
     BackgroundAudioPlayer,
     JobContext,
     PlayHandle,
-    RoomInputOptions,
     RunContext,
-    WorkerOptions,
     cli,
     llm,
+    room_io,
     stt,
     tts,
 )
@@ -122,7 +122,7 @@ class SessionManager:
             await self.supervisor_session.start(
                 agent=supervisor_agent,
                 room=self.supervisor_room,
-                room_input_options=RoomInputOptions(
+                room_options=room_io.RoomOptions(
                     close_on_disconnect=True,
                 ),
             )
@@ -310,6 +310,10 @@ class SupervisorAgent(Agent):
         self.session_manager.set_supervisor_failed()
 
 
+server = AgentServer()
+
+
+@server.rtc_session(agent_name="sip-inbound")
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
@@ -328,9 +332,11 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=support_agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # enable Krisp BVC noise cancellation
-            noise_cancellation=noise_cancellation.BVCTelephony(),
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                # enable Krisp BVC noise cancellation
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+            ),
         ),
     )
 
@@ -361,12 +367,7 @@ def _create_tts() -> tts.TTS:
 if __name__ == "__main__":
     # this example requires explicit dispatch using named agents
     # supervisor will be placed in a separate room, and we do not want it to dispatch the default agent
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            agent_name="sip-inbound",
-        )
-    )
+    cli.run_app(server)
 
 _common_instructions = """
 # Personality

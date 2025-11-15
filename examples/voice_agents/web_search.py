@@ -7,11 +7,11 @@ from duckduckgo_search import DDGS
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
     ToolError,
-    WorkerOptions,
     cli,
     function_tool,
 )
@@ -47,6 +47,10 @@ async def search_web(ctx: RunContext[AppData], query: str):
     return search
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     app_data = AppData(ddgs_client=DDGS())
 
@@ -57,4 +61,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

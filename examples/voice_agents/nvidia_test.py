@@ -7,8 +7,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    RoomOutputOptions,
     WorkerOptions,
     cli,
 )
@@ -40,8 +38,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Agent(instructions="You are a helpful voice AI assistant."),
         room=ctx.room,
-        room_input_options=RoomInputOptions(),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

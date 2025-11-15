@@ -422,7 +422,7 @@ class TranscriptSynchronizer:
 
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
-        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task(None))
+        self._rotate_segment_atask: asyncio.Task[None] | None = None
 
     @property
     def audio_output(self) -> _SyncedAudioOutput:
@@ -446,7 +446,7 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
-        if enabled or not self._rotate_segment_atask or self._rotate_segment_atask.done():
+        if not self._rotate_segment_atask or self._rotate_segment_atask.done():
             # avoid calling rotate_segment twice when closing the session during agent speaking
             # first time when speech interrupted, second time here when output detached
             self.rotate_segment()
@@ -478,7 +478,7 @@ class TranscriptSynchronizer:
         if self._closed:
             return
 
-        if not self._rotate_segment_atask.done():
+        if self._rotate_segment_atask and not self._rotate_segment_atask.done():
             logger.warning("rotate_segment called while previous segment is still being rotated")
 
         self._rotate_segment_atask = asyncio.create_task(
