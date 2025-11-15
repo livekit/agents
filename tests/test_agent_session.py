@@ -83,6 +83,57 @@ class MyAgent(Agent):
 SESSION_TIMEOUT = 60.0
 
 
+class IdleAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="Stay idle.")
+
+    async def on_enter(self) -> None:
+        return
+
+
+class TrackingSTT(FakeSTT):
+    def __init__(self) -> None:
+        super().__init__(fake_user_speeches=[])
+        self.prewarm_calls = 0
+        self.on_events: list[str] = []
+        self.off_events: list[str] = []
+        self.stream_calls = 0
+
+    def prewarm(self) -> None:
+        self.prewarm_calls += 1
+
+    def on(self, event: str, listener):
+        self.on_events.append(event)
+        return super().on(event, listener)
+
+    def off(self, event: str, listener):
+        self.off_events.append(event)
+        return super().off(event, listener)
+
+    def stream(self, *args, **kwargs):
+        self.stream_calls += 1
+        return super().stream(*args, **kwargs)
+
+
+class TrackingTTS(FakeTTS):
+    def __init__(self) -> None:
+        super().__init__(fake_responses=[])
+        self.prewarm_calls = 0
+        self.on_events: list[str] = []
+        self.off_events: list[str] = []
+
+    def prewarm(self) -> None:
+        self.prewarm_calls += 1
+
+    def on(self, event: str, listener):
+        self.on_events.append(event)
+        return super().on(event, listener)
+
+    def off(self, event: str, listener):
+        self.off_events.append(event)
+        return super().off(event, listener)
+
+
 async def test_events_and_metrics() -> None:
     speed = 5.0
     actions = FakeActions()
@@ -227,6 +278,64 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[5].type == "message"
     assert chat_ctx_items[5].role == "assistant"
     assert chat_ctx_items[5].text_content == "The weather in Tokyo is sunny today."
+
+
+async def test_session_audio_toggle_hotplugs_models() -> None:
+    stt = TrackingSTT()
+    tts = TrackingTTS()
+    session = AgentSession(
+        stt=stt,
+        tts=tts,
+        llm=FakeLLM(fake_responses=[]),
+        vad=FakeVAD(fake_user_speeches=[]),
+        min_interruption_duration=0.1,
+        min_endpointing_delay=0.1,
+        max_endpointing_delay=0.2,
+        false_interruption_timeout=None,
+    )
+
+    session.input.audio = FakeAudioInput()
+    session.output.audio = FakeAudioOutput()
+    session.output.transcription = FakeTextOutput()
+
+    session.input.set_audio_enabled(False)
+    session.output.set_audio_enabled(False)
+
+    agent = IdleAgent()
+
+    await session.start(agent)
+
+    assert stt.prewarm_calls == 0
+    assert tts.prewarm_calls == 0
+    assert not stt.on_events
+    assert not tts.on_events
+
+    session.input.set_audio_enabled(True)
+    await asyncio.sleep(0.05)
+
+    assert stt.prewarm_calls == 1
+    assert stt.on_events.count("metrics_collected") == 1
+    assert stt.on_events.count("error") == 1
+    assert stt.stream_calls >= 1
+
+    session.input.set_audio_enabled(False)
+    await asyncio.sleep(0.05)
+    assert stt.off_events.count("metrics_collected") == 1
+    assert stt.off_events.count("error") == 1
+
+    session.output.set_audio_enabled(True)
+    assert tts.prewarm_calls == 1
+    assert tts.on_events.count("metrics_collected") == 1
+    assert tts.on_events.count("error") == 1
+
+    session.output.set_audio_enabled(False)
+    assert tts.off_events.count("metrics_collected") == 1
+    assert tts.off_events.count("error") == 1
+
+    session.output.set_audio_enabled(True)
+    assert tts.prewarm_calls == 1
+
+    await session.aclose()
 
 
 @pytest.mark.parametrize(
