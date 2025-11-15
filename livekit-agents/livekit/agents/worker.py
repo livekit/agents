@@ -278,6 +278,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         multiprocessing_context: Literal["spawn", "forkserver"] = (
             "spawn" if not sys.platform.startswith("linux") else "forkserver"
         ),
+        setup_fnc: Callable[[JobProcess], Any] | None = None,
+        load_fnc: Callable[[AgentServer], float] | None = None,
         prometheus_port: int | None = None,
     ) -> None:
         super().__init__()
@@ -301,8 +303,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._prometheus_port = prometheus_port
         self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
+
         if not is_given(http_proxy):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
         self._http_proxy = http_proxy
         self._agent_name = ""
         self._server_type = ServerType.ROOM
@@ -314,8 +318,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
 
         # worker cb
-        self._prewarm_fnc: Callable[[JobProcess], Any] | None = None
-        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
+        self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
+        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
         self._closed, self._draining, self._connecting = True, False, False
         self._http_server: http_server.HttpServer | None = None
@@ -357,8 +361,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             http_proxy=options.http_proxy,
             multiprocessing_context=options.multiprocessing_context,
             prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+            setup_fnc=options.prewarm_fnc,
+            load_fnc=options.load_fnc,
         )
-        server.setup(options.prewarm_fnc)
         server.rtc_session(
             options.entrypoint_fnc,
             agent_name=options.agent_name,
@@ -430,42 +435,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if func is not None:
             return decorator(func)
-        return decorator
 
-    @overload
-    def setup(
-        self,
-        func: Callable[[JobProcess], Any],
-    ) -> Callable[[JobProcess], Any]: ...
-
-    @overload
-    def setup(
-        self,
-    ) -> Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]: ...
-
-    def setup(
-        self,
-        func: Callable[[JobProcess], Any] | None = None,
-    ) -> (
-        Callable[[JobProcess], Any]
-        | Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]
-    ):
-        """
-        Decorator or direct registrar for the setup/prewarm function.
-
-        Usage:
-            @server.setup()
-            def setup_process(job_proc: JobProcess): ...
-
-            server.setup(setup_process)
-        """
-
-        def decorator(f: Callable[[JobProcess], Any]) -> Callable[[JobProcess], Any]:
-            self._prewarm_fnc = f
-            return f
-
-        if func is not None:
-            return decorator(func)
         return decorator
 
     @property
@@ -512,8 +482,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
 
-            if self._prewarm_fnc is None:
-                self._prewarm_fnc = _default_setup_fnc
+            if self._setup_fnc is None:
+                self._setup_fnc = _default_setup_fnc
 
             if self._load_fnc is None:
                 self._load_fnc = _DefaultLoadCalc.get_load
@@ -556,7 +526,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             self._proc_pool = ipc.proc_pool.ProcPool(
-                initialize_process_fnc=self._prewarm_fnc,
+                initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=self._entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
