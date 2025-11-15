@@ -343,7 +343,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._lock = asyncio.Lock()
 
         # used to keep a reference to the room io
-        # this is not exposed, if users want access to it, they can create their own RoomIO
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
 
@@ -379,9 +378,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         super().emit(event, arg)
 
     @property
+    def room_io(self) -> room_io.RoomIO:
+        if not self._room_io:
+            raise RuntimeError(
+                "Cannot access room_io: the AgentSession was not started with a room."
+            )
+
+        return self._room_io
+
+    @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("VoiceAgent userdata is not set")
+            raise ValueError("AgentSession userdata is not set")
 
         return self._userdata
 
