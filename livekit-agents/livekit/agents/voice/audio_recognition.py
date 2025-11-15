@@ -56,7 +56,11 @@ class _TurnDetector(Protocol):
     async def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
+        self,
+        chat_ctx: llm.ChatContext | None = None,  # MODIFIED: Now optional for audio-based
+        *,
+        audio_frames: list[rtc.AudioFrame] | None = None,  # NEW: Optional audio frames
+        timeout: float | None = None
     ) -> float: ...
 
 
@@ -415,6 +419,52 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
+    async def _run_audio_turn_detection(
+        self,
+        audio_frames: list[rtc.AudioFrame],
+    ) -> float:
+        """Run audio-based turn detection on accumulated audio frames.
+
+        This method is called when VAD detects END_OF_SPEECH, using the
+        accumulated audio frames from the entire speech segment.
+
+        Args:
+            audio_frames: List of audio frames from VAD event (entire speech segment).
+
+        Returns:
+            Probability that this is an end-of-turn (0.0 to 1.0).
+        """
+        if not audio_frames or not self._turn_detector:
+            return 0.0
+
+        try:
+            # Call the turn detector with audio frames
+            # Audio-based detectors will use frames, text-based will ignore them
+            probability = await self._turn_detector.predict_end_of_turn(
+                chat_ctx=None,  # Audio-based doesn't need chat context
+                audio_frames=audio_frames,  # Pass frames to detector
+                timeout=3.0,
+            )
+
+            logger.debug(
+                "audio turn detection completed",
+                extra={
+                    "probability": probability,
+                    "num_frames": len(audio_frames),
+                    "total_samples": sum(f.samples_per_channel for f in audio_frames),
+                },
+            )
+
+            return probability
+
+        except TypeError:
+            # Detector doesn't support audio_frames parameter (text-based detector)
+            logger.debug("Turn detector does not support audio_frames, skipping audio turn detection")
+            return 0.0
+        except Exception:
+            logger.exception("Error running audio turn detection")
+            return 0.0
+
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):
@@ -438,13 +488,22 @@ class AudioRecognition:
             # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._last_speaking_time = time.time() - ev.silence_duration
 
+            # NEW: Run audio-based turn detection if available
+            audio_turn_probability: float | None = None
+            if self._turn_detector and ev.frames:
+                audio_turn_probability = await self._run_audio_turn_detection(ev.frames)
+
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+                self._run_eou_detection(chat_ctx, audio_turn_probability=audio_turn_probability)
 
-    def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
+    def _run_eou_detection(
+        self,
+        chat_ctx: llm.ChatContext,
+        audio_turn_probability: float | None = None
+    ) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
             # stt enabled but no transcript yet
             return
@@ -461,7 +520,23 @@ class AudioRecognition:
         async def _bounce_eou_task(last_speaking_time: float) -> None:
             endpointing_delay = self._min_endpointing_delay
             user_turn_span = self._ensure_user_turn_span()
-            if turn_detector is not None:
+
+            # NEW: Use audio turn probability to adjust delay if available
+            if audio_turn_probability is not None:
+                logger.debug(
+                    "audio turn detection result",
+                    extra={"audio_turn_probability": audio_turn_probability},
+                )
+                # If audio detector has high confidence, prefer audio-based decision
+                unlikely_threshold = await turn_detector.unlikely_threshold(
+                    self._last_language
+                )
+                if unlikely_threshold is not None and audio_turn_probability < unlikely_threshold:
+                    endpointing_delay = self._max_endpointing_delay
+                # High probability = likely end of turn, use min delay
+                # This takes precedence over text-based detection
+
+            if turn_detector is not None and audio_turn_probability is None:
                 if not await turn_detector.supports_language(self._last_language):
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
