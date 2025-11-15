@@ -16,7 +16,7 @@ from livekit.agents.voice.agent_session import AgentSession
 from ...log import logger
 from .. import io
 
-# the recorder currently assume the input is a continous uninterrupted audio stream
+# the recorder currently assume the input is a continuous uninterrupted audio stream
 
 
 WRITE_INTERVAL = 2.5
