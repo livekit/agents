@@ -12,9 +12,10 @@ from typing import (
     TYPE_CHECKING,
     Generic,
     Literal,
+    Optional,
     Protocol,
     TypeVar,
-    Union,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -39,7 +40,7 @@ from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
 from .agent_activity import AgentActivity
-from .audio_recognition import _TurnDetector
+from .audio_recognition import TurnDetectionMode
 from .events import (
     AgentState,
     AgentStateChangedEvent,
@@ -89,22 +90,6 @@ class VoiceOptions:
 
 Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
-
-TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
-"""
-The mode of turn detection to use.
-
-- "stt": use speech-to-text result to detect the end of the user's turn
-- "vad": use VAD to detect the start and end of the user's turn
-- "realtime_llm": use server-side turn detection provided by the realtime LLM
-- "manual": manually manage the turn detection
-- _TurnDetector: use the default mode with the provided turn detector
-
-(default) If not provided, automatically choose the best mode based on
-    available models (realtime_llm -> vad -> stt -> manual)
-If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
-"""
-
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
 
@@ -754,6 +739,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the agent session.
@@ -761,16 +747,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
             max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+            turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
+                when the user has finished speaking. ``None`` reverts to automatic selection.
         """
         if is_given(min_endpointing_delay):
             self._opts.min_endpointing_delay = min_endpointing_delay
         if is_given(max_endpointing_delay):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
+        if is_given(turn_detection):
+            self._turn_detection = cast(Optional[TurnDetectionMode], turn_detection)
+
         if self._activity is not None:
             self._activity.update_options(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                turn_detection=turn_detection,
             )
 
     def say(
