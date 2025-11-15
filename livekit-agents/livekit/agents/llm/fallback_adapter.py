@@ -5,7 +5,7 @@ import dataclasses
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
@@ -113,6 +113,8 @@ class FallbackAdapter(
 
 
 class FallbackLLMStream(LLMStream):
+    _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+
     def __init__(
         self,
         llm: FallbackAdapter,
