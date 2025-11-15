@@ -12,7 +12,7 @@ from typing import Any
 from huggingface_hub import errors
 
 from livekit.agents import llm
-from livekit.agents.inference_runner import _InferenceRunner
+from livekit.agents.inference_runner import LocalInferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
 from livekit.agents.utils import hw
@@ -42,7 +42,7 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     return local_path
 
 
-class _EUORunnerBase(_InferenceRunner):
+class _EUORunnerBase(LocalInferenceRunner):
     def __init__(self, model_type: EOUModelType):
         super().__init__()
         self._model_revision = MODEL_REVISIONS[model_type]
