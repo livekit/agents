@@ -6,9 +6,10 @@ import contextvars
 import functools
 import json
 import os
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -42,18 +43,30 @@ Run_T = TypeVar("Run_T")
 class ChatMessageEvent:
     item: llm.ChatMessage
     type: Literal["message"] = "message"
+    created_at: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        self.created_at = self.item.created_at
 
 
 @dataclass
 class FunctionCallEvent:
     item: llm.FunctionCall
     type: Literal["function_call"] = "function_call"
+    created_at: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        self.created_at = self.item.created_at
 
 
 @dataclass
 class FunctionCallOutputEvent:
     item: llm.FunctionCallOutput
     type: Literal["function_call_output"] = "function_call_output"
+    created_at: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        self.created_at = self.item.created_at
 
 
 @dataclass
@@ -61,6 +74,7 @@ class AgentHandoffEvent:
     old_agent: Agent | None
     new_agent: Agent
     type: Literal["agent_handoff"] = "agent_handoff"
+    created_at: float = field(default_factory=time.time)
 
 
 RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, AgentHandoffEvent]
@@ -134,18 +148,25 @@ class RunResult(Generic[Run_T]):
         return _await_impl().__await__()
 
     def _agent_handoff(self, *, old_agent: Agent | None, new_agent: Agent) -> None:
-        self._recorded_items.append(AgentHandoffEvent(old_agent=old_agent, new_agent=new_agent))
+        event = AgentHandoffEvent(old_agent=old_agent, new_agent=new_agent)
+        index = self._find_insertion_index(created_at=event.created_at)
+        self._recorded_items.insert(index, event)
 
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
             return
 
+        event: RunEvent | None = None
         if item.type == "message":
-            self._recorded_items.append(ChatMessageEvent(item=item))
+            event = ChatMessageEvent(item=item)
         elif item.type == "function_call":
-            self._recorded_items.append(FunctionCallEvent(item=item))
+            event = FunctionCallEvent(item=item)
         elif item.type == "function_call_output":
-            self._recorded_items.append(FunctionCallOutputEvent(item=item))
+            event = FunctionCallOutputEvent(item=item)
+
+        if event is not None:
+            index = self._find_insertion_index(created_at=event.created_at)
+            self._recorded_items.insert(index, event)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
         self._handles.add(handle)
@@ -189,6 +210,19 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_result(None)
             else:
                 self._done_fut.set_exception(final_output)
+
+    def _find_insertion_index(self, *, created_at: float) -> int:
+        """
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at <=` the given timestamp.
+        """
+        for i in reversed(range(len(self._recorded_items))):
+            if self._recorded_items[i].created_at <= created_at:
+                return i + 1
+
+        return 0
 
 
 class RunAssert:
