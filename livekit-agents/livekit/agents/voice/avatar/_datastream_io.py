@@ -106,7 +106,7 @@ class DataStreamAudioOutput(AudioOutput):
                     identity=self._destination_identity,
                     kind=self._wait_remote_track,
                 )
-            logger.debug("remote participant ready", extra={"identity": self._destination_identity})
+            logger.debug("remote participant ready TEST", extra={"identity": self._destination_identity})
 
             self._started = True
 
