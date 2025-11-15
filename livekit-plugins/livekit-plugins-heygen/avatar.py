@@ -17,6 +17,7 @@ from livekit.agents import (
     APIConnectOptions,
     NotGivenOr,
     get_job_context,
+    utils,
 )
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -42,12 +43,7 @@ class AvatarSession:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._avatar_id = avatar_id or os.getenv("HEYGEN_AVATAR_ID")
-        self._api_key = api_key or os.getenv("HEYGEN_API_KEY")
-        self._api_url = api_url
-        if not self._avatar_id:
-            raise HeyGenException("avatar_id or HEYGEN_AVATAR_ID must be set")
-        if not self._api_key:
-            raise HeyGenException("api_key or HEYGEN_API_KEY must be set")
+        self._api = HeyGenAPI(api_key=api_key, api_url=api_url, conn_options=conn_options)
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
@@ -96,29 +92,20 @@ class AvatarSession:
 
         logger.debug("starting avatar session")
 
-        heygen_quality = os.getenv("HEYGEN_STREAM_QUALITY", "high").strip().lower()
-        heygen_encoding = os.getenv("HEYGEN_VIDEO_ENCODING", "H264").strip().upper()
-
-        logger.info(
-            f"Requesting HeyGen session with quality={heygen_quality}, encoding={heygen_encoding}"
-        )
-        self._api = HeyGenAPI(api_key=self._api_key)
-
-        session_data = await self._api.create_streaming_session(
+        session_config_data = await self._api.create_streaming_session(
             livekit_url=livekit_url,
             livekit_token=livekit_token,
             room=self._room,
             avatar_id=self._avatar_id,
-            quality=heygen_quality,
-            video_encoding=heygen_encoding,
         )
-        self._session_id = session_data["data"].get("session_id")
-        self._realtime_url = session_data["data"].get("realtime_endpoint")
-
+        self._session_id = session_config_data["data"]["session_id"]
+        self._session_token = session_config_data["data"]["session_token"]
         logger.info(f"HeyGen session created: {self._session_id}")
 
-        data = await self._api.start_streaming_session(self._session_id)
-
+        session_start_data = await self._api.start_streaming_session(
+            self._session_id, self._session_token
+        )
+        self._ws_url = session_start_data["data"]["ws_url"]
         logger.info("HeyGen streaming session started")
 
         self._agent_audio_track = list(self._room.local_participant.track_publications.values())[
@@ -143,34 +130,32 @@ class AvatarSession:
         if self._agent_audio_track is not None:
             agent_audio_stream = rtc.AudioStream.from_track(track=self._agent_audio_track)
 
-        ws_conn = await self._api._ensure_http_session().ws_connect(url=self._realtime_url)
+        ws_conn = await self._api._ensure_http_session().ws_connect(url=self._ws_url)
 
-        # TODO check input rate dynamically
+        # TODO check input rate dynamically?
         self._audio_resampler = rtc.AudioResampler(
             input_rate=48000, output_rate=24000, num_channels=1
         )
 
-        async def _send_task() -> None:
-            event_id = str(uuid.uuid4())
+        def ws_send(msg: dict) -> None:
+            asyncio.create_task(ws_conn.send_json(data=msg))
 
+        async def _send_task() -> None:
             @self._agent_session.on("agent_state_changed")
             def on_agent_state_changed(ev):
-                nonlocal event_id
                 if ev.old_state == "speaking" and ev.new_state == "listening":
-                    msg = {"type": "agent.speak_end", "event_id": event_id}
-                    asyncio.create_task(ws_conn.send_json(data=msg))
-                    event_id = str(uuid.uuid4())
+                    ws_send({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
+                    ws_send({"type": "agent.start_listening", "event_id": str(uuid.uuid4())})
+                if ev.new_state == "idle":
+                    ws_send({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
             @self._agent_session.on("conversation_item_added")
             def on_conversation_item_added(ev):
-                nonlocal event_id
                 if (
                     self._agent_session.current_speech is not None
                     and self._agent_session.current_speech.interrupted
                 ):
-                    msg = {"type": "agent.interrupt", "event_id": event_id}
-                    asyncio.create_task(ws_conn.send_json(data=msg))
-                    event_id = str(uuid.uuid4())
+                    ws_send({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
 
             async for audio_event in agent_audio_stream:
                 audio_frame = audio_event.frame
@@ -184,7 +169,7 @@ class AvatarSession:
 
                     msg = {
                         "type": "agent.speak",
-                        "event_id": event_id,
+                        "event_id": str(uuid.uuid4()),
                         "audio": encoded_audio,
                     }
 
@@ -208,5 +193,10 @@ class AvatarSession:
             asyncio.create_task(_send_task(), name="_send_task"),
             asyncio.create_task(_recv_task(), name="_recv_task"),
         ]
-
-        asyncio.gather(*tasks)
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+            await ws_conn.close()
