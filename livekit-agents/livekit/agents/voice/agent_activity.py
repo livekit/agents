@@ -1774,9 +1774,12 @@ class AgentActivity(RecognitionHooks):
             forwarded_text = text_out.text if text_out else ""
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
+                logger.info("clearing audio buffer", extra={"speech_id": speech_handle.id})
                 audio_output.clear_buffer()
 
+                logger.info("waiting for audio playout", extra={"speech_id": speech_handle.id})
                 playback_ev = await audio_output.wait_for_playout()
+                logger.info("audio playout finished", extra={"speech_id": speech_handle.id})
                 if audio_out is not None and audio_out.first_frame_fut.done():
                     # playback_ev is valid only if the first frame was already played
                     if playback_ev.synchronized_transcript is not None:

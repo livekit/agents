@@ -202,6 +202,13 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
 
         self.__playback_finished_count += 1
         self.__playback_finished_event.set()
+        logger.info(
+            "playback finished event set",
+            extra={
+                "playback_finished_count": self.__playback_finished_count,
+                "playback_segments_count": self.__playback_segments_count,
+            },
+        )
 
         ev = PlaybackFinishedEvent(
             playback_position=playback_position,
