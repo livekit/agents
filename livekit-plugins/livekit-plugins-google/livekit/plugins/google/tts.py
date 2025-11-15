@@ -98,7 +98,7 @@ class TTS(tts.TTS):
             volume_gain_db (float, optional): Volume gain in decibels. Default is 0.0. In the range [-96.0, 16.0]. Strongly recommended not to exceed +10 (dB).
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
-            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
+            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
