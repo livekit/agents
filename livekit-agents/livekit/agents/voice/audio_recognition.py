@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import time
+from collections import deque
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -14,6 +15,7 @@ from livekit import rtc
 
 from .. import llm, stt, utils, vad
 from ..log import logger
+from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -116,6 +118,13 @@ class AudioRecognition:
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
+        # used for barge-in detection
+        self._input_started_at: NotGivenOr[float] = NOT_GIVEN
+        self._ignore_until: NotGivenOr[float] = NOT_GIVEN
+        self._transcript_buffer: deque[SpeechEvent] = deque()
+        self._barge_in_enabled: bool = False
+        self._agent_speaking: bool = False
+
         self._user_turn_span: trace.Span | None = None
         self._closing = asyncio.Event()
 
@@ -134,11 +143,57 @@ class AudioRecognition:
         self.update_stt(self._stt)
         self.update_vad(self._vad)
 
+    # placeholder for development, will be properly parameterized later
+    def enable_barge_in(self) -> None:
+        self._barge_in_enabled = True
+
+    def start_barge_in_monitoring(self) -> None:
+        """Start monitoring for barge-in."""
+        if self._barge_in_enabled is not True:
+            return
+        self._agent_speaking = True
+
+    def end_barge_in_monitoring(self, ignore_until: float) -> None:
+        """End barge-in monitoring and ignore transcript until the given timestamp."""
+        if self._barge_in_enabled is not True:
+            return
+        self._ignore_until = ignore_until
+        self._agent_speaking = False
+
+    def should_hold_event(self, ev: stt.SpeechEvent) -> bool:
+        """Test if the event should be held until the ignore_until timestamp."""
+        if not self._barge_in_enabled:
+            return False
+        if self._agent_speaking:
+            return True
+        if not is_given(self._ignore_until):
+            return False
+        # sentinel events are always held until
+        # we have something concrete to release them
+        if not ev.alternatives:
+            return True
+        if (
+            # most vendors don't set them properly, in which case we just assume
+            # it is a valid event after the ignore_until timestamp
+            is_given(self._input_started_at)
+            and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
+            and ev.alternatives[0].start_time + ev.alternatives[0].end_time
+            < self._ignore_until - self._input_started_at
+        ):
+            return True
+
+        # ignore_until expired or we don't have the right timestamp
+        self._ignore_until = NOT_GIVEN
+        return False
+
     def stop(self) -> None:
         self.update_stt(None)
         self.update_vad(None)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if not is_given(self._input_started_at):
+            self._input_started_at = time.time()
+
         self._sample_rate = frame.sample_rate
         if self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
@@ -170,6 +225,9 @@ class AudioRecognition:
             self._stt_atask = asyncio.create_task(
                 self._stt_task(stt, self._stt_ch, self._stt_atask)
             )
+            self._transcript_buffer.clear()
+            self._ignore_until = NOT_GIVEN
+            self._input_started_at = NOT_GIVEN
         elif self._stt_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
@@ -297,6 +355,39 @@ class AudioRecognition:
             # ignore transcript for manual turn detection when user turn already committed
             # and EOU task is done or this is an interim transcript
             return
+
+        # handle barge-in detection
+        # - hold the event until the ignore_until expires
+        # - release only relevant events
+        # - allow RECOGNITION_USAGE to pass through immediately
+        if ev.type != stt.SpeechEventType.RECOGNITION_USAGE:
+            if self.should_hold_event(ev):
+                logger.debug(
+                    "holding event until ignore_until expires",
+                    extra={
+                        "event": ev.type,
+                        "ignore_until": self._ignore_until,
+                    },
+                )
+                self._transcript_buffer.append(ev)
+                return
+            elif self._transcript_buffer:
+                # emit the preceding sentinel event immediately before this event
+                # assuming *only one* sentinel event could precede the current event
+                # ignore if the previous event is not a sentinel event
+                logger.debug(
+                    "emitting held events",
+                    extra={
+                        "event": ev.type,
+                        "previous_event": self._transcript_buffer[-1].type,
+                    },
+                )
+                prev_event = self._transcript_buffer.pop()
+                self._transcript_buffer.clear()
+                if prev_event.type in {
+                    stt.SpeechEventType.START_OF_SPEECH,
+                }:
+                    await self._on_stt_event(prev_event)
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
