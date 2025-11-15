@@ -60,6 +60,7 @@ class _ArcanaOptions:
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
 
 
 @dataclass
@@ -127,6 +128,7 @@ class TTS(tts.TTS):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 lang=lang,
+                sample_rate=sample_rate,
             )
         elif model == "mistv2":
             self._opts.mistv2_options = _Mistv2Options(
@@ -201,6 +203,8 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["max_tokens"] = arcana_opts.max_tokens
             if is_given(arcana_opts.lang):
                 payload["lang"] = arcana_opts.lang
+            if is_given(arcana_opts.sample_rate):
+                payload["samplingRate"] = arcana_opts.sample_rate
             format = "audio/wav"
         elif self._opts.model == "mistv2":
             mistv2_opts = self._opts.mistv2_options

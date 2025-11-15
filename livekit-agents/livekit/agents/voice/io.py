@@ -227,6 +227,10 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
 
         return self.__last_playback_ev
 
+    def _reset_playback_count(self) -> None:
+        self.__playback_segments_count = 0
+        self.__playback_finished_count = 0
+
     @property
     def sample_rate(self) -> int | None:
         """The sample rate required by the audio sink, if None, any sample rate is accepted"""
