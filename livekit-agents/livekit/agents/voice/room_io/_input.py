@@ -14,7 +14,7 @@ from ...log import logger
 from ...utils import aio, log_exceptions
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
-from .types import NoiseCancellationSelector
+from .types import NoiseCancellationParams, NoiseCancellationSelector
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
@@ -229,7 +229,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     @override
     def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
         noise_cancellation = (
-            self._noise_cancellation(participant, track)
+            self._noise_cancellation(NoiseCancellationParams(participant, track))
             if callable(self._noise_cancellation)
             else self._noise_cancellation
         )

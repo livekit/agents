@@ -37,8 +37,15 @@ TextInputCallback = Callable[
     ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
 ]
 
+
+@dataclass
+class NoiseCancellationParams:
+    participant: rtc.Participant
+    track: rtc.Track
+
+
 NoiseCancellationSelector = Callable[
-    [rtc.Participant, rtc.Track], Optional[rtc.NoiseCancellationOptions]
+    [NoiseCancellationParams], Optional[rtc.NoiseCancellationOptions]
 ]
 
 
