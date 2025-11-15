@@ -1391,8 +1391,9 @@ class AgentActivity(RecognitionHooks):
         if preemptive := self._preemptive_generation:
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
+
             if (
-                preemptive.info.new_transcript == user_message.text_content
+                preemptive.info.new_transcript.lower() == user_message.text_content.lower()
                 and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
