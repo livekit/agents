@@ -379,7 +379,7 @@ class SynthesizeStream(ABC):
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
     async def _main_task(self) -> None:
-        self._tts_request_span = current_span = tracer.get_current_span()
+        self._tts_request_span = current_span = trace.get_current_span()
         current_span.set_attributes(
             {
                 trace_types.ATTR_TTS_STREAMING: True,

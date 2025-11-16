@@ -184,7 +184,7 @@ class LLMStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        self._llm_request_span = tracer.get_current_span()
+        self._llm_request_span = trace.get_current_span()
         self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
         for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
             self._llm_request_span.add_event(name, attributes)
