@@ -166,7 +166,7 @@ class _EUORunnerBase(_InferenceRunner):
 
     @classmethod
     def _download_files(cls) -> None:
-        from transformers import AutoTokenizer  # type: ignore
+        from transformers import AutoTokenizer
 
         # ensure the tokenizer is downloaded
         AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())

@@ -8,8 +8,9 @@ import aiohttp
 from livekit.agents import Plugin, get_job_context, llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .base import MAX_HISTORY_TURNS, EOUModelBase, EOUModelType, EOUPlugin, _EUORunnerBase
+from .base import MAX_HISTORY_TURNS, EOUModelBase, EOUPlugin, _EUORunnerBase
 from .log import logger
+from .models import EOUModelType
 
 REMOTE_INFERENCE_TIMEOUT = 2
 
