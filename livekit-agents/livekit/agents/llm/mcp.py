@@ -7,13 +7,13 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
-    from mcp import ClientSession, stdio_client
+    from mcp import ClientSession, McpError, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
@@ -31,13 +31,19 @@ MCPTool = RawFunctionTool
 
 
 class MCPServer(ABC):
-    def __init__(self, *, client_session_timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        client_session_timeout_seconds: float,
+        handle_mcp_error: Callable[[McpError], ToolError] | None = None,
+    ) -> None:
         self._client: ClientSession | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
+        self._handle_mcp_error = handle_mcp_error
 
     @property
     def initialized(self) -> bool:
@@ -97,7 +103,13 @@ class MCPServer(ABC):
                     "Please check that the MCPServer is still running."
                 )
 
-            tool_result = await self._client.call_tool(name, raw_arguments)
+            try:
+                tool_result = await self._client.call_tool(name, raw_arguments)
+            except McpError as e:
+                if self._handle_mcp_error:
+                    raise self._handle_mcp_error(e) from e
+                else:
+                    raise e
 
             if tool_result.isError:
                 error_str = "\n".join(str(part) for part in tool_result.content)
@@ -166,8 +178,12 @@ class MCPServerHTTP(MCPServer):
         timeout: float = 5,
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,
+        handle_mcp_error: Callable[[McpError], ToolError] | None = None,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds,
+            handle_mcp_error=handle_mcp_error,
+        )
         self.url = url
         self.headers = headers
         self._timeout = timeout
@@ -226,8 +242,12 @@ class MCPServerStdio(MCPServer):
         env: dict[str, str] | None = None,
         cwd: str | Path | None = None,
         client_session_timeout_seconds: float = 5,
+        handle_mcp_error: Callable[[McpError], ToolError] | None = None,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds,
+            handle_mcp_error=handle_mcp_error,
+        )
         self.command = command
         self.args = args
         self.env = env

@@ -23,6 +23,10 @@ from ..llm import (
     utils as llm_utils,
 )
 from ..llm.tool_context import (
+    FunctionTool,
+    RawFunctionTool,
+    get_function_info,
+    get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
 )
@@ -381,6 +385,16 @@ async def _execute_tools_task(
     from .agent import _set_activity_task_info
     from .events import RunContext
 
+    def _get_validation_error_handler(
+        tool: FunctionTool | RawFunctionTool,
+    ) -> Callable[[ValidationError], str] | None:
+        """Extract handle_validation_error from a tool."""
+        if is_function_tool(tool):
+            return get_function_info(tool).handle_validation_error
+        elif is_raw_function_tool(tool):
+            return get_raw_function_info(tool).handle_validation_error
+        return None
+
     def _tool_completed(out: ToolExecutionOutput) -> None:
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
@@ -441,7 +455,15 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                validation_error_handler = _get_validation_error_handler(function_tool)
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=e,
+                        handle_validation_error=validation_error_handler,
+                    )
+                )
                 continue
 
             if not tool_output.first_tool_started_fut.done():
@@ -514,7 +536,9 @@ async def _execute_tools_task(
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
-                    function_callable: Callable, fnc_call: llm.FunctionCall
+                    function_callable: Callable,
+                    fnc_call: llm.FunctionCall,
+                    validation_error_handler: Callable[[ValidationError], str] | None,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, fnc_call.name)
@@ -524,7 +548,12 @@ async def _execute_tools_task(
 
                     try:
                         val = await function_callable()
-                        output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+                        output = make_tool_output(
+                            fnc_call=fnc_call,
+                            output=val,
+                            exception=None,
+                            handle_validation_error=validation_error_handler,
+                        )
                     except BaseException as e:
                         if not isinstance(e, StopResponse):
                             logger.exception(
@@ -532,7 +561,12 @@ async def _execute_tools_task(
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},
                             )
 
-                        output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
+                        output = make_tool_output(
+                            fnc_call=fnc_call,
+                            output=None,
+                            exception=e,
+                            handle_validation_error=validation_error_handler,
+                        )
 
                     if fnc_call_out := output.fnc_call_out:
                         current_span.set_attribute(
@@ -545,7 +579,10 @@ async def _execute_tools_task(
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
-                task = asyncio.create_task(_traceable_fnc_tool(function_callable, fnc_call))
+                validation_error_handler = _get_validation_error_handler(function_tool)
+                task = asyncio.create_task(
+                    _traceable_fnc_tool(function_callable, fnc_call, validation_error_handler)
+                )
                 _set_activity_task_info(
                     task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
                 )
@@ -562,7 +599,15 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                validation_error_handler = _get_validation_error_handler(function_tool)
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=e,
+                        handle_validation_error=validation_error_handler,
+                    )
+                )
                 continue
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
@@ -619,7 +664,11 @@ class ToolExecutionOutput:
 
 
 def make_tool_output(
-    *, fnc_call: llm.FunctionCall, output: Any, exception: BaseException | None
+    *,
+    fnc_call: llm.FunctionCall,
+    output: Any,
+    exception: BaseException | None,
+    handle_validation_error: Callable[[ValidationError], str] | None = None,
 ) -> ToolExecutionOutput:
     from .agent import Agent
 
@@ -646,6 +695,23 @@ def make_tool_output(
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
             fnc_call_out=None,
+            agent_task=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    if isinstance(exception, ValidationError):
+        from ..llm.tool_context import handle_validation_error as _handle_validation_error
+
+        error_message = _handle_validation_error(exception, handler=handle_validation_error)
+        return ToolExecutionOutput(
+            fnc_call=fnc_call.model_copy(),
+            fnc_call_out=llm.FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output=error_message,
+                is_error=True,
+            ),
             agent_task=None,
             raw_output=output,
             raw_exception=exception,
