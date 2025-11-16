@@ -174,7 +174,14 @@ class ChunkedStream(ABC):
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
-        self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
+
+        async def _traceable_main_task() -> None:
+            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
+                await self._main_task()
+
+        self._synthesize_task = asyncio.create_task(
+            _traceable_main_task(), name="TTS._synthesize_task"
+        )
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
         self._tts_request_span: trace.Span | None = None
@@ -241,55 +248,52 @@ class ChunkedStream(ABC):
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
     async def _main_task(self) -> None:
-        with tracer.start_as_current_span(
-            self._tts_request_span_name, end_on_exit=False
-        ) as current_span:
-            self._tts_request_span = current_span
-            current_span.set_attributes(
-                {
-                    trace_types.ATTR_TTS_STREAMING: False,
-                    trace_types.ATTR_TTS_LABEL: self._tts.label,
-                }
-            )
+        self._tts_request_span = current_span = trace.get_current_span()
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_TTS_STREAMING: False,
+                trace_types.ATTR_TTS_LABEL: self._tts.label,
+            }
+        )
 
-            for i in range(self._conn_options.max_retry + 1):
-                output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
-                try:
-                    with tracer.start_as_current_span("tts_request_run") as attempt_span:
-                        attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                        try:
-                            await self._run(output_emitter)
-                        except Exception as e:
-                            telemetry_utils.record_exception(attempt_span, e)
-                            raise
-
-                    output_emitter.end_input()
-                    # wait for all audio frames to be pushed & propagate errors
-                    await output_emitter.join()
-
-                    if self._input_text.strip() and output_emitter.pushed_duration() <= 0.0:
-                        raise APIError(f"no audio frames were pushed for text: {self._input_text}")
-
-                    current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
-                    return
-                except APIError as e:
-                    retry_interval = self._conn_options._interval_for_retry(i)
-                    if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
-                        self._emit_error(e, recoverable=False)
+        for i in range(self._conn_options.max_retry + 1):
+            output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+            try:
+                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        await self._run(output_emitter)
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
                         raise
-                    else:
-                        self._emit_error(e, recoverable=True)
-                        logger.warning(
-                            f"failed to synthesize speech, retrying in {retry_interval}s",
-                            exc_info=e,
-                            extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                        )
 
-                    await asyncio.sleep(retry_interval)
-                    # Reset the flag when retrying
-                    self._current_attempt_has_error = False
-                finally:
-                    await output_emitter.aclose()
+                output_emitter.end_input()
+                # wait for all audio frames to be pushed & propagate errors
+                await output_emitter.join()
+
+                if self._input_text.strip() and output_emitter.pushed_duration() <= 0.0:
+                    raise APIError(f"no audio frames were pushed for text: {self._input_text}")
+
+                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
+                return
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f"failed to synthesize speech, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                    )
+
+                await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+            finally:
+                await output_emitter.aclose()
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
@@ -353,7 +357,11 @@ class SynthesizeStream(ABC):
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, self._monitor_aiter = self._tee
 
-        self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
+        async def _traceable_main_task() -> None:
+            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
+                await self._main_task()
+
+        self._task = asyncio.create_task(_traceable_main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task[None] | None = None  # started on first push
         self._current_attempt_has_error = False
@@ -371,64 +379,59 @@ class SynthesizeStream(ABC):
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
     async def _main_task(self) -> None:
-        with tracer.start_as_current_span(
-            self._tts_request_span_name, end_on_exit=False
-        ) as current_span:
-            self._tts_request_span = current_span
-            current_span.set_attributes(
-                {
-                    trace_types.ATTR_TTS_STREAMING: True,
-                    trace_types.ATTR_TTS_LABEL: self._tts.label,
-                }
-            )
+        self._tts_request_span = current_span = tracer.get_current_span()
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_TTS_STREAMING: True,
+                trace_types.ATTR_TTS_LABEL: self._tts.label,
+            }
+        )
 
-            for i in range(self._conn_options.max_retry + 1):
-                output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
-                try:
-                    with tracer.start_as_current_span("tts_request_run") as attempt_span:
-                        attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                        try:
-                            await self._run(output_emitter)
-                        except Exception as e:
-                            telemetry_utils.record_exception(attempt_span, e)
-                            raise
-
-                    output_emitter.end_input()
-                    # wait for all audio frames to be pushed & propagate errors
-                    await output_emitter.join()
-
-                    if self._pushed_text.strip():
-                        if output_emitter.pushed_duration(idx=-1) <= 0.0:
-                            raise APIError(
-                                f"no audio frames were pushed for text: {self._pushed_text}"
-                            )
-
-                        if self._num_segments != output_emitter.num_segments:
-                            raise APIError(
-                                f"number of segments mismatch: expected {self._num_segments}, "
-                                f"but got {output_emitter.num_segments}"
-                            )
-
-                    current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
-                    return
-                except APIError as e:
-                    retry_interval = self._conn_options._interval_for_retry(i)
-                    if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
-                        self._emit_error(e, recoverable=False)
+        for i in range(self._conn_options.max_retry + 1):
+            output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+            try:
+                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        await self._run(output_emitter)
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
                         raise
-                    else:
-                        self._emit_error(e, recoverable=True)
-                        logger.warning(
-                            f"failed to synthesize speech, retrying in {retry_interval}s",
-                            exc_info=e,
-                            extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+
+                output_emitter.end_input()
+                # wait for all audio frames to be pushed & propagate errors
+                await output_emitter.join()
+
+                if self._pushed_text.strip():
+                    if output_emitter.pushed_duration(idx=-1) <= 0.0:
+                        raise APIError(f"no audio frames were pushed for text: {self._pushed_text}")
+
+                    if self._num_segments != output_emitter.num_segments:
+                        raise APIError(
+                            f"number of segments mismatch: expected {self._num_segments}, "
+                            f"but got {output_emitter.num_segments}"
                         )
 
-                    await asyncio.sleep(retry_interval)
-                    # Reset the flag when retrying
-                    self._current_attempt_has_error = False
-                finally:
-                    await output_emitter.aclose()
+                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
+                return
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f"failed to synthesize speech, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                    )
+
+                await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+            finally:
+                await output_emitter.aclose()
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True

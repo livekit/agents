@@ -171,7 +171,11 @@ class LLMStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
 
-        self._task = asyncio.create_task(self._main_task())
+        async def _traceable_main_task() -> None:
+            with tracer.start_as_current_span(self._llm_request_span_name, end_on_exit=False):
+                await self._main_task()
+
+        self._task = asyncio.create_task(_traceable_main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
         self._llm_request_span: trace.Span | None = None
@@ -180,57 +184,52 @@ class LLMStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        with tracer.start_as_current_span(
-            self._llm_request_span_name, end_on_exit=False
-        ) as current_span:
-            self._llm_request_span = current_span
-            self._llm_request_span.set_attribute(
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model
-            )
-            for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
-                self._llm_request_span.add_event(name, attributes)
+        self._llm_request_span = tracer.get_current_span()
+        self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
+        for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
+            self._llm_request_span.add_event(name, attributes)
 
-            for i in range(self._conn_options.max_retry + 1):
-                try:
-                    with tracer.start_as_current_span("llm_request_run") as attempt_span:
-                        attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                        try:
-                            return await self._run()
-                        except Exception as e:
-                            telemetry_utils.record_exception(attempt_span, e)
-                            raise
-                except APIError as e:
-                    retry_interval = self._conn_options._interval_for_retry(i)
-
-                    if self._conn_options.max_retry == 0 or not e.retryable:
-                        self._emit_error(e, recoverable=False)
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                with tracer.start_as_current_span("llm_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        return await self._run()
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
                         raise
-                    elif i == self._conn_options.max_retry:
-                        self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(
-                            f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
-                        ) from e
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
 
-                    else:
-                        self._emit_error(e, recoverable=True)
-                        logger.warning(
-                            f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
-                            exc_info=e,
-                            extra={
-                                "llm": self._llm._label,
-                                "attempt": i + 1,
-                            },
-                        )
-
-                    if retry_interval > 0:
-                        await asyncio.sleep(retry_interval)
-
-                    # reset the flag when retrying
-                    self._current_attempt_has_error = False
-
-                except Exception as e:
+                if self._conn_options.max_retry == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
+                elif i == self._conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
+                    ) from e
+
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f"failed to generate LLM completion, retrying in {retry_interval}s",  # noqa: E501
+                        exc_info=e,
+                        extra={
+                            "llm": self._llm._label,
+                            "attempt": i + 1,
+                        },
+                    )
+
+                if retry_interval > 0:
+                    await asyncio.sleep(retry_interval)
+
+                # reset the flag when retrying
+                self._current_attempt_has_error = False
+
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
