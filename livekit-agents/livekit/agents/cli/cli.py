@@ -239,8 +239,8 @@ def run_app(
         setup_logging(log_level, True, False)
 
         for plugin in Plugin.registered_plugins:
-            logger.info(f"Downloading files for {plugin}")
+            logger.info(f"Downloading files for {plugin.package}")
             plugin.download_files()
-            logger.info(f"Finished downloading files for {plugin}")
+            logger.info(f"Finished downloading files for {plugin.package}")
 
     cli()
