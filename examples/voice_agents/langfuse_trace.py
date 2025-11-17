@@ -8,7 +8,16 @@ from opentelemetry.util.types import AttributeValue
 
 from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter
 from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunContext, cli, metrics, inference
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    metrics,
+    inference,
+)
 from livekit.agents.llm import function_tool
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter, StreamAdapter
