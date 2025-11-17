@@ -521,9 +521,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 job_ctx = get_job_context()
                 if not is_given(record):
                     record = job_ctx.job.enable_recording
+
                 self._enable_recording = record
+
                 if self._enable_recording:
                     job_ctx.init_recording()
+
             except RuntimeError:
                 # JobContext is not available in evals
                 pass
@@ -601,14 +604,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if self._enable_recording:
-                    if job_ctx._primary_agent_session is None:
-                        job_ctx._primary_agent_session = self
-                    else:
-                        raise RuntimeError(
-                            "Only one `AgentSession` can be the primary at a time. "
-                            "If you want to ignore primary designation, use session.start(record=False)."
-                        )
+                if job_ctx._primary_agent_session is None:
+                    job_ctx._primary_agent_session = self
+                elif self._enable_recording:
+                    raise RuntimeError(
+                        "Only one `AgentSession` can be the primary at a time. "
+                        "If you want to ignore primary designation, use session.start(record=False)."
+                    )
 
                 if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(self)
