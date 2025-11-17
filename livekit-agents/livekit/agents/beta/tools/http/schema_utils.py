@@ -141,4 +141,3 @@ def sanitize_arguments(raw_arguments: dict | None, schema: dict[str, Any]) -> di
         raise ToolError(f"Missing required parameters: {', '.join(missing)}.")
 
     return sanitized
-

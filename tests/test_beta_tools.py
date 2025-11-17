@@ -129,9 +129,7 @@ async def test_http_methods(method: str):
     mock_session = MockSession(response=mock_response)
     mock_context = create_mock_context()
 
-    with patch(
-        "livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session
-    ):
+    with patch("livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session):
         result = await tool({}, mock_context)
 
     assert result == "success"
@@ -141,16 +139,12 @@ async def test_http_methods(method: str):
 
 async def test_http_error_handling():
     mock_context = create_mock_context()
-    tool = create_http_tool(
-        HTTPToolConfig(name="default_tool", url="https://api.example.com")
-    )
+    tool = create_http_tool(HTTPToolConfig(name="default_tool", url="https://api.example.com"))
 
     mock_response = MockResponse(status=404, text="Not found")
     mock_session = MockSession(response=mock_response)
 
-    with patch(
-        "livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session
-    ):
+    with patch("livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session):
         with pytest.raises(ToolError, match="HTTP 404"):
             await tool({}, mock_context)
 
@@ -179,17 +173,13 @@ async def test_url_templating():
         )
     )
 
-    with patch(
-        "livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session
-    ):
+    with patch("livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session):
         await tool(
             {"user_id": "123", "post_id": "456", "title": "Test", "content": "Content"},
             mock_context,
         )
 
-    # Verify URL was templated correctly
     assert mock_session.request_kwargs["url"] == "https://api.example.com/users/123/posts/456"
-    # Verify only body params were sent in JSON
     assert mock_session.request_kwargs["json"] == {"title": "Test", "content": "Content"}
 
 
@@ -214,9 +204,7 @@ async def test_argument_sanitization_and_validation():
         )
     )
 
-    with patch(
-        "livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session
-    ):
+    with patch("livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session):
         await tool({"id": "123", "title": "Task", "extra": "ignored"}, mock_context)
 
     assert mock_session.request_kwargs["json"] == {"id": "123", "title": "Task"}
@@ -250,9 +238,7 @@ async def test_params_dataclass_support():
         )
     )
 
-    with patch(
-        "livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session
-    ):
+    with patch("livekit.agents.beta.tools.http.send_http.http_session", return_value=mock_session):
         await tool({"id": "42", "title": "Test", "status": "open", "ignored": "yes"}, mock_context)
 
     assert mock_session.request_kwargs["url"] == "https://api.example.com/tasks/42"

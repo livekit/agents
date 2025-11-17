@@ -19,4 +19,3 @@ async def announce_execution(tool_name: str, message: str, session: AgentSession
             "failed to announce execution for tool",
             extra={"tool_name": tool_name, "error": str(e)},
         )
-

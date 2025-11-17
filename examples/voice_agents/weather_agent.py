@@ -167,8 +167,12 @@ get_current_weather_tool = create_http_tool(
         method="GET",
         timeout_ms=10000,
         params=[
-            HTTPToolParam(name="latitude", description="Latitude coordinate", type="number", required=True),
-            HTTPToolParam(name="longitude", description="Longitude coordinate", type="number", required=True),
+            HTTPToolParam(
+                name="latitude", description="Latitude coordinate", type="number", required=True
+            ),
+            HTTPToolParam(
+                name="longitude", description="Longitude coordinate", type="number", required=True
+            ),
             HTTPToolParam(name="current", description="Variables to fetch", required=False),
             HTTPToolParam(name="timezone", description="Timezone setting", required=False),
             HTTPToolParam(
@@ -240,11 +244,14 @@ class WeatherAgent(Agent):
             "and timezone='auto'."
         )
 
-        super().__init__(instructions=instructions, tools=[
-            search_location_tool,
-            get_current_weather_tool,
-            get_weather_forecast_tool,
-        ])
+        super().__init__(
+            instructions=instructions,
+            tools=[
+                search_location_tool,
+                get_current_weather_tool,
+                get_weather_forecast_tool,
+            ],
+        )
 
     async def on_enter(self):
         await self.session.generate_reply(

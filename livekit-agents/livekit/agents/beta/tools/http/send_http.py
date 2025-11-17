@@ -228,7 +228,11 @@ def create_http_tool(config: HTTPToolConfig) -> FunctionTool:
     if config.params is not None:
         parameters_schema = schema_from_params(config.params)
     else:
-        parameters_schema = config.json_schema or {"type": "object", "properties": {}, "required": []}
+        parameters_schema = config.json_schema or {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        }
 
     if not isinstance(parameters_schema, dict) or "type" not in parameters_schema:
         logger.error(

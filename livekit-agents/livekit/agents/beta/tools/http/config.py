@@ -89,4 +89,3 @@ class HTTPToolConfig:
     params: list[HTTPToolParam] | None = None
     execution_message: str | None = None
     output_normalizer: Callable[[HTTPResponse], str | None] | None = None
-
