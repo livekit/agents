@@ -25,9 +25,7 @@ class StreamAdapter(STT):
                 interim_results=False,
                 diarization=False,  # diarization requires streaming STT
             )
-        super().__init__(
-            capabilities=capabilities
-        )
+        super().__init__(capabilities=capabilities)
         self._vad = vad
         self._stt = stt
         self._force_stream = force_stream
@@ -74,7 +72,7 @@ class StreamAdapter(STT):
             wrapped_stt=self._stt,
             language=language,
             conn_options=conn_options,
-            force_stream=self._force_stream
+            force_stream=self._force_stream,
         )
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
@@ -93,7 +91,7 @@ class StreamAdapterWrapper(RecognizeStream):
         wrapped_stt: STT,
         language: NotGivenOr[str],
         conn_options: APIConnectOptions,
-        force_stream: bool = False
+        force_stream: bool = False,
     ) -> None:
         super().__init__(stt=stt, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._vad = vad
@@ -106,7 +104,6 @@ class StreamAdapterWrapper(RecognizeStream):
         pass  # do nothing
 
     async def _run(self) -> None:
-
         # we do expect stt providers to honestly tell us
         # weather they are capable of streaming
         if self._wrapped_stt.capabilities.streaming and self._force_stream:
@@ -137,11 +134,7 @@ class StreamAdapterWrapper(RecognizeStream):
             async for event in vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
                     start_of_speech_received.set()
-                    self._event_ch.send_nowait(
-                        SpeechEvent(
-                            type=SpeechEventType.START_OF_SPEECH
-                        )
-                    )
+                    self._event_ch.send_nowait(SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
                 elif event.type == VADEventType.END_OF_SPEECH:
                     self._event_ch.send_nowait(
                         SpeechEvent(
@@ -158,8 +151,10 @@ class StreamAdapterWrapper(RecognizeStream):
                     continue
 
                 # we let vad handle these events
-                if (event.type == SpeechEventType.START_OF_SPEECH
-                        or event.type == SpeechEventType.END_OF_SPEECH):
+                if (
+                    event.type == SpeechEventType.START_OF_SPEECH
+                    or event.type == SpeechEventType.END_OF_SPEECH
+                ):
                     continue
 
                 if event.type == SpeechEventType.FINAL_TRANSCRIPT and status:
@@ -168,9 +163,9 @@ class StreamAdapterWrapper(RecognizeStream):
                 self._event_ch.send_nowait(event)
 
         tasks = [
-            asyncio.create_task(_forward_input(), name='forward_input'),
-            asyncio.create_task(_handle_vad_stream(), name='handle_vad'),
-            asyncio.create_task(_handle_stt_stream(), name='handle_stt')
+            asyncio.create_task(_forward_input(), name="forward_input"),
+            asyncio.create_task(_handle_vad_stream(), name="handle_vad"),
+            asyncio.create_task(_handle_stt_stream(), name="handle_stt"),
         ]
         try:
             await asyncio.gather(*tasks)
