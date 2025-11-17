@@ -83,7 +83,8 @@ def to_chat_ctx(
             turn["role"] = "user"
 
     # Gemini requires the last message to end with user's turn before they can generate
-    if inject_dummy_user_message and current_role != "user":
+    # allow tool role since we update it to user in the previous step
+    if inject_dummy_user_message and current_role not in ("user", "tool"):
         turns.append({"role": "user", "parts": [{"text": "."}]})
 
     return turns, GoogleFormatData(system_messages=system_messages)

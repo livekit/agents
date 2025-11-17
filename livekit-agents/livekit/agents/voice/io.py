@@ -85,11 +85,11 @@ class AudioInput:
 
     def on_attached(self) -> None:
         if self.source:
-            self.on_attached()
+            self.source.on_attached()
 
     def on_detached(self) -> None:
         if self.source:
-            self.on_detached()
+            self.source.on_detached()
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(label={self.label!r}, source={self.source!r})"
@@ -119,11 +119,11 @@ class VideoInput:
 
     def on_attached(self) -> None:
         if self.source:
-            self.on_attached()
+            self.source.on_attached()
 
     def on_detached(self) -> None:
         if self.source:
-            self.on_detached()
+            self.source.on_detached()
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(label={self.label!r}, source={self.source!r})"

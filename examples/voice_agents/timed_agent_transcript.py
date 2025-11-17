@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, AsyncIterable
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.io import TimedString
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -35,6 +35,10 @@ class MyAgent(Agent):
             yield chunk
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -51,4 +55,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

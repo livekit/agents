@@ -5,7 +5,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, JobContext, cli
 from livekit.plugins import elevenlabs
 
 logger = logging.getLogger("elevenlabs-tts-demo")
@@ -38,6 +38,10 @@ async def _playout_task(playout_q: asyncio.Queue, audio_source: rtc.AudioSource)
         await audio_source.capture_frame(frame)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(job: JobContext):
     # use another voice for this demo
     # you can get a list of the voices using 'await tts_11labs.list_voices()'
@@ -87,4 +91,4 @@ async def entrypoint(job: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

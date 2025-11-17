@@ -66,7 +66,7 @@ TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 TTSEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
-DEFAULT_SAMPLE_RATE: int = 16000
+DEFAULT_SAMPLE_RATE: int = 24000
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 

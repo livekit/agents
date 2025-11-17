@@ -57,7 +57,7 @@ class InferenceProcExecutor(SupervisedProc):
         return self._mp_ctx.Process(  # type: ignore
             target=proc_main,
             args=(proc_args,),
-            name="inference_proc",
+            name="agents_inference_process",
         )
 
     @log_exceptions(logger=logger)

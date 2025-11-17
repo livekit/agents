@@ -21,7 +21,6 @@ from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
-from ..telemetry.traces import _chat_ctx_to_otel_events
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -183,8 +182,6 @@ class LLMStream(ABC):
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
         self._llm_request_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._llm.model)
-        for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
-            self._llm_request_span.add_event(name, attributes)
 
         for i in range(self._conn_options.max_retry + 1):
             try:
