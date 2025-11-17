@@ -568,6 +568,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._http_server = http_server.HttpServer(
                 self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
             )
+            self._worker_load: float = 0.0
 
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
@@ -580,6 +581,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     {
                         "agent_name": self._agent_name,
                         "worker_type": agent.JobType.Name(self._server_type.value),
+                        "worker_load": self._worker_load,
                         "active_jobs": len(self.active_jobs),
                         "sdk_version": __version__,
                         "project_type": "python",
@@ -598,7 +600,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
-            self._worker_load: float = 0.0
 
             if not self._ws_url:
                 raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
@@ -669,6 +670,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._worker_load = await asyncio.get_event_loop().run_in_executor(
                         None, load_fnc
                     )
+
+                    telemetry.metrics._update_worker_load(self._worker_load)
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
