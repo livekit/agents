@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.util.types import AttributeValue
 
-from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter
-from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -15,10 +13,11 @@ from livekit.agents import (
     JobContext,
     RunContext,
     cli,
-    metrics,
     inference,
+    metrics,
 )
-from livekit.agents.llm import function_tool
+from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
+from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter, StreamAdapter
 from livekit.agents.voice import MetricsCollectedEvent
