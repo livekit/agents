@@ -9,12 +9,20 @@ This agent can:
 Uses free Open-Meteo API (no API key required)
 """
 
-import logging
 import json
+import logging
+
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunContext, cli, function_tool
-from livekit.agents.llm.tool_context import ToolError
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    function_tool,
+)
 from livekit.agents.beta.tools.http import (
     HTTPToolConfig,
     HTTPToolParam,
@@ -22,6 +30,7 @@ from livekit.agents.beta.tools.http import (
     create_http_tool,
     run_http_request,
 )
+from livekit.agents.llm.tool_context import ToolError
 from livekit.plugins import silero
 
 logger = logging.getLogger("weather-agent")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-
 from typing import Any
 
 import aiohttp
@@ -9,8 +8,8 @@ import aiohttp
 from .... import FunctionTool
 from ....llm.tool_context import ToolError, function_tool
 from ....log import logger
-from ....voice import RunContext
 from ....utils.http_context import http_session
+from ....voice import RunContext
 from .config import HTTPResponse, HTTPToolConfig, HTTPToolRequest
 from .execution_utils import announce_execution
 from .schema_utils import (
