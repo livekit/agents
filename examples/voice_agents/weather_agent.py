@@ -10,11 +10,18 @@ Uses free Open-Meteo API (no API key required)
 """
 
 import logging
-
+import json
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
-from livekit.agents.beta.tools.http import HTTPToolConfig, create_http_tool
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunContext, cli, function_tool
+from livekit.agents.llm.tool_context import ToolError
+from livekit.agents.beta.tools.http import (
+    HTTPToolConfig,
+    HTTPToolParam,
+    HTTPToolRequest,
+    create_http_tool,
+    run_http_request,
+)
 from livekit.plugins import silero
 
 logger = logging.getLogger("weather-agent")
@@ -24,8 +31,6 @@ load_dotenv()
 
 def _format_location_response(resp) -> str:
     """Parse geocoding response and return formatted location info."""
-    import json
-
     data = json.loads(resp.body)
 
     if not data.get("results"):
@@ -45,7 +50,6 @@ def _format_location_response(resp) -> str:
 
 def _format_current_weather(resp) -> str:
     """Parse current weather response into readable format."""
-    import json
 
     data = json.loads(resp.body)
     current = data.get("current", {})
@@ -97,7 +101,6 @@ def _format_current_weather(resp) -> str:
 
 def _format_forecast(resp) -> str:
     """Parse forecast response into readable format."""
-    import json
 
     data = json.loads(resp.body)
     daily = data.get("daily", {})
@@ -114,7 +117,8 @@ def _format_forecast(resp) -> str:
     return forecast_text
 
 
-# Create HTTP tools for weather APIs
+# Create HTTP tools for weather APIs. You can use any of the following configs. Config #2 is the simplest and quickest way to create a tool.
+# Config 1: full json_schema for maximum control
 search_location_tool = create_http_tool(
     HTTPToolConfig(
         name="search_location",
@@ -122,7 +126,7 @@ search_location_tool = create_http_tool(
         url="https://geocoding-api.open-meteo.com/v1/search",
         method="GET",
         timeout_ms=5000,
-        parameters={
+        json_schema={
             "type": "object",
             "required": ["name"],
             "properties": {
@@ -145,6 +149,7 @@ search_location_tool = create_http_tool(
 )
 
 
+# Config 2: params shorthand for quicker declarations
 get_current_weather_tool = create_http_tool(
     HTTPToolConfig(
         name="get_current_weather",
@@ -152,80 +157,63 @@ get_current_weather_tool = create_http_tool(
         url="https://api.open-meteo.com/v1/forecast",
         method="GET",
         timeout_ms=10000,
-        parameters={
-            "type": "object",
-            "required": ["latitude", "longitude"],
-            "properties": {
-                "latitude": {
-                    "type": "number",
-                    "description": "Latitude coordinate (e.g., 40.7128 for New York, 51.5074 for London)",
-                },
-                "longitude": {
-                    "type": "number",
-                    "description": "Longitude coordinate (e.g., -74.0060 for New York, -0.1278 for London)",
-                },
-                "current": {
-                    "type": "string",
-                    "description": "Current weather variables to fetch",
-                },
-                "timezone": {
-                    "type": "string",
-                    "description": "Timezone (use 'auto' to detect automatically)",
-                },
-                "temperature_unit": {
-                    "type": "string",
-                    "description": "Temperature unit: 'celsius' or 'fahrenheit'",
-                    "enum": ["celsius", "fahrenheit"],
-                },
-            },
-        },
+        params=[
+            HTTPToolParam(name="latitude", description="Latitude coordinate", type="number", required=True),
+            HTTPToolParam(name="longitude", description="Longitude coordinate", type="number", required=True),
+            HTTPToolParam(name="current", description="Variables to fetch", required=False),
+            HTTPToolParam(name="timezone", description="Timezone setting", required=False),
+            HTTPToolParam(
+                name="temperature_unit",
+                description="Temperature unit",
+                enum=["celsius", "fahrenheit"],
+            ),
+        ],
         output_normalizer=_format_current_weather,
     )
 )
 
 
-get_weather_forecast_tool = create_http_tool(
-    HTTPToolConfig(
-        name="get_weather_forecast",
-        description="Get a 7-day weather forecast for a location. Returns daily high/low temperatures, weather conditions, precipitation, and wind speed.",
-        url="https://api.open-meteo.com/v1/forecast",
-        method="GET",
-        timeout_ms=15000,
-        parameters={
-            "type": "object",
-            "required": ["latitude", "longitude"],
-            "properties": {
-                "latitude": {
-                    "type": "number",
-                    "description": "Latitude coordinate (e.g., 40.7128 for New York)",
-                },
-                "longitude": {
-                    "type": "number",
-                    "description": "Longitude coordinate (e.g., -74.0060 for New York)",
-                },
-                "daily": {
-                    "type": "string",
-                    "description": "Daily weather variables to fetch",
-                },
-                "timezone": {
-                    "type": "string",
-                    "description": "Timezone (use 'auto' to detect automatically)",
-                },
-                "temperature_unit": {
-                    "type": "string",
-                    "description": "Temperature unit: 'celsius' or 'fahrenheit'",
-                    "enum": ["celsius", "fahrenheit"],
-                },
-                "forecast_days": {
-                    "type": "number",
-                    "description": "Number of forecast days (1-16). Default is 7.",
-                },
-            },
-        },
-        execution_message="One moment, fetching the weather forecast for you.",
-        output_normalizer=_format_forecast,
-    )
+# Config 3: direct run_http_request example for custom logic
+forecast_request = HTTPToolRequest(
+    url_template="https://api.open-meteo.com/v1/forecast",
+    method="GET",
+    timeout_ms=15000,
 )
+
+
+@function_tool(
+    name="get_weather_forecast",
+    description="Get a 7-day weather forecast for a location. Returns daily high/low temperatures, weather conditions, precipitation, and wind speed.",
+)
+async def get_weather_forecast_tool(
+    context: RunContext,
+    latitude: float,
+    longitude: float,
+    daily: str | None = None,
+    timezone: str | None = None,
+    temperature_unit: str | None = None,
+    forecast_days: int | None = None,
+) -> str:
+    """Custom wrapper: show run_http_request usage with before/after hooks."""
+
+    arguments = {
+        "latitude": latitude,
+        "longitude": longitude,
+    }
+
+    if daily is not None:
+        arguments["daily"] = daily
+    if timezone is not None:
+        arguments["timezone"] = timezone
+    if temperature_unit is not None:
+        arguments["temperature_unit"] = temperature_unit
+    if forecast_days is not None:
+        arguments["forecast_days"] = forecast_days
+
+    response = await run_http_request(forecast_request, arguments)
+    if not response.success:
+        raise ToolError(f"HTTP {response.status_code}: {response.body}")
+    return _format_forecast(response)
 
 
 class WeatherAgent(Agent):
@@ -243,12 +231,11 @@ class WeatherAgent(Agent):
             "and timezone='auto'."
         )
 
-        super().__init__(instructions=instructions)
-        self._tools = [
+        super().__init__(instructions=instructions, tools=[
             search_location_tool,
             get_current_weather_tool,
             get_weather_forecast_tool,
-        ]
+        ])
 
     async def on_enter(self):
         await self.session.generate_reply(
