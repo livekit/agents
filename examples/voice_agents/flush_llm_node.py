@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentSession,
+    FlushSentinel,
     JobContext,
     MetricsCollectedEvent,
     ModelSettings,
@@ -71,7 +72,7 @@ class FastResponseAgent(Agent):
         chat_ctx: llm.ChatContext,
         tools: list[llm.FunctionTool],
         model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk | llm.FlushSentinel]:
+    ) -> AsyncIterable[llm.ChatChunk | FlushSentinel]:
         called_tools: list[llm.FunctionToolCall] = []
         has_text_message = False
         async for chunk in Agent.default.llm_node(
@@ -95,7 +96,7 @@ class FastResponseAgent(Agent):
             yield "One moment while I look that up. "
             # flush the response to tts immediately
             # NOTE: this will close the current tts_node and start a new one
-            yield llm.FlushSentinel()
+            yield FlushSentinel()
 
             # simulate additional processing before closing the llm_node
             await asyncio.sleep(3)

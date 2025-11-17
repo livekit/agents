@@ -5,7 +5,7 @@ import functools
 import inspect
 import json
 import time
-from collections.abc import AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
 
@@ -29,7 +29,7 @@ from ..llm.tool_context import (
 )
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
+from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
 from ..utils import aio, is_given
 from ..utils.aio import itertools
 from . import io
@@ -49,7 +49,7 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str | llm.FlushSentinel]
+    text_ch: aio.Chan[str | FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
@@ -65,7 +65,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[Union[str, llm.FlushSentinel]]()
+    text_ch = aio.Chan[Union[str, FlushSentinel]]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -158,7 +158,7 @@ async def _llm_inference_task(
                     data.generated_text += chunk.delta.content
                     text_ch.send_nowait(chunk.delta.content)
 
-            elif isinstance(chunk, llm.FlushSentinel):
+            elif isinstance(chunk, FlushSentinel):
                 text_ch.send_nowait(chunk)
             else:
                 logger.warning(
@@ -188,7 +188,7 @@ class _TTSGenerationData:
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str | llm.FlushSentinel],
+    input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
@@ -214,7 +214,7 @@ def perform_tts_inference(
 @utils.log_exceptions(logger=logger)
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str | llm.FlushSentinel],
+    input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
     text_transforms: Sequence[TextTransforms] | None,
@@ -266,13 +266,13 @@ async def _tts_inference_task(
     async def _get_start_time() -> None:
         nonlocal start_time
         async for chunk in input_tee[0]:
-            if not isinstance(chunk, llm.FlushSentinel):
+            if not isinstance(chunk, FlushSentinel):
                 start_time = time.perf_counter()
                 break
 
-    async def _input_segment() -> AsyncIterable[str]:
+    async def _input_segment() -> AsyncGenerator[str, None]:
         async for chunk in input_tee[1]:
-            if isinstance(chunk, llm.FlushSentinel):
+            if isinstance(chunk, FlushSentinel):
                 return
             yield chunk
 
@@ -281,11 +281,15 @@ async def _tts_inference_task(
 
     _start_time_task = asyncio.create_task(_get_start_time())
     pushed_duration: float = 0.0
+    input_segment: AsyncGenerator[str, None] | None = None
     try:
         while not finished:
-            pushed_duration += await _tts_node_inference(_input_segment(), pushed_duration)
+            input_segment = _input_segment()
+            pushed_duration += await _tts_node_inference(input_segment, pushed_duration)
     finally:
         await aio.gracefully_cancel(_start_time_task)
+        if input_segment is not None:
+            await input_segment.aclose()
         await input_tee.aclose()
 
     return pushed_duration > 0

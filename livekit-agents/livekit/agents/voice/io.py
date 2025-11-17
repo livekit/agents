@@ -10,7 +10,7 @@ from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?
@@ -25,13 +25,11 @@ LLMNode = Callable[
     [llm.ChatContext, list[Union[llm.FunctionTool, llm.RawFunctionTool]], ModelSettings],
     Union[
         Optional[
-            Union[AsyncIterable[Union[llm.ChatChunk, str, llm.FlushSentinel]], str, llm.ChatChunk]
+            Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
         ],
         Awaitable[
             Optional[
-                Union[
-                    AsyncIterable[Union[llm.ChatChunk, str, llm.FlushSentinel]], str, llm.ChatChunk
-                ]
+                Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
             ]
         ],
     ],

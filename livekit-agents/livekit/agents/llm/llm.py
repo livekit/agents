@@ -75,10 +75,6 @@ class LLMError(BaseModel):
     recoverable: bool
 
 
-class FlushSentinel:
-    pass
-
-
 TEvent = TypeVar("TEvent")
 
 
