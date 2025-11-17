@@ -493,7 +493,6 @@ class VADStream(agents.vad.VADStream):
                         pub_speaking
                         and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
-                        speech_duration = pub_speech_duration
                         pub_speaking = False
                         pub_silence_duration = silence_threshold_duration
 
@@ -503,7 +502,7 @@ class VADStream(agents.vad.VADStream):
                                 samples_index=pub_current_sample,
                                 timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,
-                                speech_duration=speech_duration,
+                                speech_duration=pub_speech_duration,
                                 frames=[_copy_speech_buffer()],
                                 speaking=False,
                             )
