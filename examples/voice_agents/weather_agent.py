@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.beta.tools.http import HTTPToolConfig, create_http_tool
-from livekit.agents.beta.tools.sms import SMSToolConfig, create_sms_tool
 from livekit.plugins import silero
 
 logger = logging.getLogger("weather-agent")
@@ -229,43 +228,14 @@ get_weather_forecast_tool = create_http_tool(
 )
 
 
-# Create SMS tool (automatically sends to the caller)
-# Only initialize if SMS provider credentials are available
-# It will skip sending the SMS if no credentials are found
-try:
-    send_weather_sms_tool = create_sms_tool(
-        SMSToolConfig(
-            name="send_weather_sms",
-            description="Send weather information via SMS to the caller. Use this when the user asks to receive weather info by text message.",
-            to_number="+15555555555",  # PUT YOUR PHONE NUMBER HERE
-        )
-    )
-except ValueError:
-    logger.warning("SMS tool not available: no SMS provider credentials found")
-    send_weather_sms_tool = None
-
-
 class WeatherAgent(Agent):
     def __init__(self) -> None:
-        tools = [
-            search_location_tool,
-            get_current_weather_tool,
-            get_weather_forecast_tool,
-        ]
-
         instructions = (
             "You are a helpful weather assistant. When a user asks about weather:\n"
             "1. First use search_location to get coordinates for the city\n"
             "2. Then use get_current_weather or get_weather_forecast with those coordinates\n"
             "3. Be friendly and conversational\n"
-            "4. Always mention the city name in your response\n"
-        )
-
-        if send_weather_sms_tool:
-            tools.append(send_weather_sms_tool)
-            instructions += "5. If the user asks to receive weather info by SMS/text, use send_weather_sms with a concise weather summary\n"
-
-        instructions += (
+            "4. Always mention the city name in your response\n\n"
             "Note: Open-Meteo API requires specific parameters - for current weather, pass "
             "current='temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m' "
             "and timezone='auto'. For forecast, pass "
@@ -274,7 +244,11 @@ class WeatherAgent(Agent):
         )
 
         super().__init__(instructions=instructions)
-        self._tools = tools
+        self._tools = [
+            search_location_tool,
+            get_current_weather_tool,
+            get_weather_forecast_tool,
+        ]
 
     async def on_enter(self):
         await self.session.generate_reply(
