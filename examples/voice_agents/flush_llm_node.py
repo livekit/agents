@@ -2,7 +2,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterable
 
-import aiohttp
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -11,6 +10,7 @@ from livekit.agents import (
     JobContext,
     MetricsCollectedEvent,
     ModelSettings,
+    RunContext,
     WorkerOptions,
     cli,
     function_tool,
@@ -34,36 +34,26 @@ class FastResponseAgent(Agent):
         )
 
     @function_tool
-    async def get_weather(
-        self,
-        latitude: str,
-        longitude: str,
+    async def lookup_weather(
+        self, context: RunContext, location: str, latitude: str, longitude: str
     ):
-        """Called when the user asks about the weather. This function will return the weather for
-        the given location. When given a location, please estimate the latitude and longitude of the
-        location and do not ask the user for them.
+        """Called when the user asks for weather related information.
+        Ensure the user's location (city or region) is provided.
+        When given a location, please estimate the latitude and longitude of the location and
+        do not ask the user for them.
 
         Args:
-            latitude: The latitude of the location
-            longitude: The longitude of the location
+            location: The location they are asking for
+            latitude: The latitude of the location, do not ask user for it
+            longitude: The longitude of the location, do not ask user for it
         """
 
-        logger.info(f"getting weather for {latitude}, {longitude}")
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
-        weather_data = {}
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # response from the function call is returned to the LLM
-                    weather_data = {
-                        "temperature": data["current"]["temperature_2m"],
-                        "temperature_unit": "Celsius",
-                    }
-                else:
-                    raise Exception(f"Failed to get weather data, status code: {response.status}")
+        logger.info(f"Looking up weather for {location}")
 
-        return weather_data
+        await asyncio.sleep(3)
+        context.session.say("Okay I found what you were looking for...")
+
+        return "sunny with a temperature of 70 degrees."
 
     async def llm_node(
         self,
@@ -71,34 +61,17 @@ class FastResponseAgent(Agent):
         tools: list[llm.FunctionTool],
         model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk | llm.FlushSentinel]:
-        fast_response_sent = False
         async for chunk in Agent.default.llm_node(
             agent=self,
             chat_ctx=chat_ctx,
             tools=tools,
             model_settings=model_settings,
         ):
-            if (
-                not fast_response_sent
-                and isinstance(chunk, llm.ChatChunk)
-                and chunk.delta
-                and chunk.delta.tool_calls
-            ):
-                yield "One moment while I look that up. "
-                # flush the response to tts immediately
-                # NOTE: this will close the current tts_node and start a new one
+            if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.tool_calls:
+                yield "One moment while I look that up."
                 yield llm.FlushSentinel()
 
-                fast_response_sent = True
-
             yield chunk
-
-        if fast_response_sent:
-            # simulate a delay before closing the llm_node
-            await asyncio.sleep(3)
-            yield "Okay I found what you were looking for... "
-
-        logger.info("LLM node completed")
 
 
 async def entrypoint(ctx: JobContext):
