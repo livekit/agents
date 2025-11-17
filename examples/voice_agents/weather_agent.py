@@ -111,16 +111,25 @@ def _format_current_weather(resp) -> str:
 def _format_forecast(resp) -> str:
     """Parse forecast response into readable format."""
 
-    data = json.loads(resp.body)
-    daily = data.get("daily", {})
+    try:
+        data = json.loads(resp.body)
+    except json.JSONDecodeError:
+        return resp.body
+
+    daily = data.get("daily") or {}
 
     # just show first 3 days to keep it concise
-    times = daily.get("time", [])[:3]
-    max_temps = daily.get("temperature_2m_max", [])[:3]
-    min_temps = daily.get("temperature_2m_min", [])[:3]
+    times = (daily.get("time") or [])[:3]
+    max_temps = (daily.get("temperature_2m_max") or [])[:3]
+    min_temps = (daily.get("temperature_2m_min") or [])[:3]
+
+    days_to_report = min(len(times), len(max_temps), len(min_temps))
+    if days_to_report == 0:
+        return resp.body
 
     forecast_text = "Here's the forecast: "
-    for i, date in enumerate(times):
+    for i in range(days_to_report):
+        date = times[i]
         forecast_text += f"{date}: High {max_temps[i]}°C, Low {min_temps[i]}°C. "
 
     return forecast_text
