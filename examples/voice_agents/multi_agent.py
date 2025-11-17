@@ -133,9 +133,11 @@ class StoryAgent(Agent):
 server = AgentServer()
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
 
 
 @server.rtc_session()

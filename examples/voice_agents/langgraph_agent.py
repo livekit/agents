@@ -34,9 +34,11 @@ load_dotenv()
 server = AgentServer()
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
 
 
 class State(TypedDict):
