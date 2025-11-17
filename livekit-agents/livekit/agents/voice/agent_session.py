@@ -378,15 +378,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         super().emit(event, arg)
 
     @property
-    def room_io(self) -> room_io.RoomIO:
-        if not self._room_io:
-            raise RuntimeError(
-                "Cannot access room_io: the AgentSession was not started with a room."
-            )
-
-        return self._room_io
-
-    @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
             raise ValueError("AgentSession userdata is not set")
@@ -731,6 +722,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         await self._activity.drain()
+
+    @property
+    def room_io(self) -> room_io.RoomIO:
+        if not self._room_io:
+            raise RuntimeError(
+                "Cannot access room_io: the AgentSession was not started with a room."
+            )
+
+        return self._room_io
 
     def _close_soon(
         self,

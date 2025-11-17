@@ -279,7 +279,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             "spawn" if not sys.platform.startswith("linux") else "forkserver"
         ),
         setup_fnc: Callable[[JobProcess], Any] | None = None,
-        load_fnc: Callable[[AgentServer], float] | None = None,
+        load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
     ) -> None:
         super().__init__()
