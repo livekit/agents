@@ -1722,13 +1722,16 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        # messages in RunResult are ordered by the `created_at` field
+        # cache the tool items and add them to the speech handle after the assistant message is added
+        # (this ensure everything is kept ordered)
+        tool_items: list[llm.FunctionCall | llm.FunctionCallOutput] = []
+
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
-            speech_handle._item_added([fnc_call])
+            tool_items.append(fnc_call)
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+                tool_items.append(out.fnc_call_out)
 
         # start to execute tools (only after play())
         exe_task, tool_output = perform_tool_executions(
@@ -1786,7 +1789,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._agent._chat_ctx.insert(msg)
                 self._session._conversation_item_added(msg)
-                speech_handle._item_added([msg])
+                speech_handle._item_added([msg, *tool_items])
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
@@ -1811,7 +1814,7 @@ class AgentActivity(RecognitionHooks):
             )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
-            speech_handle._item_added([msg])
+            speech_handle._item_added([msg, *tool_items])
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, text_out.text)
 
         if len(tool_output.output) > 0:
