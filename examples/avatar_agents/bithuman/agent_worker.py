@@ -45,7 +45,6 @@ async def entrypoint(ctx: JobContext):
     )
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     if not bithuman_model_path:
         return
@@ -58,6 +57,8 @@ def prewarm(proc: JobProcess):
     logger.info("bithuman runtime loaded")
     proc.userdata["bithuman_runtime"] = runtime
 
+
+server.setup_fnc = prewarm
 
 if __name__ == "__main__":
     cli.run_app(server)
