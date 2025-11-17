@@ -1855,9 +1855,9 @@ class AgentActivity(RecognitionHooks):
 
         # add the tools messages that triggers this reply to the chat context
         if _previous_tools_messages:
-            for msg in _previous_tools_messages:
+            for tool_msg in _previous_tools_messages:
                 # reset the created_at to the reply start time
-                msg.created_at = reply_started_at
+                tool_msg.created_at = reply_started_at
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
 
