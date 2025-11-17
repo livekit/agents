@@ -346,7 +346,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._setup_fnc
 
     @setup_fnc.setter
-    def setup_fnc(self, value: Callable[[JobProcess], Any] | None):
+    def setup_fnc(self, value: Callable[[JobProcess], Any] | None) -> None:
         if value is not None and not callable(value):
             raise TypeError("setup_fnc must be a callable or None")
         self._setup_fnc = value
@@ -356,7 +356,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._load_fnc
 
     @load_fnc.setter
-    def load_fnc(self, value: Callable[..., float] | None):
+    def load_fnc(self, value: Callable[..., float] | None) -> None:
         if value is not None and not callable(value):
             raise TypeError("load_fnc must be a callable or None")
         self._load_fnc = value
