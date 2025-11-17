@@ -93,6 +93,11 @@ def proc_main(args: ProcStartArgs) -> None:
         if t.daemon:
             continue
 
+        from concurrent.futures.thread import _threads_queues
+
+        if t in _threads_queues:
+            continue
+
         t.join(timeout=0.25)
 
         frames = sys._current_frames()
