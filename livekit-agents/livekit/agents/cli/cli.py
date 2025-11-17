@@ -1499,8 +1499,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             # c.print(" ")
 
             for plugin in Plugin.registered_plugins:
-                logger.info(f"Downloading files for {plugin}")
+                logger.info(f"Downloading files for {plugin.package}")
                 plugin.download_files()
+                logger.info(f"Finished downloading files for {plugin.package}")
+
 
         except CLIError as e:
             c.print(" ")

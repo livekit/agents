@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,21 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contextually-aware turn detection for LiveKit Agents
-
-See https://docs.livekit.io/agents/build/turns/turn-detector/ for more information.
-"""
-
-from .version import __version__
-
-__all__ = ["english", "multilingual", "__version__"]
-
-
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
-
-__pdoc__ = {}
-
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
+__version__ = "1.0.0"

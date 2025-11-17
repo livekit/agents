@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,21 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contextually-aware turn detection for LiveKit Agents
+"""AvatarTalk virtual avatar plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/build/turns/turn-detector/ for more information.
+See https://docs.livekit.io/agents/integrations/avatar/avatartalk/ for more information.
 """
 
+from .api import AvatarTalkException
+from .avatar import AvatarSession
 from .version import __version__
 
-__all__ = ["english", "multilingual", "__version__"]
+__all__ = [
+    "AvatarTalkException",
+    "AvatarSession",
+    "__version__",
+]
+
+from livekit.agents import Plugin
+
+from .log import logger
 
 
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
+class AvatarTalkPlugin(Plugin):
+    def __init__(self) -> None:
+        super().__init__(__name__, __version__, __package__, logger)
 
-__pdoc__ = {}
 
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
+Plugin.register_plugin(AvatarTalkPlugin())
