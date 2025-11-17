@@ -6,18 +6,10 @@ from dotenv import load_dotenv
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.util.types import AttributeValue
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    RunContext,
-    WorkerOptions,
-    cli,
-    inference,
-    metrics,
-)
-from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
+from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter
 from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunContext, cli, metrics, inference
+from livekit.agents.llm import function_tool
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter, StreamAdapter
 from livekit.agents.voice import MetricsCollectedEvent
@@ -126,6 +118,10 @@ class Alloy(Agent):
         return Kelly()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # set up the langfuse tracer
     trace_provider = setup_langfuse(
@@ -151,4 +147,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
