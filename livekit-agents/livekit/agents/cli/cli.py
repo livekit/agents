@@ -1503,7 +1503,6 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                 plugin.download_files()
                 logger.info(f"Finished downloading files for {plugin.package}")
 
-
         except CLIError as e:
             c.print(" ")
             c.print(f"[error]{e}")
