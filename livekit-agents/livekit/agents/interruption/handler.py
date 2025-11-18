@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Optional, Set
+from typing import Callable, list, set
 
 from livekit.agents import stt
 
@@ -30,7 +30,7 @@ class InterruptionType(Enum):
 class InterruptionConfig:
     """Configuration for interruption handling"""
 
-    ignored_words: Set[str]
+    ignored_words: set[str]
     confidence_threshold: float = 0.6
     min_word_duration: float = 0.2
     log_all_events: bool = True
@@ -57,7 +57,7 @@ class IntelligentInterruptionHandler:
 
     def __init__(
         self,
-        ignored_words: Optional[List[str]] = None,
+        ignored_words: list[str] | None = None,
         confidence_threshold: float = 0.6,
         log_all_events: bool = True,
         allow_runtime_updates: bool = True,
@@ -66,7 +66,7 @@ class IntelligentInterruptionHandler:
         Initialize the interruption handler.
 
         Args:
-            ignored_words: List of filler words to ignore during agent speech
+            ignored_words: list of filler words to ignore during agent speech
             confidence_threshold: Minimum confidence for valid interruptions
             log_all_events: Whether to log all interruption events
             allow_runtime_updates: Allow updating ignored words at runtime
@@ -95,9 +95,9 @@ class IntelligentInterruptionHandler:
         )
 
         self._agent_speaking = False
-        self._interruption_history: List[InterruptionEvent] = []
+        self._interruption_history: list[InterruptionEvent] = []
         self._lock = asyncio.Lock()
-        self._on_valid_interruption: Optional[Callable] = None
+        self._on_valid_interruption: Callable | None = None
 
         logger.info(
             f"Initialized InterruptionHandler with ignored words: {self._config.ignored_words}"
@@ -109,10 +109,10 @@ class IntelligentInterruptionHandler:
         logger.debug(f"Agent speaking state changed to: {is_speaking}")
 
     def set_interruption_callback(self, callback: Callable) -> None:
-        """Set callback to invoke on valid interruptions"""
+        """set callback to invoke on valid interruptions"""
         self._on_valid_interruption = callback
 
-    async def update_ignored_words(self, words: List[str], append: bool = True) -> None:
+    async def update_ignored_words(self, words: list[str], append: bool = True) -> None:
         """
         Dynamically update the list of ignored words.
 
@@ -217,7 +217,7 @@ class IntelligentInterruptionHandler:
 
             return should_interrupt
 
-    def get_interruption_history(self, limit: Optional[int] = None) -> List[InterruptionEvent]:
+    def get_interruption_history(self, limit: int | None = None) -> list[InterruptionEvent]:
         """Get recent interruption history for debugging"""
         if limit:
             return self._interruption_history[-limit:]
@@ -255,7 +255,7 @@ class LiveKitInterruptionWrapper:
     def __init__(
         self,
         handler: IntelligentInterruptionHandler,
-        original_interrupt_callback: Optional[Callable] = None,
+        original_interrupt_callback: Callable | None = None,
     ):
         self._handler = handler
         self._original_callback = original_interrupt_callback

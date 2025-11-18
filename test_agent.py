@@ -7,8 +7,10 @@ from livekit.agents import (
     cli,
     function_tool,
 )
+
 # 'openai' removed and 'google' added
 from livekit.plugins import deepgram, elevenlabs, google, silero
+
 
 @function_tool
 async def lookup_weather(
@@ -31,11 +33,9 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         # any combination of STT, LLM, TTS, or realtime API can be used
         stt=deepgram.STT(model="nova-3"),
-        
         # --- Changed from openai.LLM to google.LLM ---
         llm=google.LLM(model="gemini-1.0-pro"),
         # ----------------------------------------------
-
         tts=elevenlabs.TTS(),
     )
 

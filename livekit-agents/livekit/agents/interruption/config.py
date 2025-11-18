@@ -4,7 +4,7 @@ Configuration file and quick start script for LiveKit Interruption Handler
 
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import list
 
 import yaml
 
@@ -14,9 +14,9 @@ class InterruptionConfig:
     """Configuration for interruption handling"""
 
     # Filler words configuration
-    english_fillers: List[str]
-    hindi_fillers: List[str]
-    custom_fillers: List[str]
+    english_fillers: list[str]
+    hindi_fillers: list[str]
+    custom_fillers: list[str]
 
     # Behavior settings
     confidence_threshold: float
@@ -65,7 +65,7 @@ class InterruptionConfig:
             enable_statistics=os.getenv("INTERRUPTION_ENABLE_STATS", "true").lower() == "true",
         )
 
-    def get_all_ignored_words(self) -> List[str]:
+    def get_all_ignored_words(self) -> list[str]:
         """Get combined list of all ignored words"""
         all_words = []
         all_words.extend(self.english_fillers)
