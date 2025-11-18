@@ -44,15 +44,17 @@ Two agents included:
 
 ## 📁 Project Structure
 
-chat_processor/
-   agent_config.py
-   intent_detector.py
-   memory_manager.py
-   settings_loader.py
+project-root/
+    chat_processor/
+        agent_config.py
+        intent_detector.py
+        memory_manager.py
+        settings_loader.py
 
-main_agent.py
-default_agent.py
-agent_profile.json
+    main_agent.py
+    default_agent.py
+    agent_profile.json
+
 
 
 ### **Module Responsibilities**
@@ -106,7 +108,7 @@ This improves conversation flow and reduces accidental cutoffs.
 
 ---
 
-## ⚙ Installation & Setup
+## Installation & Setup
 
 ### 1. Clone the repository
 
