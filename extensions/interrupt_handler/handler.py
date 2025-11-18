@@ -1,29 +1,39 @@
 # extensions/interrupt_handler/handler.py
 import re
-from typing import List
-from .config import IGNORED_WORDS, ASR_CONFIDENCE_THRESHOLD, COMMAND_KEYWORDS
+from collections.abc import Awaitable
+from typing import Callable
+
+from .config import ASR_CONFIDENCE_THRESHOLD, COMMAND_KEYWORDS, IGNORED_WORDS
 from .logger import log
 
 _token_re = re.compile(r"\w+")
 
-def tokenize(text: str) -> List[str]:
+
+def tokenize(text: str) -> list[str]:
     return _token_re.findall((text or "").lower())
+
 
 def is_filler_only(text: str, confidence: float) -> bool:
     tokens = tokenize(text)
     if not tokens:
         return True
-    
+    # If any token is a command keyword -> not filler-only
     if any(t in COMMAND_KEYWORDS for t in tokens):
         return False
-    
+    # If any token not in ignored words -> not filler-only
     non_filler = [t for t in tokens if t not in IGNORED_WORDS]
     if non_filler:
         return False
-    
+    # All tokens are filler words -> decide by confidence
     return confidence >= ASR_CONFIDENCE_THRESHOLD
 
-async def decide_and_handle(transcript: str, confidence: float, agent_speaking: bool, on_interrupt_cb):
+
+async def decide_and_handle(
+    transcript: str,
+    confidence: float,
+    agent_speaking: bool,
+    on_interrupt_cb: Callable[[str, float], Awaitable[None]],
+) -> dict:
     """
     Decide whether to ignore or treat as interrupt.
     on_interrupt_cb is an async callable to call when we must interrupt.
@@ -31,11 +41,22 @@ async def decide_and_handle(transcript: str, confidence: float, agent_speaking: 
     tokens = tokenize(transcript)
     filler = is_filler_only(transcript, confidence)
     if agent_speaking and filler:
-        log("IGNORED_FILLER", transcript=transcript, tokens=tokens, confidence=confidence, agent_speaking=agent_speaking)
+        log(
+            "IGNORED_FILLER",
+            transcript=transcript,
+            tokens=tokens,
+            confidence=confidence,
+            agent_speaking=agent_speaking,
+        )
         return {"action": "ignored"}
-    
-    log("VALID_INTERRUPT", transcript=transcript, tokens=tokens, confidence=confidence, agent_speaking=agent_speaking)
-  
+    # else treat as user speech / interrupt
+    log(
+        "VALID_INTERRUPT",
+        transcript=transcript,
+        tokens=tokens,
+        confidence=confidence,
+        agent_speaking=agent_speaking,
+    )
     try:
         await on_interrupt_cb(transcript, confidence)
     except Exception as e:

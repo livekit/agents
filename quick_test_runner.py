@@ -2,14 +2,18 @@
 # Standalone checks for interrupt_handler (bypasses repo pytest/conftest)
 import asyncio
 import sys
-from extensions.interrupt_handler.handler import tokenize, is_filler_only, decide_and_handle
+
+from extensions.interrupt_handler.handler import decide_and_handle, is_filler_only, tokenize
+
 
 def fail(msg):
     print("FAIL:", msg)
     sys.exit(1)
 
+
 def ok(msg):
     print("PASS:", msg)
+
 
 def run_sync_checks():
     # tokenize
@@ -34,10 +38,12 @@ def run_sync_checks():
         fail("is_filler_only should be True for empty transcript")
     ok("is_filler_only empty transcript")
 
+
 async def run_async_checks():
     class MockAgent:
         def __init__(self):
             self.interrupted = False
+
         async def interrupt_cb(self, transcript, confidence):
             self.interrupted = True
 
@@ -61,6 +67,7 @@ async def run_async_checks():
         fail("Agent silent should count filler as user speech -> INTERRUPT")
     ok("integration: silent agent, filler -> interrupt")
 
+
 def main():
     print("Running sync checks...")
     run_sync_checks()
@@ -68,6 +75,7 @@ def main():
     asyncio.run(run_async_checks())
     print("ALL QUICK CHECKS PASSED")
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main()
