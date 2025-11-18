@@ -1,4 +1,5 @@
 import logging
+import asyncio 
 
 from dotenv import load_dotenv
 
@@ -14,9 +15,17 @@ from livekit.agents import (
     metrics,
     room_io,
 )
+
+# === START: MODIFIED IMPORTS ===
+# We are importing the specific plugin classes here to instantiate them directly,
+# bypassing the problematic local inference path setup.
+from livekit.plugins import deepgram # Added for direct STT instantiation
+from livekit.plugins import openai    # Added for direct LLM instantiation
+from livekit.plugins import cartesia  # Added for direct TTS instantiation
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+# === END: MODIFIED IMPORTS ===
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -25,8 +34,31 @@ logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
+# =========================================================================
+# === START: INTERRUPT HANDLER MODIFICATIONS ===
+
+# 1. Define the configurable list of filler words
+IGNORED_WORDS = {'uh', 'umm', 'hmm', 'haan', 'yeah', 'like', 'uhh', 'um', 'mhm'} # Added common fillers
+
+def is_filler_only(transcribed_text: str) -> bool:
+    """Checks if the transcription contains only words on the ignored list."""
+    words = transcribed_text.lower().split()
+    if not words:
+        return True # Treat empty transcription as filler
+    
+    # Check every word against the ignored list
+    for word in words:
+        if word not in IGNORED_WORDS:
+            return False # Found a non-filler word, so it's a real interruption
+            
+    return True # Only fillers were found
+
+# === END: INTERRUPT HANDLER MODIFICATIONS ===
+# =========================================================================
+
 
 class MyAgent(Agent):
+# ... (MyAgent class remains unchanged) ...
     def __init__(self) -> None:
         super().__init__(
             instructions="Your name is Kelly. You would interact with users via voice."
@@ -79,28 +111,72 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+    # === START: MODIFIED AGENTSESSION CONFIG ===
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt="deepgram/nova-3",
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm="openai/gpt-4.1-mini",
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+        # STT: Instantiate Deepgram plugin directly to run locally
+        stt=deepgram.STT(),
+        # LLM: Instantiate OpenAI plugin directly to run locally
+        llm=openai.LLM(),
+        # TTS: Instantiate Cartesia plugin directly to run locally
+        tts=cartesia.TTS(),
+        
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
+        
         # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
-        # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-        # when it's detected, you may resume the agent's speech
-        resume_false_interruption=True,
+        
+        # resume_false_interruption is crucial for your code to work
+        resume_false_interruption=True, 
         false_interruption_timeout=1.0,
     )
+    # === END: MODIFIED AGENTSESSION CONFIG ===
+
+    # =========================================================================
+    # === START: INTERCEPTION LOGIC (ASYNC/SYNC FIX) ===
+    
+    async def _process_smart_interruption(event):
+        """Contains the core logic, run as an asynchronous task."""
+        
+        # Only process final, confirmed transcriptions
+        if not event.final:
+            return
+
+        transcript_text = event.text.lower()
+
+        # Check the agent's state: is it currently speaking?
+        if session.state == "speaking":
+            
+            if is_filler_only(transcript_text):
+                # 1. Filler-Only: BLOCK the interruption signal
+                
+                logger.info(f"LOG: IGNORED INTERRUPTION. Resuming agent speech. Filler: '{transcript_text}'")
+                
+                # CRITICAL: Call this method to override the VAD pause signal and force the agent to continue TTS.
+                await session.resume_interruption(reason="filler-filter-override")
+                
+            else:
+                # 2. Genuine Interruption: LET IT PASS
+                logger.info(f"LOG: VALID INTERRUPTION. Agent will stop. Command: '{transcript_text}'")
+                # No action needed, the VAD pause signal proceeds normally.
+        
+        else:
+            # Agent is listening (not speaking)
+            logger.debug(f"Registered user speech (Agent was listening). Text: '{transcript_text}'")
+
+    
+    @session.on("user_input_transcribed")
+    def handle_smart_interruption(event):
+        """
+        LiveKit requires this to be synchronous. We defer the async logic
+        to resolve the concurrency error.
+        """
+        # IMMEDIATELY create a task to run the actual async logic in the background
+        asyncio.create_task(_process_smart_interruption(event))
+
+    # === END: INTERCEPTION LOGIC (ASYNC/SYNC FIX) ===
+    # =========================================================================
 
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
