@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, tts
 from livekit.agents.tokenize import basic
 from livekit.plugins import elevenlabs, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("realtime-scribe-v2")
 logger.setLevel(logging.INFO)
@@ -16,13 +15,13 @@ load_dotenv()
 async def entrypoint(ctx: JobContext):
     stt = elevenlabs.STTv2(
         model_id="scribe_v2_realtime",
-        vad_silence_threshold_secs=1.5,
-        vad_threshold=0.4,
+        vad_silence_threshold_secs=0.5,
+        vad_threshold=0.5,
         min_speech_duration_ms=100,
-        min_silence_duration_ms=100,
+        min_silence_duration_ms=300,
     )
 
-    llm = openai.LLM(model="gpt-4o")
+    llm = openai.LLM(model="gpt-4.1-mini")
 
     wrapped_tts = tts.StreamAdapter(
         tts=elevenlabs.TTS(model="eleven_turbo_v2_5"),
@@ -31,7 +30,6 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         allow_interruptions=True,
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         stt=stt,
         llm=llm,

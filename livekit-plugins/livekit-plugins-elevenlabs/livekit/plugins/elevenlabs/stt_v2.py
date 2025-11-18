@@ -334,18 +334,36 @@ class SpeechStreamv2(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
         message_type = data.get("message_type")
+        text = data.get("text", "")
+
+        speech_data = stt.SpeechData(
+            language=self._language or "en",
+            text=text,
+        )
 
         if message_type == "partial_transcript":
-            # Ignore partial transcripts - only use committed transcripts for voice agents.
-            # Partial transcripts are only used for UI feedback and don't trigger agent responses.
-            return
+            logger.debug("Received message type partial_transcript: %s", data)
+
+            if text:
+                # Send START_OF_SPEECH if we're not already speaking
+                if not self._speaking:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
+                    self._speaking = True
+
+                # Send INTERIM_TRANSCRIPT
+                interim_event = stt.SpeechEvent(
+                    type=SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=[speech_data],
+                )
+                self._event_ch.send_nowait(interim_event)
 
         elif message_type == "committed_transcript":
             logger.debug("Received message type committed_transcript: %s", data)
 
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
-            text = data.get("text", "")
 
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
@@ -359,12 +377,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 # Multiple commits can occur within the same speech segment
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._language or "en",
-                            text=text,
-                        )
-                    ],
+                    alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(final_event)
             else:
