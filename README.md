@@ -111,6 +111,7 @@ This improves conversation flow and reduces accidental cutoffs.
 ## Installation & Setup
 
 ### 1. Clone the repository
+
 git clone <repo>
 cd <project-root>
 
