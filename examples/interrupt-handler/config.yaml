@@ -1,0 +1,27 @@
+# Configuration for Intelligent Interruption Handler
+
+# Filler words to ignore when agent is speaking
+ignored_words:
+  - uh
+  - uhh
+  - um
+  - umm
+  - hmm
+  - hmmm
+  - err
+  - ah
+  - ahh
+  - haan
+  - mhmm
+  - uh-huh
+  - mm-hmm
+  - yeah
+
+# Minimum confidence threshold for ASR (0.0 to 1.0)
+confidence_threshold: 0.6
+
+# Enable detailed logging
+enable_logging: true
+
+# Case sensitive matching
+case_sensitive: false
