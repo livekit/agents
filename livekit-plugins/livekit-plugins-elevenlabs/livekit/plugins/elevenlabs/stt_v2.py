@@ -67,7 +67,7 @@ class STTv2(stt.STT):
         model_id: STTModels | str = "scribe_v2_realtime",
         language_code: NotGivenOr[str] = NOT_GIVEN,
         audio_format: STTAudioFormat = "pcm_16000",
-        commit_strategy: str = "vad",
+        commit_strategy: Literal["vad", "manual"] = "vad",
         include_timestamps: bool = False,
         vad_silence_threshold_secs: float = 1.5,
         vad_threshold: float = 0.4,
