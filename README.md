@@ -43,7 +43,7 @@ Two agents included:
 ---
 
 ## 📁 Project Structure
-
+```
 project-root/
     chat_processor/
         agent_config.py
@@ -54,7 +54,7 @@ project-root/
     main_agent.py
     default_agent.py
     agent_profile.json
-
+```
 
 
 ### **Module Responsibilities**
@@ -128,6 +128,7 @@ pip install python-dotenv
 
 
 4. Create a .env file
+    ```
     LIVEKIT_URL=your_url
     LIVEKIT_API_KEY=your_key
     LIVEKIT_API_SECRET=your_secret
@@ -136,9 +137,9 @@ pip install python-dotenv
     DEFAULT_LANGUAGE=en
     FILLER_CONFIDENCE_THRESHOLD=0.6
     FILLER_CONFIG_PATH=./agent_profile.json
+    ```
 
-
-5. Create the dynamic config file
+6. Create the dynamic config file
 agent_profile.json
 
 
