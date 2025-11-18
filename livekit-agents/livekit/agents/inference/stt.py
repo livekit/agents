@@ -7,6 +7,7 @@ import os
 import weakref
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, Union, overload
+from livekit.agents.voice.filler_filter import FillerFilter
 
 import aiohttp
 
@@ -323,6 +324,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
+        self._filler_filter = FillerFilter()
 
     def update_options(
         self,
@@ -481,7 +483,19 @@ class SpeechStream(stt.SpeechStream):
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
+        confidence = data.get("confidence", 1.0)
         language = data.get("language", self._opts.language or "en")
+
+        
+        if self._filler_filter.is_filler_only(text):
+            logger.debug(f"Filtered filler-only STT text: {text}")
+            return
+
+        # 2) Filter low-confidence results
+        if confidence is not None and self._filler_filter.is_low_confidence(confidence, threshold=0.55):
+            logger.debug(f"Filtered low-confidence STT text: {text} (conf={confidence})")
+            return
+
 
         if not text and not is_final:
             return
@@ -490,7 +504,11 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_ch.send_nowait(start_event)
-
+        if hasattr(self._stt, "agent") and hasattr(self._stt.agent, "tts"):
+            tts_obj = self._stt.agent.tts
+            if tts_obj and getattr(tts_obj, "is_playing", False):
+                logger.info("User is speaking — interrupting TTS")
+                asyncio.create_task(tts_obj.stop())
         speech_data = stt.SpeechData(
             language=language,
             start_time=data.get("start", 0),
