@@ -1002,16 +1002,14 @@ def _text_mode(c: AgentsConsole) -> None:
             c.console.bell()
             continue
 
-        def _generate_with_context(
-            text: str, result_fut: asyncio.Future[list[RunEvent]]
-        ) -> list[RunEvent]:
+        def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
             async def _generate(text: str) -> list[RunEvent]:
                 sess = await c.io_session.run(user_input=text)  # type: ignore
                 return sess.events.copy()
 
             def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
-                if task.exception():
-                    result_fut.set_exception(task.exception())
+                if exception := task.exception():
+                    result_fut.set_exception(exception)
                 else:
                     result_fut.set_result(task.result())
 
