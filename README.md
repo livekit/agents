@@ -111,12 +111,14 @@ This improves conversation flow and reduces accidental cutoffs.
 ## Installation & Setup
 
 ### 1. Clone the repository
+
 ```bash
 git clone <repo>
 cd <project-root>
 ```
 
 2. Create a virtual environment
+
 ```
 python -m venv .venv
 source .venv/bin/activate      # macOS / Linux
@@ -124,6 +126,7 @@ source .venv/bin/activate      # macOS / Linux
 ```
 
 4. Install dependencies
+
 ```
 pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.3"
 pip install python-dotenv
@@ -147,6 +150,7 @@ agent_profile.json
 ```
 
 ▶ Running the Agents
+
 ```
 python main_agent.py console
 ```
