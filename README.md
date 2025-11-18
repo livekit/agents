@@ -182,13 +182,13 @@ pip install python-dotenv
     <tr>
       <td>Filler while agent is talking</td>
       <td>Yes</td>
-      <td>“umm… uh… hmm…”</td>
+      <td>“umm… uh… hmm… acha... aree... hanji... haan...”</td>
       <td>Agent continues speaking, fillers are <strong>ignored</strong>.</td>
     </tr>
     <tr>
       <td>Explicit interrupt command</td>
       <td>Yes</td>
-      <td>“stop”, “wait”, “no, not that one”</td>
+      <td>“stop”, “wait”, “no, not that one”,"listen","hold on","ruk jao","ek second"</td>
       <td>Current TTS is <strong>stopped immediately</strong>, agent replies to new intent.</td>
     </tr>
     <tr>
