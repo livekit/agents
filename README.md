@@ -111,10 +111,10 @@ This improves conversation flow and reduces accidental cutoffs.
 ## Installation & Setup
 
 ### 1. Clone the repository
-
+```bash
 git clone <repo>
 cd <project-root>
-
+```
 
 2. Create a virtual environment
 python -m venv .venv
@@ -128,24 +128,24 @@ pip install python-dotenv
 
 
 4. Create a .env file
-LIVEKIT_URL=your_url
-LIVEKIT_API_KEY=your_key
-LIVEKIT_API_SECRET=your_secret
-OPENAI_API_KEY=sk-xxxx
-LIVEKIT_INFERENCE_USE_DIRECT_OPENAI=1
-DEFAULT_LANGUAGE=en
-FILLER_CONFIDENCE_THRESHOLD=0.6
-FILLER_CONFIG_PATH=./agent_profile.json
+    LIVEKIT_URL=your_url
+    LIVEKIT_API_KEY=your_key
+    LIVEKIT_API_SECRET=your_secret
+    OPENAI_API_KEY=sk-xxxx
+    LIVEKIT_INFERENCE_USE_DIRECT_OPENAI=1
+    DEFAULT_LANGUAGE=en
+    FILLER_CONFIDENCE_THRESHOLD=0.6
+    FILLER_CONFIG_PATH=./agent_profile.json
 
 
 5. Create the dynamic config file
 agent_profile.json
 
 
-▶ Running the Agents
+▶ Running the Agents :- 
 python main_agent.py console
 
-Run the baseline agent
+Run the baseline agent :- 
 python default_agent.py console
 
 
