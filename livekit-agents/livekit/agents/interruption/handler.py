@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, list, set
+from typing import Callable
 
 from livekit.agents import stt
 
@@ -234,7 +234,7 @@ class IntelligentInterruptionHandler:
             }
 
         total = len(self._interruption_history)
-        by_type = {}
+        by_type: dict[str, int] = {}
         for event in self._interruption_history:
             type_name = event.classification.value
             by_type[type_name] = by_type.get(type_name, 0) + 1
@@ -268,7 +268,7 @@ class LiveKitInterruptionWrapper:
         alternative = event.alternatives[0]
         text = alternative.text
         confidence = getattr(alternative, "confidence", 1.0)
-        is_final = event.is_final
+        is_final = event.is_final  # type: ignore[attr-defined]
 
         should_interrupt = await self._handler.process_transcript(
             text=text, confidence=confidence, is_final=is_final
