@@ -5,8 +5,7 @@ from typing import Any
 
 import aiohttp
 
-from .... import FunctionTool
-from ....llm.tool_context import ToolError, function_tool
+from ....llm.tool_context import RawFunctionTool, ToolError, function_tool
 from ....log import logger
 from ....utils.http_context import http_session
 from ....voice import RunContext
@@ -128,7 +127,7 @@ async def run_http_request(
         raise ToolError(f"Unexpected error: {str(e)}") from e
 
 
-def create_http_tool(config: HTTPToolConfig) -> FunctionTool:
+def create_http_tool(config: HTTPToolConfig) -> RawFunctionTool:
     """Create an HTTP request tool.
 
     The tool makes HTTP requests to a specified endpoint with configurable
@@ -138,7 +137,7 @@ def create_http_tool(config: HTTPToolConfig) -> FunctionTool:
         config: Configuration for the HTTP tool
 
     Returns:
-        FunctionTool that can be used in Agent.tools
+        RawFunctionTool that can be used in Agent.tools
 
     Raises:
         ValueError: If config is invalid (missing URL, invalid parameters schema)
