@@ -148,6 +148,8 @@ def create_default_config(filepath: str = "interruption_config.yaml") -> None:
     with open(filepath, "w") as f:
         f.write(DEFAULT_CONFIG_YAML)
     print(f"Created default configuration at: {filepath}")
+
+
 # Quick start script
 if __name__ == "__main__":
     import argparse
