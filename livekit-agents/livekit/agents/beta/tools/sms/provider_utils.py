@@ -10,6 +10,7 @@ import aiohttp
 
 from livekit import rtc
 
+from ....job import get_job_context
 from ....log import logger
 from ....utils.http_context import http_session
 from ....voice import RunContext
@@ -228,14 +229,13 @@ async def _send_vonage(
 
 
 def get_caller_phone_number(context: RunContext) -> str | None:
-    """Extract caller phone number from SIP participant via RunContext."""
+    """Extract caller phone number from SIP participant via JobContext."""
     try:
-        session = context.session
-        if session.room is None:
-            return None
-        for participant in session.room.remote_participants.values():
+        job_ctx = get_job_context()
+        for participant in job_ctx.room.remote_participants.values():
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-                return participant.identity
+                # remove sip_ prefix also from the identity
+                return participant.identity.replace("sip_", "")
     except Exception:
         return None
     return None

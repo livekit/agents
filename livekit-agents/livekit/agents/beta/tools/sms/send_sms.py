@@ -3,15 +3,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .... import FunctionTool
-from ....llm.tool_context import ToolError, function_tool
+from ....llm.tool_context import RawFunctionTool, ToolError, function_tool
 from ....log import logger
 from ....voice import RunContext
 from .config import SMSToolConfig, SMSToolRequest
-from .provider_utils import detect_provider, get_caller_phone_number, run_sms_request, validate_phone_number
+from .provider_utils import (
+    detect_provider,
+    get_caller_phone_number,
+    run_sms_request,
+    validate_phone_number,
+)
 
 
-def create_sms_tool(config: SMSToolConfig | None = None) -> FunctionTool:
+def create_sms_tool(config: SMSToolConfig | None = None) -> RawFunctionTool:
     """Create an SMS sending tool with auto-detected provider."""
     cfg = config or SMSToolConfig()
 
@@ -46,6 +50,7 @@ def create_sms_tool(config: SMSToolConfig | None = None) -> FunctionTool:
         if not message:
             raise ToolError("Message text is required.")
 
+        recipient: str | None
         if cfg.to_number:
             recipient = cfg.to_number
         elif cfg.auto_detect_caller:
