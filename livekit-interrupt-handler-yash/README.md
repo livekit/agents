@@ -11,20 +11,20 @@ Below is the complete directory layout:
 ```bash
 ├── agents/
     ├── livekit-interrupt-handler-yash/
-        ├── agent/
-        │   ├── config.py
-        │   ├── entrypoint.py
-        │   ├── session_manager.py
-        │   └── state.py
-        │
-        ├── interrupt_handler/
-        │   ├── constants.py
-        │   ├── middleware.py
-        │   └── utils.py
-        │
-        ├── .env.example
-        ├── requirements.txt
-        └── README.md
+            ├── agent/
+            │   ├── config.py
+            │   ├── entrypoint.py
+            │   ├── session_manager.py
+            │   └── state.py
+            │
+            ├── interrupt_handler/
+            │   ├── constants.py
+            │   ├── middleware.py
+            │   └── utils.py
+            │
+            ├── .env.example
+            ├── requirements.txt
+            └── README.md
 ```
 
 ---

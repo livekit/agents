@@ -12,7 +12,7 @@ class SessionManager:
         self.config = config
         self.state = AgentState()
 
-        # semantic interruption filter
+        # interruption filter
         self.interrupt_filter = InterruptFilteringMiddleware(
             conf_threshold=float(getattr(config, "confidence_threshold", 0.6))
         )
@@ -26,30 +26,24 @@ class SessionManager:
 
         await self.session.start(agent=self.agent, room=room)
         logger.info("[SESSION] Started LiveKit session.")
+        
 
-    # ----------------------------------------------------
-    # MAIN HANDLER — LiveKit 1.3.x event model
-    # ----------------------------------------------------
     async def _handle_message(self, ev):
-        msg = ev.message  # correct object in LiveKit 1.3.x
+        msg = ev.message 
 
-        # ignore system + assistant messages
         if msg.role != "user":
             return
 
-        # get transcript text
         text = (msg.text or "").strip()
 
-        # confidence exists only for transcripts
         confidence = getattr(msg, "confidence", 1.0)
 
         logger.info(f"[USER TRANSCRIPT] '{text}' (conf={confidence:.2f})")
 
         await self.handle_user_transcript(text, confidence)
 
-    # ----------------------------------------------------
-    # SEMANTIC INTERRUPTION LAYER
-    # ----------------------------------------------------
+
+    # INTERRUPTION LAYER
     async def handle_user_transcript(self, text, confidence):
         decision = await self.interrupt_filter.should_interrupt(
             text=text,
@@ -66,13 +60,10 @@ class SessionManager:
             logger.info("[FILLER IGNORED] Not interrupting.")
             return
 
-        # Normal speech → end user turn (allows agent to respond)
         logger.info("[END USER TURN] Normal speech.")
         await self.session.end_user_turn()
 
-    # ----------------------------------------------------
     # AGENT TTS GENERATION
-    # ----------------------------------------------------
     async def say(self, text):
         logger.info(f"[AGENT] Speaking: {text}")
 
