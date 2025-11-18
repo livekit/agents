@@ -149,14 +149,16 @@ pip install python-dotenv
 agent_profile.json
 ```
 
-6. Running the Agents
+
+6. Run the baseline agent (Basic Model)
+```
+python default_agent.py console
+```
+
+7. Running the Agents (Adavance Model)
 
 ```
 python main_agent.py console
-```
-Run the baseline agent
-```
-python default_agent.py console
 ```
 
 # Verified Behaviour During Testing
