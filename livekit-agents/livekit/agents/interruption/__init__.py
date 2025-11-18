@@ -2,18 +2,18 @@
 Intelligent interruption handling for LiveKit agents
 """
 
+from .config import InterruptionConfig
 from .handler import (
     IntelligentInterruptionHandler,
-    LiveKitInterruptionWrapper,
-    InterruptionType,
     InterruptionEvent,
+    InterruptionType,
+    LiveKitInterruptionWrapper,
 )
-from .config import InterruptionConfig
 
 __all__ = [
-    'IntelligentInterruptionHandler',
-    'LiveKitInterruptionWrapper',
-    'InterruptionType',
-    'InterruptionEvent',
-    'InterruptionConfig',
+    "IntelligentInterruptionHandler",
+    "LiveKitInterruptionWrapper",
+    "InterruptionType",
+    "InterruptionEvent",
+    "InterruptionConfig",
 ]
