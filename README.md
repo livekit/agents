@@ -117,17 +117,19 @@ cd <project-root>
 ```
 
 2. Create a virtual environment
+```
 python -m venv .venv
 source .venv/bin/activate      # macOS / Linux
 .venv\Scripts\activate         # Windows
+```
 
-
-3. Install dependencies
+4. Install dependencies
+```
 pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.3"
 pip install python-dotenv
+```
 
-
-4. Create a .env file
+6. Create a .env file
     ```
     LIVEKIT_URL=your_url
     LIVEKIT_API_KEY=your_key
@@ -139,16 +141,19 @@ pip install python-dotenv
     FILLER_CONFIG_PATH=./agent_profile.json
     ```
 
-6. Create the dynamic config file
+7. Create the dynamic config file
+```
 agent_profile.json
+```
 
-
-▶ Running the Agents :- 
+▶ Running the Agents
+```
 python main_agent.py console
-
-Run the baseline agent :- 
+```
+Run the baseline agent
+```
 python default_agent.py console
-
+```
 
 # Verified Behaviour During Testing
 1. Correctly ignores filler words during TTS
