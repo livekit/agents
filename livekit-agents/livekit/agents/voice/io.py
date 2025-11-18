@@ -351,12 +351,16 @@ class VideoOutput(ABC):
 
 class AgentInput:
     def __init__(
-        self, video_changed: Callable[[], None], audio_changed: Callable[[], None]
+        self,
+        video_changed: Callable[[], None],
+        audio_changed: Callable[[], None],
+        audio_enabled_changed: Callable[[bool], None] | None = None,
     ) -> None:
         self._video_stream: VideoInput | None = None
         self._audio_stream: AudioInput | None = None
         self._video_changed = video_changed
         self._audio_changed = audio_changed
+        self._audio_enabled_changed = audio_enabled_changed
 
         # enabled by default
         self._audio_enabled = True
@@ -372,12 +376,21 @@ class AgentInput:
         self._audio_enabled = enable
 
         if not self._audio_stream:
+            if self._audio_changed:
+                self._audio_changed()
+            if self._audio_enabled_changed:
+                self._audio_enabled_changed(enable)
             return
 
         if enable:
             self._audio_stream.on_attached()
         else:
             self._audio_stream.on_detached()
+
+        self._audio_changed()
+
+        if self._audio_enabled_changed:
+            self._audio_enabled_changed(enable)
 
     def set_video_enabled(self, enable: bool) -> None:
         if enable and not self._video_stream:
@@ -453,6 +466,7 @@ class AgentOutput:
         video_changed: Callable[[], None],
         audio_changed: Callable[[], None],
         transcription_changed: Callable[[], None],
+        audio_enabled_changed: Callable[[bool], None] | None = None,
     ) -> None:
         self._video_sink: VideoOutput | None = None
         self._audio_sink: AudioOutput | None = None
@@ -460,6 +474,7 @@ class AgentOutput:
         self._video_changed = video_changed
         self._audio_changed = audio_changed
         self._transcription_changed = transcription_changed
+        self._audio_enabled_changed = audio_enabled_changed
 
         self._audio_enabled = True
         self._video_enabled = True
@@ -492,12 +507,21 @@ class AgentOutput:
         self._audio_enabled = enabled
 
         if not self._audio_sink:
+            if self._audio_changed:
+                self._audio_changed()
+            if self._audio_enabled_changed:
+                self._audio_enabled_changed(enabled)
             return
 
         if enabled:
             self._audio_sink.on_attached()
         else:
             self._audio_sink.on_detached()
+
+        self._audio_changed()
+
+        if self._audio_enabled_changed:
+            self._audio_enabled_changed(enabled)
 
     def set_transcription_enabled(self, enabled: bool) -> None:
         if enabled and not self._transcription_sink:

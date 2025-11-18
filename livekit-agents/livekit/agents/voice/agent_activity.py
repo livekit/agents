@@ -142,6 +142,17 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
 
+        # Media enable state tracking for hot toggling
+        self._target_audio_input_enabled = sess.input.audio_enabled
+        self._current_audio_input_enabled: bool | None = None
+        self._target_audio_output_enabled = sess.output.audio_enabled
+        self._current_audio_output_enabled: bool | None = None
+
+        self._attached_stt: stt.STT | None = None
+        self._stt_prewarmed = False
+        self._attached_tts: tts.TTS | None = None
+        self._tts_prewarmed = False
+
         if self._turn_detection_mode == "vad" and not self.vad:
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
             self._turn_detection_mode = None
@@ -433,12 +444,6 @@ class AgentActivity(RecognitionHooks):
                     if isinstance(self.llm, llm.LLM):
                         self.llm.prewarm()
 
-                    if isinstance(self.stt, stt.STT):
-                        self.stt.prewarm()
-
-                    if isinstance(self.tts, tts.TTS):
-                        self.tts.prewarm()
-
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session()
                 self._started = True
@@ -470,14 +475,6 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
-
-        if isinstance(self.stt, stt.STT):
-            self.stt.on("metrics_collected", self._on_metrics_collected)
-            self.stt.on("error", self._on_error)
-
-        if isinstance(self.tts, tts.TTS):
-            self.tts.on("metrics_collected", self._on_metrics_collected)
-            self.tts.on("error", self._on_error)
 
         if isinstance(self.vad, vad.VAD):
             self.vad.on("metrics_collected", self._on_metrics_collected)
@@ -562,17 +559,20 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the instructions")
 
         await self._resume_scheduling_task()
+        initial_audio_enabled = self._target_audio_input_enabled
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
-            stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
+            stt=self._agent.stt_node if (initial_audio_enabled and self.stt) else None,
+            vad=self.vad if initial_audio_enabled else None,
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
             turn_detection_mode=self._turn_detection_mode,
         )
         self._audio_recognition.start()
+        self._apply_audio_input_enabled()
+        self._apply_audio_output_enabled()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -681,13 +681,8 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.off("metrics_collected", self._on_metrics_collected)
             self._rt_session.off("error", self._on_error)
 
-        if isinstance(self.stt, stt.STT):
-            self.stt.off("metrics_collected", self._on_metrics_collected)
-            self.stt.off("error", self._on_error)
-
-        if isinstance(self.tts, tts.TTS):
-            self.tts.off("metrics_collected", self._on_metrics_collected)
-            self.tts.off("error", self._on_error)
+        self._detach_stt_handlers()
+        self._detach_tts_handlers()
 
         if isinstance(self.vad, vad.VAD):
             self.vad.off("metrics_collected", self._on_metrics_collected)
@@ -700,6 +695,10 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
+            self._audio_recognition = None
+
+        self._current_audio_input_enabled = None
+        self._current_audio_output_enabled = None
 
         await self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
         self._interrupt_paused_speech_task = None
@@ -953,6 +952,14 @@ class AgentActivity(RecognitionHooks):
                 speech.add_done_callback(on_playout_done)
 
         return future
+
+    def on_audio_input_enabled_changed(self, enabled: bool) -> None:
+        self._target_audio_input_enabled = enabled
+        self._apply_audio_input_enabled()
+
+    def on_audio_output_enabled_changed(self, enabled: bool) -> None:
+        self._target_audio_output_enabled = enabled
+        self._apply_audio_output_enabled()
 
     def clear_user_turn(self) -> None:
         if self._audio_recognition:
@@ -2554,6 +2561,111 @@ class AgentActivity(RecognitionHooks):
 
         if self._session.options.resume_false_interruption and self._session.output.audio:
             self._session.output.audio.resume()
+
+    def _apply_audio_input_enabled(self) -> None:
+        if self._audio_recognition is None:
+            return
+
+        enabled = self._target_audio_input_enabled
+        if self._current_audio_input_enabled == enabled:
+            return
+
+        if enabled:
+            self._attach_stt_handlers()
+            self._audio_recognition.update_vad(self.vad if self.vad else None)
+            stt_node = self._agent.stt_node if self.stt else None
+            self._audio_recognition.update_stt(stt_node)
+        else:
+            self._audio_recognition.update_stt(None)
+            self._audio_recognition.update_vad(None)
+            self._detach_stt_handlers()
+
+        self._current_audio_input_enabled = enabled
+
+    def _apply_audio_output_enabled(self) -> None:
+        if self._audio_recognition is None:
+            return
+
+        enabled = self._target_audio_output_enabled
+        previously = self._current_audio_output_enabled
+
+        if previously == enabled:
+            return
+
+        if enabled:
+            self._attach_tts_handlers()
+        else:
+            self._detach_tts_handlers()
+            if previously:
+                if self._started:
+                    future = self.interrupt(force=True)
+
+                    def _log_interrupt(fut: asyncio.Future[None]) -> None:
+                        if fut.cancelled():
+                            return
+                        exc = fut.exception()
+                        if exc:
+                            logger.warning(
+                                "failed to interrupt pending speeches after disabling audio output",
+                                exc_info=exc,
+                            )
+
+                    future.add_done_callback(_log_interrupt)
+        self._current_audio_output_enabled = enabled
+
+    def _attach_stt_handlers(self) -> None:
+        model = self.stt
+        if not isinstance(model, stt.STT):
+            self._detach_stt_handlers()
+            return
+
+        if self._attached_stt is model:
+            return
+
+        if self._attached_stt is not None:
+            self._detach_stt_handlers()
+
+        model.on("metrics_collected", self._on_metrics_collected)
+        model.on("error", self._on_error)
+        if not self._stt_prewarmed:
+            model.prewarm()
+            self._stt_prewarmed = True
+        self._attached_stt = model
+
+    def _detach_stt_handlers(self) -> None:
+        if self._attached_stt is None:
+            return
+
+        self._attached_stt.off("metrics_collected", self._on_metrics_collected)
+        self._attached_stt.off("error", self._on_error)
+        self._attached_stt = None
+
+    def _attach_tts_handlers(self) -> None:
+        model = self.tts
+        if not isinstance(model, tts.TTS):
+            self._detach_tts_handlers()
+            return
+
+        if self._attached_tts is model:
+            return
+
+        if self._attached_tts is not None:
+            self._detach_tts_handlers()
+
+        model.on("metrics_collected", self._on_metrics_collected)
+        model.on("error", self._on_error)
+        if not self._tts_prewarmed:
+            model.prewarm()
+            self._tts_prewarmed = True
+        self._attached_tts = model
+
+    def _detach_tts_handlers(self) -> None:
+        if self._attached_tts is None:
+            return
+
+        self._attached_tts.off("metrics_collected", self._on_metrics_collected)
+        self._attached_tts.off("error", self._on_error)
+        self._attached_tts = None
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
