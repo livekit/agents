@@ -9,36 +9,36 @@ Date: November 18, 2025
 
 class SimpleFillerFilter:
     """Standalone version of FillerFilter for testing."""
-    
+
     def __init__(self, ignored_words=None, min_confidence_threshold=0.5):
         self.min_confidence_threshold = min_confidence_threshold
         if ignored_words:
             self.ignored_words = [w.strip().lower() for w in ignored_words]
         else:
             self.ignored_words = ["uh", "umm", "hmm", "haan", "mm", "mhm", "er", "ah", "oh"]
-    
+
     def is_filler_only(self, text, confidence=1.0, agent_is_speaking=False):
         # Low confidence check
         if confidence < self.min_confidence_threshold:
             return True
-        
+
         # Empty text check
         text_cleaned = text.strip()
         if not text_cleaned:
             return True
-        
+
         # Normalize words
         words = self._normalize_words(text_cleaned)
         if not words:
             return True
-        
+
         # Check if ALL words are fillers
         for word in words:
             if word not in self.ignored_words:
                 return False
-        
+
         return True
-    
+
     def _normalize_words(self, text):
         text_cleaned = text.lower()
         for punct in ".,!?;:\"'":
@@ -49,19 +49,19 @@ class SimpleFillerFilter:
 
 def test_filler_filter():
     """Test the FillerFilter with various scenarios."""
-    
+
     print("=" * 80)
     print("STANDALONE FILLER FILTER TEST SUITE")
     print("=" * 80)
     print()
-    
+
     # Initialize filter
     filter_obj = SimpleFillerFilter()
-    print(f"✓ Initialized FillerFilter")
+    print("✓ Initialized FillerFilter")
     print(f"  Ignored words: {filter_obj.ignored_words}")
     print(f"  Confidence threshold: {filter_obj.min_confidence_threshold}")
     print()
-    
+
     # Test cases
     test_cases = [
         ("Simple filler", "umm", 0.8, True, True),
@@ -75,27 +75,27 @@ def test_filler_filter():
         ("Valid command", "wait a minute", 0.95, True, False),
         ("High conf valid", "hello", 0.99, True, False),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for i, (name, text, confidence, agent_speaking, expected) in enumerate(test_cases, 1):
         result = filter_obj.is_filler_only(text, confidence, agent_speaking)
-        
+
         status = "✓ PASS" if result == expected else "✗ FAIL"
         emoji = "🟢" if result == expected else "🔴"
-        
+
         print(f"{emoji} {status} - Test {i}: {name}")
         print(f"   Input: '{text}' (conf: {confidence})")
         print(f"   Expected: {expected}, Got: {result}")
-        
+
         if result == expected:
             passed += 1
         else:
             failed += 1
-            print(f"   ⚠️  MISMATCH!")
+            print("   ⚠️  MISMATCH!")
         print()
-    
+
     # Summary
     print("=" * 80)
     print(f"RESULTS: {passed}/{len(test_cases)} tests passed")
@@ -104,7 +104,7 @@ def test_filler_filter():
     else:
         print(f"⚠️  {failed} test(s) failed")
     print("=" * 80)
-    
+
     return failed == 0
 
 
@@ -115,9 +115,9 @@ if __name__ == "__main__":
     print("║" + " " * 28 + "by Raghav" + " " * 42 + "║")
     print("╚" + "=" * 78 + "╝")
     print("\n")
-    
+
     success = test_filler_filter()
-    
+
     print("\n")
     print("=" * 80)
     if success:

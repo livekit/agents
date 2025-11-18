@@ -142,7 +142,7 @@ class AgentActivity(RecognitionHooks):
         )
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
-        
+
         # Initialize filler filter for interrupt handling
         # Use configured filler words from session options, or let FillerFilter use defaults
         self._filler_filter = FillerFilter(
@@ -1178,17 +1178,17 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
-        
+
         # FILLER FILTER: Check if agent is speaking and transcript contains only fillers
         agent_is_speaking = (
             self._current_speech is not None and not self._current_speech.done()
         )
-        
+
         if agent_is_speaking and self._audio_recognition is not None:
             text = self._audio_recognition.current_transcript
             # Use a default confidence of 1.0 if not available from STT
             confidence = 1.0
-            
+
             # Check if this is filler-only speech
             if self._filler_filter.is_filler_only(text, confidence, agent_is_speaking):
                 logger.info(
