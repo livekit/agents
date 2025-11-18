@@ -20,7 +20,6 @@ import json
 import os
 import typing
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiohttp
@@ -57,7 +56,6 @@ class STTOptions:
     vad_threshold: float | None = None
     min_speech_duration_ms: int | None = None
     min_silence_duration_ms: int | None = None
-    on_committed_transcript: Callable[[str, int], str] | None = None
 
 
 class STTv2(stt.STT):
@@ -73,7 +71,6 @@ class STTv2(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
-        on_committed_transcript: Callable[[str, int], str] | None = None,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT v2 with streaming support.
@@ -92,7 +89,6 @@ class STTv2(stt.STT):
             vad_threshold (NotGivenOr[float]): Threshold for voice activity detection (must be between 0.1 and 0.9). Optional.
             min_speech_duration_ms (NotGivenOr[int]): Minimum speech duration in milliseconds (must be between 50 and 2000). Optional.
             min_silence_duration_ms (NotGivenOr[int]): Minimum silence duration in milliseconds (must be between 50 and 2000). Optional.
-            on_committed_transcript (Callable[[str, int], str] | None): Optional callback to process committed transcripts. Receives text and max_tokens_to_recompute, returns processed text.
         """  # noqa: E501
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
 
@@ -122,7 +118,6 @@ class STTv2(stt.STT):
             min_silence_duration_ms=min_silence_duration_ms
             if is_given(min_silence_duration_ms)
             else None,
-            on_committed_transcript=on_committed_transcript,
         )
         if is_given(language_code):
             self._opts.language_code = language_code
@@ -187,7 +182,6 @@ class SpeechStreamv2(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
-        self._max_tokens_to_recompute = 5  # Default from ElevenLabs, updated from session_started
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -353,10 +347,6 @@ class SpeechStreamv2(stt.SpeechStream):
             # and trigger agent responses (unlike partial transcripts which are UI-only)
             text = data.get("text", "")
 
-            # Process transcript with callback if provided
-            if self._opts.on_committed_transcript:
-                text = self._opts.on_committed_transcript(text, self._max_tokens_to_recompute)
-
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
@@ -387,18 +377,7 @@ class SpeechStreamv2(stt.SpeechStream):
         elif message_type == "session_started":
             # Session initialization message - informational only
             session_id = data.get("session_id", "unknown")
-            config = data.get("config", {})
-
-            # Capture max_tokens_to_recompute for deduplication logic
-            if "max_tokens_to_recompute" in config:
-                self._max_tokens_to_recompute = config["max_tokens_to_recompute"]
-                logger.info(
-                    "STTv2: Session started with ID: %s, max_tokens_to_recompute=%s",
-                    session_id,
-                    self._max_tokens_to_recompute,
-                )
-            else:
-                logger.info("STTv2: Session started with ID: %s", session_id)
+            logger.info("STTv2: Session started with ID: %s", session_id)
 
         elif message_type == "committed_transcript_with_timestamps":
             logger.debug("Received message type committed_transcript_with_timestamps: %s", data)
