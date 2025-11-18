@@ -125,14 +125,14 @@ source .venv/bin/activate      # macOS / Linux
 .venv\Scripts\activate         # Windows
 ```
 
-4. Install dependencies
+3. Install dependencies
 
 ```
 pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.3"
 pip install python-dotenv
 ```
 
-6. Create a .env file
+4. Create a .env file
     ```
     LIVEKIT_URL=your_url
     LIVEKIT_API_KEY=your_key
@@ -144,12 +144,12 @@ pip install python-dotenv
     FILLER_CONFIG_PATH=./agent_profile.json
     ```
 
-7. Create the dynamic config file
+5. Create the dynamic config file
 ```
 agent_profile.json
 ```
 
-▶ Running the Agents
+6. Running the Agents
 
 ```
 python main_agent.py console
