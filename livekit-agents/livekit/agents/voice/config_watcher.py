@@ -19,7 +19,7 @@ class ConfigFileWatcher:
     Monitors a JSON file and automatically reloads configuration
     when the file is modified.
     """
-    
+
     def __init__(self, config_path: str, reload_callback: Callable[[], None]):
         """Initialize the config file watcher.
 
@@ -32,17 +32,17 @@ class ConfigFileWatcher:
         self._last_modified: float | None = None
         self._watch_task: asyncio.Task | None = None
         self._running = False
-    
+
     async def start(self) -> None:
         """Start watching the config file for changes."""
         if self._running:
             print("[CONFIG_WATCHER] Already running")
             return
-        
+
         self._running = True
         self._watch_task = asyncio.create_task(self._watch_loop())
         print(f"[CONFIG_WATCHER] Started monitoring {self.config_path}")
-    
+
     async def stop(self) -> None:
         """Stop watching the config file."""
         self._running = False

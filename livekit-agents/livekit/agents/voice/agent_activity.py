@@ -1214,7 +1214,9 @@ class AgentActivity(RecognitionHooks):
                 }
             )
 
-        return is_suppressed    def _interrupt_by_audio_activity(self) -> None:
+        return is_suppressed
+
+    def _interrupt_by_audio_activity(self) -> None:
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
@@ -1232,12 +1234,12 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
-        
+
         # Check if agent is speaking and transcript should be suppressed
         agent_is_speaking = (
             self._current_speech is not None and not self._current_speech.done()
         )
-        
+
         if agent_is_speaking and self._audio_recognition is not None:
             text = self._audio_recognition.current_transcript
             confidence = 1.0
