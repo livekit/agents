@@ -373,3 +373,77 @@ The Agents framework is under active development in a rapidly evolving field. We
 </tbody>
 </table>
 <!--END_REPO_NAV-->
+
+
+
+🎙️ Interruption Handler Feature – LiveKit Agent
+1️⃣ What Changed
+
+Added interruption_handler_agent.py inside examples/voice_agents/
+
+Introduced configurable logic to distinguish filler sounds from real user interruptions
+
+No changes made to LiveKit core SDK or VAD logic
+
+Designed as an extension layer using ASR events
+
+Supports runtime configuration via environment variables
+
+2️⃣ What Works (Verified Features)
+Feature	Status
+Ignore fillers when agent is speaking (uh, umm, hmm, haan)	✅
+Accept fillers as speech when agent is not speaking	✅
+Real commands (e.g., stop, wait) interrupt TTS	✅
+Handles mixed input (umm okay stop)	✅
+Confidence-based filtering	✅ (if ASR supports confidence score)
+No SDK modification	✔ Fully compliant
+3️⃣ Known Issues / Notes
+
+Windows users may face dependency issues (bithuman) – recommended to develop/run using Linux or WSL
+
+Real-time accuracy depends on ASR quality
+
+Confidence-based logic limited to ASR engines that provide confidence
+
+Testing in noisy audio environments recommended
+
+4️⃣ Steps to Test Locally
+🧪 Setup
+# (Optional) Copy example environment file
+cp .env.example .env
+
+
+Install dependencies (SDK untouched):
+
+pip install livekit livekit-agents
+
+▶️ Run the agent
+python examples/voice_agents/interruption_handler_agent.py
+
+🎤 Test Examples
+Input	Agent Speaking	Expected Behavior
+“umm”	Yes	Ignored
+“wait”	Yes	Stops immediately
+“umm okay stop”	Yes	Stops
+“hmm”	No	Registered normally
+5️⃣ Environment Details
+Item	Value
+Python Version	3.11+
+OS (tested)	Windows (local), Linux (recommended)
+SDK Modifications	❌ None
+Runtime Type	Real-time voice agent
+🔧 Optional Environment Variables
+
+Set in .env or via system:
+
+IGNORED_FILLERS=uh,umm,hmm,haan
+INTERRUPT_KEYWORDS=stop,wait,cancel
+CONFIDENCE_THRESHOLD=0.6
+
+Variable	Purpose	Example
+IGNORED_FILLERS	Words to ignore while agent is speaking	uh,umm,hmm,haan
+INTERRUPT_KEYWORDS	Keywords that trigger interruption	stop,wait,cancel
+CONFIDENCE_THRESHOLD	Minimum ASR confidence (0–1)	0.6
+
+📌 These are optional. Defaults will be used if undefined.
+📌 Update .env.example, but do not commit .env.
