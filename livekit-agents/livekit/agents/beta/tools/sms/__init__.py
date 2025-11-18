@@ -3,10 +3,14 @@
 Supports Twilio, SignalWire, and Vonage SMS providers.
 """
 
-from .send_sms import SMSResponse, SMSToolConfig, create_sms_tool
+from .config import SMSResponse, SMSToolConfig, SMSToolRequest
+from .provider_utils import run_sms_request
+from .send_sms import create_sms_tool
 
 __all__ = [
     "SMSToolConfig",
+    "SMSToolRequest",
     "SMSResponse",
     "create_sms_tool",
+    "run_sms_request",
 ]
