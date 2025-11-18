@@ -384,6 +384,8 @@ class SpeechStream(stt.SpeechStream):
             turn_is_formatted = data.get("turn_is_formatted", False)
             utterance = data.get("utterance", "")
             transcript = data.get("transcript", "")
+            confidence = words[-1].get("confidence", 0.0) if words else 0.0
+            
             # language_code is only returned with utterances, so track it for final transcript
             if "language_code" in data:
                 self._current_language_code = data["language_code"]
@@ -392,7 +394,7 @@ class SpeechStream(stt.SpeechStream):
                 interim_text = " ".join(word.get("text", "") for word in words)
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language="en", text=interim_text)],
+                    alternatives=[stt.SpeechData(language="en", text=interim_text, confidence=confidence)],
                 )
                 self._event_ch.send_nowait(interim_event)
 
@@ -400,7 +402,7 @@ class SpeechStream(stt.SpeechStream):
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
                     alternatives=[
-                        stt.SpeechData(language=self._current_language_code, text=utterance)
+                        stt.SpeechData(language=self._current_language_code, text=utterance, confidence=confidence)
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
@@ -412,7 +414,7 @@ class SpeechStream(stt.SpeechStream):
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
-                        stt.SpeechData(language=self._current_language_code, text=transcript)
+                        stt.SpeechData(language=self._current_language_code, text=transcript, confidence=confidence)
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
