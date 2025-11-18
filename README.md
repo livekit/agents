@@ -341,6 +341,7 @@ python myagent.py dev
 Starts the agent server and enables hot reloading when files change. This mode allows each process to host multiple concurrent agents efficiently.
 
 The agent connects to LiveKit Cloud or your self-hosted server. Set the following environment variables:
+
 - LIVEKIT_URL
 - LIVEKIT_API_KEY
 - LIVEKIT_API_SECRET
@@ -360,16 +361,208 @@ Runs the agent with production-ready optimizations.
 
 The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
 
-<!--BEGIN_REPO_NAV-->
-<br/><table>
-<thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
-<tbody>
-<tr><td>LiveKit SDKs</td><td><a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS/visionOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (WebGL)</a> · <a href="https://github.com/livekit/client-sdk-esp32">ESP32</a></td></tr><tr></tr>
-<tr><td>Server APIs</td><td><a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/server-sdk-go">Golang</a> · <a href="https://github.com/livekit/server-sdk-ruby">Ruby</a> · <a href="https://github.com/livekit/server-sdk-kotlin">Java/Kotlin</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/agence104/livekit-server-sdk-php">PHP (community)</a> · <a href="https://github.com/pabloFuente/livekit-server-sdk-dotnet">.NET (community)</a></td></tr><tr></tr>
-<tr><td>UI Components</td><td><a href="https://github.com/livekit/components-js">React</a> · <a href="https://github.com/livekit/components-android">Android Compose</a> · <a href="https://github.com/livekit/components-swift">SwiftUI</a> · <a href="https://github.com/livekit/components-flutter">Flutter</a></td></tr><tr></tr>
-<tr><td>Agents Frameworks</td><td><b>Python</b> · <a href="https://github.com/livekit/agents-js">Node.js</a> · <a href="https://github.com/livekit/agent-playground">Playground</a></td></tr><tr></tr>
-<tr><td>Services</td><td><a href="https://github.com/livekit/livekit">LiveKit server</a> · <a href="https://github.com/livekit/egress">Egress</a> · <a href="https://github.com/livekit/ingress">Ingress</a> · <a href="https://github.com/livekit/sip">SIP</a></td></tr><tr></tr>
-<tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://github.com/livekit-examples">Example apps</a> · <a href="https://livekit.io/cloud">Cloud</a> · <a href="https://docs.livekit.io/home/self-hosting/deployment">Self-hosting</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a></td></tr>
-</tbody>
-</table>
-<!--END_REPO_NAV-->
+# Filler Word Filter Extension for LiveKit Agents
+
+## Overview
+
+This extension adds intelligent filler word filtering to LiveKit voice agents, preventing false interruptions from common filler words like "umm", "uh", "hmm", etc.
+
+## Features
+
+- ✅ **Stateful Filtering**: Different behavior when agent is speaking vs. quiet
+- ✅ **Configurable**: Customizable list of ignored filler words
+- ✅ **Real-time**: Minimal latency overhead
+- ✅ **Confidence Filtering**: Ignores low-confidence ASR results
+- ✅ **Dynamic Updates**: Update ignored words at runtime
+- ✅ **Multi-language Ready**: Supports filler words from any language
+- ✅ **Comprehensive Logging**: Detailed logs for debugging
+
+## How It Works
+
+### State-Based Logic
+
+1. **When Agent is QUIET** (not speaking):
+
+   - All user speech is processed immediately
+   - Even filler words like "umm" start the user's turn
+
+2. **When Agent is SPEAKING**:
+   - Filler-only phrases (e.g., "umm", "uh hmm") are ignored
+   - Real words trigger immediate interruption (e.g., "stop", "wait")
+   - Mixed phrases interrupt (e.g., "umm okay stop")
+
+### Confidence Filtering
+
+Transcripts with confidence scores below the threshold (default: 0.3) are automatically ignored to reduce false positives from background noise.
+
+## Installation
+
+```bash
+pip install livekit-agents livekit-plugins-openai livekit-plugins-silero
+```
+
+## Quick Start
+
+### Basic Usage
+
+```python
+from livekit.agents import JobContext, cli, WorkerOptions
+from src.filler_filter import create_assistant_with_filter
+
+async def entrypoint(ctx: JobContext):
+    # Create assistant with default filler filtering
+    assistant, filter_ext = create_assistant_with_filter(ctx)
+
+    await ctx.connect()
+    assistant.start(ctx.room)
+    await assistant.say("Hello! I'm ready to chat.")
+
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+```
+
+### Custom Configuration
+
+```python
+from src.filler_filter import create_assistant_with_filter, FillerFilterConfig
+
+# Create custom config
+config = FillerFilterConfig()
+config.update_ignored_words(['uh', 'umm', 'hmm', 'haan', 'toh', 'accha'])
+
+# Create assistant with custom config
+assistant, filter_ext = create_assistant_with_filter(ctx, config)
+```
+
+### Environment Variable Configuration
+
+Set the `IGNORED_FILLER_WORDS` environment variable:
+
+```bash
+# Comma-separated list
+export IGNORED_FILLER_WORDS="uh,umm,hmm,haan,toh"
+
+# Or JSON array
+export IGNORED_FILLER_WORDS='["uh","umm","hmm","haan"]'
+```
+
+### Dynamic Updates at Runtime
+
+```python
+# Update the list of ignored words while running
+filter_ext.update_ignored_words(['uh', 'umm', 'hmm', 'well'])
+```
+
+## Testing
+
+### Run Unit Tests
+
+```bash
+python -m pytest tests/test_filler_filter.py -v
+```
+
+### Manual Testing Scenarios
+
+#### Test Case 1: Filler-Only Interruption (Should Be Ignored)
+
+1. Start the agent
+2. Let it speak a long response
+3. Say "umm" or "uh" while it's talking
+4. **Expected**: Agent continues speaking
+5. **Check logs**: Should see "Ignored filler interruption"
+
+#### Test Case 2: Real Interruption (Should Stop Agent)
+
+1. Start the agent
+2. Let it speak
+3. Say "wait" or "stop" while it's talking
+4. **Expected**: Agent stops immediately
+5. **Check logs**: Should see "Detected real interruption"
+
+#### Test Case 3: Mixed Interruption (Should Stop Agent)
+
+1. Start the agent
+2. Let it speak
+3. Say "umm okay stop" while it's talking
+4. **Expected**: Agent stops immediately
+5. **Check logs**: Should see "Detected real interruption" with real words: ['okay', 'stop']
+
+#### Test Case 4: Filler When Agent is Quiet (Should Process)
+
+1. Wait for agent to finish speaking
+2. Say "umm"
+3. **Expected**: Agent recognizes this as the start of your turn
+4. **Check logs**: Should see "Agent quiet - processing speech"
+
+### Performance Testing
+
+```python
+import time
+from src.filler_filter import FillerWordFilter
+
+filter = FillerWordFilter()
+filter.set_agent_speaking_state(True)
+
+start = time.perf_counter()
+for _ in range(1000):
+    filter.should_process_interruption("umm okay stop")
+end = time.perf_counter()
+
+print(f"Average processing time: {(end-start)/1000*1000:.3f}ms")
+# Expected: < 1ms per call
+```
+
+## Configuration Reference
+
+### FillerFilterConfig
+
+| Parameter        | Type     | Default   | Description                      |
+| ---------------- | -------- | --------- | -------------------------------- |
+| `ignored_words`  | Set[str] | See below | Set of words to ignore           |
+| `min_confidence` | float    | 0.3       | Minimum ASR confidence threshold |
+
+**Default Ignored Words**: `['uh', 'umm', 'hmm', 'haan', 'um', 'er', 'ah', 'eh']`
+
+### Methods
+
+- `update_ignored_words(words: List[str])`: Replace entire list
+- `add_ignored_word(word: str)`: Add single word
+- `remove_ignored_word(word: str)`: Remove single word
+
+## Logging
+
+Enable detailed logging:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+```
+
+Log messages include:
+
+- `INFO: Agent quiet - processing speech: 'hello'`
+- `INFO: Detected real interruption: 'stop' (real words: ['stop'])`
+- `INFO: Ignored filler interruption: 'umm' (only fillers: ['umm'])`
+- `INFO: Ignored low-confidence (0.25) transcript: 'noise'`
+
+## Troubleshooting
+
+### Agent not stopping on real words
+
+- Check that `is_agent_speaking` state is being set correctly
+- Verify the word isn't in the `ignored_words` list
+- Enable DEBUG logging to see filtering decisions
+
+### Agent stopping on fillers
+
+- Verify the filler is in the `ignored_words` list (case-insensitive)
+- Check for punctuation issues (e.g., "umm." vs "umm")
+- Review ASR confidence scores
+
+### High latency
+
+- The filter adds < 1ms overhead per transcript
+- Check your ASR service latency instead
+- Consider adjusting VAD sensitivity
+
+## Architecture
