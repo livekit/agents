@@ -60,6 +60,7 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
+from .filler_filter import FillerFilter
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
@@ -141,6 +142,13 @@ class AgentActivity(RecognitionHooks):
         )
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
+        
+        # Initialize filler filter for interrupt handling
+        # Use configured filler words from session options, or let FillerFilter use defaults
+        self._filler_filter = FillerFilter(
+            ignored_words=sess.options.ignored_filler_words,
+            min_confidence_threshold=sess.options.filler_confidence_threshold,
+        )
 
         if self._turn_detection_mode == "vad" and not self.vad:
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
@@ -1170,6 +1178,38 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
+        
+        # FILLER FILTER: Check if agent is speaking and transcript contains only fillers
+        agent_is_speaking = (
+            self._current_speech is not None and not self._current_speech.done()
+        )
+        
+        if agent_is_speaking and self._audio_recognition is not None:
+            text = self._audio_recognition.current_transcript
+            # Use a default confidence of 1.0 if not available from STT
+            confidence = 1.0
+            
+            # Check if this is filler-only speech
+            if self._filler_filter.is_filler_only(text, confidence, agent_is_speaking):
+                logger.info(
+                    "[IGNORED_FILLER] Filler-only transcript ignored during agent speech",
+                    extra={
+                        "transcript": text,
+                        "confidence": confidence,
+                        "agent_speaking": agent_is_speaking,
+                        "ignored_words": self._filler_filter.get_ignored_words(),
+                    },
+                )
+                return  # Don't interrupt for filler-only speech
+            else:
+                logger.info(
+                    "[VALID_INTERRUPT] Valid user interruption detected",
+                    extra={
+                        "transcript": text,
+                        "confidence": confidence,
+                        "agent_speaking": agent_is_speaking,
+                    },
+                )
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
