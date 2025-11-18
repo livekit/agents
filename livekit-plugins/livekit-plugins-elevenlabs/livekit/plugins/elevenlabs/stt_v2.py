@@ -412,5 +412,6 @@ class SpeechStreamv2(stt.SpeechStream):
                 error_msg,
                 details_suffix,
             )
+            raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
         else:
             logger.warning("STTv2: Unknown message type: %s, data: %s", message_type, data)
