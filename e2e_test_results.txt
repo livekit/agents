@@ -1,0 +1,32 @@
+
+============================================================
+🧪 END-TO-END AGENT INTEGRATION TEST
+============================================================
+
+📝 Scenario 1: Agent speaking + user filler
+   ✅ Agent ignored filler and continued speaking
+
+📝 Scenario 2: Agent speaking + real interruption
+   ✅ Agent stopped immediately on real interruption
+
+📝 Scenario 3: Agent quiet + user filler
+   ✅ Filler registered as valid speech when agent quiet
+
+📝 Scenario 4: Agent speaking + mixed filler + command
+   ✅ Agent detected command despite filler
+
+📝 Scenario 5: Agent speaking + low confidence noise
+   ✅ Agent ignored low confidence background noise
+
+============================================================
+📊 FINAL STATISTICS
+============================================================
+Total Events Processed: 5
+Events by Type: {'filler_only': 1, 'real_interruption': 2, 'valid_speech': 1, 'low_confidence': 1}
+Total Interruptions: 2
+Ignored Words: 5 configured
+
+============================================================
+✅ ALL END-TO-END TESTS PASSED
+============================================================
+

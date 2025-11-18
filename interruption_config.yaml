@@ -1,0 +1,49 @@
+
+# LiveKit Interruption Handler Configuration
+
+# English filler words to ignore during agent speech
+english_fillers:
+  - uh
+  - um
+  - umm
+  - hmm
+  - hm
+  - mm
+  - mhmm
+  - ah
+  - er
+  - eh
+
+# Hindi filler words
+hindi_fillers:
+  - haan
+  - han
+  - ha
+  - achha
+  - theek
+  - ji
+
+# Custom filler words for your use case
+custom_fillers:
+  - yeah
+  - yep
+  - okay  # Only if you want to ignore casual acknowledgments
+
+# Minimum confidence score to process (0.0 - 1.0)
+# Higher = stricter (ignores more), Lower = lenient (ignores less)
+confidence_threshold: 0.6
+
+# Minimum word duration in seconds
+min_word_duration: 0.2
+
+# Log all interruption events (not just valid ones)
+log_all_events: true
+
+# Allow updating ignored words at runtime
+allow_runtime_updates: true
+
+# Maximum interruption history to keep in memory
+max_history_size: 1000
+
+# Enable statistics tracking
+enable_statistics: true
