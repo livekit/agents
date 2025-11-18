@@ -3,7 +3,6 @@
 
 This project enhances a standard LiveKit voice agent by adding an **interruption handling layer** which intelligently distinguishes between *filler utterances* and *real interruption commands* while strictly keeping LiveKit’s internal VAD untouched
 
-
 ---
 
 ## 🗂 Project Structure
@@ -48,7 +47,7 @@ Located inside the `agent/` directory:
 | `state.py` | Tracks agent speaking state |
 | `config.py` | Reads `.env` and provides runtime config |
 
-### 🔹 3. Updated Model Stack
+### 🔹 3. Updated Model Parameters
 
 The system now uses:
 
@@ -59,7 +58,7 @@ The system now uses:
 
 ---
 
-## 🚀 What Features Works : 
+## 🚀 What Features Works (✅ Verified with Manual Testing): 
 
 - **Filler Suppression While Agent Speaks**  
   Words like *“umm”, “haan”, “uhh”, “hmm”* are ignored when the agent is speaking to avoid false interruptions.
@@ -132,3 +131,34 @@ https://agents-playground.livekit.io/
 
 ## Then Login --> And Connect to the Agent
 ```
+---
+
+##  🛠️ Environment Details
+
+| Component      | Version                  |
+| -------------- | ------------------------ |
+| **Python**     | `3.12.x` (recommended)   |
+| **Livekit**    | latest stable            |
+
+---
+
+## 📦 Core Dependencies
+
+| Library                  | Purpose                     |
+| ------------------------ | --------------------------- |
+| `livekit-agents`         | Core voice agent framework  |
+| `livekit-plugins-silero` | VAD engine                  |
+| `deepgram-sdk`           | Streaming STT               |
+| `openai`                 | LLM (chat completions)      |
+| `elevenlabs`             | TTS voice synthesis         |
+| `python-dotenv`          | Environment variable loader |
+| `pydantic`               | Type-safe models            |
+| `aiohttp/httpx`          | Async HTTP clients          |
+
+---
+
+## 🔹 Known Issues : 
+
+- **Background Noise Sensitivity**
+- **Slightly Unstable Behavior During Rapid Turn Changes**
+- **Micro-pauses in agent speech during filler words**
