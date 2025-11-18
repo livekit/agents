@@ -1054,18 +1054,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
+            handoff_item = AgentHandoff(
+                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                new_agent_id=self._activity.agent.id,
+            )
             if run_state:
                 run_state._agent_handoff(
+                    item=handoff_item,
                     old_agent=previous_activity_v.agent if previous_activity_v else None,
                     new_agent=self._activity.agent,
                 )
-
-            self._chat_ctx.insert(
-                AgentHandoff(
-                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                    new_agent_id=self._activity.agent.id,
-                )
-            )
+            self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()
