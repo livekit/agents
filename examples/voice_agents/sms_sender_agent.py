@@ -17,14 +17,15 @@ RANDOM_MESSAGES = [
     "This is a quick systems check: all vibes appear positive.",
 ]
 
-IS_SIP_SESSION = True # Enables auto-detection of caller's number in SIP session
+IS_SIP_SESSION = True  # Enables auto-detection of caller's number in SIP session
 # Disable it for non-SIP sessions (e.g. console runs)
 
 sms_tool = create_sms_tool(
     SMSToolConfig(
         name="send_playful_sms",
         description=(
-            IS_SIP_SESSION and "Send a playful SMS to the caller's phone number. "
+            IS_SIP_SESSION
+            and "Send a playful SMS to the caller's phone number. "
             or "Send a playful SMS to the provided `to` phone number. "
             "Always include the exact message text you want to deliver."
         ),
@@ -57,13 +58,14 @@ class SMSAgent(Agent):
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions=
-                IS_SIP_SESSION
-                and "Warmly greet the user and ask to choose a message to send"
-                or "Warmly greet the user and ask for their mobile number (skip if you don't have to field in sms tool)"
-            )
+            instructions=IS_SIP_SESSION
+            and "Warmly greet the user and ask to choose a message to send"
+            or "Warmly greet the user and ask for their mobile number (skip if you don't have to field in sms tool)"
+        )
+
 
 server = AgentServer()
+
 
 @server.rtc_session(agent_name="sms-sender")
 async def entrypoint(ctx: JobContext):
