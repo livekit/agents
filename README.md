@@ -111,7 +111,6 @@ This improves conversation flow and reduces accidental cutoffs.
 ## Installation & Setup
 
 ### 1. Clone the repository
-
 git clone <repo>
 cd <project-root>
 
@@ -149,7 +148,7 @@ Run the baseline agent
 python default_agent.py console
 
 
-#Verified Behaviour During Testing
+# Verified Behaviour During Testing
 1. Correctly ignores filler words during TTS
 2. Correctly treats fillers as speech when agent is silent
 3. Interrupts instantly on real interruption commands
