@@ -347,6 +347,8 @@ class SpeechStreamv2(stt.SpeechStream):
             return
 
         elif message_type == "committed_transcript":
+            logger.debug("Received message type committed_transcript: %s", data)
+
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
             text = data.get("text", "")
@@ -397,6 +399,9 @@ class SpeechStreamv2(stt.SpeechStream):
                 )
             else:
                 logger.info("STTv2: Session started with ID: %s", session_id)
+
+        elif message_type == "committed_transcript_with_timestamps":
+            logger.debug("Received message type committed_transcript_with_timestamps: %s", data)
 
         # Error handling for known ElevenLabs error types
         elif message_type in (
