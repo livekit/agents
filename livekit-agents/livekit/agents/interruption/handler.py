@@ -88,7 +88,7 @@ class IntelligentInterruptionHandler:
             ]
 
         self._config = InterruptionConfig(
-            ignored_words=set(word.lower() for word in ignored_words),
+            ignored_words={word.lower() for word in ignored_words},
             confidence_threshold=confidence_threshold,
             log_all_events=log_all_events,
             allow_runtime_updates=allow_runtime_updates,
@@ -125,7 +125,7 @@ class IntelligentInterruptionHandler:
             return
 
         async with self._lock:
-            normalized_words = set(word.lower() for word in words)
+            self._ignored_words = self._ignored_words.union({word.lower() for word in new_words})
             if append:
                 self._config.ignored_words.update(normalized_words)
                 logger.info(f"Added ignored words: {normalized_words}")

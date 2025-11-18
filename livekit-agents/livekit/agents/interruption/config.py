@@ -4,7 +4,6 @@ Configuration file and quick start script for LiveKit Interruption Handler
 
 import os
 from dataclasses import dataclass
-from typing import list
 
 import yaml
 
