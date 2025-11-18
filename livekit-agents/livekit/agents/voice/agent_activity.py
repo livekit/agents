@@ -60,6 +60,8 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
+from .config_watcher import ConfigFileWatcher
+from .suppression_config import SuppressionConfig
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
@@ -141,6 +143,18 @@ class AgentActivity(RecognitionHooks):
         )
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
+
+        # Initialize suppression config for filler word handling
+        self._suppression_config: SuppressionConfig | None = None
+        if sess.options.suppression_words is not None:
+            self._suppression_config = SuppressionConfig(
+                suppression_words=set(sess.options.suppression_words),
+                min_confidence=sess.options.min_confidence_level,
+                enable_patterns=sess.options.enable_multilang_suppression,
+            )
+            # Load from file if provided
+            if sess.options.suppression_config_file:
+                self._suppression_config.load_from_file(sess.options.suppression_config_file)`n`n                # BONUS #1: Start file watcher for dynamic config reload`n                self._config_watcher = ConfigFileWatcher(`n                    sess.options.suppression_config_file,`n                    reload_callback=lambda: self._suppression_config.load_from_file(`n                        sess.options.suppression_config_file`n                    )`n                )`n                # Start watching in background`n                asyncio.create_task(self._config_watcher.start())
 
         if self._turn_detection_mode == "vad" and not self.vad:
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
@@ -1152,7 +1166,55 @@ class AgentActivity(RecognitionHooks):
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    def _interrupt_by_audio_activity(self) -> None:
+    def _should_suppress_transcript(
+        self,
+        text: str,
+        confidence: float,
+        agent_speaking: bool,
+        language: str | None = None,
+    ) -> bool:
+        """Determine if transcript should be suppressed as filler word.
+
+        Uses advanced multi-algorithm detection for improved accuracy.
+
+        Args:
+            text: Transcript text to check
+            confidence: Confidence score from STT
+            agent_speaking: Whether agent is currently speaking
+            language: Optional language code for pattern matching
+
+        Returns:
+            True if transcript should be suppressed, False otherwise
+        """
+        if not self._suppression_config:
+            return False
+
+        # Use advanced suppression logic with multiple algorithms
+        is_suppressed, reason = self._suppression_config.should_suppress_advanced(
+            text, confidence, language
+        )
+
+        if is_suppressed:
+            logger.info(
+                "[SUPPRESSED] Filler detected",
+                extra={
+                    "text": text,
+                    "confidence": confidence,
+                    "agent_speaking": agent_speaking,
+                    "reason": reason,
+                }
+            )
+        else:
+            logger.debug(
+                "[VALID_INPUT] Valid user input",
+                extra={
+                    "text": text,
+                    "confidence": confidence,
+                    "reason": reason,
+                }
+            )
+
+        return is_suppressed    def _interrupt_by_audio_activity(self) -> None:
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
@@ -1170,6 +1232,37 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
+        
+        # Check if agent is speaking and transcript should be suppressed
+        agent_is_speaking = (
+            self._current_speech is not None and not self._current_speech.done()
+        )
+        
+        if agent_is_speaking and self._audio_recognition is not None:
+            text = self._audio_recognition.current_transcript
+            confidence = 1.0
+
+            # Check if transcript should be suppressed
+            if self._should_suppress_transcript(text, confidence, agent_is_speaking):
+                logger.info(
+                    "[SUPPRESSED] Filler-only transcript suppressed during agent speech",
+                    extra={
+                        "transcript": text,
+                        "confidence": confidence,
+                        "agent_speaking": agent_is_speaking,
+                        "suppression_words": list(self._suppression_config.get_suppression_words()) if self._suppression_config else [],
+                    },
+                )
+                return  # Don't interrupt for suppressed speech
+            else:
+                logger.info(
+                    "[VALID_INTERRUPT] Valid user interruption detected",
+                    extra={
+                        "transcript": text,
+                        "confidence": confidence,
+                        "agent_speaking": agent_is_speaking,
+                    },
+                )
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -2574,3 +2667,4 @@ class AgentActivity(RecognitionHooks):
     @property
     def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
+

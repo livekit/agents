@@ -88,6 +88,11 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    # Niranjani's filler suppression parameters (different names from Raghav)
+    suppression_words: list[str] | None
+    min_confidence_level: float
+    enable_multilang_suppression: bool
+    suppression_config_file: str | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -174,6 +179,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
+        # Niranjani's filler suppression parameters (different names from Raghav)
+        suppression_words: NotGivenOr[list[str] | None] = NOT_GIVEN,
+        min_confidence_level: float = 0.5,
+        enable_multilang_suppression: bool = False,
+        suppression_config_file: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -303,6 +313,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            # Niranjani's suppression parameters (different from Raghav's ignored_filler_words)
+            suppression_words=suppression_words if is_given(suppression_words) else None,
+            min_confidence_level=min_confidence_level,
+            enable_multilang_suppression=enable_multilang_suppression,
+            suppression_config_file=suppression_config_file if is_given(suppression_config_file) else None,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False

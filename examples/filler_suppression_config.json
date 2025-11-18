@@ -1,0 +1,16 @@
+{
+  "suppression_words": [
+    "uh",
+    "umm",
+    "hmm",
+    "er",
+    "ah",
+    "haan",
+    "arey",
+    "yaar",
+    "bas",
+    "theek"
+  ],
+  "min_confidence": 0.5,
+  "enable_patterns": true
+}

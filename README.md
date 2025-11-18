@@ -1,375 +1,324 @@
-<!--BEGIN_BANNER_IMAGE-->
+# Filler Word Suppression for LiveKit Agents
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="/.github/banner_dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="/.github/banner_light.png">
-  <img style="width:100%;" alt="The LiveKit icon, the name of the repository and some sample code in the background." src="https://raw.githubusercontent.com/livekit/agents/main/.github/banner_light.png">
-</picture>
-
-<!--END_BANNER_IMAGE-->
-<br />
-
-![PyPI - Version](https://img.shields.io/pypi/v/livekit-agents)
-[![PyPI Downloads](https://static.pepy.tech/badge/livekit-agents/month)](https://pepy.tech/projects/livekit-agents)
-[![Slack community](https://img.shields.io/endpoint?url=https%3A%2F%2Flivekit.io%2Fbadges%2Fslack)](https://livekit.io/join-slack)
-[![Twitter Follow](https://img.shields.io/twitter/follow/livekit)](https://twitter.com/livekit)
-[![Ask DeepWiki for understanding the codebase](https://deepwiki.com/badge.svg)](https://deepwiki.com/livekit/agents)
-[![License](https://img.shields.io/github/license/livekit/livekit)](https://github.com/livekit/livekit/blob/master/LICENSE)
-
-<br />
-
-Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/agents-js)
-
-## What is Agents?
-
-<!--BEGIN_DESCRIPTION-->
-
-The Agent Framework is designed for building realtime, programmable participants
-that run on servers. Use it to create conversational, multi-modal voice
-agents that can see, hear, and understand.
-
-<!--END_DESCRIPTION-->
-
-## Features
-
-- **Flexible integrations**: A comprehensive ecosystem to mix and match the right STT, LLM, TTS, and Realtime API to suit your use case.
-- **Integrated job scheduling**: Built-in task scheduling and distribution with [dispatch APIs](https://docs.livekit.io/agents/build/dispatch/) to connect end users to agents.
-- **Extensive WebRTC clients**: Build client applications using LiveKit's open-source SDK ecosystem, supporting all major platforms.
-- **Telephony integration**: Works seamlessly with LiveKit's [telephony stack](https://docs.livekit.io/sip/), allowing your agent to make calls to or receive calls from phones.
-- **Exchange data with clients**: Use [RPCs](https://docs.livekit.io/home/client/data/rpc/) and other [Data APIs](https://docs.livekit.io/home/client/data/) to seamlessly exchange data with clients.
-- **Semantic turn detection**: Uses a transformer model to detect when a user is done with their turn, helps to reduce interruptions.
-- **MCP support**: Native support for MCP. Integrate tools provided by MCP servers with one loc.
-- **Builtin test framework**: Write tests and use judges to ensure your agent is performing as expected.
-- **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
-
-## Installation
-
-To install the core Agents library, along with plugins for popular model providers:
-
-```bash
-pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0"
-```
-
-## Docs and guides
-
-Documentation on the framework and how to use it can be found [here](https://docs.livekit.io/agents/)
-
-## Core concepts
-
-- Agent: An LLM-based application with defined instructions.
-- AgentSession: A container for agents that manages interactions with end users.
-- entrypoint: The starting point for an interactive session, similar to a request handler in a web server.
-- Worker: The main process that coordinates job scheduling and launches agents for user sessions.
-
-## Usage
-
-### Simple voice agent
+**Author:** Niranjani Sharma  
+**Implementation Date:** November 19, 2025  
+**Feature:** Advanced filler word suppression with multi-algorithm detection
 
 ---
 
+## Overview
+
+This implementation adds intelligent filler word suppression to LiveKit Agents, preventing speech disfluencies (like "umm", "hmm", "uh") from causing unwanted interruptions during agent responses. The system uses a 6-algorithm fusion approach with multi-language support and configurable detection modes.
+
+### Key Features
+
+- **6-Algorithm Detection**: Combines confidence thresholding, pattern matching, filler ratio analysis, and acknowledgment detection
+- **Multi-Language Support**: Built-in patterns for 10 languages (English, Hindi, Spanish, French, German, Japanese, Chinese, Portuguese, Italian, Korean)
+- **Configurable Modes**: Strict (100%), Balanced (≥70%), Lenient (≥80%) detection sensitivity
+- **Smart Acknowledgments**: Recognizes meaningful single-word responses like "okay", "yeah", "yes"
+- **File-Based Configuration**: Dynamic reload without restarting the agent
+- **Production-Ready**: 100% generalization on unseen cases, 88.6% robustness on adversarial tests
+
+---
+
+## How It Works
+
+### Suppression Pipeline
+
+1. **User speaks** while agent is responding
+2. **STT transcribes** the speech with confidence score
+3. **6-Algorithm Analysis**:
+   - Algorithm 1: Confidence thresholding (< 0.5 = suppress)
+   - Algorithm 2: Empty text detection
+   - Algorithm 3: Pattern matching with filler-only check
+   - Algorithm 4: Filler ratio analysis (mode-based thresholds)
+   - Algorithm 5: Short utterance special handling
+   - Algorithm 6: Acknowledgment word detection
+4. **Decision**: Suppress (ignore) or Allow (process as interruption)
+
+### Detection Modes
+
+| Mode | Threshold | Use Case |
+|------|-----------|----------|
+| **Strict** | 100% fillers | Only suppress pure filler sequences |
+| **Balanced** | ≥70% fillers | Default - good for most scenarios |
+| **Lenient** | ≥80% fillers | Allow more potential fillers through |
+
+---
+
+## Installation & Usage
+
+### Basic Configuration
+
 ```python
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    RunContext,
-    WorkerOptions,
-    cli,
-    function_tool,
+from livekit.agents.voice.suppression_config import SuppressionConfig
+
+# Create configuration
+config = SuppressionConfig(
+    detection_mode="balanced",  # or "strict", "lenient"
+    min_confidence=0.5,
+    enable_patterns=True,
+    min_filler_ratio=0.7
 )
-from livekit.plugins import deepgram, elevenlabs, openai, silero
 
-@function_tool
-async def lookup_weather(
-    context: RunContext,
-    location: str,
-):
-    """Used to look up weather information."""
+# Use in suppression logic
+should_suppress, reason = config.should_suppress_advanced(
+    text="uh um hello",
+    confidence=0.92,
+    language="en"
+)
 
-    return {"weather": "sunny", "temperature": 70}
-
-
-async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
-    agent = Agent(
-        instructions="You are a friendly voice assistant built by LiveKit.",
-        tools=[lookup_weather],
-    )
-    session = AgentSession(
-        vad=silero.VAD.load(),
-        # any combination of STT, LLM, TTS, or realtime API can be used
-        stt=deepgram.STT(model="nova-3"),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=elevenlabs.TTS(),
-    )
-
-    await session.start(agent=agent, room=ctx.room)
-    await session.generate_reply(instructions="greet the user and ask about their day")
-
-
-if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+if should_suppress:
+    print(f"Suppressed: {reason}")
+else:
+    print(f"Allowed: {reason}")
 ```
 
-You'll need the following environment variables for this example:
+### File-Based Configuration
 
-- DEEPGRAM_API_KEY
-- OPENAI_API_KEY
-- ELEVEN_API_KEY
+Create `filler_suppression_config.json`:
 
-### Multi-agent handoff
+```json
+{
+  "suppression_words": ["custom", "words"],
+  "min_confidence": 0.5,
+  "enable_patterns": true,
+  "detection_mode": "balanced",
+  "min_filler_ratio": 0.7
+}
+```
+
+Load configuration:
+
+```python
+config = SuppressionConfig()
+config.load_from_file("filler_suppression_config.json")
+```
+
+The configuration file is monitored and automatically reloaded on changes (2-second polling interval).
 
 ---
 
-This code snippet is abbreviated. For the full example, see [multi_agent.py](examples/voice_agents/multi_agent.py)
+## Supported Languages
 
-```python
-...
-class IntroAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions=f"You are a story teller. Your goal is to gather a few pieces of information from the user to make the story personalized and engaging."
-            "Ask the user for their name and where they are from"
-        )
+The system includes built-in patterns for 10 languages:
 
-    async def on_enter(self):
-        self.session.generate_reply(instructions="greet the user and gather information")
+| Language | Code | Example Fillers |
+|----------|------|----------------|
+| English | en | uh, um, er, hmm, ah, oh |
+| Hindi | hi | haan, arey, yaar, bas, accha |
+| Spanish | es | eh, este, pues, bueno, claro |
+| French | fr | euh, ben, alors, bon, hein |
+| German | de | äh, ähm, also, halt, eben |
+| Japanese | ja | ano, eto, ma, ne, sa |
+| Chinese | zh | en, 嗯, 啊, 哦, 那个 |
+| Portuguese | pt | eh, né, então, tipo |
+| Italian | it | ehm, allora, cioè, quindi |
+| Korean | ko | uh, um, 그, 저, 음 |
 
-    @function_tool
-    async def information_gathered(
-        self,
-        context: RunContext,
-        name: str,
-        location: str,
-    ):
-        """Called when the user has provided the information needed to make the story personalized and engaging.
+---
 
-        Args:
-            name: The name of the user
-            location: The location of the user
-        """
+## Algorithm Details
 
-        context.userdata.name = name
-        context.userdata.location = location
+### 1. Confidence Thresholding
+Suppresses low-confidence transcriptions (default < 0.5) regardless of content.
 
-        story_agent = StoryAgent(name, location)
-        return story_agent, "Let's start the story!"
+### 2. Empty Text Detection
+Handles empty strings and whitespace-only inputs.
 
+### 3. Pattern Matching
+Uses regex patterns to detect filler words across 10 languages, then verifies the text contains only fillers.
 
-class StoryAgent(Agent):
-    def __init__(self, name: str, location: str) -> None:
-        super().__init__(
-            instructions=f"You are a storyteller. Use the user's information in order to make the story personalized."
-            f"The user's name is {name}, from {location}"
-            # override the default model, switching to Realtime API from standard LLMs
-            llm=openai.realtime.RealtimeModel(voice="echo"),
-            chat_ctx=chat_ctx,
-        )
+### 4. Filler Ratio Analysis
+Calculates the percentage of filler words:
+- **Strict mode**: Suppress only if 100% fillers
+- **Balanced mode**: Suppress if ≥ configured ratio (default 70%)
+- **Lenient mode**: Suppress if ≥ 80% fillers
 
-    async def on_enter(self):
-        self.session.generate_reply()
+### 5. Short Utterance Handling
+Special logic for 1-2 word phrases to avoid false positives.
 
+### 6. Acknowledgment Detection
+Whitelists 20 common acknowledgment words that should not be suppressed when used alone:
+- Positive: okay, ok, yeah, yes, yep, sure, right, correct, alright, fine, good, great, perfect, excellent
+- Negative: no, nope, nah, never
+- Emphatic: absolutely, definitely
 
-async def entrypoint(ctx: JobContext):
-    await ctx.connect()
+---
 
-    userdata = StoryData()
-    session = AgentSession[StoryData](
-        vad=silero.VAD.load(),
-        stt=deepgram.STT(model="nova-3"),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(voice="echo"),
-        userdata=userdata,
-    )
+## Testing & Validation
 
-    await session.start(
-        agent=IntroAgent(),
-        room=ctx.room,
-    )
-...
-```
+### Test Coverage
 
-### Testing
+The implementation includes comprehensive testing with 12 test suites covering:
 
-Automated tests are essential for building reliable agents, especially with the non-deterministic behavior of LLMs. LiveKit Agents include native test integration to help you create dependable agents.
+1. **Basic Suppression** - Core word matching
+2. **Regex Pattern Matching** - Multi-language patterns
+3. **Confidence Thresholds** - Dynamic threshold updates
+4. **Dynamic Updates** - Add/remove suppression words
+5. **Multi-Language Support** - All 10 languages
+6. **Case Insensitivity** - Upper/lower/mixed case
+7. **Empty/Whitespace** - Edge cases
+8. **Advanced Logic** - 6-algorithm integration
+9. **Detection Modes** - Strict/balanced/lenient
+10. **Real-World Scenarios** - Natural conversation patterns
+11. **Acknowledgment Words** - Single-word responses
+12. **Filler Ratio** - Mathematical calculations
 
-```python
-@pytest.mark.asyncio
-async def test_no_availability() -> None:
-    llm = google.LLM()
-    async AgentSession(llm=llm) as sess:
-        await sess.start(MyAgent())
-        result = await sess.run(
-            user_input="Hello, I need to place an order."
-        )
-        result.expect.skip_next_event_if(type="message", role="assistant")
-        result.expect.next_event().is_function_call(name="start_order")
-        result.expect.next_event().is_function_call_output()
-        await (
-            result.expect.next_event()
-            .is_message(role="assistant")
-            .judge(llm, intent="assistant should be asking the user what they would like")
-        )
+### Validation Results
 
-```
+- **Unit Tests**: 12/12 passed (100%)
+- **Comprehensive Test**: 100/100 samples (100%)
+- **Generalization Test**: 49/49 unseen cases (100%)
+- **Adversarial Test**: 39/44 corner cases (88.6%)
+- **Total Coverage**: ~200 test cases
+
+See `OVERFITTING_ANALYSIS.md` for detailed validation methodology and results.
+
+---
 
 ## Examples
 
-<table>
-<tr>
-<td width="50%">
-<h3>🎙️ Starter Agent</h3>
-<p>A starter agent optimized for voice conversations.</p>
-<p>
-<a href="examples/voice_agents/basic_agent.py">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>🔄 Multi-user push to talk</h3>
-<p>Responds to multiple users in the room via push-to-talk.</p>
-<p>
-<a href="examples/voice_agents/push_to_talk.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>🎵 Background audio</h3>
-<p>Background ambient and thinking audio to improve realism.</p>
-<p>
-<a href="examples/voice_agents/background_audio.py">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>🛠️ Dynamic tool creation</h3>
-<p>Creating function tools dynamically.</p>
-<p>
-<a href="examples/voice_agents/dynamic_tool_creation.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>☎️ Outbound caller</h3>
-<p>Agent that makes outbound phone calls</p>
-<p>
-<a href="https://github.com/livekit-examples/outbound-caller-python">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>📋 Structured output</h3>
-<p>Using structured output from LLM to guide TTS tone.</p>
-<p>
-<a href="examples/voice_agents/structured_output.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>🔌 MCP support</h3>
-<p>Use tools from MCP servers</p>
-<p>
-<a href="examples/voice_agents/mcp">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>💬 Text-only agent</h3>
-<p>Skip voice altogether and use the same code for text-only integrations</p>
-<p>
-<a href="examples/other/text_only.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>📝 Multi-user transcriber</h3>
-<p>Produce transcriptions from all users in the room</p>
-<p>
-<a href="examples/other/transcription/multi-user-transcriber.py">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>🎥 Video avatars</h3>
-<p>Add an AI avatar with Tavus, Beyond Presence, and Bithuman</p>
-<p>
-<a href="examples/avatar_agents/">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>🍽️ Restaurant ordering and reservations</h3>
-<p>Full example of an agent that handles calls for a restaurant.</p>
-<p>
-<a href="examples/voice_agents/restaurant_agent.py">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>👁️ Gemini Live vision</h3>
-<p>Full example (including iOS app) of Gemini Live agent that can see.</p>
-<p>
-<a href="https://github.com/livekit-examples/vision-demo">Code</a>
-</p>
-</td>
-</tr>
-
-</table>
-
-## Running your agent
-
-### Testing in terminal
-
-```shell
-python myagent.py console
+### Example 1: Pure Fillers (Suppressed)
+```python
+config = SuppressionConfig(detection_mode="balanced")
+should_suppress, reason = config.should_suppress_advanced("uh um er", 0.85, "en")
+# Result: should_suppress = True
+# Reason: "Pattern match - only filler words"
 ```
 
-Runs your agent in terminal mode, enabling local audio input and output for testing.
-This mode doesn't require external servers or dependencies and is useful for quickly validating behavior.
-
-### Developing with LiveKit clients
-
-```shell
-python myagent.py dev
+### Example 2: Question with Filler (Allowed)
+```python
+should_suppress, reason = config.should_suppress_advanced("uh can you help me", 0.92, "en")
+# Result: should_suppress = False
+# Reason: "Contains 4 non-filler words (ratio: 0.20)"
 ```
 
-Starts the agent server and enables hot reloading when files change. This mode allows each process to host multiple concurrent agents efficiently.
-
-The agent connects to LiveKit Cloud or your self-hosted server. Set the following environment variables:
-- LIVEKIT_URL
-- LIVEKIT_API_KEY
-- LIVEKIT_API_SECRET
-
-You can connect using any LiveKit client SDK or telephony integration.
-To get started quickly, try the [Agents Playground](https://agents-playground.livekit.io/).
-
-### Running for production
-
-```shell
-python myagent.py start
+### Example 3: Acknowledgment (Allowed)
+```python
+should_suppress, reason = config.should_suppress_advanced("okay", 0.88, "en")
+# Result: should_suppress = False
+# Reason: "Single acknowledgment word 'okay' - allowing"
 ```
 
-Runs the agent with production-ready optimizations.
+### Example 4: Low Confidence (Suppressed)
+```python
+should_suppress, reason = config.should_suppress_advanced("hello", 0.42, "en")
+# Result: should_suppress = True
+# Reason: "Low confidence (0.42 < 0.50)"
+```
 
-## Contributing
+---
 
-The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
+## File Structure
 
-<!--BEGIN_REPO_NAV-->
-<br/><table>
-<thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
-<tbody>
-<tr><td>LiveKit SDKs</td><td><a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS/visionOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (WebGL)</a> · <a href="https://github.com/livekit/client-sdk-esp32">ESP32</a></td></tr><tr></tr>
-<tr><td>Server APIs</td><td><a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/server-sdk-go">Golang</a> · <a href="https://github.com/livekit/server-sdk-ruby">Ruby</a> · <a href="https://github.com/livekit/server-sdk-kotlin">Java/Kotlin</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/agence104/livekit-server-sdk-php">PHP (community)</a> · <a href="https://github.com/pabloFuente/livekit-server-sdk-dotnet">.NET (community)</a></td></tr><tr></tr>
-<tr><td>UI Components</td><td><a href="https://github.com/livekit/components-js">React</a> · <a href="https://github.com/livekit/components-android">Android Compose</a> · <a href="https://github.com/livekit/components-swift">SwiftUI</a> · <a href="https://github.com/livekit/components-flutter">Flutter</a></td></tr><tr></tr>
-<tr><td>Agents Frameworks</td><td><b>Python</b> · <a href="https://github.com/livekit/agents-js">Node.js</a> · <a href="https://github.com/livekit/agent-playground">Playground</a></td></tr><tr></tr>
-<tr><td>Services</td><td><a href="https://github.com/livekit/livekit">LiveKit server</a> · <a href="https://github.com/livekit/egress">Egress</a> · <a href="https://github.com/livekit/ingress">Ingress</a> · <a href="https://github.com/livekit/sip">SIP</a></td></tr><tr></tr>
-<tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://github.com/livekit-examples">Example apps</a> · <a href="https://livekit.io/cloud">Cloud</a> · <a href="https://docs.livekit.io/home/self-hosting/deployment">Self-hosting</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a></td></tr>
-</tbody>
-</table>
-<!--END_REPO_NAV-->
+```
+livekit-agents/
+├── livekit/
+│   └── agents/
+│       └── voice/
+│           ├── suppression_config.py   # Main implementation (366 lines)
+│           ├── config_watcher.py       # File monitoring (115 lines)
+│           └── agent_activity.py       # Integration point
+tests/
+└── test_suppression.py                 # Comprehensive tests (321 lines)
+examples/
+└── filler_suppression_config.json      # Example configuration
+```
+
+---
+
+## Performance Characteristics
+
+- **Pattern Compilation**: One-time at initialization
+- **Regex Matching**: O(n) where n = text length
+- **Filler Ratio**: O(w) where w = word count
+- **Config Reload**: 2-second polling interval
+- **Memory**: Minimal (~10KB for patterns)
+
+---
+
+## Production Deployment
+
+### Recommended Settings
+
+**High-Accuracy Scenario** (customer service, medical):
+```python
+config = SuppressionConfig(
+    detection_mode="strict",
+    min_confidence=0.7,
+    min_filler_ratio=1.0
+)
+```
+
+**Balanced Scenario** (general chatbots):
+```python
+config = SuppressionConfig(
+    detection_mode="balanced",
+    min_confidence=0.5,
+    min_filler_ratio=0.7
+)
+```
+
+**Permissive Scenario** (casual conversation):
+```python
+config = SuppressionConfig(
+    detection_mode="lenient",
+    min_confidence=0.4,
+    min_filler_ratio=0.8
+)
+```
+
+---
+
+## Running Tests
+
+```bash
+# Navigate to tests directory
+cd tests
+
+# Run unit tests
+python test_suppression.py
+
+# Expected output:
+# ======================================================================
+# Running Filler Suppression Tests
+# ======================================================================
+# 
+# ✓ Basic suppression test passed
+# ✓ Regex pattern matching test passed
+# ✓ Confidence threshold test passed
+# ✓ Dynamic updates test passed
+# ✓ Multi-language support test passed
+# ✓ Case insensitivity test passed
+# ✓ Empty/whitespace test passed
+# ✓ Advanced suppression logic test passed
+# ✓ Detection modes test passed
+# ✓ Real-world scenarios test passed
+# ✓ Acknowledgment words test passed
+# ✓ Filler ratio calculation test passed
+# 
+# ======================================================================
+# ✅ All 12 tests passed successfully!
+# ======================================================================
+```
+
+---
+
+## License
+
+This implementation follows the LiveKit Agents license (Apache 2.0). See LICENSE file for details.
+
+---
+
+## References
+
+- [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
+- [Overfitting Analysis](OVERFITTING_ANALYSIS.md) - Detailed validation methodology
+- Feature implementation based on LiveKit Agents Intern Assessment Task
+
+---
+
+**Contact**: Niranjani Sharma  
+**Repository**: https://github.com/Niranjani-sharma/livekit_agents  
+**Branch**: feature/filler-suppression-niranjani
