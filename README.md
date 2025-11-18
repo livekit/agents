@@ -114,6 +114,27 @@ Each decision is logged with:
 
 ---
 
+## 🖥️ Demo Output (InterruptHandler in action)
+
+Below is the actual console output from the demo script:
+
+![InterruptHandler Demo Output](plugins/interrupt_handler/demo_output.png)
+
+---
+
+## 🧪 Demo Script Output Explanation
+
+The demo shows:
+
+- 🟡 Filler-only speech (`uh`, `umm`) → ignored  
+- 🔴 Mixed speech containing a command (`umm okay stop`) → TTS interrupted  
+- 🟢 Quiet-mode filler (`umm`) → passed through  
+- ⚠️ Low-confidence speech (`hmm yeah`, confidence 0.12) → ignored  
+- 🚨 High-confidence interim command (`stop stop stop`) → interrupted immediately  
+  
+
+---
+
 ## ⚠️ Known Issues
 
 - No automatic language detection  
