@@ -1,7 +1,7 @@
 # 🎙️ LiveKit Voice Agent — Interruption Handling Layer
-### **NSUT Internship Assignment — Final Submission - By Yash Gupta**
+### 🔥 **NSUT Internship Assignment — Final Submission - By Yash Gupta**
 
-This project enhances a standard LiveKit voice agent by adding an **interruption handling layer** which intelligently distinguishes between *filler utterances* and *real interruption commands* while strictly keeping LiveKit’s internal VAD untouched
+This project enhances a standard LiveKit voice agent by adding an **interruption handling layer** which intelligently distinguishes between *filler utterances* and *real interruption commands* while strictly keeping LiveKit’s internal VAD untouched.
 
 ---
 
@@ -9,21 +9,22 @@ This project enhances a standard LiveKit voice agent by adding an **interruption
 
 Below is the complete directory layout:
 ```bash
-.
-├── agent/
-│   ├── config.py
-│   ├── entrypoint.py
-│   ├── session_manager.py
-│   └── state.py
-│
-├── interrupt_handler/
-│   ├── constants.py
-│   ├── middleware.py
-│   └── utils.py
-│
-├── .env.example
-├── requirements.txt
-└── README.md
+├── agents/
+    ├── livekit-interrupt-handler-yash/
+        ├── agent/
+        │   ├── config.py
+        │   ├── entrypoint.py
+        │   ├── session_manager.py
+        │   └── state.py
+        │
+        ├── interrupt_handler/
+        │   ├── constants.py
+        │   ├── middleware.py
+        │   └── utils.py
+        │
+        ├── .env.example
+        ├── requirements.txt
+        └── README.md
 ```
 
 ---
@@ -58,7 +59,7 @@ The system now uses:
 
 ---
 
-## 🚀 What Features Works (✅ Verified with Manual Testing): 
+## 🚀 What Features Works  (✅ Verified): 
 
 - **Filler Suppression While Agent Speaks**  
   Words like *“umm”, “haan”, “uhh”, “hmm”* are ignored when the agent is speaking to avoid false interruptions.
@@ -150,7 +151,7 @@ https://agents-playground.livekit.io/
 | `livekit-plugins-silero` | VAD engine                  |
 | `deepgram-sdk`           | Streaming STT               |
 | `openai`                 | LLM (chat completions)      |
-| `elevenlabs`             | TTS voice synthesis         |
+| `cartesia`               | TTS voice synthesis         |
 | `python-dotenv`          | Environment variable loader |
 | `pydantic`               | Type-safe models            |
 | `aiohttp/httpx`          | Async HTTP clients          |
