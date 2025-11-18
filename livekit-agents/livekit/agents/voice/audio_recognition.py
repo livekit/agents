@@ -323,7 +323,6 @@ class AudioRecognition:
             if not transcript:
                 return
 
-            self._hooks.on_final_transcript(ev)
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
@@ -334,6 +333,12 @@ class AudioRecognition:
             self._audio_transcript = self._audio_transcript.lstrip()
             self._final_transcript_confidence.append(confidence)
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
+            self._hooks.on_final_transcript(
+                ev,
+                speaking=self._speaking if self._vad else None,
+                pause_speech=transcript_changed
+                and (self._vad_base_turn_detection or self._user_turn_committed),
+            )
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
             self._final_transcript_received.set()

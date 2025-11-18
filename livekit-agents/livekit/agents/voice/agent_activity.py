@@ -1254,7 +1254,9 @@ class AgentActivity(RecognitionHooks):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
-    def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
+    def on_final_transcript(
+        self, ev: stt.SpeechEvent, *, speaking: bool | None = None, pause_speech: bool = False
+    ) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -1267,6 +1269,21 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+        # agent speech might be playing if there are two final transcripts in a row
+        # so we need to pause the speech and then immediately interrupt
+        # VAD should have triggered the interruption, but sometimes it fails
+        # and final transcript is received without any preceding signals/events
+
+        if pause_speech:
+            self._interrupt_by_audio_activity()
+
+            if (
+                speaking is False
+                and self._paused_speech
+                and (timeout := self._session.options.false_interruption_timeout) is not None
+            ):
+                # schedule a resume timer if interrupted after end_of_speech
+                self._start_false_interruption_timer(timeout)
 
         self._interrupt_paused_speech_task = asyncio.create_task(
             self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
