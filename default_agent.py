@@ -1,4 +1,4 @@
-# baseline_agent.py
+# default_agent.py
 from __future__ import annotations
 
 import logging
@@ -13,7 +13,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("baseline_agent")
+logger = logging.getLogger("default_agent")
 
 
 class BaselineAssistant(Agent):
@@ -41,10 +41,6 @@ async def entrypoint(ctx: agents.JobContext):
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
-        # NOTE: we are NOT overriding allow_interruptions here.
-        # Default is True, so any user speech will interrupt the agent.
-        # See LiveKit docs: allow_interruptions default True.
-        # https://docs.livekit.io/agents/build/turns/
     )
 
     await session.start(

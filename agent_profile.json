@@ -1,0 +1,10 @@
+{
+  "ignored": {
+    "en": ["uh", "umm", "hmm"],
+    "hi": ["haan", "acha", "arey"]
+  },
+  "commands": {
+    "en": ["wait", "stop", "no", "hold on", "byebye"],
+    "hi": ["ruko", "band", "nahi"]
+  }
+}
