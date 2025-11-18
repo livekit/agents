@@ -30,6 +30,38 @@ agents that can see, hear, and understand.
 
 <!--END_DESCRIPTION-->
 
+## LiveKit Voice Interruption Handling Challenge
+
+### What Changed
+- Added a filler-aware interruption guard that filters STT transcripts before they pause or cancel active speech, wired directly into `AgentActivity`.
+- Extended `AgentSessionOptions` with configurable `ignored_interruption_words`, confidence thresholding, and runtime update hooks so deployments can tune behavior per language.
+- Logged ignored vs. accepted segments for observability and added `tests/test_interruption_guard.py` to unit-test the semantic gate.
+
+### What Works
+- Filler-only audio such as "uh/umm/hmm/haan" no longer interrupts the agent mid-sentence, while the same words still count as speech once the agent is silent.
+- Mixed phrases like "umm okay stop" break through immediately because the guard detects non-filler tokens.
+- Low-confidence filler snippets are dropped as noise, avoiding stop/start flapping in noisy rooms.
+- Ignored and accepted turns are tagged separately in the logs, making it easy to trace decisions.
+
+### Known Issues
+- End-to-end validation still depends on a configured STT/LLM/TTS stack; without provider keys the realtime example cannot be exercised.
+- `pytest` is not installed in this environment, so the new unit test suite could not be executed here (see steps below for running it locally).
+
+### Steps to Test
+1. **Unit test**: `python -m pip install pytest` (once), then `python -m pytest tests/test_interruption_guard.py`.
+2. **Manual voice loop**:
+   - Export your LiveKit + model credentials and run `python examples/voice_agents/basic_agent.py console`.
+   - While the agent is speaking, say only filler words such as “uh… uh… hmm” — the agent should keep talking.
+   - Say “umm okay stop” during playback — the agent should cut off immediately.
+   - Stay silent until the agent finishes, then say “uh” — it should count as normal user speech and trigger a response.
+   - Speak softly “wait one second” during playback — it should interrupt instantly.
+
+### Environment Details
+- Python 3.10+ (repo tested with 3.10.0 from `C:\Users\Kevin Antony\AppData\Local\Programs\Python\Python310\python.exe`).
+- Install deps with `pip install -e .[openai,silero,deepgram,cartesia,turn-detector]` (or your preferred providers) plus `pytest` for the guard tests.
+- Config: set `ignored_interruption_words` and `filler_confidence_threshold` when instantiating `AgentSession`, or call `session.update_ignored_interruption_words([...])` at runtime.
+- Logs: run with `LOG_LEVEL=debug` to see `ignored filler speech` vs. `accepted user speech` events emitted by the guard.
+
 ## Features
 
 - **Flexible integrations**: A comprehensive ecosystem to mix and match the right STT, LLM, TTS, and Realtime API to suit your use case.

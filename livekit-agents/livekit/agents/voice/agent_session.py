@@ -88,6 +88,9 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    interruption_guard_enabled: bool
+    ignored_interruption_words: tuple[str, ...]
+    filler_confidence_threshold: float
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -144,6 +147,8 @@ class VoiceActivityVideoSampler:
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
+DEFAULT_IGNORED_INTERRUPTION_WORDS: tuple[str, ...] = ("uh", "umm", "hmm", "haan")
+DEFAULT_FILLER_CONFIDENCE_THRESHOLD = 0.55
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
@@ -174,6 +179,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
+        ignored_interruption_words: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        interruption_guard_enabled: bool = True,
+        filler_confidence_threshold: float = DEFAULT_FILLER_CONFIDENCE_THRESHOLD,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -260,6 +268,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
+            ignored_interruption_words (Sequence[str], optional): Words/utterances that should not
+                pause the agent while it is speaking. Defaults to ``("uh", "umm", "hmm", "haan")``.
+            interruption_guard_enabled (bool): Whether to enable the filler-word interruption guard.
+                Requires STT transcripts. Defaults to ``True``.
+            filler_confidence_threshold (float): Confidence floor applied to filler-only transcripts.
+                Below this value, the transcripts are treated as noise even when the agent is silent.
+                Defaults to ``0.55``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -281,6 +296,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
+        ignored_words = (
+            tuple(ignored_interruption_words)
+            if is_given(ignored_interruption_words)
+            else DEFAULT_IGNORED_INTERRUPTION_WORDS
+        )
+
         self._opts = AgentSessionOptions(
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
@@ -300,6 +321,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             ivr_detection=ivr_detection,
+            interruption_guard_enabled=interruption_guard_enabled,
+            ignored_interruption_words=ignored_words,
+            filler_confidence_threshold=filler_confidence_threshold,
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
@@ -407,6 +431,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def options(self) -> AgentSessionOptions:
         return self._opts
+
+    def update_ignored_interruption_words(self, words: Sequence[str]) -> None:
+        normalized = tuple(words)
+        self._opts.ignored_interruption_words = normalized
+        if self._activity is not None:
+            self._activity.update_ignored_interruption_words(normalized)
 
     @property
     def conn_options(self) -> SessionConnectOptions:
