@@ -125,7 +125,9 @@ class IntelligentInterruptionHandler:
             return
 
         async with self._lock:
-            self._ignored_words = self._ignored_words.union({word.lower() for word in new_words})
+            normalized_words = {word.lower() for word in words} # <-- Assume input parameter is 'words'
+
+            self._ignored_words = self._ignored_words.union(normalized_words)
             if append:
                 self._config.ignored_words.update(normalized_words)
                 logger.info(f"Added ignored words: {normalized_words}")
