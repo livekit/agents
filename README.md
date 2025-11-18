@@ -1,3 +1,96 @@
+Assignment: LiveKit Interrupt Handler & Filler-Word Filtering
+Author: Deepak Kumar
+Branch: feature/livekit-interrupt-handler-deepak
+✅ 1. What Changed (Feature Overview)
+
+This assignment extends the LiveKit Agents STT pipeline to make conversations more natural and interruption-aware. The following additions were implemented:
+
+🔹 New Module Added
+
+livekit-agents/livekit/agents/voice/filler_filter.py
+
+Detects filler-only speech such as:
+"uh", "um", "hmm", "okay..."
+
+Filters them before they reach the LLM.
+
+Provides configurable low-confidence rejection.
+
+🔹 Modified File
+
+livekit-agents/livekit/agents/inference/stt.py
+
+Integrated filler filtering for interim + final transcripts.
+
+Added low-confidence filtering based on confidence score.
+
+Implemented automatic TTS interruption when the user begins speaking.
+
+Maintains normal STT pipeline behavior for valid speech.
+
+✅ 2. What Works (Verified Features)
+
+✔ Filler words are correctly removed and not forwarded to the LLM
+✔ Low-confidence transcripts (< 0.55) are ignored
+✔ User speech interrupts TTS output immediately
+✔ STT event flow (START → INTERIM → FINAL → END) remains unchanged
+✔ Agent continues running end-to-end without errors
+
+⚠️ 3. Known Issues / Limitations
+
+🔸 Filler detection is rule-based, not ML-based — may miss some complex filler phrases
+🔸 TTS interruption tested only in mock environment (console mode)
+🔸 LiveKit cloud STT requires valid API keys — internal STT was used locally
+
+🧪 4. Steps to Test the Feature
+📌 A. Run Agent in Console Mode
+
+Run inside the virtual environment:
+
+uv run python examples/voice_agents/basic_agent.py console
+
+📌 B. Speak These Test Inputs
+Input	Expected Behavior
+“umm…”	Should be filtered (no STT event)
+“uhh… okay…”	Should be filtered
+Whisper very softly	Rejected as low confidence
+Speak while TTS is talking	TTS stops immediately
+📌 C. Observe Logs
+
+You should see logs like:
+
+Filtered filler-only STT text: "um"
+Filtered low-confidence STT text: "hello" (conf=0.42)
+User is speaking — interrupting TTS
+
+🧩 5. Implementation Files
+File	Purpose
+voice/filler_filter.py	Implements filler + confidence-based filtering
+inference/stt.py	Integrates filter + TTS interruption into STT flow
+��️ 6. Environment Details
+Python 3.13
+LiveKit Agents v1.3.x
+Dependencies installed via uv
+Testing done in console mode (no external STT/LLM/TTS keys)
+
+🔗 7. Branch Link (Submit This)
+
+👉 https://github.com/deepakumar427/agents/tree/feature/livekit-interrupt-handler-deepak
+
+✅ 8. Summary
+
+This update provides a more natural conversational experience by:
+
+removing meaningless filler sounds,
+
+blocking unreliable transcripts,
+
+avoiding the assistant “talking over” the user.
+
+All changes are isolated, documented, and ready for review.
+
+
+
 <!--BEGIN_BANNER_IMAGE-->
 
 <picture>
@@ -49,6 +142,8 @@ To install the core Agents library, along with plugins for popular model provide
 ```bash
 pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0"
 ```
+
+
 
 ## Docs and guides
 
