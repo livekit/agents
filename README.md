@@ -1,5 +1,5 @@
-# Chat Processor AI — Intelligent Voice Assistant with Advanced Interruption Handling
-### *NSUT Assignment – B.Tech CSE (Artificial Intelligence), 3rd Year*
+# LiveKit — A powerful framework for building realtime voice AI agents
+### *SalesCode.ai Assessment – Tanish Kumar, B.Tech, CSAI*
 
 This repository contains my implementation of a **multilingual, filler-aware, interruption-safe voice assistant** built using the **LiveKit Agents** framework.  
 The goal of this work was to create a more natural and intelligent voice interaction system that understands the difference between *filler noise* and *real user interruptions* — something real conversational AI systems must handle correctly.
