@@ -7,7 +7,7 @@ I reorganized and renamed the modules into a clean package called **`chat_proces
 
 ---
 
-## 🚀 Features & Capabilities
+## Features & Capabilities
 
 ### ✔ Filler Words Are Ignored While Agent Speaks
 The agent does **not** interrupt itself when the user says:
@@ -26,7 +26,7 @@ Works for both languages:
 **English:**  
 `stop`, `wait`, `hold on`, `no`  
 
-**Hindi (Latin script):**  
+**Hindi:**  
 `ruko`, `band`, `nahi`
 
 ### ✔ English + Hindi Language Detection  
@@ -45,10 +45,10 @@ Two agents included:
 ## 📁 Project Structure
 
 chat_processor/
-agent_config.py
-intent_detector.py
-memory_manager.py
-settings_loader.py
+   agent_config.py
+   intent_detector.py
+   memory_manager.py
+   settings_loader.py
 
 main_agent.py
 default_agent.py
@@ -91,7 +91,7 @@ Tracks agent & user speaking states:
 
 ---
 
-## 🧠 Intelligent Classification Logic (Summary)
+## Intelligent Classification Logic (Summary)
 
 1. **If the agent is not speaking**  
    → **Everything counts as user speech**
@@ -124,16 +124,14 @@ source .venv/bin/activate      # macOS / Linux
 pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.3"
 pip install python-dotenv
 
+
 4. Create a .env file
 LIVEKIT_URL=your_url
 LIVEKIT_API_KEY=your_key
 LIVEKIT_API_SECRET=your_secret
-
 OPENAI_API_KEY=sk-xxxx
 LIVEKIT_INFERENCE_USE_DIRECT_OPENAI=1
-
 DEFAULT_LANGUAGE=en
-
 FILLER_CONFIDENCE_THRESHOLD=0.6
 FILLER_CONFIG_PATH=./agent_profile.json
 
@@ -149,19 +147,13 @@ Run the baseline agent
 python default_agent.py console
 
 
-🧪 Verified Behaviour During Testing
-
-✔ Correctly ignores filler words during TTS
-
-✔ Correctly treats fillers as speech when agent is silent
-
-✔ Interrupts instantly on real interruption commands
-
-✔ Selects correct language profile based on STT
-
-✔ Reacts instantly to JSON updates
-
-✔ Baseline agent interrupts on all noise (intended behavior)
+#Verified Behaviour During Testing
+1. Correctly ignores filler words during TTS
+2. Correctly treats fillers as speech when agent is silent
+3. Interrupts instantly on real interruption commands
+4. Selects correct language profile based on STT
+5. Reacts instantly to JSON updates
+6. Baseline agent interrupts on all noise (intended behavior)
 
 
 
