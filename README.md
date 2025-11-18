@@ -372,4 +372,13 @@ The Agents framework is under active development in a rapidly evolving field. We
 <tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://github.com/livekit-examples">Example apps</a> · <a href="https://livekit.io/cloud">Cloud</a> · <a href="https://docs.livekit.io/home/self-hosting/deployment">Self-hosting</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a></td></tr>
 </tbody>
 </table>
+
+##  Additional Extension (Assignment)
+
+A new module was added to support smart voice interruption filtering.
+
+See:
+`agents/extensions/interrupt_handler/README.md`
 <!--END_REPO_NAV-->
+
+

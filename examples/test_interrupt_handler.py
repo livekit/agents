@@ -1,5 +1,12 @@
 import asyncio
 from agents.extensions.interrupt_handler.handler import InterruptHandler
+import asyncio
+from agents.extensions.interrupt_handler.handler import InterruptHandler
+
+# Simulated speaking state
+agent_speaking = True
+
+
 
 # Simulated speaking state
 agent_speaking = True
@@ -12,6 +19,7 @@ def stop_agent():
     print(">>> Agent interrupted and stopped speaking")
     agent_speaking = False
 
+
 interrupt_handler = InterruptHandler(
     is_agent_speaking=is_agent_speaking,
     stop_agent=stop_agent,
@@ -22,20 +30,23 @@ async def simulate_input(text, confidence=1.0):
     print(f"\nUser says: {text}")
     await interrupt_handler.handle_asr(text, confidence)
 
+
 async def run_tests():
     print("=== Starting Interrupt Handler Test ===")
-    
-    # Agent starts speaking
+
     global agent_speaking
     agent_speaking = True
 
-    await simulate_input("umm")         # ignored filler
-    await simulate_input("haan")        # ignored filler
-    await simulate_input("wait stop")   # valid interruption
+    # Agent is speaking
+    await simulate_input("umm")          # ignored filler
+    await simulate_input("haan")         # ignored filler
+    await simulate_input("wait stop")    # valid interruption
 
-    # Now agent is stopped
-    await simulate_input("umm")         # user speech event (agent quiet)
+    # Agent is now silent
+    await simulate_input("umm")          # user speech (not ignored)
 
     print("\n=== Test Complete ===")
 
-asyncio.run(run_tests())
+
+if __name__ == "__main__":
+    asyncio.run(run_tests())
