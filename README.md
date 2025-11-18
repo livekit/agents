@@ -321,6 +321,36 @@ async def test_no_availability() -> None:
 
 </table>
 
+## LiveKit Voice Interruption Handler Implementation
+
+This section details the custom implementation for intelligently handling user interruptions based on ASR transcription content, as required by the Salescode challenge. This logic enhances the agent's naturalness by distinguishing genuine commands from irrelevant speech fillers (e.g., "umm," "uh").
+
+### What Changed 
+* **New Module:** Introduced `intelligent_handler.py` containing the `IntelligentInterruptionHandler` class.
+* **Core Logic:** The handler uses a configurable list (`FILLER_WORDS`) and the agent's internal speaking status to classify user transcription events.
+* **Integration:** Modified `examples/voice_agents/resume_interrupted_agent.py` to hook into two events:
+    * `session.on("agent_state_changed")`: To track when the agent starts/stops speaking.
+    * `session.on("user_input_transcribed")`: To run the custom `should_interrupt` logic.
+
+### What Works 
+* **Seamless Continuation:** Agent ignores filler words (e.g., "uh", "umm") when it is currently speaking, allowing speech to continue without awkward cuts.
+* **Immediate Stop:** Agent immediately stops its TTS output when genuine commands (e.g., "wait one second", "no not that one") are detected.
+* **Mixed Input Handling:** Agent correctly interrupts when a filler word is mixed with a command (e.g., "umm okay stop").
+* **Quiet Speech:** Filler words are correctly registered as valid speech events when the agent is quiet.
+
+
+### Steps to Test 
+1.  **Environment:** Ensure API keys are set in the `.env` file (LIVEKIT, DEEPGRAM, OPENAI/Cartesia).
+2.  **Run:** Start the agent in console mode: `python examples/voice_agents/resume_interrupted_agent.py console`
+3.  **Test Case 1 (Ignore Filler):** Wait for the agent to start speaking. Say "uh-huh" or "hmm." **Expected Result:** The agent must continue speaking.
+4.  **Test Case 2 (Genuine Command):** Wait for the agent to start speaking. Say "stop." **Expected Result:** The agent must stop talking immediately.
+5.  **Test Case 3 (Quiet Speech):** Wait until the agent is silent. Say "umm." **Expected Result:** The agent registers the speech and starts processing a reply.
+
+### Environment Details 
+* **Python Version:** (State your version, e.g., 3.10.x)
+* **Dependencies:** Installed via `pip install -e .[openai,silero,deepgram,cartesia,turn-detector]`.
+* **Configuration:** Requires valid API keys for LiveKit and the configured STT/TTS providers (Deepgram/Cartesia) in the `.env` file.
+
 ## Running your agent
 
 ### Testing in terminal
