@@ -257,6 +257,7 @@ class RoomIO:
     def linked_participant(self) -> rtc.RemoteParticipant | None:
         if not self._participant_available_fut.done():
             return None
+
         return self._participant_available_fut.result()
 
     @property

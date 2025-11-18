@@ -135,10 +135,11 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(cleanup)
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+
+server.setup_fnc = prewarm
 
 if __name__ == "__main__":
     cli.run_app(server)

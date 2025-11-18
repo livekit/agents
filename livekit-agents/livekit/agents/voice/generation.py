@@ -5,9 +5,9 @@ import functools
 import inspect
 import json
 import time
-from collections.abc import AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -29,11 +29,12 @@ from ..llm.tool_context import (
 )
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
-from ..utils import aio
+from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
+from ..utils import aio, is_given
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
+from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -48,7 +49,7 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str]
+    text_ch: aio.Chan[str | FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
@@ -64,7 +65,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[str]()
+    text_ch = aio.Chan[Union[str, FlushSentinel]]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -156,6 +157,9 @@ async def _llm_inference_task(
                 if chunk.delta.content:
                     data.generated_text += chunk.delta.content
                     text_ch.send_nowait(chunk.delta.content)
+
+            elif isinstance(chunk, FlushSentinel):
+                text_ch.send_nowait(chunk)
             else:
                 logger.warning(
                     f"LLM node returned an unexpected type: {type(chunk)}",
@@ -184,7 +188,7 @@ class _TTSGenerationData:
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str],
+    input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
@@ -192,12 +196,9 @@ def perform_tts_inference(
     timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
-    if text_transforms:
-        from .transcription.filters import apply_text_transforms
-
-        input = apply_text_transforms(input, text_transforms)
-
-    tts_task = asyncio.create_task(_tts_inference_task(node, input, model_settings, data))
+    tts_task = asyncio.create_task(
+        _tts_inference_task(node, input, model_settings, data, text_transforms)
+    )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
@@ -211,52 +212,87 @@ def perform_tts_inference(
 
 
 @utils.log_exceptions(logger=logger)
-@tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str],
+    input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
+    text_transforms: Sequence[TextTransforms] | None,
 ) -> bool:
     start_time: float | None = None
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
-    input_tee = itertools.tee(input, 2)
 
-    async def _get_start_time() -> None:
-        nonlocal start_time
-        await input_tee[0].__anext__()
-        start_time = time.perf_counter()
+    @tracer.start_as_current_span("tts_node")
+    async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
+        if text_transforms:
+            input = apply_text_transforms(input, text_transforms)
 
-    _start_time_task = asyncio.create_task(_get_start_time())
-
-    try:
-        tts_node = node(input_tee[1], model_settings)
+        tts_node = node(input, model_settings)
         if asyncio.iscoroutine(tts_node):
             tts_node = await tts_node
 
-        if isinstance(tts_node, AsyncIterable):
+        audio_duration: float = 0.0
+        if not isinstance(tts_node, AsyncIterable):
+            if not timed_texts_fut.done():
+                timed_texts_fut.set_result(None)
+            return audio_duration
+
+        if timed_texts_fut.done():
+            timed_text_ch = timed_texts_fut.result()
+        else:
             timed_text_ch = aio.Chan[io.TimedString]()
             timed_texts_fut.set_result(timed_text_ch)
 
-            async for audio_frame in tts_node:
-                if data.ttfb is None:
-                    if start_time is None:
-                        start_time = 0
+        async for audio_frame in tts_node:
+            if start_time is not None and data.ttfb is None:
+                data.ttfb = time.perf_counter() - start_time
 
-                    data.ttfb = time.perf_counter() - start_time
-
+            if timed_text_ch is not None:
                 for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                    timed_text_ch.send_nowait(text)
+                    if isinstance(text, io.TimedString):
+                        if is_given(text.start_time):
+                            text.start_time += pushed_duration
+                        if is_given(text.end_time):
+                            text.end_time += pushed_duration
+                        timed_text_ch.send_nowait(text)
 
-                audio_ch.send_nowait(audio_frame)
-            return True
+            audio_ch.send_nowait(audio_frame)
+            audio_duration += audio_frame.duration
+        return audio_duration
 
-        timed_texts_fut.set_result(None)
+    input_tee = itertools.tee(input, 2)
+    finished = False
+
+    async def _get_start_time() -> None:
+        nonlocal start_time
+        async for chunk in input_tee[0]:
+            if not isinstance(chunk, FlushSentinel):
+                start_time = time.perf_counter()
+                break
+
+    async def _input_segment() -> AsyncGenerator[str, None]:
+        async for chunk in input_tee[1]:
+            if isinstance(chunk, FlushSentinel):
+                return
+            yield chunk
+
+        nonlocal finished
+        finished = True
+
+    _start_time_task = asyncio.create_task(_get_start_time())
+    pushed_duration: float = 0.0
+    input_segment: AsyncGenerator[str, None] | None = None
+    try:
+        while not finished:
+            input_segment = _input_segment()
+            pushed_duration += await _tts_node_inference(input_segment, pushed_duration)
     finally:
         await aio.gracefully_cancel(_start_time_task)
+        if input_segment is not None:
+            await input_segment.aclose()
         await input_tee.aclose()
 
-    return False
+    return pushed_duration > 0
 
 
 @dataclass

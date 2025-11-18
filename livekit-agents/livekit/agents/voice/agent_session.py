@@ -343,7 +343,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._lock = asyncio.Lock()
 
         # used to keep a reference to the room io
-        # this is not exposed, if users want access to it, they can create their own RoomIO
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
 
@@ -381,7 +380,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("VoiceAgent userdata is not set")
+            raise ValueError("AgentSession userdata is not set")
 
         return self._userdata
 
@@ -513,9 +512,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 job_ctx = get_job_context()
                 if not is_given(record):
                     record = job_ctx.job.enable_recording
+
                 self._enable_recording = record
+
                 if self._enable_recording:
                     job_ctx.init_recording()
+
             except RuntimeError:
                 # JobContext is not available in evals
                 pass
@@ -593,14 +595,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if self._enable_recording:
-                    if job_ctx._primary_agent_session is None:
-                        job_ctx._primary_agent_session = self
-                    else:
-                        raise RuntimeError(
-                            "Only one `AgentSession` can be the primary at a time. "
-                            "If you want to ignore primary designation, use session.start(record=False)."
-                        )
+                if job_ctx._primary_agent_session is None:
+                    job_ctx._primary_agent_session = self
+                elif self._enable_recording:
+                    raise RuntimeError(
+                        "Only one `AgentSession` can be the primary at a time. "
+                        "If you want to ignore primary designation, use session.start(record=False)."
+                    )
 
                 if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(self)
@@ -721,6 +722,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         await self._activity.drain()
+
+    @property
+    def room_io(self) -> room_io.RoomIO:
+        if not self._room_io:
+            raise RuntimeError(
+                "Cannot access room_io: the AgentSession was not started with a room."
+            )
+
+        return self._room_io
 
     def _close_soon(
         self,
