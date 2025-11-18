@@ -1,5 +1,6 @@
-import logging
+cat > basic_agent.py <<'PY'
 import asyncio
+import logging
 
 from dotenv import load_dotenv
 
@@ -10,8 +11,6 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
-    WorkerOptions,
-    AutoSubscribe,
     RunContext,
     cli,
     metrics,
@@ -33,11 +32,13 @@ load_dotenv()
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Kelly. You would interact with users via voice."
-            "with that in mind keep your responses concise and to the point."
-            "do not use emojis, asterisks, markdown, or other special characters in your responses."
-            "You are curious and friendly, and have a sense of humor."
-            "you will speak english to the user",
+            instructions=(
+                "Your name is Kelly. You would interact with users via voice. "
+                "With that in mind keep your responses concise and to the point. "
+                "Do not use emojis, asterisks, markdown, or other special characters in your responses. "
+                "You are curious and friendly, and have a sense of humor. "
+                "You will speak English to the user."
+            ),
         )
 
     async def on_enter(self):
@@ -67,7 +68,7 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-    
+
     session = AgentSession(
         stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
@@ -117,3 +118,4 @@ async def entrypoint(ctx: JobContext):
 
 if __name__ == "__main__":
     cli.run_app(server)
+PY
