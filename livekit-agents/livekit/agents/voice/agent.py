@@ -91,6 +91,19 @@ class Agent:
 
         self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
+                
+        try:
+            from livekit.agents.interrupt_handler.global_injector import GlobalInterruptionInjector
+
+            injector = GlobalInterruptionInjector()
+
+            # Attach automatically when a session becomes available
+            injector.attach_to_next_session(self)
+
+            logger.info("✅ Global interruption injector enabled for all agents.")
+
+        except Exception as e:
+            logger.error(f"⚠ Failed to attach global interruption injector: {e}")
 
     @property
     def id(self) -> str:
