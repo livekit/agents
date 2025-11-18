@@ -119,7 +119,7 @@ class LLM(llm.LLM):
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
             if model == "gpt-5.1":
-                reasoning_effort = "none"
+                reasoning_effort = None  # type: ignore
             else:
                 reasoning_effort = "minimal"
 
