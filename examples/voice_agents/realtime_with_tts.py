@@ -5,7 +5,7 @@ from google.genai.types import Modality  # noqa: F401
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, room_io
 from livekit.agents.llm import function_tool
-from livekit.plugins import google, openai  # noqa: F401
+from livekit.plugins import google  # noqa: F401
 
 logger = logging.getLogger("realtime-with-tts")
 logger.setLevel(logging.INFO)
@@ -24,9 +24,9 @@ class WeatherAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a helpful assistant.",
-            llm=openai.realtime.RealtimeModel(modalities=["text"]),
-            # llm=google.beta.realtime.RealtimeModel(modalities=[Modality.TEXT]),
-            tts=openai.TTS(voice="ash"),
+            #llm=openai.realtime.RealtimeModel(modalities=["text"]),
+            llm=google.beta.realtime.RealtimeModel(modalities=[Modality.TEXT]),
+            tts=google.beta.gemini_tts.TTS(), # Switched from openai to gemini for testing since gemini provides a free api key unlike openai
         )
 
     @function_tool
