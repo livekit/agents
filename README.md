@@ -258,7 +258,10 @@ CARTESIA_API_KEY=&lt;your_cartesia_key&gt;
   "uh",
   "uhh",
   "hmm",
-  "erm"
+  "erm",
+  "acha",
+  "aree",
+  "haan"
 ]</code></pre>
   </li>
 
@@ -271,7 +274,9 @@ CARTESIA_API_KEY=&lt;your_cartesia_key&gt;
   "hold on",
   "no",
   "stop that",
-  "stop now"
+  "stop now",
+  "ruk jao",
+  "ek second"
 ]</code></pre>
   </li>
 </ul>
