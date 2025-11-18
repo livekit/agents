@@ -125,7 +125,9 @@ class IntelligentInterruptionHandler:
             return
 
         async with self._lock:
-            normalized_words = {word.lower() for word in words} # <-- Assume input parameter is 'words'
+            normalized_words = {
+                word.lower() for word in words
+            }  # <-- Assume input parameter is 'words'
 
             self._ignored_words = self._ignored_words.union(normalized_words)
             if append:
