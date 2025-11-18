@@ -1813,23 +1813,7 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        # before executing tools, make sure we generated all the text
-        # (this ensure everything is kept ordered)
-        if text_forward_task:
-            await speech_handle.wait_if_not_interrupted([text_forward_task])
-
-        generated_msg: llm.ChatMessage | None = None
-        if text_out and text_out.text:
-            # emit the assistant message to the SpeechHandle before calling the tools
-            generated_msg = llm.ChatMessage(
-                role="assistant",
-                content=[text_out.text],
-                id=llm_gen_data.id,
-                interrupted=False,
-                created_at=reply_started_at,
-            )
-            speech_handle._item_added([generated_msg])
-
+        # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
 
@@ -1874,16 +1858,14 @@ class AgentActivity(RecognitionHooks):
                     started_speaking_at - user_metrics["stopped_speaking_at"]
                 )
 
-        if generated_msg and assistant_metrics:
-            generated_msg.metrics = assistant_metrics
-
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        has_speech_message = False
 
         # add the tools messages that triggers this reply to the chat context
         if _previous_tools_messages:
-            for msg in _previous_tools_messages:
+            for tool_msg in _previous_tools_messages:
                 # reset the created_at to the reply start time
-                msg.created_at = reply_started_at
+                tool_msg.created_at = reply_started_at
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
 
@@ -1892,6 +1874,8 @@ class AgentActivity(RecognitionHooks):
             await text_tee.aclose()
 
             forwarded_text = text_out.text if text_out else ""
+            if forwarded_text:
+                has_speech_message = True
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -1904,16 +1888,18 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
-            copy_msg: llm.ChatMessage | None = None
-            if generated_msg:
-                copy_msg = generated_msg.model_copy()
-                copy_msg.content = [forwarded_text]
-                copy_msg.interrupted = True
-
-                if forwarded_text:
-                    self._agent._chat_ctx.insert(copy_msg)
-                    self._session._conversation_item_added(copy_msg)
-
+            if forwarded_text:
+                msg = chat_ctx.add_message(
+                    role="assistant",
+                    content=forwarded_text,
+                    id=llm_gen_data.id,
+                    interrupted=True,
+                    created_at=reply_started_at,
+                    metrics=assistant_metrics,
+                )
+                self._agent._chat_ctx.insert(msg)
+                self._session._conversation_item_added(msg)
+                speech_handle._item_added([msg])
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
@@ -1928,13 +1914,20 @@ class AgentActivity(RecognitionHooks):
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
             )
 
-        if generated_msg:
-            chat_ctx.insert(generated_msg)
-            self._agent._chat_ctx.insert(generated_msg)
-            self._session._conversation_item_added(generated_msg)
-            current_span.set_attribute(
-                trace_types.ATTR_RESPONSE_TEXT, generated_msg.text_content or ""
+        if text_out and text_out.text:
+            has_speech_message = True
+            msg = chat_ctx.add_message(
+                role="assistant",
+                content=text_out.text,
+                id=llm_gen_data.id,
+                interrupted=False,
+                created_at=reply_started_at,
+                metrics=assistant_metrics,
             )
+            self._agent._chat_ctx.insert(msg)
+            self._session._conversation_item_added(msg)
+            speech_handle._item_added([msg])
+            current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, text_out.text)
 
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
@@ -2015,7 +2008,7 @@ class AgentActivity(RecognitionHooks):
                         ),
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
                         # tool response generation
-                        _previous_user_metrics=user_metrics if not generated_msg else None,
+                        _previous_user_metrics=user_metrics if not has_speech_message else None,
                         _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
@@ -2027,8 +2020,8 @@ class AgentActivity(RecognitionHooks):
                 )
             elif len(new_fnc_outputs) > 0:
                 # add the tool calls and outputs to the chat context even no reply is generated
-                for msg in tool_messages:
-                    msg.created_at = reply_started_at
+                for tool_msg in tool_messages:
+                    tool_msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
