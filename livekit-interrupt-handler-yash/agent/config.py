@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+## Handles API Keys
 class Config:
     def __init__(self):
         self.livekit_url = os.getenv("LIVEKIT_URL")

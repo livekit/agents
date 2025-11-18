@@ -29,9 +29,6 @@ class InterruptFilteringMiddleware:
         confidence: float,
         agent_is_speaking: bool,
     ) -> bool:
-        """
-        The core decision engine for interruption filtering.
-        """
 
         # When the agent is NOT speaking → treat user speech as valid turn
         if not agent_is_speaking:

@@ -1,11 +1,9 @@
 import logging
 import asyncio
-from livekit.agents import ConversationItemAddedEvent
 from agent.state import AgentState
 from interrupt_handler.middleware import InterruptFilteringMiddleware
 
 logger = logging.getLogger("session_manager")
-
 
 class SessionManager:
     def __init__(self, session, agent, config):
@@ -14,65 +12,70 @@ class SessionManager:
         self.config = config
         self.state = AgentState()
 
+        # semantic interruption filter
         self.interrupt_filter = InterruptFilteringMiddleware(
-            conf_threshold=float(
-                getattr(config, "confidence_threshold", 0.6)
-            )
+            conf_threshold=float(getattr(config, "confidence_threshold", 0.6))
         )
 
     async def initialize(self, room):
-        """
-        Attach event listener for conversation items (v1.3).
-        """
 
-        @self.session.on("conversation_item_added")
-        def _on_conversation_item_added(event: ConversationItemAddedEvent):
-            # MUST use create_task — LiveKit does NOT allow async callbacks
-            asyncio.create_task(self._handle_conversation_message(event))
+        # LiveKit 1.3.x emits "conversation_message_added"
+        @self.session.on("conversation_message_added")
+        def _on_message(ev):
+            asyncio.create_task(self._handle_message(ev))
 
         await self.session.start(agent=self.agent, room=room)
         logger.info("[SESSION] Started LiveKit session.")
 
-    async def _handle_conversation_message(self, event):
-        """
-        Minimal replacement for transcript handler.
-        """
+    # ----------------------------------------------------
+    # MAIN HANDLER — LiveKit 1.3.x event model
+    # ----------------------------------------------------
+    async def _handle_message(self, ev):
+        msg = ev.message  # correct object in LiveKit 1.3.x
 
-        # Correct participant access
-        participant = event.item.participant
-
-        # Ignore assistant messages
-        if participant.identity == "assistant":
+        # ignore system + assistant messages
+        if msg.role != "user":
             return
 
-        text = event.item.text_content or ""
-        confidence = 1.0  # LiveKit doesn't expose ASR confidence here
+        # get transcript text
+        text = (msg.text or "").strip()
 
-        logger.info(
-            f"[USER TRANSCRIPT] '{text}' (conf={confidence:.2f})"
-        )
+        # confidence exists only for transcripts
+        confidence = getattr(msg, "confidence", 1.0)
+
+        logger.info(f"[USER TRANSCRIPT] '{text}' (conf={confidence:.2f})")
 
         await self.handle_user_transcript(text, confidence)
 
+    # ----------------------------------------------------
+    # SEMANTIC INTERRUPTION LAYER
+    # ----------------------------------------------------
     async def handle_user_transcript(self, text, confidence):
-        """
-        Your existing interruption logic.
-        """
-
-        should_interrupt = await self.interrupt_filter.should_interrupt(
+        decision = await self.interrupt_filter.should_interrupt(
             text=text,
             confidence=confidence,
             agent_is_speaking=self.state.agent_is_speaking,
         )
 
-        if should_interrupt and self.state.agent_is_speaking:
-            logger.info("[INTERRUPT] Approved.")
+        if decision == "command" and self.state.agent_is_speaking:
+            logger.info("[INTERRUPT] Command detected → stopping agent.")
             await self.session.interrupt()
-        else:
-            logger.info("[NO INTERRUPT] Rejected.")
+            return
 
+        if decision == "filler_ignored" and self.state.agent_is_speaking:
+            logger.info("[FILLER IGNORED] Not interrupting.")
+            return
+
+        # Normal speech → end user turn (allows agent to respond)
+        logger.info("[END USER TURN] Normal speech.")
+        await self.session.end_user_turn()
+
+    # ----------------------------------------------------
+    # AGENT TTS GENERATION
+    # ----------------------------------------------------
     async def say(self, text):
         logger.info(f"[AGENT] Speaking: {text}")
+
         self.state.agent_is_speaking = True
 
         handle = await self.session.generate_reply(
@@ -80,5 +83,5 @@ class SessionManager:
             allow_interruptions=False,
         )
 
-        await handle.wait_for_completion()
+        await handle._wait_for_generation()
         self.state.agent_is_speaking = False

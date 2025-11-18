@@ -9,8 +9,6 @@ from livekit.agents import (
     cli,
 )
 from livekit.plugins import silero
-
-
 from agent.session_manager import SessionManager
 from agent.config import load_config
 
@@ -26,21 +24,26 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
     cfg = load_config()
 
-    # Build the agent persona (instructions + tools)
+    # Initialize agent    
     agent = Agent(
         instructions="You are a helpful voice assistant. Reply concisely.",
         tools=[],
     )
-
-    # Create LiveKit session
+    # Initialize agent session with VAD, STT, LLM, and TTS
     session = AgentSession(
         vad=silero.VAD.load(),
         stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+
+        # disable model-side interrupt prediction
+        preemptive_generation=False,
+
+        resume_false_interruption=True,
+        false_interruption_timeout=0.4,
     )
 
-    # Wrap with our session manager (tracks speaking state, attaches handlers)
+    # Initialize session manager
     sm = SessionManager(
         session=session,
         agent=agent,
