@@ -1,12 +1,13 @@
-# examples/my_intelligent_agent.py
-
-from livekit.agents import Agent, AgentSession, JobContext, cli
-from livekit.plugins import deepgram, elevenlabs, openai, silero
-from livekit.agents.utils import function_tool # Example tool import
+import os
+from livekit.agents import Agent, AgentSession, JobContext, cli, WorkerOptions
+from livekit.plugins import deepgram, elevenlabs, silero
+from livekit.plugins import groq # <--- 1. IMPORT GROQ PLUGIN INSTEAD OF GEMINI (which was unused)
+from livekit.plugins import openai # KEEP openai to ensure its LLM is available
 
 # Import modules created in Step 2
 from .config import IGNORED_WORDS, INTERRUPTION_COMMANDS, LOW_CONFIDENCE_THRESHOLD
 from .IntelligentInterruptHandler import IntelligentInterruptHandler
+groq_key = os.environ.get("GROQ_API_KEY")
 
 async def entrypoint(ctx: JobContext):
     """The starting point for an interactive session."""
@@ -27,16 +28,20 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         stt=deepgram.STT(model="nova-3"), # Deepgram is used here as it provides transcription events
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=elevenlabs.TTS(),
+        llm=groq.LLM( # <--- 2. USE THE DEDICATED GROQ PLUGIN
+            model="llama-3.1-8b-instant", 
+            # api_key and api_base are now passed via environment variable: GROQ_API_KEY
+        ),
+        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
     )
 
     await session.start(agent=agent, room=room)
 
     # 3. Custom Interruption Logic Hook
-    # The handling should be done as an extension layer[cite: 12].
+    # The handling should be done as an extension layer.
     @session.on("user_speech_transcribed")
     def handle_transcription(transcript_event):
+        # ... (Interruption logic remains the same
         """Processes ASR transcription events from the STT plugin."""
         
         # Use getattr for safety, as field names can vary by plugin.
@@ -50,7 +55,7 @@ async def entrypoint(ctx: JobContext):
             
             # If the handler decides it's a valid interruption and the agent is speaking:
             if agent_is_speaking:
-                # Gracefully pause when genuine interruptions are detected[cite: 58].
+                # Gracefully pause when genuine interruptions are detected.
                 print("Stopping agent streams due to valid interruption...")
                 session.tts_stream.stop()
                 session.llm_session.stop()
@@ -63,5 +68,15 @@ async def entrypoint(ctx: JobContext):
     await session.generate_reply(instructions="greet the user and tell them you are ready to talk. Ask them to try interrupting you with 'umm' and then with 'stop'.")
     
 if __name__ == "__main__":
-    # Ensure you set required environment variables (DEEPGRAM_API_KEY, OPENAI_API_KEY, ELEVEN_API_KEY)
-    cli.run_app(entrypoint_fnc=entrypoint)
+    # Environment Variable Check (Optional, but good practice)
+    if not all(os.getenv(v) for v in ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "GROQ_API_KEY", "DEEPGRAM_API_KEY", "ELEVEN_API_KEY"]): # <--- 3. Updated ENV check to GROQ_API_KEY
+        print("ERROR: One or more required environment variables are not set. Ensure GROQ_API_KEY is set.")
+        exit(1)
+
+    # 1. Create the WorkerOptions object
+    opts = WorkerOptions(
+        entrypoint_fnc=entrypoint
+    )
+
+    # 2. Run the application by passing the options object
+    cli.run_app(opts)

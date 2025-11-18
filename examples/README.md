@@ -1,79 +1,80 @@
-# LiveKit Agents Examples
+# 🗣️ Conversational AI Agent with Static Backchannel Filtering
 
-This directory contains various examples demonstrating different capabilities and use cases for LiveKit agents. Each example showcases specific features, integrations, or workflows that can be built with the LiveKit Agents framework.
+## Project Overview
 
-## 📁 Example Categories
+This project implements an advanced conversational AI agent using an **Intelligent Interrupt Handler**. The core feature is the use of a predefined, static list of **ignored words (backchannels)** to filter out common conversational fillers (like "yeah," "uh-huh") and prevent the agent from being unnecessarily interrupted. This significantly improves the natural flow of the full-duplex conversation.
 
-### 🎙️ [Voice Agents](./voice_agents/)
+## Key Components
 
-A comprehensive collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, and advanced features like multi-agent workflows and push-to-talk agents.
+### 1\. The Agent (`my_ai_agent.py`)
 
-### 🖼️ [Avatar Agents](./avatar_agents/)
+This is the main entry point, containing the session setup and event handlers for managing the conversation flow.
 
-Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Bey, BitHuman, Hedra, Simli, and Tavus.
+### 2\. Intelligent Interrupt Handler (`IntelligentInterruptHandler.py`)
 
-### 🔄 [Warm Transfer](./warm-transfer/)
+This class contains the core logic for distinguishing between a listener backchannel and a genuine interruption command. It checks for:
 
-Demonstrates supervisor escalation workflows for call centers, showing how to implement warm transfers where agents can brief supervisors before connecting them to customers.
+  * **Static Ignored Words:** Exact matches to `IGNORED_WORDS` are filtered.
+  * **Explicit Commands:** Words like "STOP" are immediately processed if confidence is high.
+  * **Confidence Threshold:** Filters out low-confidence, noisy transcriptions.
 
-### 🚗 [Drive-Thru](./drive-thru/)
+## Feature Branch Details: Static Interruption Filtering
 
-A complete drive-thru ordering system example that showcases interactive voice agents for food ordering with database integration and order management.
+### What Changed: Overview of new modules, params, and logic added.
 
-### 🏢 [Front Desk](./frontdesk/)
+  * **New Module:** Introduced `IntelligentInterruptHandler.py` to encapsulate and centralize all interruption decision logic, separating it from the main agent loop.
+  * **New Parameter:** The `IGNORED_WORDS` list was introduced in `config.py` to hold the static, pre-defined set of backchannels (e.g., `mhm`, `i see`).
+  * **Core Logic:** The `user_speech_transcribed` event handler now delegates the interruption decision to an instance of `IntelligentInterruptHandler`, which applies the static filter and confidence checks.
 
-A front desk agent example demonstrating how to build customer service agents with calendar integration and appointment management capabilities.
+### What Works: Features verified through manual or automated testing.
 
-### 🔧 [Primitives](./primitives/)
+  * **Backchannel Filtering:** The agent successfully ignores single-word or short phrases (e.g., **"mhm," "right"**) found in the static `IGNORED_WORDS` list, allowing it to complete its current speech segment without disruption.
+  * **Explicit Interruption:** Explicit commands like **"STOP"** or **"WAIT"** are immediately recognized and halt the agent's speech, provided the transcription confidence meets the required threshold.
+  * **Full-Duplex Flow:** The agent maintains responsiveness, ensuring low latency for STT, LLM, and TTS services.
 
-Basic building blocks and fundamental examples showing core LiveKit concepts like room connections, participant management, and basic audio/video handling.
+### Known Issues: Any edge cases or instability observed.
 
-### 🛠️ [Other](./other/)
+  * **Static Limitation:** The word list is **static** and cannot be updated dynamically during a session. A restart is required to add or remove ignored words.
+  * **Partial Match Edge Case:** The current logic only ignores the transcription if it is an *exact* match for a word in `IGNORED_WORDS`. A complex phrase starting with a filler (e.g., "Yeah, can you pause for a second") is currently treated as a full interruption.
+  * **Confidence Instability:** Highly mumbled or low-confidence filler words sometimes slip through the confidence threshold, leading to minor, unwarranted interruptions.
 
-Additional examples including text-only agents, various TTS providers, transcription services, and translation utilities.
+### Steps to Test: How to start the agent and verify filler vs. real speech handling.
 
-## Running Examples
+1.  **Start the agent** using the instructions in the "Running the Agent" section below.
+2.  **Test 1 (Ignored Backchannel):** While the agent is speaking a long response, say: **"Mhm"** or **"Got it"**.
+      * *Expected Result:* The agent must continue speaking without interruption.
+3.  **Test 2 (Valid Interruption):** While the agent is speaking, say: **"Stop talking now"**.
+      * *Expected Result:* The agent should immediately halt its speech and acknowledge the interruption.
+4.  **Test 3 (Unlisted Filler):** While the agent is speaking, say: **"Like"** (assuming "like" is *not* in the static list).
+      * *Expected Result:* The agent should halt, demonstrating the need for new fillers to be added to the static list.
 
-To run the examples, you'll need:
+### Environment Details: Python version, dependencies, and config instructions.
 
-- A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
-- API keys for the model providers you want to use in a `.env` file
-- Python 3.9 or higher
-- [uv](https://docs.astral.sh/uv/)
+  * **Python Version:** Python 3.8+
+  * **Dependencies:** All required packages are listed in `requirements.txt`.
+  * **Required External APIs:**
+      * **Speech-to-Text (STT): Deepgram**
+      * **Text-to-Speech (TTS): LiveKit In-Built TTS**
+      * **Large Language Model (LLM): Grok API**
 
-### Environment file
+-----
 
-Create a `.env` file in the `examples` directory and add your API keys (see `examples/.env.example`):
+## Configuration & Static Filtering
 
-```bash
-LIVEKIT_URL="wss://your-project.livekit.cloud"
-LIVEKIT_API_KEY="your_api_key"
-LIVEKIT_API_SECRET="your_api_secret"
-OPENAI_API_KEY="sk-xxx" # or any other model provider API key
-# ... other model provider API keys as needed
-```
+The list of words and phrases the agent will ignore is defined statically in `config.py`.
 
-### Install dependencies
+### `config.py` (Example)
 
-From the repository root, run the following command:
-
-```bash
-uv sync --all-extras --dev
-```
-
-### Running an individual example
-
-Run an example agent:
-
-```bash
-uv run examples/voice_agents/basic_agent.py console
-```
-
-Your agent is now running in the console.
-
-For frontend support, use the [Agents playground](https://agents-playground.livekit.io) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
-
-## 📖 Additional Resources
-
-- [LiveKit Documentation](https://docs.livekit.io/)
-- [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
+```python
+# List of words/phrases the agent will ignore to prevent unnecessary interruption.
+IGNORED_WORDS = [
+    "yeah",
+    "uh-huh",
+    "mhm",
+    "right",
+    "i see",
+    "okay",
+    "got it",
+    "wow",
+    "go on",
+]

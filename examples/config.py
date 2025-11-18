@@ -9,7 +9,15 @@ IGNORED_WORDS: List[str] = [
     'hmm', 
     'haan', 
     'like', 
-    'you know'
+    'you know',
+    'Okay',
+    'ok',
+    'Yeah',
+    'Uh-huh',
+    'Right',
+    'Yup',
+    'Sure',
+    'Wow',
 ]
 
 # 2. Defined list of Real Interruption Commands
