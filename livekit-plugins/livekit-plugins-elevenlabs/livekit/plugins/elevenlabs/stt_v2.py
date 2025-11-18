@@ -22,6 +22,7 @@ import logging
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
