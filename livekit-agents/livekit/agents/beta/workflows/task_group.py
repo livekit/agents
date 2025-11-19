@@ -13,7 +13,7 @@ else:
 
 from typing import Any
 
-from ... import FunctionTool, llm
+from ... import RawFunctionTool, llm
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
@@ -102,7 +102,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
         self.complete(TaskGroupResult(task_results=task_results))
 
-    def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
+    def _build_out_of_scope_tool(self, *, active_task_id: str) -> RawFunctionTool | None:
         if not self._visited_tasks:
             return None
 
