@@ -584,9 +584,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if self.input.audio and self.output.audio:
                     if self._enable_recording:
                         # TODO: remove this when adding barge-in model @chenghao
+                        # history = []
+
                         # def placeholder_input_write_cb(buf: list[rtc.AudioFrame]) -> None:
                         #     if len(buf) > 0:
                         #         logger.debug(f"Received {len(buf)} audio frames")
+                        #         history.extend(buf)
+                        #         frame = rtc.combine_audio_frames(history)
+                        #         with open("history.wav", "wb") as f:
+                        #             f.write(frame.to_wav_bytes())
 
                         # self._recorder_io = RecorderIO(
                         #     agent_session=self, input_write_cb=placeholder_input_write_cb
