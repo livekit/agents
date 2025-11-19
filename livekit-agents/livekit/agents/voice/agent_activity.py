@@ -1243,7 +1243,7 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-        if ev.alternatives[0].text:
+        if ev.alternatives[0].text and self._turn_detection_mode not in ("manual", "realtime_llm"):
             self._interrupt_by_audio_activity()
 
             if (
@@ -1254,9 +1254,7 @@ class AgentActivity(RecognitionHooks):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
-    def on_final_transcript(
-        self, ev: stt.SpeechEvent, *, speaking: bool | None = None, pause_speech: bool = False
-    ) -> None:
+    def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -1269,12 +1267,11 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
-        # agent speech might be playing if there are two final transcripts in a row
-        # so we need to pause the speech and then immediately interrupt
-        # VAD should have triggered the interruption, but sometimes it fails
-        # and final transcript is received without any preceding signals/events
+        # agent speech might not be interrupted if VAD failed and a final transcript is received
+        # we call _interrupt_by_audio_activity (idempotent) to pause the speech, if possible
+        # which will also be immediately interrupted
 
-        if pause_speech:
+        if self._turn_detection_mode not in ("manual", "realtime_llm"):
             self._interrupt_by_audio_activity()
 
             if (
