@@ -583,6 +583,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
                     if self._enable_recording:
+                        # TODO: remove this when adding barge-in model @chenghao
+                        # def placeholder_input_write_cb(buf: list[rtc.AudioFrame]) -> None:
+                        #     if len(buf) > 0:
+                        #         logger.debug(f"Received {len(buf)} audio frames")
+
+                        # self._recorder_io = RecorderIO(
+                        #     agent_session=self, input_write_cb=placeholder_input_write_cb
+                        # )
                         self._recorder_io = RecorderIO(agent_session=self)
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)

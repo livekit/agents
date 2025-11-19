@@ -128,12 +128,13 @@ class RecorderIO:
     def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
         assert self._in_record is not None
 
-        input_buf = self._in_record.take_buf()
+        input_buf, already_peeked = self._in_record.take_buf()
         self._in_q.put_nowait(input_buf)
         self._out_q.put_nowait(buf)
 
         if self._input_write_cb:
-            self._input_write_cb(input_buf)
+            self._input_write_cb(input_buf[already_peeked:])
+
         if self._output_write_cb:
             self._output_write_cb(buf)
 
@@ -143,22 +144,22 @@ class RecorderIO:
 
         # Forward the input audio to the encoder every _write_interval seconds
         # only if the agent finishes speaking (no more pending data in the output buffer)
-        input_buffer: list[rtc.AudioFrame] = []
         while True:
             await asyncio.sleep(self._write_interval)
-            # buffer the input audio so that the callback can still process it in real-time
-            # without affecting the recording process
-            input_buf = self._in_record.take_buf()
+            # peek the input buffer so that the callback can still process it regularly
+            # without affecting the actual recording process
+            input_buf = self._in_record.peek_buf()
             if self._input_write_cb:
                 self._input_write_cb(input_buf)
-            input_buffer.extend(input_buf)
 
             if self._out_record.has_pending_data:
                 # if the output is currenetly playing audio, wait for it to stay in sync
                 continue  # always wait for the complete output
 
-            self._in_q.put_nowait(input_buffer)
-            input_buffer = []
+            input_buf, already_peeked = self._in_record.take_buf()
+            if self._input_write_cb:
+                self._input_write_cb(input_buf[already_peeked:])
+            self._in_q.put_nowait(input_buf)
             self._out_q.put_nowait([])
 
     def _encode_thread(self) -> None:
@@ -287,15 +288,22 @@ class RecorderAudioInput(io.AudioInput):
         self.__recording_io = recording_io
         self.__acc_frames: list[rtc.AudioFrame] = []
         self.__started_time: None | float = None
+        self.__peek_idx: int = 0
 
     @property
     def started_wall_time(self) -> float | None:
         return self.__started_time
 
     def take_buf(self) -> list[rtc.AudioFrame]:
-        frames = self.__acc_frames
+        frames, already_peeked = self.__acc_frames, self.__peek_idx
         self.__acc_frames = []
-        return frames
+        self.__peek_idx = 0
+        return frames, already_peeked
+
+    def peek_buf(self) -> list[rtc.AudioFrame]:
+        buf = self.__acc_frames[self.__peek_idx :]
+        self.__peek_idx += len(buf)
+        return buf
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
