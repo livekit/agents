@@ -18,7 +18,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
 from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
-from livekit.agents.telemetry import set_tracer_provider, tracer
+from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter, StreamAdapter
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import openai, silero
@@ -138,21 +138,20 @@ async def entrypoint(ctx: JobContext):
             "langfuse.session.id": ctx.room.name,
         }
     )
-    # A root span is needed for langfuse to correctly trace the session
-    with tracer.start_as_current_span("session"):
-        # (optional) add a shutdown callback to flush the trace before process exit
-        async def flush_trace():
-            trace_provider.force_flush()
 
-        ctx.add_shutdown_callback(flush_trace)
+    # (optional) add a shutdown callback to flush the trace before process exit
+    async def flush_trace():
+        trace_provider.force_flush()
 
-        session = AgentSession(vad=silero.VAD.load())
+    ctx.add_shutdown_callback(flush_trace)
 
-        @session.on("metrics_collected")
-        def _on_metrics_collected(ev: MetricsCollectedEvent):
-            metrics.log_metrics(ev.metrics)
+    session = AgentSession(vad=silero.VAD.load())
 
-        await session.start(agent=Kelly(), room=ctx.room)
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+
+    await session.start(agent=Kelly(), room=ctx.room)
 
 
 if __name__ == "__main__":

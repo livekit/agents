@@ -364,6 +364,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_speaking_span: trace.Span | None = None
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
+        self._session_ctx_token: otel_context.Token | None = None
         self._root_span_context: otel_context.Context | None = None
 
         self._recorded_events: list[AgentEvent] = []
@@ -523,6 +524,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 pass
 
             self._session_span = current_span = tracer.start_span("agent_session")
+            ctx = trace.set_span_in_context(current_span)
+            self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []
             self._room_io = None
@@ -821,6 +824,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
+                otel_context.detach(self._session_ctx_token)
+                self._session_ctx_token = None
 
             self._started = False
 
