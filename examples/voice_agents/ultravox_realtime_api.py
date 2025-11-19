@@ -7,9 +7,9 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    RoomOutputOptions,
     cli,
     function_tool,
+    room_io,
 )
 from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
@@ -52,8 +52,8 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            transcription_speed_factor=1.5,
+        room_options=room_io.RoomOptions(
+            text_output=room_io.TextOutputOptions(transcription_speed_factor=1.5),
         ),
     )
 

@@ -9,11 +9,11 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     MetricsCollectedEvent,
-    RoomOutputOptions,
     StopResponse,
     cli,
     llm,
     metrics,
+    room_io,
 )
 from livekit.plugins import openai, silero
 
@@ -60,10 +60,10 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Transcriber(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            transcription_enabled=True,
+        room_options=room_io.RoomOptions(
+            text_output=True,
             # disable audio output if it's not needed
-            audio_enabled=False,
+            audio_output=False,
         ),
     )
 

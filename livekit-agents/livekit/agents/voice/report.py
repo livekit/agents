@@ -22,6 +22,8 @@ class SessionReport:
     audio_recording_started_at: float | None = None
     """Timestamp when the audio recording started"""
     duration: float | None = None
+    started_at: float | None = None
+    """Timestamp when the session started"""
     timestamp: float = field(default_factory=time.time)
     """Timestamp when the session report was created, typically at the end of the session"""
 

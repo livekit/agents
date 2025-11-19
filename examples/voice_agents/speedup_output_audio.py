@@ -90,12 +90,14 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
     # warmup the librosa JIT
     librosa.effects.time_stretch(np.random.randn(16000).astype(np.float32), rate=1.2)
+
+
+server.setup_fnc = prewarm
 
 
 @server.rtc_session()

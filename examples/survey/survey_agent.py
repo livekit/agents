@@ -14,11 +14,11 @@ from livekit.agents import (
     AgentSession,
     AgentTask,
     JobContext,
-    RoomInputOptions,
     RunContext,
     cli,
     llm,
     metrics,
+    room_io,
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
@@ -357,9 +357,7 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=SurveyAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            delete_room_on_close=True,
-        ),
+        room_options=room_io.RoomOptions(delete_room_on_close=True),
     )
 
     await ctx.connect()

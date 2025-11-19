@@ -10,7 +10,7 @@ from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?
@@ -24,8 +24,14 @@ STTNode = Callable[
 LLMNode = Callable[
     [llm.ChatContext, list[Union[llm.FunctionTool, llm.RawFunctionTool]], ModelSettings],
     Union[
-        Optional[Union[AsyncIterable[Union[llm.ChatChunk, str]], str, llm.ChatChunk]],
-        Awaitable[Optional[Union[AsyncIterable[Union[llm.ChatChunk, str]], str, llm.ChatChunk]]],
+        Optional[
+            Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
+        ],
+        Awaitable[
+            Optional[
+                Union[AsyncIterable[Union[llm.ChatChunk, str, FlushSentinel]], str, llm.ChatChunk]
+            ]
+        ],
     ],
 ]
 TTSNode = Callable[
@@ -226,6 +232,10 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
             self.__playback_finished_event.clear()
 
         return self.__last_playback_ev
+
+    def _reset_playback_count(self) -> None:
+        self.__playback_segments_count = 0
+        self.__playback_finished_count = 0
 
     @property
     def sample_rate(self) -> int | None:

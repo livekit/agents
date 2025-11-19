@@ -10,7 +10,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     MetricsCollectedEvent,
-    RoomOutputOptions,
     RunContext,
     cli,
     metrics,
@@ -114,7 +113,6 @@ async def dtmf_session(ctx: JobContext) -> None:
     await session.start(
         agent=DtmfAgent(user_request=user_request),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 

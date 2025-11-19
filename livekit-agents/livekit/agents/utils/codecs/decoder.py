@@ -336,4 +336,4 @@ class AudioStreamDecoder:
         async for _ in self._output_ch:
             pass
 
-        self._executor.shutdown(wait=True)
+        self._executor.shutdown(wait=False, cancel_futures=True)

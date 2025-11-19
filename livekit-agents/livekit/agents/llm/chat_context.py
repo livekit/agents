@@ -232,6 +232,7 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
@@ -241,6 +242,8 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if is_given(metrics):
+            kwargs["metrics"] = metrics
         if is_given(extra):
             kwargs["extra"] = extra
 

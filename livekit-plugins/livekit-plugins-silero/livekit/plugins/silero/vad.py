@@ -488,7 +488,6 @@ class VADStream(agents.vad.VADStream):
                         and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
-                        pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
                         self._event_ch.send_nowait(
@@ -502,6 +501,8 @@ class VADStream(agents.vad.VADStream):
                                 speaking=False,
                             )
                         )
+
+                        pub_speech_duration = 0.0
 
                         _reset_write_cursor()
 

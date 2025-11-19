@@ -29,9 +29,14 @@ CHILD_PROC_GAUGE = prometheus_client.Gauge(
     multiprocess_mode="max",
 )
 
+CPU_LOAD_GAUGE = prometheus_client.Gauge(
+    "lk_agents_worker_load",
+    "Worker load percentage",
+    ["nodename"],
+)
 
-# Note: set_function() is not supported in multiprocess mode.
-# We need to update this metric explicitly.
+
+# Note: set_function() is not supported in multiprocess mode.# We need to update this metric explicitly.
 def _update_child_proc_count() -> None:
     """Update child process count metric. Must be called periodically in the main process."""
     try:
@@ -40,6 +45,10 @@ def _update_child_proc_count() -> None:
     except Exception:
         # Process might not exist anymore or access denied
         pass
+
+
+def _update_worker_load(worker_load: float) -> None:
+    CPU_LOAD_GAUGE.labels(nodename=utils.nodename()).set(worker_load)
 
 
 def job_started() -> None:

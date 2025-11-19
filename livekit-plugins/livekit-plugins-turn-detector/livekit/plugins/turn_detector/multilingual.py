@@ -5,11 +5,12 @@ from time import perf_counter
 
 import aiohttp
 
-from livekit.agents import get_job_context, llm, utils
+from livekit.agents import Plugin, get_job_context, llm, utils
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .base import MAX_HISTORY_TURNS, EOUModelBase, _EUORunnerBase
+from .base import MAX_HISTORY_TURNS, EOUModelBase, EOUPlugin, _EUORunnerBase
 from .log import logger
+from .models import EOUModelType
 
 REMOTE_INFERENCE_TIMEOUT = 2
 
@@ -17,8 +18,9 @@ REMOTE_INFERENCE_TIMEOUT = 2
 class _EUORunnerMultilingual(_EUORunnerBase):
     INFERENCE_METHOD = "lk_end_of_utterance_multilingual"
 
-    def __init__(self) -> None:
-        super().__init__("multilingual")
+    @classmethod
+    def model_type(cls) -> EOUModelType:
+        return "multilingual"
 
 
 class MultilingualModel(EOUModelBase):
@@ -111,3 +113,4 @@ def _remote_inference_url() -> str | None:
 
 if not _remote_inference_url():
     _InferenceRunner.register_runner(_EUORunnerMultilingual)
+Plugin.register_plugin(EOUPlugin(_EUORunnerMultilingual))

@@ -48,10 +48,11 @@ async def entrypoint(ctx: JobContext):
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
 
-@server.setup()
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+
+server.setup_fnc = prewarm
 
 if __name__ == "__main__":
     cli.run_app(server)

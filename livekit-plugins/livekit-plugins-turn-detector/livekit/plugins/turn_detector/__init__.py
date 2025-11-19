@@ -17,31 +17,10 @@
 See https://docs.livekit.io/agents/build/turns/turn-detector/ for more information.
 """
 
-from livekit.agents import Plugin
-
-from .log import logger
 from .version import __version__
 
 __all__ = ["english", "multilingual", "__version__"]
 
-
-class EOUPlugin(Plugin):
-    def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
-
-    def download_files(self) -> None:
-        from transformers import AutoTokenizer  # type: ignore
-
-        from .base import _download_from_hf_hub
-        from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME
-
-        for revision in MODEL_REVISIONS.values():
-            AutoTokenizer.from_pretrained(HG_MODEL, revision=revision)
-            _download_from_hf_hub(HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=revision)
-            _download_from_hf_hub(HG_MODEL, "languages.json", revision=revision)
-
-
-Plugin.register_plugin(EOUPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

@@ -9,8 +9,8 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    RoomOutputOptions,
     cli,
+    room_io,
 )
 from livekit.plugins import bithuman, openai
 
@@ -42,7 +42,7 @@ async def entrypoint(ctx: JobContext):
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
         # audio is forwarded to the avatar, so we disable room audio output
-        room_output_options=RoomOutputOptions(audio_enabled=False),
+        room_options=room_io.RoomOptions(audio_output=False),
     )
 
 

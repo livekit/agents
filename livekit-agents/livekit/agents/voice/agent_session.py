@@ -17,24 +17,23 @@ from typing import (
     overload,
     runtime_checkable,
 )
-from urllib.parse import urlparse
 
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
 from .. import cli, inference, llm, stt, tts, utils, vad
-from ..job import get_job_context
+from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
-from ..telemetry import _setup_cloud_tracer, trace_types, tracer
+from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
-from ..utils.misc import is_cloud, is_given
+from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent
@@ -344,7 +343,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._lock = asyncio.Lock()
 
         # used to keep a reference to the room io
-        # this is not exposed, if users want access to it, they can create their own RoomIO
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
 
@@ -370,6 +368,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._recorded_events: list[AgentEvent] = []
         self._enable_recording: bool = False
+        self._started_at: float | None = None
 
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
@@ -381,7 +380,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("VoiceAgent userdata is not set")
+            raise ValueError("AgentSession userdata is not set")
 
         return self._userdata
 
@@ -456,6 +455,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
@@ -468,6 +469,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
@@ -479,6 +482,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
+        room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: NotGivenOr[bool] = NOT_GIVEN,
@@ -499,22 +504,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._started_at = time.time()
+
             # configure observability first
-            job_ctx = get_job_context()
-            if not is_given(record):
-                record = job_ctx.job.enable_recording
-            self._enable_recording = record
-            if is_cloud(job_ctx._info.url) and self._enable_recording:
-                cloud_hostname = urlparse(job_ctx._info.url).hostname
-                logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
-                if cloud_hostname:
-                    _setup_cloud_tracer(
-                        room_id=job_ctx.job.room.sid,
-                        job_id=job_ctx.job.id,
-                        cloud_hostname=cloud_hostname,
-                    )
-            else:
-                self._enable_recording = False
+            job_ctx: JobContext | None = None
+            try:
+                job_ctx = get_job_context()
+                if not is_given(record):
+                    record = job_ctx.job.enable_recording
+
+                self._enable_recording = record
+
+                if self._enable_recording:
+                    job_ctx.init_recording()
+
+            except RuntimeError:
+                # JobContext is not available in evals
+                pass
 
             self._session_span = current_span = tracer.start_span("agent_session")
 
@@ -542,44 +548,39 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 c.acquire_io(loop=self._loop, session=self)
             elif is_given(room) and not self._room_io:
-                room_input_options = copy.copy(
-                    room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
+                room_options = room_io.RoomOptions._ensure_options(
+                    room_options,
+                    room_input_options=room_input_options,
+                    room_output_options=room_output_options,
                 )
-                room_output_options = copy.copy(
-                    room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
-                )
+                room_options = copy.copy(room_options)  # shadow copy is enough
 
                 if self.input.audio is not None:
-                    if room_input_options.audio_enabled:
+                    if room_options.audio_input:
                         logger.warning(
                             "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
                         )
-                    room_input_options.audio_enabled = False
+                    room_options.audio_input = False
 
                 if self.output.audio is not None:
-                    if room_output_options.audio_enabled:
+                    if room_options.audio_output:
                         logger.warning(
                             "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
                         )
-                    room_output_options.audio_enabled = False
+                    room_options.audio_output = False
 
                 if self.output.transcription is not None:
-                    if room_output_options.transcription_enabled:
+                    if room_options.text_output:
                         logger.warning(
                             "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                         )
-                    room_output_options.transcription_enabled = False
+                    room_options.text_output = False
 
-                self._room_io = room_io.RoomIO(
-                    room=room,
-                    agent_session=self,
-                    input_options=room_input_options,
-                    output_options=room_output_options,
-                )
+                self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-            # session can be restarted, register the callbacks only once
-            try:
+            if job_ctx:
+                # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
                     if self._enable_recording:
                         self._recorder_io = RecorderIO(agent_session=self)
@@ -594,14 +595,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                             tasks.append(task)
 
-                if record:
-                    if job_ctx._primary_agent_session is None:
-                        job_ctx._primary_agent_session = self
-                    else:
-                        raise RuntimeError(
-                            "Only one `AgentSession` can be the primary at a time. "
-                            "If you want to ignore primary designation, use session.start(record=False)."
-                        )
+                if job_ctx._primary_agent_session is None:
+                    job_ctx._primary_agent_session = self
+                elif self._enable_recording:
+                    raise RuntimeError(
+                        "Only one `AgentSession` can be the primary at a time. "
+                        "If you want to ignore primary designation, use session.start(record=False)."
+                    )
 
                 if self.options.ivr_detection:
                     self._ivr_activity = IVRActivity(self)
@@ -620,13 +620,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     # automatically connect to the room when room io is used
                     tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
 
+                # session can be restarted, register the callbacks only once
                 if not self._job_context_cb_registered:
                     job_ctx.add_shutdown_callback(
                         lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
                     )
                     self._job_context_cb_registered = True
-            except RuntimeError:
-                pass  # ignore
 
             run_state: RunResult | None = None
             if capture_run:
@@ -723,6 +722,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("AgentSession isn't running")
 
         await self._activity.drain()
+
+    @property
+    def room_io(self) -> room_io.RoomIO:
+        if not self._room_io:
+            raise RuntimeError(
+                "Cannot access room_io: the AgentSession was not started with a room."
+            )
+
+        return self._room_io
 
     def _close_soon(
         self,
@@ -922,9 +930,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(user_input)
             else NOT_GIVEN
         )
-        # even though it's not speech, we'd want this attribute to compute e2e latency
-        if user_message:
-            user_message.metrics["stopped_speaking_at"] = time.time()
 
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
@@ -1049,18 +1054,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
+            handoff_item = AgentHandoff(
+                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                new_agent_id=self._activity.agent.id,
+            )
             if run_state:
                 run_state._agent_handoff(
+                    item=handoff_item,
                     old_agent=previous_activity_v.agent if previous_activity_v else None,
                     new_agent=self._activity.agent,
                 )
-
-            self._chat_ctx.insert(
-                AgentHandoff(
-                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                    new_agent_id=self._activity.agent.id,
-                )
-            )
+            self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()

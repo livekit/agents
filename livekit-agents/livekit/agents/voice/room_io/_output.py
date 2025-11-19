@@ -299,7 +299,8 @@ class _ParticipantLegacyTranscriptionOutput:
             if self._room.isconnected():
                 await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
-            logger.warning("failed to publish transcription", exc_info=e)
+            if self._room.isconnected():
+                logger.warning("failed to publish transcription", exc_info=e)
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
