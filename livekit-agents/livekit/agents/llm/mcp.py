@@ -165,7 +165,8 @@ class MCPServer(ABC):
             MemoryObjectSendStream[SessionMessage],
             GetSessionIdCallback,
         ]
-    ]: ...
+    ]:
+        ...
 
 
 class MCPServerHTTP(MCPServer):
