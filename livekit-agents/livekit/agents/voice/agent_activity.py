@@ -52,6 +52,7 @@ from .audio_recognition import (
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
 )
+from .filler_filter import FillerWordFilter
 from .events import (
     AgentFalseInterruptionEvent,
     ErrorEvent,
@@ -224,6 +225,14 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
+
+        # Initialize filler word filter if enabled
+        self._filler_filter: FillerWordFilter | None = None
+        if self._session.options.filler_filter_enabled:
+            self._filler_filter = FillerWordFilter(
+                ignored_words=self._session.options.filler_ignored_words,
+                min_confidence=self._session.options.filler_min_confidence,
+            )
 
     @property
     def scheduling_paused(self) -> bool:
@@ -1234,16 +1243,59 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
+        transcript_text = ev.alternatives[0].text
+        confidence = ev.alternatives[0].confidence
+
+        # Apply filler word filter if enabled
+        should_ignore = False
+        ignore_reason = ""
+        if self._filler_filter and transcript_text:
+            should_ignore, ignore_reason = self._filler_filter.filter_transcript(
+                self, transcript_text, confidence
+            )
+
+            if should_ignore:
+                logger.debug(
+                    "FillerWordFilter: ignoring interim transcript",
+                    extra={
+                        "transcript": transcript_text,
+                        "reason": ignore_reason,
+                        "confidence": confidence,
+                        "agent_speaking": (
+                            self._current_speech is not None
+                            and not self._current_speech.interrupted
+                        ) or (self._session.agent_state == "speaking"),
+                    },
+                )
+                # Still emit the transcription event for logging, but don't interrupt
+                self._session._user_input_transcribed(
+                    UserInputTranscribedEvent(
+                        language=ev.alternatives[0].language,
+                        transcript=transcript_text,
+                        is_final=False,
+                        speaker_id=ev.alternatives[0].speaker_id,
+                    ),
+                )
+                return
+
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
-                transcript=ev.alternatives[0].text,
+                transcript=transcript_text,
                 is_final=False,
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
 
-        if ev.alternatives[0].text:
+        if transcript_text:
+            logger.debug(
+                "FillerWordFilter: allowing interim transcript",
+                extra={
+                    "transcript": transcript_text,
+                    "reason": ignore_reason if ignore_reason else "valid_speech",
+                    "confidence": confidence,
+                },
+            )
             self._interrupt_by_audio_activity()
 
             if (
@@ -1259,13 +1311,57 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
+        transcript_text = ev.alternatives[0].text
+        confidence = ev.alternatives[0].confidence
+
+        # Apply filler word filter if enabled
+        should_ignore = False
+        ignore_reason = ""
+        if self._filler_filter and transcript_text:
+            should_ignore, ignore_reason = self._filler_filter.filter_transcript(
+                self, transcript_text, confidence
+            )
+
+            if should_ignore:
+                logger.info(
+                    "FillerWordFilter: ignoring final transcript",
+                    extra={
+                        "transcript": transcript_text,
+                        "reason": ignore_reason,
+                        "confidence": confidence,
+                        "agent_speaking": (
+                            self._current_speech is not None
+                            and not self._current_speech.interrupted
+                        ) or (self._session.agent_state == "speaking"),
+                    },
+                )
+                # Still emit the transcription event for logging, but don't interrupt
+                self._session._user_input_transcribed(
+                    UserInputTranscribedEvent(
+                        language=ev.alternatives[0].language,
+                        transcript=transcript_text,
+                        is_final=True,
+                        speaker_id=ev.alternatives[0].speaker_id,
+                    ),
+                )
+                return
+
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
-                transcript=ev.alternatives[0].text,
+                transcript=transcript_text,
                 is_final=True,
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
+        )
+
+        logger.debug(
+            "FillerWordFilter: allowing final transcript",
+            extra={
+                "transcript": transcript_text,
+                "reason": ignore_reason if ignore_reason else "valid_speech",
+                "confidence": confidence,
+            },
         )
 
         self._interrupt_paused_speech_task = asyncio.create_task(
