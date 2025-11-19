@@ -31,7 +31,9 @@ MCPTool = RawFunctionTool
 
 
 class MCPServer(ABC):
-    def __init__(self, *, client_session_timeout_seconds: float, tools: list[str] | None = None) -> None:
+    def __init__(
+        self, *, client_session_timeout_seconds: float, tools: list[str] | None = None
+    ) -> None:
         self._client: ClientSession | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
@@ -87,12 +89,13 @@ class MCPServer(ABC):
                 )
 
             client_tools.tools = [
-                tool for tool in client_tools.tools
-                if tool.name in requested
+                tool for tool in client_tools.tools if tool.name in requested
             ]
 
         lk_tools = [
-            self._make_function_tool(tool.name, tool.description, tool.inputSchema, tool.meta)
+            self._make_function_tool(
+                tool.name, tool.description, tool.inputSchema, tool.meta
+            )
             for tool in client_tools.tools
         ]
 
@@ -186,7 +189,9 @@ class MCPServerHTTP(MCPServer):
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds, tools=tools)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds, tools=tools
+        )
         self.url = url
         self.headers = headers
         self._timeout = timeout
@@ -247,7 +252,9 @@ class MCPServerStdio(MCPServer):
         cwd: str | Path | None = None,
         client_session_timeout_seconds: float = 5,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds, tools=tools)
+        super().__init__(
+            client_session_timeout_seconds=client_session_timeout_seconds, tools=tools
+        )
         self.command = command
         self.args = args
         self.env = env
@@ -262,8 +269,12 @@ class MCPServerStdio(MCPServer):
         ]
     ]:
         return stdio_client(  # type: ignore[no-any-return]
-            StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
+            StdioServerParameters(
+                command=self.command, args=self.args, env=self.env, cwd=self.cwd
+            )
         )
 
     def __repr__(self) -> str:
-        return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
+        return (
+            f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
+        )
