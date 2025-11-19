@@ -22,14 +22,15 @@ async def entrypoint(ctx: JobContext):
 
     heygen_avatar_id = os.getenv("HEYGEN_AVATAR_ID")
     avatar = heygen.AvatarSession(avatar_id=heygen_avatar_id)
-
+    await avatar.start(session, room=ctx.room)
+    
     agent = Agent(instructions="Talk to me!")
 
     await session.start(
         agent=agent,
         room=ctx.room,
     )
-    await avatar.start(session, room=ctx.room)
+    
 
     session.generate_reply(instructions="say hello to the user")
 

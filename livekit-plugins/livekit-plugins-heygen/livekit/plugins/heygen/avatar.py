@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 import uuid
+import contextlib
 from collections.abc import Iterator
 
 import aiohttp
@@ -43,12 +44,18 @@ class AvatarSession:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._avatar_id = avatar_id or os.getenv("HEYGEN_AVATAR_ID")
-        self._api = HeyGenAPI(api_key=api_key, api_url=api_url, conn_options=conn_options)
+        self._api = HeyGenAPI(
+            api_key=api_key, api_url=api_url, conn_options=conn_options
+        )
 
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
+        self._avatar_participant_identity = (
+            avatar_participant_identity or _AVATAR_AGENT_IDENTITY
+        )
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._main_atask = asyncio.Task | None
+        self._audio_resampler: rtc.AudioResampler | None = None
         self._session_data = None
+        self._msg_ch = utils.aio.Chan[dict]()
 
     async def start(
         self,
@@ -63,7 +70,9 @@ class AvatarSession:
         self._room = room
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (
+            os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN
+        )
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise HeyGenException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set"
@@ -86,7 +95,9 @@ class AvatarSession:
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity})
+            .with_attributes(
+                {ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity}
+            )
             .to_jwt()
         )
 
@@ -108,15 +119,59 @@ class AvatarSession:
         self._ws_url = session_start_data["data"]["ws_url"]
         logger.info("HeyGen streaming session started")
 
-        self._agent_audio_track = list(self._room.local_participant.track_publications.values())[
-            0
-        ].track
+        @self._agent_session.on("agent_state_changed")
+        def on_agent_state_changed(ev):
+            if ev.old_state == "speaking" and ev.new_state == "listening":
+                self.send_event(
+                    {"type": "agent.speak_end", "event_id": str(uuid.uuid4())}
+                )
+                self.send_event(
+                    {"type": "agent.start_listening", "event_id": str(uuid.uuid4())}
+                )
+            if ev.new_state == "idle":
+                self.send_event(
+                    {"type": "agent.stop_listening", "event_id": str(uuid.uuid4())}
+                )
 
-        self._main_atask = asyncio.create_task(self._main_task(), name="AvatarSession._main_task")
+        @self._agent_session.on("conversation_item_added")
+        def on_conversation_item_added(ev):
+            if (
+                self._agent_session.current_speech is not None
+                and self._agent_session.current_speech.interrupted
+            ):
+                self.send_event(
+                    {"type": "agent.interrupt", "event_id": str(uuid.uuid4())}
+                )
+
+        @self._room.on("local_track_published")
+        def on_local_track_published(publication, track):
+            self._agent_audio_track = track
+            self._main_atask = asyncio.create_task(
+                self._main_task(), name="AvatarSession._main_task"
+            )
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._audio_resampler:
+            if frame.sample_rate != self._audio_resampler._input_rate:
+                self._audio_resampler = None
+
+        if self._audio_resampler is None and (
+            frame.sample_rate != SAMPLE_RATE or frame.num_channels != 1
+        ):
+            self._audio_resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=SAMPLE_RATE,
+                num_channels=1,
+            )
+
+        if self._audio_resampler:
             yield from self._audio_resampler.push(frame)
+        else:
+            yield frame
+
+    def send_event(self, msg: dict) -> None:
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._msg_ch.send_nowait(msg)
 
     async def _main_task(self) -> None:
         local_participant = self._room.local_participant
@@ -128,42 +183,21 @@ class AvatarSession:
         )
 
         if self._agent_audio_track is not None:
-            agent_audio_stream = rtc.AudioStream.from_track(track=self._agent_audio_track)
-
+            agent_audio_stream = rtc.AudioStream.from_track(
+                track=self._agent_audio_track
+            )
         ws_conn = await self._api._ensure_http_session().ws_connect(url=self._ws_url)
 
-        # TODO check input rate dynamically?
-        self._audio_resampler = rtc.AudioResampler(
-            input_rate=48000, output_rate=24000, num_channels=1
-        )
+        closing = False
 
-        def ws_send(msg: dict) -> None:
-            asyncio.create_task(ws_conn.send_json(data=msg))
-
-        async def _send_task() -> None:
-            @self._agent_session.on("agent_state_changed")
-            def on_agent_state_changed(ev):
-                if ev.old_state == "speaking" and ev.new_state == "listening":
-                    ws_send({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
-                    ws_send({"type": "agent.start_listening", "event_id": str(uuid.uuid4())})
-                if ev.new_state == "idle":
-                    ws_send({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
-
-            @self._agent_session.on("conversation_item_added")
-            def on_conversation_item_added(ev):
-                if (
-                    self._agent_session.current_speech is not None
-                    and self._agent_session.current_speech.interrupted
-                ):
-                    ws_send({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
-
+        async def _forward_audio() -> None:
             async for audio_event in agent_audio_stream:
                 audio_frame = audio_event.frame
 
                 if not any(audio_frame.data):
                     continue
 
-                for resampled_frame in self._resample_audio(audio_event.frame):
+                for resampled_frame in self._resample_audio(audio_frame):
                     data = resampled_frame.data.tobytes()
                     encoded_audio = base64.b64encode(data).decode("utf-8")
 
@@ -173,12 +207,21 @@ class AvatarSession:
                         "audio": encoded_audio,
                     }
 
-                    try:
-                        await ws_conn.send_json(data=msg)
-                    except Exception as e:
-                        print(e)
-                        break
+                    self.send_event(msg)
 
+        @utils.log_exceptions(logger=logger)
+        async def _send_task() -> None:
+            nonlocal closing
+
+            async for msg in self._msg_ch:
+                try:
+                    await ws_conn.send_json(data=msg)
+                except Exception:
+                    break
+            closing = True
+            await ws_conn.close()
+
+        @utils.log_exceptions(logger=logger)
         async def _recv_task() -> None:
             while True:
                 msg = await ws_conn.receive()
@@ -187,9 +230,14 @@ class AvatarSession:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIConnectionError(message="HeyGen connection closed unexpectedly.")
+                    if closing:
+                        return
+                    raise APIConnectionError(
+                        message="HeyGen connection closed unexpectedly."
+                    )
 
         tasks = [
+            asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
             asyncio.create_task(_recv_task(), name="_recv_task"),
         ]
