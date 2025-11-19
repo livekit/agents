@@ -21,19 +21,12 @@ async def entrypoint(ctx: JobContext):
         min_silence_duration_ms=300,
     )
 
-    llm = openai.LLM(model="gpt-4.1-mini")
-
-    wrapped_tts = tts.StreamAdapter(
-        tts=elevenlabs.TTS(model="eleven_turbo_v2_5"),
-        sentence_tokenizer=basic.SentenceTokenizer(),
-    )
-
     session = AgentSession(
         allow_interruptions=True,
         vad=ctx.proc.userdata["vad"],
         stt=stt,
-        llm=llm,
-        tts=wrapped_tts,
+        llm=openai.LLM(model="gpt-4.1-mini"),
+        tts=elevenlabs.TTS(model="eleven_turbo_v2_5"),
     )
     await session.start(
         agent=Agent(instructions="You are a somewhat helpful assistant."), room=ctx.room
