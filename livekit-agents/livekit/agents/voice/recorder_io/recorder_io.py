@@ -142,7 +142,7 @@ class RecorderIO:
 
         # Forward the input audio to the encoder every 5s.
         while True:
-            await asyncio.sleep(WRITE_INTERVAL)
+            await asyncio.sleep(self._write_interval)
             if self._out_record.has_pending_data:
                 # if the output is currenetly playing audio, wait for it to stay in sync
                 continue  # always wait for the complete output
