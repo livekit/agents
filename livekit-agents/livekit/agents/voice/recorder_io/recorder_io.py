@@ -32,6 +32,9 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        write_interval: float = WRITE_INTERVAL,
+        input_write_cb: Callable[[list[rtc.AudioFrame]], Any] | None = None,
+        output_write_cb: Callable[[list[rtc.AudioFrame]], Any] | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._in_record: RecorderAudioInput | None = None
@@ -46,6 +49,10 @@ class RecorderIO:
         self._lock = asyncio.Lock()
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
         self._output_path: Path | None = None
+
+        self._write_interval = write_interval
+        self._input_write_cb = input_write_cb
+        self._output_write_cb = output_write_cb
 
     async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
@@ -109,12 +116,25 @@ class RecorderIO:
 
         return min(in_t, out_t)
 
+    @property
+    def input_recording_started_at(self) -> float | None:
+        return self._in_record.started_wall_time if self._in_record else None
+
+    @property
+    def output_recording_started_at(self) -> float | None:
+        return self._out_record.started_wall_time if self._out_record else None
+
     def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
         assert self._in_record is not None
 
         input_buf = self._in_record.take_buf()
         self._in_q.put_nowait(input_buf)
         self._out_q.put_nowait(buf)
+
+        if self._input_write_cb:
+            self._input_write_cb(input_buf)
+        if self._output_write_cb:
+            self._output_write_cb(buf)
 
     async def _forward_task(self) -> None:
         assert self._in_record is not None
@@ -128,6 +148,8 @@ class RecorderIO:
                 continue  # always wait for the complete output
 
             input_buf = self._in_record.take_buf()
+            if self._input_write_cb:
+                self._input_write_cb(input_buf)
             self._in_q.put_nowait(input_buf)
             self._out_q.put_nowait([])
 
