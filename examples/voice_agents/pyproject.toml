@@ -1,0 +1,134 @@
+[tool.uv]
+constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+
+[tool.uv.sources]
+livekit-agents = { workspace = true }
+livekit-plugins-anam = { workspace = true }
+livekit-plugins-anthropic = { workspace = true }
+livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-aws = { workspace = true }
+livekit-plugins-azure = { workspace = true }
+livekit-plugins-baseten = { workspace = true }
+livekit-plugins-bey = { workspace = true }
+livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-cartesia = { workspace = true }
+livekit-plugins-clova = { workspace = true }
+livekit-plugins-deepgram = { workspace = true }
+livekit-plugins-elevenlabs = { workspace = true }
+livekit-plugins-fal = { workspace = true }
+livekit-plugins-fireworksai = { workspace = true }
+livekit-plugins-fishaudio = { workspace = true }
+livekit-plugins-gladia = { workspace = true }
+livekit-plugins-google = { workspace = true }
+livekit-plugins-groq = { workspace = true }
+livekit-plugins-hedra = { workspace = true }
+livekit-plugins-hume = { workspace = true }
+livekit-plugins-inworld = { workspace = true }
+livekit-plugins-langchain = { workspace = true }
+livekit-plugins-lmnt = { workspace = true }
+livekit-plugins-minimax-ai = { workspace = true }
+livekit-plugins-mistralai = { workspace = true }
+livekit-plugins-neuphonic = { workspace = true }
+livekit-plugins-nltk = { workspace = true }
+livekit-plugins-nvidia = { workspace = true }
+livekit-plugins-openai = { workspace = true }
+livekit-plugins-resemble = { workspace = true }
+livekit-plugins-rime = { workspace = true }
+livekit-plugins-sarvam = { workspace = true }
+livekit-plugins-silero = { workspace = true }
+livekit-plugins-simli = { workspace = true }
+livekit-plugins-avatartalk = { workspace = true }
+livekit-plugins-smallestai = { workspace = true }
+livekit-plugins-soniox = { workspace = true }
+livekit-plugins-speechify = { workspace = true }
+livekit-plugins-speechmatics = { workspace = true }
+livekit-plugins-spitch = { workspace = true }
+livekit-plugins-tavus = { workspace = true }
+livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-ultravox = { workspace = true }
+livekit-plugins-upliftai = { workspace = true }
+
+[tool.uv.workspace]
+members = ["livekit-plugins/*", "livekit-agents"]
+exclude = [
+    "livekit-plugins/livekit-plugins-browser",
+    "livekit-plugins/livekit-blingfire",
+]
+
+[dependency-groups]
+dev = [
+    "python-dotenv>=1.0.1",
+    "mypy",
+    "pytest",
+    "ruff",
+    "pytest-asyncio>=0.25.3",
+    "jiwer>=3.1.0",
+    "scipy>=1.13.1",
+    "tiktoken>=0.9.0",
+]
+docs = ["pdoc3", "setuptools"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+exclude = [".github"]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["livekit"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["--import-mode=importlib", "--ignore=examples"]
+
+
+[tool.mypy]
+strict = true
+disallow_any_generics = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.genai"
+follow_imports = "normal"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "boto3"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "aws_sdk_bedrock_runtime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "speechmatics.*"
+follow_untyped_imports = true
