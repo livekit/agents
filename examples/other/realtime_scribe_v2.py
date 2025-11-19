@@ -2,8 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, tts
-from livekit.agents.tokenize import basic
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
 from livekit.plugins import elevenlabs, openai, silero
 
 logger = logging.getLogger("realtime-scribe-v2")
