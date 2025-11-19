@@ -1,0 +1,11 @@
+# Core dependencies (should already be in main requirements.txt)
+livekit>=0.10.0
+livekit-agents>=0.8.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Logging and monitoring (optional)
+python-json-logger>=2.0.7
