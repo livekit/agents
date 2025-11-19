@@ -1,0 +1,194 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>LiveKit Publisher — Debug Version</title>
+  <style>
+    /* Dark Mode Console Styling 
+      Designed for high contrast and readability during debugging sessions.
+    */
+    body { font-family: system-ui; padding:16px; background:#111; color:#eee; }
+    
+    /* Log container with auto-scroll behavior */
+    #logs { white-space: pre-wrap; background:#000; color:#0f0;
+            padding:12px; height:400px; overflow:auto; border-radius:8px; }
+    
+    button { padding:8px 12px; font-size:14px; margin:6px; }
+  </style>
+</head>
+
+<body>
+  <h2>LiveKit Publisher — Debug Version</h2>
+
+  <button id="join">Join & Publish Mic</button>
+  <button id="clear">Clear logs</button>
+
+  <div id="logs">Loaded — ready.\n</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.14/dist/livekit-client.umd.min.js"></script>
+
+  <script>
+    // ==============================================================================
+    // 1. LOGGING UTILITIES
+    // ==============================================================================
+
+    const logEl = document.getElementById('logs');
+
+    /**
+     * Appends a timestamped message to the on-screen debug console.
+     * Also outputs to the browser DevTools console.
+     * * @param {string} msg - The message to log.
+     */
+    function log(msg){
+      let t = new Date().toISOString();
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight; // Auto-scroll to bottom
+      console.log(msg);
+    }
+    
+    document.getElementById('clear').onclick = () => logEl.textContent = '';
+
+    // ==============================================================================
+    // 2. LIVEKIT SDK DETECTION
+    // ==============================================================================
+
+    /**
+     * Detects the global LiveKit object provided by the UMD script.
+     * Handles variations in naming conventions across SDK versions.
+     * * @returns {Object|null} The LiveKit SDK entry point.
+     */
+    function detectLK(){
+      if (window.livekit) return window.livekit;
+      if (window.LivekitClient) return window.LivekitClient;
+      if (window.LiveKitClient) return window.LiveKitClient;
+      return null;
+    }
+
+    // ==============================================================================
+    // 3. AUTHENTICATION
+    // ==============================================================================
+
+    /**
+     * Fetches an access token for the room.
+     * Implements a fallback strategy to support both hosted and local dev environments.
+     * * @returns {Promise<string>} The raw JWT token.
+     * @throws {Error} If token cannot be fetched from any source.
+     */
+    async function fetchToken(){
+      // Strategy A: Try fetching relative to the current page (Production/Same-origin)
+      try {
+        let url = (location.origin + "/browser.token");
+        log("fetching token from: " + url);
+        let res = await fetch(url);
+        log("response status: " + res.status + " " + res.statusText);
+        if (res.ok) return (await res.text()).trim();
+      } catch(e){}
+
+      // Strategy B: Try fetching from local dev server (Development fallback)
+      try {
+        let url = "http://localhost:8000/browser.token";
+        log("fetching token from: " + url);
+        let res = await fetch(url);
+        log("response status: " + res.status + " " + res.statusText);
+        if (res.ok) return (await res.text()).trim();
+      } catch(e){}
+
+      throw new Error("Token fetch failed from all sources");
+    }
+
+    // ==============================================================================
+    // 4. MEDIA MANAGEMENT
+    // ==============================================================================
+
+    /**
+     * Creates a local audio track from the user's microphone.
+     * Handles API differences between SDK versions (legacy vs modern).
+     * * @param {Object} lk - The LiveKit SDK object.
+     * @returns {Promise<LocalAudioTrack>} The created audio track.
+     */
+    async function createMicTrack(lk){
+      log("Creating local audio track…");
+      
+      // Modern SDK API
+      if (lk.createLocalAudioTrack){
+        return await lk.createLocalAudioTrack();
+      }
+      
+      // Legacy SDK API
+      if (lk.createLocalTracks){
+        let tracks = await lk.createLocalTracks({audio:true, video:false});
+        return tracks[0];
+      }
+      
+      // Native Browser Fallback (Last Resort)
+      let s = await navigator.mediaDevices.getUserMedia({audio:true});
+      return s.getAudioTracks()[0];
+    }
+
+    /**
+     * Publishes the local track to the Room.
+     * * @param {Room} room - The connected LiveKit room instance.
+     * @param {LocalTrack} track - The audio track to publish.
+     */
+    async function publishMic(room, track){
+      let lp = room.localParticipant;
+      log("Publishing mic track…");
+      let pub = await lp.publishTrack(track);
+      log("Mic published: " + pub.sid);
+    }
+
+    // ==============================================================================
+    // 5. MAIN EXECUTION FLOW
+    // ==============================================================================
+
+    document.getElementById("join").onclick = async () => {
+      try {
+        log("JOIN clicked…");
+
+        let lk = detectLK();
+        if (!lk){ log("LiveKit global not found", "err"); return; }
+        window.lk = lk;  // Expose for debugging
+        log("Using LiveKit SDK global");
+
+        let token = await fetchToken();
+        log("Token length=" + token.length);
+
+        // LiveKit Cloud WebSocket URL
+        const url = "wss://helloworld-ccvq9di6.livekit.cloud";
+
+        // Resolve Room class definition
+        let RoomClass = lk.Room || lk.default?.Room;
+        if (!RoomClass) {
+          log("No Room class found.", "err");
+          return;
+        }
+
+        // Initialize Room
+        let room = new RoomClass();
+        await room.connect(url, token);
+        log("Connected to room.");
+
+        // IMPORTANT: Expose room globally for DevTools (allows `window.room.disconnect()`, etc.)
+        window.room = room;
+        log("room object stored as window.room");
+
+        // Audio Setup
+        let micTrack = await createMicTrack(lk);
+        log("Mic track created");
+
+        // Publish to Server
+        await publishMic(room, micTrack);
+
+        // NOTE: We deliberately do NOT play the mic track locally to prevent audio feedback loops
+        log("Mic published (not attaching locally to avoid feedback)");
+
+        log("READY. Check DevTools → console → window.room");
+
+      } catch (e){
+        log("JOIN error: " + e);
+        console.error(e);
+      }
+    }
+  </script>
+</body>
+</html>
