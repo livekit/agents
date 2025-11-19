@@ -23,18 +23,50 @@ import os
 
 from ..log import logger
 
-# Multi-language filler word database
-DEFAULT_LANGUAGE_FILLERS: dict[str, list[str]] = {
-    "en": ["uh", "umm", "hmm", "er", "ah", "oh", "yeah", "yep", "okay", "ok", "mm", "mhm"],
-    "hi": ["haan", "arey", "accha", "theek", "yaar", "bas", "arre", "haa"],
-    "es": ["eh", "este", "pues", "bueno", "entonces", "claro"],
-    "fr": ["euh", "ben", "alors", "quoi", "voilà", "bah"],
-    "de": ["äh", "ähm", "also", "ja", "naja", "halt"],
-    "ja": ["ええと", "あの", "ま", "えっと"],
-    "zh": ["嗯", "啊", "呃", "那个"],
-    "pt": ["eh", "né", "então", "tipo", "bem"],
-    "it": ["eh", "ehm", "allora", "cioè", "insomma"],
-    "ko": ["음", "어", "그", "저"],
+# Multi-language filler word database with single words and phrases
+DEFAULT_LANGUAGE_FILLERS: dict[str, dict[str, list[str]]] = {
+    "en": {
+        "single": ["uh", "umm", "hmm", "er", "ah", "oh", "yeah", "yep", "okay", "ok", 
+                   "mm", "mhm", "well", "like", "so", "right", "um", "huh"],
+        "phrases": ["you know", "i mean", "you see", "kind of", "sort of", 
+                    "uh huh", "mm hmm", "you know what i mean"]
+    },
+    "hi": {
+        "single": ["haan", "arey", "accha", "theek", "yaar", "bas", "arre", "haa", "ji", "hai"],
+        "phrases": ["theek hai", "haan ji", "accha theek hai", "bas yaar"]
+    },
+    "es": {
+        "single": ["eh", "este", "pues", "bueno", "entonces", "claro"],
+        "phrases": ["o sea", "pues si"]
+    },
+    "fr": {
+        "single": ["euh", "ben", "alors", "quoi", "voilà", "bah"],
+        "phrases": ["tu vois", "tu sais"]
+    },
+    "de": {
+        "single": ["äh", "ähm", "also", "ja", "naja", "halt"],
+        "phrases": ["weißt du"]
+    },
+    "ja": {
+        "single": ["ええと", "あの", "ま", "えっと"],
+        "phrases": []
+    },
+    "zh": {
+        "single": ["嗯", "啊", "呃", "那个"],
+        "phrases": []
+    },
+    "pt": {
+        "single": ["eh", "né", "então", "tipo", "bem"],
+        "phrases": ["sabe"]
+    },
+    "it": {
+        "single": ["eh", "ehm", "allora", "cioè", "insomma"],
+        "phrases": ["cioè"]
+    },
+    "ko": {
+        "single": ["음", "어", "그", "저"],
+        "phrases": []
+    },
 }
 
 
@@ -47,12 +79,14 @@ class FillerFilter:
     is speaking.
 
     Attributes:
-        ignored_words: List of words to consider as fillers
+        ignored_words: List of single words to consider as fillers
+        ignored_phrases: List of multi-word phrases to consider as fillers
         min_confidence_threshold: Minimum confidence score to consider (below this = filler)
         _lock: Async lock for thread-safe operations
-        _language_mode: Whether to use multi-language support ("auto", "manual", or None)
+        _enable_multi_language: Whether to use multi-language support
         _language_fillers: Multi-language filler word database
         _current_language: Currently detected/selected language
+        _context_aware: Enable context-aware classification
     """
 
     def __init__(
@@ -61,6 +95,7 @@ class FillerFilter:
         min_confidence_threshold: float = 0.5,
         enable_multi_language: bool = False,
         default_language: str = "en",
+        context_aware: bool = True,
     ) -> None:
         """
         Initialize the FillerFilter.
@@ -72,27 +107,41 @@ class FillerFilter:
                                      considered fillers (default: 0.5)
             enable_multi_language: Enable automatic language detection and switching
             default_language: Default language code (e.g., "en", "hi", "es")
+            context_aware: Enable context-aware classification for ambiguous words
         """
         self._min_confidence_threshold = min_confidence_threshold
         self._lock = asyncio.Lock()
         self._enable_multi_language = enable_multi_language
         self._current_language = default_language
         self._language_fillers = DEFAULT_LANGUAGE_FILLERS.copy()
+        self._context_aware = context_aware
 
         if enable_multi_language:
             # Start with the default language fillers
-            self.ignored_words = self._language_fillers.get(default_language, [])
+            lang_data = self._language_fillers.get(default_language, {"single": [], "phrases": []})
+            self.ignored_words = lang_data.get("single", [])
+            self.ignored_phrases = lang_data.get("phrases", [])
             logger.info(
                 "FillerFilter initialized with multi-language support",
                 extra={
                     "default_language": default_language,
                     "available_languages": list(self._language_fillers.keys()),
+                    "context_aware": context_aware,
                 },
             )
         elif ignored_words is not None:
             self.ignored_words = [w.strip().lower() for w in ignored_words]
+            self.ignored_phrases = []
         else:
-            self.ignored_words = self._load_fillers_from_env()
+            fillers_from_env = self._load_fillers_from_env()
+            # Load default English fillers with phrases
+            if not fillers_from_env:
+                lang_data = self._language_fillers.get("en", {"single": [], "phrases": []})
+                self.ignored_words = lang_data.get("single", [])
+                self.ignored_phrases = lang_data.get("phrases", [])
+            else:
+                self.ignored_words = fillers_from_env
+                self.ignored_phrases = []
 
         logger.info(
             "FillerFilter initialized",
@@ -201,15 +250,134 @@ class FillerFilter:
 
         return is_filler
 
-    def _normalize_words(self, text: str) -> list[str]:
+    def _normalize_text(self, text: str) -> str:
         """
-        Normalize text into individual words for comparison.
+        Normalize text for comparison.
 
         This handles:
         - Lowercasing
-        - Trimming whitespace
+        - Hyphen to space conversion (uh-huh -> uh huh)
         - Removing punctuation
-        - Splitting on whitespace
+        - Whitespace normalization
+
+        Args:
+            text: Text to normalize
+
+        Returns:
+            Normalized text string
+        """
+        text_lower = text.lower().strip()
+        
+        # Convert hyphens to spaces for hyphenated fillers
+        text_lower = text_lower.replace('-', ' ')
+        
+        # Remove punctuation
+        punctuation = ".,!?;:\"'…"
+        for punct in punctuation:
+            text_lower = text_lower.replace(punct, ' ')
+        
+        # Normalize whitespace
+        text_lower = ' '.join(text_lower.split())
+        
+        return text_lower
+
+    def _extract_words(self, text: str) -> list[str]:
+        """
+        Extract individual words from normalized text.
+
+        Args:
+            text: Normalized text
+
+        Returns:
+            List of words
+        """
+        return [w.strip() for w in text.split() if w.strip()]
+
+    def _check_phrase_fillers(self, text: str) -> bool | None:
+        """
+        Check for multi-word filler phrases.
+
+        Args:
+            text: Normalized text
+
+        Returns:
+            True if text is filler-only phrase
+            False if text contains non-filler content with phrases
+            None if no phrase match (continue with word-level analysis)
+        """
+        if not self.ignored_phrases:
+            return None
+
+        # Exact phrase match
+        if text in self.ignored_phrases:
+            logger.debug("Exact phrase match", extra={"text": text})
+            return True
+
+        # Check for phrase combinations
+        remaining_text = text
+        matched_phrases = []
+
+        for phrase in sorted(self.ignored_phrases, key=len, reverse=True):
+            if phrase in remaining_text:
+                matched_phrases.append(phrase)
+                remaining_text = remaining_text.replace(phrase, ' ', 1)
+
+        if matched_phrases:
+            remaining_words = self._extract_words(remaining_text)
+            if all(w in self.ignored_words for w in remaining_words):
+                logger.debug(
+                    "Phrase fillers detected",
+                    extra={"phrases": matched_phrases, "text": text}
+                )
+                return True
+            else:
+                # Has meaningful content along with phrases
+                return False
+
+        return None
+
+    def _context_aware_classification(self, text: str, words: list[str]) -> bool:
+        """
+        Context-aware classification for ambiguous words.
+
+        Some words like "well", "like", "okay", "so" can be fillers when standalone
+        but meaningful when part of a sentence.
+
+        Args:
+            text: Full normalized text
+            words: List of words in text
+
+        Returns:
+            True if text is filler-only, False otherwise
+        """
+        # Single word case
+        if len(words) == 1:
+            word = words[0]
+            # Ambiguous words that are fillers when standalone
+            ambiguous_fillers = {"well", "like", "okay", "so", "right"}
+            if word in ambiguous_fillers:
+                return True
+            return word in self.ignored_words
+
+        # Multiple words - check if ALL are fillers
+        filler_count = sum(1 for w in words if w in self.ignored_words)
+        non_filler_count = len(words) - filler_count
+
+        # All fillers
+        if non_filler_count == 0:
+            logger.debug(
+                "All words are fillers",
+                extra={"text": text, "words": words}
+            )
+            return True
+
+        # Mixed content - has meaningful words
+        return False
+
+    def _normalize_words(self, text: str) -> list[str]:
+        """
+        Legacy method for backward compatibility.
+        Normalizes text and returns words.
 
         Args:
             text: Text to normalize
@@ -217,16 +385,8 @@ class FillerFilter:
         Returns:
             List of normalized words
         """
-        # Simple normalization - can be enhanced with more sophisticated tokenization
-        # Remove common punctuation
-        text_cleaned = text.lower()
-        for punct in ".,!?;:\"'":
-            text_cleaned = text_cleaned.replace(punct, " ")
-
-        # Split and filter empty strings
-        words = [w.strip() for w in text_cleaned.split() if w.strip()]
-
-        return words
+        normalized = self._normalize_text(text)
+        return self._extract_words(normalized)
 
     async def update_ignored_words(self, words: list[str]) -> None:
         """
@@ -396,14 +556,17 @@ class FillerFilter:
         if lang_code in self._language_fillers:
             old_language = self._current_language
             self._current_language = lang_code
-            self.ignored_words = self._language_fillers[lang_code].copy()
+            lang_data = self._language_fillers[lang_code]
+            self.ignored_words = lang_data.get("single", []).copy()
+            self.ignored_phrases = lang_data.get("phrases", []).copy()
 
             logger.info(
                 "[MULTI_LANG] Language switched",
                 extra={
                     "from": old_language,
                     "to": lang_code,
-                    "new_fillers": self.ignored_words,
+                    "words": len(self.ignored_words),
+                    "phrases": len(self.ignored_phrases),
                 },
             )
         else:
@@ -451,13 +614,16 @@ class FillerFilter:
         """
         if language in self._language_fillers:
             self._current_language = language
-            self.ignored_words = self._language_fillers[language].copy()
+            lang_data = self._language_fillers[language]
+            self.ignored_words = lang_data.get("single", []).copy()
+            self.ignored_phrases = lang_data.get("phrases", []).copy()
 
             logger.info(
                 "[MULTI_LANG] Manually switched language",
                 extra={
                     "language": language,
-                    "fillers": self.ignored_words,
+                    "words": len(self.ignored_words),
+                    "phrases": len(self.ignored_phrases),
                 },
             )
             return True
