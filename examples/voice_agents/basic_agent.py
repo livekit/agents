@@ -126,7 +126,6 @@ async def entrypoint(ctx: JobContext):
                 # noise_cancellation=noise_cancellation.BVC(),
             ),
         ),
-        # record=True,
     )
 
 
