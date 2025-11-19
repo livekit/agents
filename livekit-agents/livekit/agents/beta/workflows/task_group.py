@@ -121,15 +121,6 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         )
 
         enum_list = sorted(task_ids)
-
-        async def out_of_scope(task_ids: list[str]) -> None:
-            for task_id in task_ids:
-                if task_id not in self._registered_factories or task_id not in self._visited_tasks:
-                    raise ToolError(f"unable to regress, invalid task id {task_id}")
-
-            if not self._current_task.done():
-                self._current_task.complete(_OutOfScopeError(target_task_ids=task_ids))
-
         # pass raw schema to out_of_scope
         schema = {
             "type": "function",
@@ -152,4 +143,13 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             },
         }
 
-        return function_tool(out_of_scope, raw_schema=schema, flags=ToolFlag.IGNORE_ON_ENTER)
+        @function_tool(raw_schema=schema, flags=ToolFlag.IGNORE_ON_ENTER)
+        async def out_of_scope(task_ids: list[str]) -> None:
+            for task_id in task_ids:
+                if task_id not in self._registered_factories or task_id not in self._visited_tasks:
+                    raise ToolError(f"unable to regress, invalid task id {task_id}")
+
+            if not self._current_task.done():
+                self._current_task.complete(_OutOfScopeError(target_task_ids=task_ids))
+
+        return out_of_scope
