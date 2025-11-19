@@ -11,9 +11,7 @@ if sys.version_info >= (3, 11):
 else:
     from typing_extensions import Self
 
-from typing import Annotated, Any
-
-from pydantic import Field
+from typing import Any
 
 from ... import FunctionTool, llm
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
@@ -122,16 +120,9 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             f"The following are the IDs and their corresponding task description. {json.dumps(task_repr)}"
         )
 
-        @function_tool(description=description, flags=ToolFlag.IGNORE_ON_ENTER)
-        async def out_of_scope(
-            task_ids: Annotated[
-                list[str],
-                Field(
-                    description="The IDs of the tasks requested",
-                    json_schema_extra={"items": {"enum": list(task_ids)}},
-                ),
-            ],
-        ) -> None:
+        enum_list = sorted(task_ids)
+
+        async def out_of_scope(task_ids: list[str]) -> None:
             for task_id in task_ids:
                 if task_id not in self._registered_factories or task_id not in self._visited_tasks:
                     raise ToolError(f"unable to regress, invalid task id {task_id}")
@@ -139,4 +130,26 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             if not self._current_task.done():
                 self._current_task.complete(_OutOfScopeError(target_task_ids=task_ids))
 
-        return out_of_scope
+        # pass raw schema to out_of_scope
+        schema = {
+            "type": "function",
+            "name": "out_of_scope",
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_ids": {
+                        "type": "array",
+                        "description": "The IDs of the tasks requested",
+                        "items": {
+                            "type": "string",
+                            "enum": enum_list,
+                        },
+                    }
+                },
+                "required": ["task_ids"],
+                "additionalProperties": False,
+            },
+        }
+
+        return function_tool(out_of_scope, raw_schema=schema, flags=ToolFlag.IGNORE_ON_ENTER)
