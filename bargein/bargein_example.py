@@ -46,8 +46,9 @@ class MyAgent(Agent):
     def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings):
         async def _forward():
             async for event in Agent.default.stt_node(self, audio, model_settings):
-
-                if not utils.is_given(self.should_hold_transcript) and not utils.is_given(self.last_inference_time):
+                if not utils.is_given(self.should_hold_transcript) and not utils.is_given(
+                    self.last_inference_time
+                ):
                     yield event
                     continue
 
@@ -63,20 +64,31 @@ class MyAgent(Agent):
                         self.transcript_buffer.append(event)
                         continue
 
-                    if event.alternatives[0].start_time <= self.last_inference_time - self._stream_started_at:
+                    if (
+                        event.alternatives[0].start_time
+                        <= self.last_inference_time - self._stream_started_at
+                    ):
                         self.transcript_buffer.append(event)
                         continue
 
                     # release any events that are after the last inference time
                     while self.transcript_buffer:
                         prev_event = self.transcript_buffer.pop()
-                        if prev_event.alternatives and prev_event.alternatives[0].start_time <= self.last_inference_time - self._stream_started_at:
-                            logger.info(f"[BARGEIN] Releasing event: {event.type}: {prev_event.alternatives[0].start_time}")
+                        if (
+                            prev_event.alternatives
+                            and prev_event.alternatives[0].start_time
+                            <= self.last_inference_time - self._stream_started_at
+                        ):
+                            logger.info(
+                                f"[BARGEIN] Releasing event: {event.type}: {prev_event.alternatives[0].start_time}"
+                            )
                             yield event
                         elif prev_event.type == stt.SpeechEventType.START_OF_SPEECH:
                             logger.info(f"[BARGEIN] Releasing event: {prev_event.type}")
                             yield prev_event
-                            logger.info(f"[BARGEIN] Releasing event: {event.type}: {event.alternatives[0].start_time}")
+                            logger.info(
+                                f"[BARGEIN] Releasing event: {event.type}: {event.alternatives[0].start_time}"
+                            )
                             yield event
                         break
 
@@ -92,10 +104,13 @@ class MyAgent(Agent):
         self.last_inference_time = time
         self._stream_started_at = started_at
 
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+
 tasks = set()
+
 
 async def entrypoint(ctx: JobContext):
     # each log entry will include these fields
@@ -138,7 +153,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     sa = BargeInDetector(
-        model_path="/Users/chenghao/Downloads/bd_best.onnx",
+        model_path="/Users/chenghao/Downloads/bargein_binary.onnx",
         enable_clipping=True,
         clipping_threshold=1e-3,
         sample_rate=16000,
