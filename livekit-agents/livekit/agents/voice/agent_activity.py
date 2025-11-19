@@ -1242,7 +1242,12 @@ class AgentActivity(RecognitionHooks):
 
         if agent_is_speaking and self._audio_recognition is not None:
             text = self._audio_recognition.current_transcript
-            confidence = 1.0
+            confidence = (
+                sum(self._audio_recognition._final_transcript_confidence)
+                / len(self._audio_recognition._final_transcript_confidence)
+                if self._audio_recognition._final_transcript_confidence
+                else 0.0
+            )
 
             # Check if transcript should be suppressed
             if self._should_suppress_transcript(text, confidence, agent_is_speaking):
@@ -2669,4 +2674,5 @@ class AgentActivity(RecognitionHooks):
     @property
     def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
+
 
