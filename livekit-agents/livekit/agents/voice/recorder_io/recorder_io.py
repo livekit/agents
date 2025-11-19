@@ -53,6 +53,7 @@ class RecorderIO:
         self._write_interval = write_interval
         self._input_write_cb = input_write_cb
         self._output_write_cb = output_write_cb
+        self._input_buf: list[rtc.AudioFrame] = []
 
     async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
@@ -140,17 +141,24 @@ class RecorderIO:
         assert self._in_record is not None
         assert self._out_record is not None
 
-        # Forward the input audio to the encoder every 5s.
+        # Forward the input audio to the encoder every _write_interval seconds
+        # only if the agent finishes speaking (no more pending data in the output buffer)
+        input_buffer: list[rtc.AudioFrame] = []
         while True:
             await asyncio.sleep(self._write_interval)
+            # buffer the input audio so that the callback can still process it in real-time
+            # without affecting the recording process
+            input_buf = self._in_record.take_buf()
+            if self._input_write_cb:
+                self._input_write_cb(input_buf)
+            input_buffer.extend(input_buf)
+
             if self._out_record.has_pending_data:
                 # if the output is currenetly playing audio, wait for it to stay in sync
                 continue  # always wait for the complete output
 
-            input_buf = self._in_record.take_buf()
-            if self._input_write_cb:
-                self._input_write_cb(input_buf)
-            self._in_q.put_nowait(input_buf)
+            self._in_q.put_nowait(input_buffer)
+            input_buffer = []
             self._out_q.put_nowait([])
 
     def _encode_thread(self) -> None:
