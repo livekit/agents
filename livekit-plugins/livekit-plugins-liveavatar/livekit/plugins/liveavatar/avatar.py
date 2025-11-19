@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import os
 import uuid
-import contextlib
 from collections.abc import Iterator
 
 import aiohttp
@@ -22,16 +22,16 @@ from livekit.agents import (
 )
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import HeyGenAPI, HeyGenException
+from .api import LiveAvatarAPI, LiveAvatarException
 from .log import logger
 
 SAMPLE_RATE = 24000
-_AVATAR_AGENT_IDENTITY = "heygen-avatar-agent"
-_AVATAR_AGENT_NAME = "heygen-avatar-agent"
+_AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
+_AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
 
 class AvatarSession:
-    """A HeyGen avatar session"""
+    """A LiveAvatar avatar session"""
 
     def __init__(
         self,
@@ -43,14 +43,10 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        self._avatar_id = avatar_id or os.getenv("HEYGEN_AVATAR_ID")
-        self._api = HeyGenAPI(
-            api_key=api_key, api_url=api_url, conn_options=conn_options
-        )
+        self._avatar_id = avatar_id or os.getenv("LIVEAVATAR_AVATAR_ID")
+        self._api = LiveAvatarAPI(api_key=api_key, api_url=api_url, conn_options=conn_options)
 
-        self._avatar_participant_identity = (
-            avatar_participant_identity or _AVATAR_AGENT_IDENTITY
-        )
+        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._main_atask = asyncio.Task | None
         self._audio_resampler: rtc.AudioResampler | None = None
@@ -70,11 +66,9 @@ class AvatarSession:
         self._room = room
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (
-            os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN
-        )
+        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise HeyGenException(
+            raise LiveAvatarException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set"
             )
 
@@ -83,7 +77,7 @@ class AvatarSession:
             self._local_participant_identity = job_ctx.token_claims().identity
         except RuntimeError as e:
             if not room.isconnected():
-                raise HeyGenException("failed to get local participant identity") from e
+                raise LiveAvatarException("failed to get local participant identity") from e
             self._local_participant_identity = room.local_participant.identity
 
         livekit_token = (
@@ -95,9 +89,7 @@ class AvatarSession:
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
-            .with_attributes(
-                {ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity}
-            )
+            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity})
             .to_jwt()
         )
 
@@ -111,27 +103,21 @@ class AvatarSession:
         )
         self._session_id = session_config_data["data"]["session_id"]
         self._session_token = session_config_data["data"]["session_token"]
-        logger.info(f"HeyGen session created: {self._session_id}")
+        logger.info(f"LiveAvatar session created: {self._session_id}")
 
         session_start_data = await self._api.start_streaming_session(
             self._session_id, self._session_token
         )
         self._ws_url = session_start_data["data"]["ws_url"]
-        logger.info("HeyGen streaming session started")
+        logger.info("LiveAvatar streaming session started")
 
         @self._agent_session.on("agent_state_changed")
         def on_agent_state_changed(ev):
             if ev.old_state == "speaking" and ev.new_state == "listening":
-                self.send_event(
-                    {"type": "agent.speak_end", "event_id": str(uuid.uuid4())}
-                )
-                self.send_event(
-                    {"type": "agent.start_listening", "event_id": str(uuid.uuid4())}
-                )
+                self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
+                self.send_event({"type": "agent.start_listening", "event_id": str(uuid.uuid4())})
             if ev.new_state == "idle":
-                self.send_event(
-                    {"type": "agent.stop_listening", "event_id": str(uuid.uuid4())}
-                )
+                self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
         @self._agent_session.on("conversation_item_added")
         def on_conversation_item_added(ev):
@@ -139,9 +125,7 @@ class AvatarSession:
                 self._agent_session.current_speech is not None
                 and self._agent_session.current_speech.interrupted
             ):
-                self.send_event(
-                    {"type": "agent.interrupt", "event_id": str(uuid.uuid4())}
-                )
+                self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
 
         @self._room.on("local_track_published")
         def on_local_track_published(publication, track):
@@ -183,9 +167,7 @@ class AvatarSession:
         )
 
         if self._agent_audio_track is not None:
-            agent_audio_stream = rtc.AudioStream.from_track(
-                track=self._agent_audio_track
-            )
+            agent_audio_stream = rtc.AudioStream.from_track(track=self._agent_audio_track)
         ws_conn = await self._api._ensure_http_session().ws_connect(url=self._ws_url)
 
         closing = False
@@ -232,9 +214,7 @@ class AvatarSession:
                 ):
                     if closing:
                         return
-                    raise APIConnectionError(
-                        message="HeyGen connection closed unexpectedly."
-                    )
+                    raise APIConnectionError(message="LiveAvatar connection closed unexpectedly.")
 
         tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),

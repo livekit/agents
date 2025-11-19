@@ -17,14 +17,14 @@ from livekit.agents import (
 logger = logging.getLogger(__name__)
 
 
-class HeyGenException(Exception):
-    """Exception for HeyGen errors"""
+class LiveAvatarException(Exception):
+    """Exception for LiveAvatar errors"""
 
 
 DEFAULT_API_URL = "https://api.liveavatar.com/v1/sessions"
 
 
-class HeyGenAPI:
+class LiveAvatarAPI:
     def __init__(
         self,
         api_key: str,
@@ -33,9 +33,9 @@ class HeyGenAPI:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         session: Optional[aiohttp.ClientSession] = None,
     ) -> None:
-        self._api_key = api_key or os.getenv("HEYGEN_API_KEY")
+        self._api_key = api_key or os.getenv("LIVEAVATAR_API_KEY")
         if self._api_key is None:
-            raise HeyGenException("api_key or HEYGEN_API_KEY must be set")
+            raise LiveAvatarException("api_key or LIVEAVATAR_API_KEY must be set")
 
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
@@ -106,9 +106,9 @@ class HeyGenAPI:
                     extra={"error": str(e)},
                 )
             except Exception:
-                logger.exception("failed to call HeyGen API")
+                logger.exception("failed to call LiveAvatar API")
 
             if i < self._conn_options.max_retry - 1:
                 await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIConnectionError("Failed to call HeyGen API after all retries.")
+        raise APIConnectionError("Failed to call LiveAvatar API after all retries.")
