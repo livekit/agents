@@ -45,6 +45,7 @@ class BargeInDetectorONNX:
     def predict_prob(self, waveform, with_timestamps=False):
         # wavform is (num_channels, num_samples) at 16_000 Hz
         # the first channel is assistent speech, the second is user speech
+        waveform = waveform[[1], :]
         waveform = np.array(waveform, dtype=np.float32)
         probs = self.sess.run(None, {"waveform": waveform})[0]
 
@@ -75,7 +76,7 @@ class BargeInDetector:
     def __init__(
         self,
         *,
-        model_path: str = "/Users/chenghao/Downloads/bd_best.onnx",
+        model_path: str = "/Users/chenghao/Downloads/bargein_binary.onnx",
         enable_clipping: bool = True,
         clipping_threshold: float = 1e-3,
         sample_rate: int = 16000,
@@ -128,7 +129,7 @@ class BargeInDetector:
         self._register_custom_hooks()
         self._main_atask = asyncio.create_task(self.main_task(ctx))
 
-    async def main_task(self, ctx: JobContext):
+    async def main_task(self, ctx: JobContext) -> None:
         while self._session.input.audio is None or self._session.output.audio is None:
             await asyncio.sleep(0.05)
 
@@ -154,7 +155,7 @@ class BargeInDetector:
     def disable_interruption(self) -> None:
         logger.info("[BARGEIN] Temporarily disabling interruption by audio activity")
 
-        def noop(*args, **kwargs):
+        def noop(*args, **kwargs) -> None:
             pass
 
         self._prev_interrupt_by_audio_activity = (
@@ -425,7 +426,9 @@ class BargeInDetector:
                     self._loop.call_soon_threadsafe(self.barge_in)
                     self.save_input_for_debug(inp, prefix="recordings/barge_in")
                     self._in_record.write_to_file("recordings/barge_in/input.wav")
-                    self.save_frames_to_file(input_frames_history, "recordings/barge_in/input_frames.pkl")
+                    self.save_frames_to_file(
+                        input_frames_history, "recordings/barge_in/input_frames.pkl"
+                    )
                 else:
                     self.save_input_for_debug(inp, prefix="recordings/not_barge_in")
 
@@ -444,11 +447,7 @@ class BargeInDetector:
         import pickle
 
         with open(filename, "wb") as f:
-            pickle.dump([
-                f.to_wav_bytes()
-                for f in frames
-            ], f)
-
+            pickle.dump([f.to_wav_bytes() for f in frames], f)
 
 
 class SyncedAudioInput(io.AudioInput):
@@ -495,8 +494,6 @@ class SyncedAudioInput(io.AudioInput):
             arr_i16 = arr_i16.astype(np.float32) / 32768.0
             f.write(ff.to_wav_bytes())
             soundfile.write(filename.replace(".wav", "_float32.wav"), arr_i16, ff._sample_rate)
-
-
 
 
 class SyncedAudioOutput(io.AudioOutput):
