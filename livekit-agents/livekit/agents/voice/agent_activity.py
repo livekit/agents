@@ -637,8 +637,7 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
-                with trace.use_span(span, end_on_exit=False):
-                    await self._start_session()
+                await self._start_session()
             finally:
                 span.end()
 
@@ -659,9 +658,8 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
             )
             try:
-                with trace.use_span(span, end_on_exit=False):
-                    await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
-                    await self._close_session()
+                await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+                await self._close_session()
             finally:
                 span.end()
 
