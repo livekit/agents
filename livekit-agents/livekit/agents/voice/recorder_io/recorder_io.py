@@ -53,7 +53,6 @@ class RecorderIO:
         self._write_interval = write_interval
         self._input_write_cb = input_write_cb
         self._output_write_cb = output_write_cb
-        self._input_buf: list[rtc.AudioFrame] = []
 
     async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
