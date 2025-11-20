@@ -46,7 +46,7 @@ async def launch_avatar(ctx: JobContext, avatar_dispatcher_url: str, avatar_iden
         .with_name("Avatar Runner")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
         .with_kind("agent")
-        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.token_claims().identity})
+        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.local_participant_identity})
         .to_jwt()
     )
 
