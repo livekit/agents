@@ -177,6 +177,13 @@ async def main(api_url: str, api_token: str):
 
     room.register_text_stream_handler(TOPIC_TRANSCRIPTION, _on_transcript)
     await room.connect(api_url, api_token)
+
+    def on_transcription_received(reader: rtc.TextStreamReader, participant_identity: str):
+        # ignore transcription from the room
+        pass
+
+    room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_transcription_received)
+
     should_stop = asyncio.Event()
 
     # stop when disconnect from the room or the agent disconnects

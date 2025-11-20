@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main, 0.x]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
-    branches: [main, 0.x]
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 jobs:
@@ -83,7 +86,6 @@ jobs:
               -p livekit.plugins.minimal
               -p livekit.plugins.neuphonic
               -p livekit.plugins.nltk
-              -p livekit.plugins.playai
               -p livekit.plugins.resemble
               -p livekit.plugins.rime
               -p livekit.plugins.silero

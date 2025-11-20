@@ -40,6 +40,7 @@ from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_cr
 from .models import (
     CerebrasChatModels,
     ChatModels,
+    CometAPIChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
@@ -117,7 +118,10 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            reasoning_effort = "minimal"
+            if model == "gpt-5.1":
+                reasoning_effort = "none"  # type: ignore
+            else:
+                reasoning_effort = "minimal"
 
         self._opts = _LLMOptions(
             model=model,
@@ -380,6 +384,7 @@ class LLM(llm.LLM):
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
     ) -> LLM:
         """
         Create a new instance of OpenRouter LLM.
@@ -428,6 +433,7 @@ class LLM(llm.LLM):
             top_p=top_p,
             extra_body=or_body,
             extra_headers=default_headers,
+            timeout=timeout,
         )
 
     @staticmethod
@@ -457,6 +463,56 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
+    @staticmethod
+    def with_cometapi(
+        *,
+        model: str | CometAPIChatModels = "gpt-5-chat-latest",
+        api_key: str | None = None,
+        base_url: str = "https://api.cometapi.com/v1/",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of CometAPI LLM.
+
+        ``api_key`` must be set to your CometAPI API key, either using the argument or by setting
+        the ``COMETAPI_API_KEY`` environmental variable.
+
+        CometAPI provides access to 500+ AI models from multiple providers including OpenAI,
+        Anthropic, Google, xAI, DeepSeek, and Qwen through a unified API.
+
+        Get your API key at: https://api.cometapi.com/console/token
+        Learn more: https://www.cometapi.com/?utm_source=livekit&utm_campaign=integration&utm_medium=integration&utm_content=integration
+        """
+
+        api_key = api_key or os.environ.get("COMETAPI_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "CometAPI API key is required, either as argument or set COMETAPI_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -730,7 +786,7 @@ class LLM(llm.LLM):
     def with_letta(
         *,
         agent_id: str,
-        base_url: str = "https://api.letta.com/v1/voice-beta",
+        base_url: str = "https://api.letta.com/v1/chat/completions",
         api_key: str | None = None,
     ) -> LLM:
         """
@@ -738,7 +794,7 @@ class LLM(llm.LLM):
 
         Args:
             agent_id (str): The Letta agent ID (must be prefixed with 'agent-').
-            base_url (str): The URL of the Letta server (e.g., from ngrok or Letta Cloud).
+            base_url (str): The URL of the Letta server (e.g., http://localhost:8283/v1/chat/completions for local or https://api.letta.com/v1/chat/completions for cloud).
             api_key (str | None, optional): Optional API key for authentication, required if
                                             the Letta server enforces auth.
 
@@ -746,7 +802,6 @@ class LLM(llm.LLM):
             LLM: A configured LLM instance for interacting with the given Letta agent.
         """
 
-        base_url = f"{base_url}/{agent_id}"
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"}:
             raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
@@ -760,7 +815,7 @@ class LLM(llm.LLM):
             )
 
         return LLM(
-            model="letta-fast",
+            model=agent_id,
             api_key=api_key,
             base_url=base_url,
             client=None,

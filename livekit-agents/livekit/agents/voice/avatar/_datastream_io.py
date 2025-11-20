@@ -37,6 +37,7 @@ class DataStreamAudioOutput(AudioOutput):
         sample_rate: int | None = None,
         wait_remote_track: rtc.TrackKind.ValueType | None = None,
         can_pause: bool = False,
+        clear_buffer_timeout: float | None = 2.0,
     ):
         super().__init__(
             label="DataStreamIO",
@@ -54,6 +55,11 @@ class DataStreamAudioOutput(AudioOutput):
         self._started = False
         self._lock = asyncio.Lock()
         self._start_atask: asyncio.Task | None = None
+
+        # a playback finished event is expected after the clear buffer rpc is performed
+        # if not received after the timeout, we still mark the playout is done to avoid deadlock
+        self._clear_buffer_timeout = clear_buffer_timeout
+        self._clear_buffer_timeout_handler: asyncio.TimerHandle | None = None
 
         def _on_room_connected(fut: asyncio.Future[None]) -> None:
             if not self._start_atask and not fut.cancelled() and not fut.exception():
@@ -153,13 +159,7 @@ class DataStreamAudioOutput(AudioOutput):
         if not self._started:
             return
 
-        task = asyncio.create_task(
-            self._room.local_participant.perform_rpc(
-                destination_identity=self._destination_identity,
-                method=RPC_CLEAR_BUFFER,
-                payload="",
-            )
-        )
+        task = asyncio.create_task(self._clear_buffer_task(self._pushed_duration))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -202,6 +202,33 @@ class DataStreamAudioOutput(AudioOutput):
         task.add_done_callback(self._tasks.discard)
         self.__paused = True
 
+    async def _clear_buffer_task(self, pushed_duration: float) -> None:
+        timeout = self._clear_buffer_timeout
+        try:
+            await self._room.local_participant.perform_rpc(
+                destination_identity=self._destination_identity,
+                method=RPC_CLEAR_BUFFER,
+                payload="",
+            )
+        except Exception as e:
+            logger.error("failed to perform clear buffer rpc", exc_info=e)
+            timeout = 0  # mark playout done immediately if clear buffer rpc fails
+
+        def _on_timeout() -> None:
+            logger.warning(
+                "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily"
+            )
+            self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
+            self._reset_playback_count()
+
+        if self._clear_buffer_timeout_handler:
+            self._clear_buffer_timeout_handler.cancel()
+
+        if timeout is not None:
+            self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
+                timeout, _on_timeout
+            )
+
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
             logger.warning(
@@ -217,6 +244,10 @@ class DataStreamAudioOutput(AudioOutput):
             "playback finished event received",
             extra={"caller_identity": data.caller_identity},
         )
+
+        if self._clear_buffer_timeout_handler:
+            self._clear_buffer_timeout_handler.cancel()
+            self._clear_buffer_timeout_handler = None
 
         event = PlaybackFinishedEvent(**json.loads(data.payload))
         self.on_playback_finished(
@@ -270,7 +301,6 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
-    _clear_buffer_rpc_registered: bool = False
     _clear_buffer_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
 
     def __init__(
@@ -497,20 +527,22 @@ class DataStreamAudioReceiver(AudioReceiver):
     ) -> None:
         cls._clear_buffer_handlers[caller_identity] = handler
 
-        if cls._clear_buffer_rpc_registered:
+        if (
+            rpc_handler := room.local_participant._rpc_handlers.get(RPC_CLEAR_BUFFER)
+        ) and rpc_handler == cls._clear_buffer_rpc_handler:
             return
 
-        def _handler(data: rtc.RpcInvocationData) -> str:
-            if data.caller_identity not in cls._clear_buffer_handlers:
-                logger.warning(
-                    "clear buffer event received from unexpected participant",
-                    extra={
-                        "caller_identity": data.caller_identity,
-                        "expected_identities": list(cls._clear_buffer_handlers.keys()),
-                    },
-                )
-                return "reject"
-            return cls._clear_buffer_handlers[data.caller_identity](data)
+        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, cls._clear_buffer_rpc_handler)
 
-        room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handler)
-        cls._clear_buffer_rpc_registered = True
+    @classmethod
+    def _clear_buffer_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity not in cls._clear_buffer_handlers:
+            logger.warning(
+                "clear buffer event received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identities": list(cls._clear_buffer_handlers.keys()),
+                },
+            )
+            return "reject"
+        return cls._clear_buffer_handlers[data.caller_identity](data)

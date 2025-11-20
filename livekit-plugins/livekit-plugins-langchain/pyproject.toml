@@ -12,7 +12,7 @@ requires-python = ">=3.9.0"
 authors = [
     {name = "LiveKit", email = "hello@livekit.io"}
 ]
-keywords = ["livekit", "agents", "LangChain", "LangGraph"]
+keywords = ["voice", "ai", "realtime", "livekit", "LangChain", "LangGraph"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.2.11",
+    "livekit-agents>=1.3.3",
     "langchain-core>=0.3.0",
     "langgraph>=0.3.0",
 ]

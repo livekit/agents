@@ -123,9 +123,6 @@ class AudioStreamDecoder:
     is designed to decode a single stream.
     """
 
-    _max_workers: int = 10
-    _executor: ThreadPoolExecutor | None = None
-
     def __init__(
         self,
         *,
@@ -148,16 +145,14 @@ class AudioStreamDecoder:
         self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
 
-        if self.__class__._executor is None:
-            # each decoder instance will submit jobs to the shared pool
-            self.__class__._executor = ThreadPoolExecutor(max_workers=self.__class__._max_workers)
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="AudioDecoder")
 
     def push(self, chunk: bytes) -> None:
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
             target = self._decode_wav_loop if self._av_format == "wav" else self._decode_loop
-            self._loop.run_in_executor(self.__class__._executor, target)
+            self._loop.run_in_executor(self._executor, target)
 
     def end_input(self) -> None:
         self._input_buf.end_input()
@@ -340,3 +335,5 @@ class AudioStreamDecoder:
 
         async for _ in self._output_ch:
             pass
+
+        self._executor.shutdown(wait=False, cancel_futures=True)

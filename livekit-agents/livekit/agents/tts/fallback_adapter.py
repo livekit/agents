@@ -5,7 +5,7 @@ import dataclasses
 import time
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Any, ClassVar, Literal, Union
 
 from livekit import rtc
 
@@ -106,6 +106,14 @@ class FallbackAdapter(
 
             t.on("metrics_collected", self._on_metrics_collected)
 
+    @property
+    def model(self) -> str:
+        return "FallbackAdapter"
+
+    @property
+    def provider(self) -> str:
+        return "livekit"
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS
     ) -> FallbackChunkedStream:
@@ -133,6 +141,8 @@ class FallbackAdapter(
 
 
 class FallbackChunkedStream(ChunkedStream):
+    _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+
     def __init__(
         self, *, tts: FallbackAdapter, input_text: str, conn_options: APIConnectOptions
     ) -> None:
@@ -251,6 +261,8 @@ class FallbackChunkedStream(ChunkedStream):
 
 
 class FallbackSynthesizeStream(SynthesizeStream):
+    _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+
     def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._fallback_adapter = tts

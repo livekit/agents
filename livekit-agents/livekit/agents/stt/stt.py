@@ -29,6 +29,11 @@ class SpeechEventType(str, Enum):
     if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""  # noqa: E501
     INTERIM_TRANSCRIPT = "interim_transcript"
     """interim transcript, useful for real-time transcription"""
+    PREFLIGHT_TRANSCRIPT = "preflight_transcript"
+    """preflight transcript, emitted when the STT is confident enough that a certain
+    portion of speech will not change. This is different from final transcript in that
+    the same transcript may still be updated; but it is stable enough to be used for
+    preemptive generation"""
     FINAL_TRANSCRIPT = "final_transcript"
     """final transcript, emitted when the STT is confident enough that a certain
     portion of speech will not change"""
@@ -90,6 +95,7 @@ class STT(
         super().__init__()
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._recognize_metrics_needed = True
 
     @property
     def label(self) -> str:
@@ -145,20 +151,21 @@ class STT(
                 event = await self._recognize_impl(
                     buffer, language=language, conn_options=conn_options
                 )
-                duration = time.perf_counter() - start_time
-                stt_metrics = STTMetrics(
-                    request_id=event.request_id,
-                    timestamp=time.time(),
-                    duration=duration,
-                    label=self._label,
-                    audio_duration=calculate_audio_duration(buffer),
-                    streamed=False,
-                    metadata=Metadata(
-                        model_name=self.model,
-                        model_provider=self.provider,
-                    ),
-                )
-                self.emit("metrics_collected", stt_metrics)
+                if self._recognize_metrics_needed:
+                    duration = time.perf_counter() - start_time
+                    stt_metrics = STTMetrics(
+                        request_id=event.request_id,
+                        timestamp=time.time(),
+                        duration=duration,
+                        label=self._label,
+                        audio_duration=calculate_audio_duration(buffer),
+                        streamed=False,
+                        metadata=Metadata(
+                            model_name=self.model,
+                            model_provider=self.provider,
+                        ),
+                    )
+                    self.emit("metrics_collected", stt_metrics)
                 return event
 
             except APIError as e:

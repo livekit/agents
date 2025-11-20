@@ -66,7 +66,7 @@ TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 TTSEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
-DEFAULT_SAMPLE_RATE: int = 16000
+DEFAULT_SAMPLE_RATE: int = 24000
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 
@@ -188,7 +188,7 @@ class TTS(tts.TTS):
         """Livekit Cloud Inference TTS
 
         Args:
-            model (TTSModels | str): TTS model to use, in "provider/model[:voice_id]" format
+            model (TTSModels | str): TTS model to use, in "provider/model" format
             voice (str, optional): Voice to use, use a default one if not provided
             language (str, optional): Language of the TTS model.
             encoding (TTSEncoding, optional): Encoding of the TTS model.
@@ -232,17 +232,6 @@ class TTS(tts.TTS):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
-        # read voice id from the model if provided: "provider/model:voice_id"
-        if is_given(model) and (idx := model.rfind(":")) != -1:
-            if is_given(voice) and voice != model[idx + 1 :]:
-                logger.warning(
-                    "`voice` is provided via both argument and model, using the one from the argument",
-                    extra={"voice": voice, "model": model},
-                )
-            else:
-                voice = model[idx + 1 :]
-            model = model[:idx]
-
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
@@ -263,13 +252,29 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    @classmethod
+    def from_model_string(cls, model: str) -> TTS:
+        """Create a TTS instance from a model string
+
+        Args:
+            model (str): TTS model to use, in "provider/model[:voice_id]" format
+
+        Returns:
+            TTS: TTS instance
+        """
+        voice: NotGivenOr[str] = NOT_GIVEN
+        if (idx := model.rfind(":")) != -1:
+            voice = model[idx + 1 :]
+            model = model[:idx]
+        return cls(model, voice=voice)
+
     @property
     def model(self) -> str:
         return self._opts.model
 
     @property
     def provider(self) -> str:
-        return "LiveKit"
+        return "livekit"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -330,12 +335,14 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str, optional): Voice.
             model (TTSModels | str, optional): TTS model to use.
             language (str, optional): Language code for the TTS model.
+            extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
         """
         if is_given(model):
             self._opts.model = model
@@ -343,6 +350,8 @@ class TTS(tts.TTS):
             self._opts.voice = voice
         if is_given(language):
             self._opts.language = language
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs.update(extra_kwargs)
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -384,6 +393,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -395,24 +405,29 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            base_pkt = {
-                "type": "input_transcript",
-            }
+            base_pkt: dict[str, Any] = {}
+            base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
+                token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
+                input_sent_event.set()
 
             end_pkt = {
                 "type": "session.flush",
             }
             await ws.send_str(json.dumps(end_pkt))
+            # needed in case empty input is sent
+            input_sent_event.set()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_session_id: str | None = None
+            await input_sent_event.wait()
+
             while True:
-                msg = await ws.receive()
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -456,6 +471,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
 

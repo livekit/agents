@@ -19,7 +19,10 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5.1",
+    "gpt-5.1-chat-latest",
     "gpt-5",
+    "gpt-5-chat-latest",
     "gpt-5-mini",
     "gpt-5-nano",
     "gpt-4.1",
@@ -141,6 +144,45 @@ DeepSeekChatModels = Literal[
     "deepseek-chat",
 ]
 
+CometAPIChatModels = Literal[
+    # GPT series
+    "gpt-5-chat-latest",
+    "gpt-5",
+    "gpt-5-pro",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "o4-mini-2025-04-16",
+    "o3-pro-2025-06-10",
+    "chatgpt-4o-latest",
+    # Claude series
+    "claude-sonnet-4-5-20250929",
+    "claude-opus-4-1-20250805",
+    "claude-opus-4-1-20250805-thinking",
+    "claude-sonnet-4-20250514",
+    "claude-sonnet-4-20250514-thinking",
+    "claude-3-7-sonnet-latest",
+    "claude-3-5-haiku-latest",
+    # Gemini series
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    # Grok series
+    "grok-4-0709",
+    "grok-4-fast-non-reasoning",
+    "grok-4-fast-reasoning",
+    # DeepSeek series
+    "deepseek-v3.1",
+    "deepseek-v3",
+    "deepseek-r1-0528",
+    "deepseek-chat",
+    "deepseek-reasoner",
+    # Qwen series
+    "qwen3-30b-a3b",
+    "qwen3-coder-plus-2025-07-22",
+]
+
 VertexModels = Literal[
     "google/gemini-2.0-flash-exp",
     "google/gemini-1.5-flash",
@@ -249,6 +291,7 @@ XAIChatModels = Literal[
 
 def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
     return model in [
+        "gpt-5.1",
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",
