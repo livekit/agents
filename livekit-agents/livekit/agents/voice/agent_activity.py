@@ -1257,14 +1257,9 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-        if (
-            ev.alternatives[0].text
-            and self._audio_recognition
-            and self._audio_recognition._turn_detection_mode
-            not in (
-                "manual",
-                "realtime_llm",
-            )
+        if ev.alternatives[0].text and self._turn_detection not in (
+            "manual",
+            "realtime_llm",
         ):
             self._interrupt_by_audio_activity()
 
@@ -1293,7 +1288,7 @@ class AgentActivity(RecognitionHooks):
         # we call _interrupt_by_audio_activity (idempotent) to pause the speech, if possible
         # which will also be immediately interrupted
 
-        if self._audio_recognition and self._audio_recognition._turn_detection_mode not in (
+        if self._audio_recognition and self._turn_detection not in (
             "manual",
             "realtime_llm",
         ):
