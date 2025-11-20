@@ -22,7 +22,7 @@ from livekit.agents.inference._utils import create_access_token
 from .log import logger
 
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.1 * 16000)  # 0.1 second at 16000 Hz
+STEP_SIZE = int(0.2 * 16000)  # 0.2 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
@@ -155,11 +155,15 @@ class BargeinStream(BargeinStreamBase):
                 continue
 
             # start inferencing against the overlap speech
-            if isinstance(input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel):
+            if agent_speech_started and isinstance(
+                input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel
+            ):
+                logger.debug("overlap speech started")
                 overlap_speech_started = True
                 continue
 
             if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
+                logger.debug("overlap speech ended")
                 overlap_speech_started = False
                 continue
 

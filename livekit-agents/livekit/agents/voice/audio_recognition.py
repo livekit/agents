@@ -343,11 +343,13 @@ class AudioRecognition:
         self._bargein_detector = bargein_detector
         if bargein_detector:
             self._bargein_ch = aio.Chan[
-                rtc.AudioFrame
-                | BargeinStream._AgentSpeechStartedSentinel
-                | BargeinStream._AgentSpeechEndedSentinel
-                | BargeinStream._OverlapSpeechStartedSentinel
-                | BargeinStream._OverlapSpeechEndedSentinel
+                Union[
+                    rtc.AudioFrame,
+                    BargeinStream._AgentSpeechStartedSentinel,
+                    BargeinStream._AgentSpeechEndedSentinel,
+                    BargeinStream._OverlapSpeechStartedSentinel,
+                    BargeinStream._OverlapSpeechEndedSentinel,
+                ]
             ]()
             self._bargein_atask = asyncio.create_task(
                 self._bargein_task(bargein_detector, self._bargein_ch, self._bargein_atask)
