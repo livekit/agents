@@ -17,6 +17,7 @@ livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-fireworksai = { workspace = true }
+livekit-plugins-fishaudio = { workspace = true }
 livekit-plugins-gladia = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
@@ -29,12 +30,14 @@ livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
+livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-simli = { workspace = true }
+livekit-plugins-avatartalk = { workspace = true }
 livekit-plugins-smallestai = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }

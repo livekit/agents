@@ -205,7 +205,6 @@ class RealtimeModel(llm.RealtimeModel):
             and realtime_input_config.automatic_activity_detection.disabled
         ):
             server_turn_detection = False
-
         modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
 
         super().__init__(
@@ -283,6 +282,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             gemini_tools=_gemini_tools,
             tool_behavior=tool_behavior,
+            tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
             http_options=http_options,
             thinking_config=thinking_config,
@@ -579,8 +579,8 @@ class RealtimeSession(llm.RealtimeSession):
         turns = []
         if is_given(instructions):
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
             if not fut.done():

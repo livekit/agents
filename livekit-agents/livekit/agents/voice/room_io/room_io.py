@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from livekit import api, rtc
 
@@ -28,88 +26,15 @@ if TYPE_CHECKING:
 
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
 from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
-
-DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
-    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-]
-
-DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
-    rtc.DisconnectReason.CLIENT_INITIATED,
-    rtc.DisconnectReason.ROOM_DELETED,
-    rtc.DisconnectReason.USER_REJECTED,
-]
-
-
-@dataclass
-class TextInputEvent:
-    text: str
-    info: rtc.TextStreamInfo
-    participant: rtc.RemoteParticipant
-
-
-TextInputCallback = Callable[
-    ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
-]
-
-
-def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
-    sess.interrupt()
-    sess.generate_reply(user_input=ev.text)
-
-
-@dataclass
-class RoomInputOptions:
-    text_enabled: NotGivenOr[bool] = NOT_GIVEN
-    """If not given, default to True."""
-    audio_enabled: NotGivenOr[bool] = NOT_GIVEN
-    """If not given, default to True."""
-    video_enabled: NotGivenOr[bool] = NOT_GIVEN
-    """If not given, default to False."""
-    audio_sample_rate: int = 24000
-    audio_num_channels: int = 1
-    noise_cancellation: rtc.NoiseCancellationOptions | None = None
-    text_input_cb: TextInputCallback = _default_text_input_cb
-    participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
-    """Participant kinds accepted for auto subscription. If not provided,
-    accept `DEFAULT_PARTICIPANT_KINDS`."""
-    participant_identity: NotGivenOr[str] = NOT_GIVEN
-    """The participant to link to. If not provided, link to the first participant.
-    Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
-    pre_connect_audio: bool = True
-    """Pre-connect audio enabled or not."""
-    pre_connect_audio_timeout: float = 3.0
-    """The pre-connect audio will be ignored if it doesn't arrive within this time."""
-    close_on_disconnect: bool = True
-    """Close the AgentSession if the linked participant disconnects with reasons in
-    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
-    delete_room_on_close: bool = False
-    """Delete the room when the AgentSession is closed, default to False"""
-
-
-@dataclass
-class RoomOutputOptions:
-    transcription_enabled: NotGivenOr[bool] = NOT_GIVEN
-    """If not given, default to True."""
-    audio_enabled: NotGivenOr[bool] = NOT_GIVEN
-    """If not given, default to True."""
-    audio_sample_rate: int = 24000
-    audio_num_channels: int = 1
-    audio_publish_options: rtc.TrackPublishOptions = field(
-        default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    )
-    audio_track_name: NotGivenOr[str] = NOT_GIVEN
-    """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
-    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """False to disable transcription synchronization with audio output.
-    Otherwise, transcription is emitted as quickly as available."""
-    transcription_speed_factor: float = 1.0
-    """Speed factor of transcription synchronization with audio output.
-    Only effective if `sync_transcription` is True."""
-
-
-DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
-DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
+from .types import (
+    DEFAULT_CLOSE_ON_DISCONNECT_REASONS,
+    DEFAULT_PARTICIPANT_KINDS,
+    RoomInputOptions,
+    RoomOptions,
+    RoomOutputOptions,
+    TextInputCallback,
+    TextInputEvent,
+)
 
 
 class RoomIO:
@@ -119,19 +44,26 @@ class RoomIO:
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,
-        input_options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,
-        output_options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS,
+        options: NotGivenOr[RoomOptions] = NOT_GIVEN,
+        # deprecated
+        input_options: NotGivenOr[RoomInputOptions] = NOT_GIVEN,
+        output_options: NotGivenOr[RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
+        self._options = RoomOptions._ensure_options(
+            options, room_input_options=input_options, room_output_options=output_options
+        )
+        self._text_input_cb: TextInputCallback | None = None
+
         self._agent_session, self._room = agent_session, room
-        self._input_options = input_options
-        self._output_options = output_options
+        # self._input_options = input_options
+        # self._output_options = output_options
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.RemoteParticipant) else participant
         )
         if self._participant_identity is None and utils.is_given(
-            input_options.participant_identity
+            self._options.participant_identity
         ):
-            self._participant_identity = input_options.participant_identity
+            self._participant_identity = self._options.participant_identity
 
         self._audio_input: _ParticipantAudioInputStream | None = None
         self._video_input: _ParticipantVideoInputStream | None = None
@@ -156,54 +88,59 @@ class RoomIO:
 
     async def start(self) -> None:
         # -- create inputs --
-        if self._input_options.pre_connect_audio:
+        input_audio_options = self._options.get_audio_input_options()
+        if input_audio_options and input_audio_options.pre_connect_audio:
             self._pre_connect_audio_handler = PreConnectAudioHandler(
                 room=self._room,
-                timeout=self._input_options.pre_connect_audio_timeout,
+                timeout=input_audio_options.pre_connect_audio_timeout,
             )
             self._pre_connect_audio_handler.register()
 
-        if self._input_options.text_enabled or not utils.is_given(self._input_options.text_enabled):
+        input_text_options = self._options.get_text_input_options()
+        if input_text_options:
+            self._text_input_cb = input_text_options.text_input_cb
             try:
                 self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
                 self._text_stream_handler_registered = True
             except ValueError:
-                if self._input_options.text_enabled:
+                if utils.is_given(self._options.text_input):
                     logger.warning(
                         f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
                     )
+        else:
+            self._text_input_cb = None
 
-        if self._input_options.video_enabled:
+        input_video_options = self._options.get_video_input_options()
+        if input_video_options:
             self._video_input = _ParticipantVideoInputStream(self._room)
 
-        if self._input_options.audio_enabled or not utils.is_given(
-            self._input_options.audio_enabled
-        ):
+        if input_audio_options:
             self._audio_input = _ParticipantAudioInputStream(
                 self._room,
-                sample_rate=self._input_options.audio_sample_rate,
-                num_channels=self._input_options.audio_num_channels,
-                noise_cancellation=self._input_options.noise_cancellation,
+                sample_rate=input_audio_options.sample_rate,
+                num_channels=input_audio_options.num_channels,
+                frame_size_ms=input_audio_options.frame_size_ms,
+                noise_cancellation=input_audio_options.noise_cancellation,
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
             )
 
         # -- create outputs --
-        if self._output_options.audio_enabled or not utils.is_given(
-            self._output_options.audio_enabled
-        ):
+        output_audio_options = self._options.get_audio_output_options()
+        if output_audio_options:
             self._audio_output = _ParticipantAudioOutput(
                 self._room,
-                sample_rate=self._output_options.audio_sample_rate,
-                num_channels=self._output_options.audio_num_channels,
-                track_publish_options=self._output_options.audio_publish_options,
-                track_name=self._output_options.audio_track_name
-                if utils.is_given(self._output_options.audio_track_name)
-                else "roomio_audio",
+                sample_rate=output_audio_options.sample_rate,
+                num_channels=output_audio_options.num_channels,
+                track_publish_options=output_audio_options.track_publish_options,
+                track_name=(
+                    output_audio_options.track_name
+                    if utils.is_given(output_audio_options.track_name)
+                    else "roomio_audio"
+                ),
             )
 
-        if self._output_options.transcription_enabled or not utils.is_given(
-            self._output_options.transcription_enabled
-        ):
+        output_text_options = self._options.get_text_output_options()
+        if output_text_options:
             self._user_tr_output = _ParticipantTranscriptionOutput(
                 room=self._room, is_delta_stream=False, participant=self._participant_identity
             )
@@ -216,17 +153,13 @@ class RoomIO:
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
             # (e.g the audio output isn't using RoomIO with our avatar datastream impl)
-            sync_transcription = True
-            if utils.is_given(self._output_options.sync_transcription):
-                sync_transcription = self._output_options.sync_transcription
-
-            if sync_transcription and (
+            if output_text_options.sync_transcription is not False and (
                 audio_output := self._audio_output or self._agent_session.output.audio
             ):
                 self._tr_synchronizer = TranscriptSynchronizer(
                     next_in_chain_audio=audio_output,
                     next_in_chain_text=self._agent_tr_output,
-                    speed=self._output_options.transcription_speed_factor,
+                    speed=output_text_options.transcription_speed_factor,
                 )
 
         # -- set the room event handlers --
@@ -254,7 +187,10 @@ class RoomIO:
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.on("close", self._on_agent_session_close)
-        self._agent_session._room_io = self
+
+    @property
+    def room(self) -> rtc.Room:
+        return self._room
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
@@ -321,6 +257,7 @@ class RoomIO:
     def linked_participant(self) -> rtc.RemoteParticipant | None:
         if not self._participant_available_fut.done():
             return None
+
         return self._participant_available_fut.result()
 
     @property
@@ -415,7 +352,7 @@ class RoomIO:
         ):
             return
 
-        accepted_kinds = self._input_options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
+        accepted_kinds = self._options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
         if participant.kind not in accepted_kinds:
             # not an accepted participant kind, skip
             return
@@ -428,7 +365,7 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
         if (
-            self._input_options.close_on_disconnect
+            self._options.close_on_disconnect
             and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
             and not self._close_session_atask
             and not self._delete_room_task
@@ -458,17 +395,21 @@ class RoomIO:
             logger.warning("participant not found, ignoring text input")
             return
 
-        async def _read_text() -> None:
+        async def _read_text(text_input_cb: TextInputCallback) -> None:
             text = await reader.read_all()
 
-            text_input_result = self._input_options.text_input_cb(
+            text_input_result = text_input_cb(
                 self._agent_session,
                 TextInputEvent(text=text, info=reader.info, participant=participant),
             )
             if asyncio.iscoroutine(text_input_result):
                 await text_input_result
 
-        task = asyncio.create_task(_read_text())
+        if self._text_input_cb is None:
+            logger.error("text input callback is not set, ignoring text input")
+            return
+
+        task = asyncio.create_task(_read_text(self._text_input_cb))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -489,7 +430,7 @@ class RoomIO:
         def _on_delete_room_task_done(task: asyncio.Future[api.DeleteRoomResponse]) -> None:
             self._delete_room_task = None
 
-        if self._input_options.delete_room_on_close and self._delete_room_task is None:
+        if self._options.delete_room_on_close and self._delete_room_task is None:
             job_ctx = get_job_context()
             logger.info(
                 "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)"

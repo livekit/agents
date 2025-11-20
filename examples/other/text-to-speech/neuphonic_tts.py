@@ -4,7 +4,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from livekit.plugins import neuphonic
 
 load_dotenv()
@@ -12,7 +12,10 @@ load_dotenv()
 logger = logging.getLogger("neuphonic-tts-demo")
 logger.setLevel(logging.INFO)
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
@@ -58,4 +61,4 @@ async def entrypoint(job: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
