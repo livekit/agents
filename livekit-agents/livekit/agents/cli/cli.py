@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import datetime
 import enum
 import hashlib
@@ -268,6 +269,7 @@ class AgentsConsole:
 
             self._io_acquired = True
             self._io_loop = loop
+            self._io_context = contextvars.copy_context()
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
             self._io_acquired_event.set()
@@ -315,6 +317,13 @@ class AgentsConsole:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_loop
+
+    @property
+    def io_context(self) -> contextvars.Context:
+        if not self._io_acquired:
+            raise RuntimeError("AgentsConsole is not acquired")
+
+        return self._io_context
 
     def wait_for_io_acquisition(self) -> None:
         self._io_acquired_event.wait()
@@ -993,11 +1002,24 @@ def _text_mode(c: AgentsConsole) -> None:
             c.console.bell()
             continue
 
-        async def _generate(text: str) -> list[RunEvent]:
-            sess = await c.io_session.run(user_input=text)  # type: ignore
-            return sess.events.copy()
+        def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
+            async def _generate(text: str) -> list[RunEvent]:
+                sess = await c.io_session.run(user_input=text)  # type: ignore
+                return sess.events.copy()
 
-        h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
+            def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
+                if exception := task.exception():
+                    result_fut.set_exception(exception)
+                else:
+                    result_fut.set_result(task.result())
+
+            task = asyncio.create_task(_generate(text))
+            task.add_done_callback(_done_callback)
+
+        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
+
+        # h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
         c.print(text, tag="You")
 
         with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
