@@ -16,6 +16,7 @@ from livekit import rtc
 from .. import bargein, llm, stt, utils, vad
 from ..bargein import BargeinDetector, BargeinStream
 from ..log import logger
+from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -161,7 +162,7 @@ class AudioRecognition:
         ) = None
         self._input_started_at: float | None = None
         self._ignore_until: NotGivenOr[float] = NOT_GIVEN
-        self._transcript_buffer: deque[stt.SpeechEvent] = deque()
+        self._transcript_buffer: deque[SpeechEvent] = deque()
         self._barge_in_enabled: bool = bargein_detector is not None
         self._agent_speaking: bool = False
 
@@ -213,21 +214,21 @@ class AudioRecognition:
 
     def start_barge_in_monitoring(self) -> None:
         """Start user audio monitoring for barge-in detection."""
-        if not self._barge_in_enabled:
+        if not self._barge_in_enabled or not self._bargein_ch:
             return
         self._agent_speaking = True
         self._bargein_ch.send_nowait(BargeinStream._AgentSpeechStartedSentinel())
 
     def start_barge_in_inference(self) -> None:
         """Start barge-in inference."""
-        if not self._barge_in_enabled:
+        if not self._barge_in_enabled or not self._bargein_ch:
             return
         if self._agent_speaking:
             self._bargein_ch.send_nowait(BargeinStream._OverlapSpeechStartedSentinel())
 
     def end_barge_in_inference(self) -> None:
         """End barge-in inference."""
-        if not self._barge_in_enabled:
+        if not self._barge_in_enabled or not self._bargein_ch:
             return
         self._bargein_ch.send_nowait(BargeinStream._OverlapSpeechEndedSentinel())
 
@@ -261,6 +262,7 @@ class AudioRecognition:
             # most vendors don't set them properly, in which case we just assume
             # it is a valid event after the ignore_until timestamp
             is_given(self._input_started_at)
+            and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
             and ev.alternatives[0].start_time + ev.alternatives[0].end_time
             < self._ignore_until - self._input_started_at

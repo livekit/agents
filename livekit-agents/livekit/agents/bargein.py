@@ -81,6 +81,8 @@ class BargeinStream(ABC):
         self._input_ch = aio.Chan[
             Union[
                 rtc.AudioFrame,
+                BargeinStream._AgentSpeechStartedSentinel,
+                BargeinStream._AgentSpeechEndedSentinel,
                 BargeinStream._OverlapSpeechStartedSentinel,
                 BargeinStream._OverlapSpeechEndedSentinel,
                 BargeinStream._FlushSentinel,
@@ -117,7 +119,14 @@ class BargeinStream(ABC):
         self._check_not_closed()
         self._input_ch.send_nowait(self._OverlapSpeechEndedSentinel())
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
+    def push_frame(
+        self,
+        frame: rtc.AudioFrame
+        | BargeinStream._AgentSpeechStartedSentinel
+        | BargeinStream._AgentSpeechEndedSentinel
+        | BargeinStream._OverlapSpeechStartedSentinel
+        | BargeinStream._OverlapSpeechEndedSentinel,
+    ) -> None:
         """Push some audio frame to be analyzed"""
         self._check_input_not_ended()
         self._check_not_closed()
