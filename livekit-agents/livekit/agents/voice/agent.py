@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, TurnDetectionMode
+    from .agent_session import AgentSession
+    from .audio_recognition import TurnDetectionMode
     from .io import TimedString
 
 
@@ -494,6 +495,13 @@ class Agent:
             NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
         """  # noqa: E501
         return self._turn_detection
+
+    @turn_detection.setter
+    def turn_detection(self, value: TurnDetectionMode | None) -> None:
+        self._turn_detection = value
+
+        if self._activity is not None:
+            self._activity.update_options(turn_detection=value)
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:

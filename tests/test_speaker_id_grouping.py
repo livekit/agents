@@ -20,10 +20,9 @@ class TestSpeakerIdGrouping:
             hooks=None,  # type: ignore
             stt=None,
             vad=None,
-            turn_detector=None,
             min_endpointing_delay=0.5,
             max_endpointing_delay=2.0,
-            turn_detection_mode=None,
+            turn_detection=None,
         )
 
     def _format_text(self, text, speaker_id):
