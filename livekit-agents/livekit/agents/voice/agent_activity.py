@@ -863,8 +863,13 @@ class AgentActivity(RecognitionHooks):
         # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
         if on_enter_data := _OnEnterContextVar.get(None):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
-                filtered_tools = []
+                filtered_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet] = []
                 for tool in tools:
+                    if isinstance(tool, llm.ToolSet):
+                        # TODO(long): add IGNORE_ON_ENTER to ToolSet?
+                        filtered_tools.append(tool)
+                        continue
+
                     info: _RawFunctionToolInfo | _FunctionToolInfo
                     if is_raw_function_tool(tool):
                         info = get_raw_function_info(tool)

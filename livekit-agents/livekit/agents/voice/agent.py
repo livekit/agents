@@ -167,7 +167,11 @@ class Agent:
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
-        invalid = [t for t in tools if not (is_function_tool(t) or is_raw_function_tool(t))]
+        invalid = [
+            t
+            for t in tools
+            if not (isinstance(t, llm.ToolSet) or is_function_tool(t) or is_raw_function_tool(t))
+        ]
         if invalid:
             kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
             raise TypeError(
