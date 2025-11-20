@@ -272,7 +272,6 @@ class AvatarSession:
                 raise BitHumanException("failed to get local participant identity") from e
             local_participant_identity = room.local_participant.identity
 
-
         # Prepare attributes for JWT token
         attributes: dict[str, str] = {
             ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity,
