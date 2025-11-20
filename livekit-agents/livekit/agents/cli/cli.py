@@ -1419,7 +1419,16 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                 envvar="LIVEKIT_API_SECRET",
             ),
         ] = None,
+        drain_timeout: Annotated[
+            Optional[int],  # noqa: UP007
+            typer.Option(
+                help="Time in seconds to wait for jobs to finish before shutting down.",
+            ),
+        ] = None,
     ) -> None:
+        if drain_timeout is not None:
+            server.update_options(drain_timeout=drain_timeout)
+
         _run_worker(
             server=server,
             args=proto.CliArgs(
