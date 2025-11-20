@@ -11,7 +11,7 @@ from ...voice.events import RunContext
 from ...voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from ...voice.agent_session import TurnDetectionMode
+    from ...voice.audio_recognition import TurnDetectionMode
 
 
 @dataclass
