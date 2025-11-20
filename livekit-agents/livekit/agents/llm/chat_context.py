@@ -286,6 +286,8 @@ class ChatContext:
         items = []
 
         from .tool_context import (
+            FunctionTool,
+            RawFunctionTool,
             ToolSet,
             get_function_info,
             get_raw_function_info,
