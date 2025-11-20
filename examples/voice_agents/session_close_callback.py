@@ -2,7 +2,16 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli, utils
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    CloseEvent,
+    JobContext,
+    cli,
+    room_io,
+    utils,
+)
 from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -38,7 +47,10 @@ class MyAgent(Agent):
         )
 
 
-@server.realtime_session()
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -50,7 +62,13 @@ async def entrypoint(ctx: JobContext):
     # session will be closed automatically when the linked participant disconnects
     # with reason CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED
     # or you can disable it by setting the RoomInputOptions.close_on_disconnect to False
-    await session.start(agent=MyAgent(), room=ctx.room)
+    await session.start(
+        agent=MyAgent(),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            delete_room_on_close=True,
+        ),
+    )
 
     @session.on("close")
     def on_close(ev: CloseEvent):
@@ -62,7 +80,23 @@ async def entrypoint(ctx: JobContext):
                 text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"
                 if item.interrupted:
                     text += " (interrupted)"
-                print(text)
+
+            elif item.type == "function_call":
+                text = f"function_call: {item.name}, arguments: {item.arguments}"
+
+            elif item.type == "function_call_output":
+                text = f"{item.name}: '{item.output}'"
+                if item.is_error:
+                    text += " (error)"
+
+            elif item.type == "agent_handoff":
+                text = f"agent_handoff: {item.old_agent_id} -> {item.new_agent_id}"
+
+            else:
+                raise ValueError(f"unknown item type: {item.type}")
+
+            print(text)
+
         print("=" * 20)
 
 

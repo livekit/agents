@@ -6,7 +6,7 @@ from typing import Annotated, Literal  # noqa: F401
 from dotenv import load_dotenv
 from pydantic import Field  # noqa: F401
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -86,6 +86,10 @@ class MyAgent(Agent):
         return f"The number value is {value}."
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     agent = AgentSession(
         vad=silero.VAD.load(),
@@ -98,4 +102,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

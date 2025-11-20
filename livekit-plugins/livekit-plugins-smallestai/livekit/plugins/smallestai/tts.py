@@ -86,7 +86,6 @@ class TTS(tts.TTS):
             output_format: Output format of the audio.
             base_url: Base URL for the Smallest AI API.
             http_session: An existing aiohttp ClientSession to use.
-            tokenizer: The tokenizer to use for streaming.
         """
 
         super().__init__(
@@ -118,6 +117,14 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "SmallestAI"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

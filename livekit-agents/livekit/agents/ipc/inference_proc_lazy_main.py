@@ -37,7 +37,6 @@ def proc_main(args: ProcStartArgs) -> None:
     inf_proc = _InferenceProc(args.runners)
 
     client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc.entrypoint)
-    client.initialize_logger()
     try:
         client.initialize()
     except Exception:

@@ -19,26 +19,38 @@ import contextlib
 import contextvars
 import functools
 import inspect
+import json
 import logging
 import multiprocessing as mp
+import tempfile
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Any, Callable, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, cast
+from urllib.parse import urlparse
 
+import aiohttp
 from opentelemetry import trace
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
-from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .telemetry import trace_types, tracer
+from .telemetry import _upload_session_report, trace_types, tracer
+from .telemetry.traces import _setup_cloud_tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
+from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
+
+
+if TYPE_CHECKING:
+    from .ipc.inference_executor import InferenceExecutor
+    from .voice.agent_session import AgentSession
+    from .voice.report import SessionReport
 
 
 def get_job_context() -> JobContext:
@@ -129,8 +141,66 @@ class JobContext:
         self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
 
+        self._primary_agent_session: AgentSession | None = None
+
+        self._tempdir = tempfile.TemporaryDirectory()
+
+        from .cli import AgentsConsole
+
+        c = AgentsConsole.get_instance()
+        if c.enabled:
+            self._session_directory = c.session_directory
+        else:
+            self._session_directory = Path(self._tempdir.name)
+
         self._connected = False
         self._lock = asyncio.Lock()
+
+    def _on_setup(self) -> None:
+        pass
+
+    async def _on_session_end(self) -> None:
+        from .cli import AgentsConsole
+
+        if not (session := self._primary_agent_session):
+            return
+
+        c = AgentsConsole.get_instance()
+        report = self.make_session_report(session)
+
+        # console recording, dump data to a local file
+        if c.enabled and c.record:
+            try:
+                report_json = json.dumps(report.to_dict(), indent=2)
+
+                import aiofiles
+                import aiofiles.os
+
+                await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
+                async with aiofiles.open(
+                    self._session_directory / "session_report.json", mode="w"
+                ) as f:
+                    await f.write(report_json)
+
+            except Exception:
+                logger.exception("failed to save session report")
+
+        if report.enable_recording:
+            try:
+                cloud_hostname = urlparse(self._info.url).hostname
+                if not cloud_hostname:
+                    raise ValueError(f"invalid cloud hostname: {self._info.url}")
+                await _upload_session_report(
+                    agent_name=self._info.job.agent_name,
+                    cloud_hostname=cloud_hostname,
+                    report=report,
+                    http_session=http_context.http_session(),
+                )
+            except Exception:
+                logger.exception("failed to upload the session report to LiveKit Cloud")
+
+    def _on_cleanup(self) -> None:
+        self._tempdir.cleanup()
 
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
@@ -158,15 +228,57 @@ class JobContext:
         return self._info.fake_job
 
     @property
+    def session_directory(self) -> Path:
+        return Path(self._session_directory)
+
+    @property
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
+
+    def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
+        from .voice.report import SessionReport
+
+        session = session or self._primary_agent_session
+
+        if not session:
+            raise RuntimeError("Cannot prepare report, no AgentSession was found")
+
+        recorder_io = session._recorder_io
+
+        if recorder_io and recorder_io.recording:
+            raise RuntimeError(
+                "Cannot create the AgentSession report, the RecorderIO is still recording"
+            )
+
+        sr = SessionReport(
+            enable_recording=session._enable_recording,
+            job_id=self.job.id,
+            room_id=self.job.room.sid,
+            room=self.job.room.name,
+            options=session.options,
+            audio_recording_path=recorder_io.output_path if recorder_io else None,
+            audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
+            started_at=session._started_at,
+            events=session._recorded_events,
+            chat_history=session.history.copy(),
+        )
+
+        if recorder_io:
+            if recorder_io.output_path:
+                sr.audio_recording_path = recorder_io.output_path
+            if recorder_io.recording_started_at:
+                sr.audio_recording_started_at = recorder_io.recording_started_at
+                sr.duration = sr.timestamp - sr.audio_recording_started_at
+        return sr
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
         """Returns an LiveKitAPI for making API calls to LiveKit.
 
-        This property requires LIVEKIT_API_KEY and LIVEKIT_API_SECRET to be set in the environment.
-        If they are passed in WorkerOptions, it would not be able to satisfy this API.
+        Credentials are sourced from environment variables if not provided explicitly.
+        When starting via the worker, values passed in `WorkerOptions` are exported to
+        LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
+        usable inside job entrypoints.
         """
         return api.LiveKitAPI(session=http_context.http_session())
 
@@ -296,9 +408,18 @@ class JobContext:
             fut.set_result(api.DeleteRoomResponse())
             return fut
 
-        task = asyncio.create_task(
-            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
-        )
+        async def _delete_room() -> None:
+            try:
+                await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            except aiohttp.ServerDisconnectedError:
+                logger.warning("server disconnected while deleting room")
+            except api.TwirpError as e:
+                if e.code != api.TwirpErrorCode.NOT_FOUND:
+                    logger.warning(f"error while deleting room: {e}")
+            except Exception:
+                logger.exception("unknown error while deleting room")
+
+        task = asyncio.create_task(_delete_room())
         self._pending_tasks.append(task)
         task.add_done_callback(lambda _: self._pending_tasks.remove(task))
         return task
@@ -417,6 +538,19 @@ class JobContext:
             raise ValueError("entrypoints cannot be added more than once")
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
+
+    def init_recording(self) -> None:
+        if not is_cloud(self._info.url):
+            return
+
+        cloud_hostname = urlparse(self._info.url).hostname
+        logger.debug("configuring session recording", extra={"hostname": cloud_hostname})
+        if cloud_hostname:
+            _setup_cloud_tracer(
+                room_id=self.job.room.sid,
+                job_id=self.job.id,
+                cloud_hostname=cloud_hostname,
+            )
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:
@@ -592,9 +726,11 @@ async def run_job(
             )
 
     def _on_ctx_connect() -> None:
+        nonlocal ctx_connect_called
         ctx_connect_called = True
 
     def _on_ctx_shutdown(reason: str) -> None:
+        nonlocal ctx_shutdown_called
         ctx_shutdown_called = True
 
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -658,10 +794,7 @@ async def run_job(
     shutdown_info = await shutdown_fut
     logger.debug(
         "shutting down job task",
-        extra={
-            "reason": shutdown_info.reason,
-            "user_initiated": shutdown_info.user_initiated,
-        },
+        extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
     )
 
     await room.disconnect()

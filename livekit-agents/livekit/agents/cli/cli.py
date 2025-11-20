@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import datetime
 import enum
 import hashlib
@@ -35,7 +37,6 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import rtc
-from livekit.agents.worker import AgentServer
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
@@ -44,6 +45,7 @@ from ..plugin import Plugin
 from ..utils import aio
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
+from ..worker import AgentServer, WorkerOptions
 from . import proto
 
 # from .discover import get_import_data
@@ -117,7 +119,12 @@ class ConsoleAudioInput(io.AudioInput):
 
 class ConsoleAudioOutput(io.AudioOutput):
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__(label="Console", next_in_chain=None, sample_rate=SAMPLE_RATE)
+        super().__init__(
+            label="Console",
+            next_in_chain=None,
+            sample_rate=SAMPLE_RATE,
+            capabilities=io.AudioOutputCapabilities(pause=False),  # TODO(theomonnom): support pause
+        )
         self._loop = loop
 
         self._capturing = False
@@ -189,6 +196,7 @@ class ConsoleAudioOutput(io.AudioOutput):
 
 class AgentsConsole:
     _instance: AgentsConsole | None = None
+    _console_directory = "console-recordings"
 
     @classmethod
     def get_instance(cls) -> AgentsConsole:
@@ -197,7 +205,7 @@ class AgentsConsole:
         return cls._instance
 
     def __init__(self) -> None:
-        theme = {
+        theme: dict[str, str | Style] = {
             "tag": "black on #1fd5f9",
             "label": "#8f83ff",
             "error": "red",
@@ -240,9 +248,14 @@ class AgentsConsole:
         self._io_acquired_event = threading.Event()
 
         self._enabled = False
+        self._record = False
 
         self._text_mode_log_filter = TextModeLogFilter()
         self._log_handler = RichLoggingHandler(self)
+
+        self._session_directory = pathlib.Path(
+            self._console_directory, f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}"
+        )
 
     def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
         with self._lock:
@@ -256,6 +269,7 @@ class AgentsConsole:
 
             self._io_acquired = True
             self._io_loop = loop
+            self._io_context = contextvars.copy_context()
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
             self._io_acquired_event.set()
@@ -272,6 +286,18 @@ class AgentsConsole:
     @enabled.setter
     def enabled(self, val: bool) -> None:
         self._enabled = val
+
+    @property
+    def record(self) -> bool:
+        return self._record
+
+    @record.setter
+    def record(self, val: bool) -> None:
+        self._record = val
+
+    @property
+    def session_directory(self) -> pathlib.Path:
+        return self._session_directory
 
     @property
     def io_acquired(self) -> bool:
@@ -291,6 +317,13 @@ class AgentsConsole:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_loop
+
+    @property
+    def io_context(self) -> contextvars.Context:
+        if not self._io_acquired:
+            raise RuntimeError("AgentsConsole is not acquired")
+
+        return self._io_context
 
     def wait_for_io_acquisition(self) -> None:
         self._io_acquired_event.wait()
@@ -329,7 +362,7 @@ class AgentsConsole:
         mode: ConsoleMode,
         audio_input: ConsoleAudioInput,
         audio_output: ConsoleAudioOutput,
-    ):
+    ) -> None:
         if asyncio.get_running_loop() != self.io_loop:
             raise RuntimeError("_update_sess_io must be executed on the io_loop")
 
@@ -349,7 +382,9 @@ class AgentsConsole:
                 sess.output.audio = audio_output
                 self._log_handler.removeFilter(self._text_mode_log_filter)
 
-    def print(self, child: RenderableType, *, tag: str = "", tag_style: Style | None = None):
+    def print(
+        self, child: RenderableType, *, tag: str = "", tag_style: Style | None = None
+    ) -> None:
         self.console.print(self._render_tag(child, tag=tag, tag_style=tag_style))
 
     def _render_tag(
@@ -477,7 +512,7 @@ class AgentsConsole:
                 "To see available output devices, run: lk-agents console --list-devices"
             ) from None
 
-    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:
+    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time: Any, *_: Any) -> None:
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
 
@@ -545,7 +580,7 @@ class AgentsConsole:
 
             self._io_loop.call_soon_threadsafe(self._io_audio_input.push_frame, frame)
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time: Any, *_: Any) -> None:
         if not self.io_acquired:
             outdata[:] = 0
             return
@@ -587,7 +622,7 @@ class FrequencyVisualizer:
         self.height_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         self.c = agents_console
 
-    def update(self):
+    def update(self) -> None:
         with self.c._input_lock:
             lv = list(self.c._input_levels)
             self._levels_idx = [max(0, min(7, int(round(v * 7)))) for v in lv]
@@ -693,9 +728,9 @@ _RESERVED_ATTRS: tuple[str, ...] = (
 
 
 def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]) -> None:
-    for key, value in record.__dict__.items():
-        if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
-            target[key] = value
+    for k, v in record.__dict__.items():
+        if k not in _RESERVED_ATTRS and not (hasattr(k, "startswith") and k.startswith("_")):
+            target[k] = v
 
 
 class RichLoggingHandler(logging.Handler):
@@ -704,7 +739,7 @@ class RichLoggingHandler(logging.Handler):
         self.c = agents_console
 
         # used to avoid rendering two same time
-        self._last_time: Optional[Text] = None
+        self._last_time: Text | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
         message = self.format(record)
@@ -770,7 +805,7 @@ class RichLoggingHandler(logging.Handler):
         row.append(json.dumps(extra, cls=JsonEncoder, ensure_ascii=False) if extra else " ")
 
         output.add_row(*row)
-        output = self.c._render_tag(output, tag_width=2)
+        output = self.c._render_tag(output, tag_width=2)  # type: ignore
 
         try:
             self.c.console.print(output)
@@ -836,7 +871,7 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
 
 class TextModeLogFilter(logging.Filter):
     # We don't want to remove the DEBUG logs from the agents codebase since they're useful. But we now have duplicate content when using
-    # the text mode, so we logging.Filer
+    # the text mode, so we use logging.Filter
     _patterns = [
         re.compile(r"\bexecuting tool\b", re.IGNORECASE),
         re.compile(r"\btools execution completed\b", re.IGNORECASE),
@@ -864,9 +899,9 @@ def _print_audio_devices() -> None:
     table.add_column("Default", justify="center")
 
     for idx, dev in enumerate(devices):
-        name = dev["name"]  # type: ignore
-        has_input = dev["max_input_channels"] > 0  # type: ignore
-        has_output = dev["max_output_channels"] > 0  # type: ignore
+        name = dev["name"]
+        has_input = dev["max_input_channels"] > 0
+        has_output = dev["max_output_channels"] > 0
 
         if has_input:
             default = Text("yes", style="#23de6b") if idx == default_input else ""
@@ -916,7 +951,7 @@ def prompt(
     return "".join(buffer)
 
 
-UpdateFn = Callable[[Optional[str | Text]], None]
+UpdateFn = Callable[[Optional[Union[str, Text]]], None]
 
 
 @contextmanager
@@ -939,7 +974,7 @@ def live_status(
         _render(), console=console, refresh_per_second=refresh_per_second, transient=transient
     ) as live:
 
-        def update(new_text: Optional[str | Text] = None) -> None:
+        def update(new_text: str | Text | None = None) -> None:
             nonlocal msg
             if new_text is not None:
                 msg = new_text if isinstance(new_text, Text) else Text(str(new_text))
@@ -948,8 +983,8 @@ def live_status(
         yield update
 
 
-def _text_mode(c: AgentsConsole):
-    def _key_read(ch: str):
+def _text_mode(c: AgentsConsole) -> None:
+    def _key_read(ch: str) -> None:
         if ch == key.CTRL_T:
             raise _ToggleMode()
 
@@ -967,11 +1002,24 @@ def _text_mode(c: AgentsConsole):
             c.console.bell()
             continue
 
-        async def _generate(text: str) -> list[RunEvent]:
-            sess = await c.io_session.run(user_input=text)
-            return sess.events.copy()
+        def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
+            async def _generate(text: str) -> list[RunEvent]:
+                sess = await c.io_session.run(user_input=text)  # type: ignore
+                return sess.events.copy()
 
-        h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
+            def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
+                if exception := task.exception():
+                    result_fut.set_exception(exception)
+                else:
+                    result_fut.set_result(task.result())
+
+            task = asyncio.create_task(_generate(text))
+            task.add_done_callback(_done_callback)
+
+        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
+
+        # h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
         c.print(text, tag="You")
 
         with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
@@ -1043,10 +1091,10 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
         logger.warning(f"unknown RunEvent type {event.type}")
 
 
-def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None):
+def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None) -> None:
     ctrl_t_e = threading.Event()
 
-    def _listen_for_toggle():
+    def _listen_for_toggle() -> None:
         while not ctrl_t_e.is_set():
             ch = readkey()
             if ch == key.CTRL_T:
@@ -1125,14 +1173,23 @@ def _run_console(
     input_device: str | None,
     output_device: str | None,
     mode: ConsoleMode,
+    record: bool,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
+    c.record = record
 
     _configure_logger(c, logging.DEBUG)
-
     c.print("Starting console mode 🚀", tag="Agents")
+
+    if c.record:
+        c.print(
+            f"Session recording will be saved to {c.session_directory}",
+            tag="Recording",
+            tag_style=Style.parse("black on red"),
+        )
+
     c.print(" ")
     # c.print(
     #     "Searching for package file structure from directories with [blue]__init__.py[/blue] files"
@@ -1201,6 +1258,8 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     if args.devmode:
         c = AgentsConsole.get_instance()  # colored logs
 
+    exit_triggered = False
+
     if not jupyter:
 
         def _handle_exit(sig: int, frame: FrameType | None) -> None:
@@ -1218,11 +1277,10 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     asyncio.set_event_loop(loop)
 
     loop.slow_callback_duration = 0.1  # 100ms
-    exit_triggered = False
 
     async def _worker_run(worker: AgentServer) -> None:
         try:
-            await server.run(devmode=args.devmode)
+            await server.run(devmode=args.devmode, unregistered=jupyter)
         except Exception:
             logger.exception("worker failed")
 
@@ -1260,16 +1318,17 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
             loop.close()  # close can only be called from the main thread
             return  # noqa: B012
 
-        try:
-            tasks = asyncio.all_tasks(loop)
-            for task in tasks:
-                task.cancel()
+        with contextlib.suppress(_ExitCli):
+            try:
+                tasks = asyncio.all_tasks(loop)
+                for task in tasks:
+                    task.cancel()
 
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
-        finally:
-            loop.close()
+                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            finally:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+                loop.close()
 
 
 class LogLevel(str, enum.Enum):
@@ -1288,13 +1347,13 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     def console(
         *,
         input_device: Annotated[
-            Union[str, None],
+            Optional[str],  # noqa: UP007, required for python 3.9
             typer.Option(
                 help="Numeric input device ID or input device name substring(s)",
             ),
         ] = None,
         output_device: Annotated[
-            Union[str, None],
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="Numeric output device ID or output device name substring(s)",
             ),
@@ -1309,6 +1368,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             bool,
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
+        record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
@@ -1328,6 +1388,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             input_device=input_device,
             output_device=output_device,
             mode="text" if text else "audio",
+            record=record,
         )
 
     @app.command()
@@ -1338,21 +1399,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Set the log level", case_sensitive=False),
         ] = LogLevel.info,
         url: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
@@ -1378,21 +1439,21 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Enable auto-reload of the server when (code) files change."),
         ] = True,
         url: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="The WebSocket URL of your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_URL",
             ),
         ] = None,
         api_key: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API key for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_KEY",
             ),
         ] = None,
         api_secret: Annotated[
-            str | None,
+            Optional[str],  # noqa: UP007
             typer.Option(
                 help="API secret for authenticating with your LiveKit server or Cloud project.",
                 envvar="LIVEKIT_API_SECRET",
@@ -1460,8 +1521,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             # c.print(" ")
 
             for plugin in Plugin.registered_plugins:
-                logger.info(f"Downloading files for {plugin}")
+                logger.info(f"Downloading files for {plugin.package}")
                 plugin.download_files()
+                logger.info(f"Finished downloading files for {plugin.package}")
 
         except CLIError as e:
             c.print(" ")
@@ -1472,5 +1534,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     return app
 
 
-def run_app(server: AgentServer) -> None:
+def run_app(server: AgentServer | WorkerOptions) -> None:
+    if isinstance(server, WorkerOptions):
+        server = AgentServer.from_server_options(server)
+
     _build_cli(server)()

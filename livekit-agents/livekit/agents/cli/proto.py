@@ -15,6 +15,7 @@ from ..job import JobAcceptArguments, RunningJobInfo
 class CliArgs:
     log_level: str
 
+    # TODO(long): these are not actually used?
     url: str | None
     api_key: str | None
     api_secret: str | None
@@ -22,7 +23,8 @@ class CliArgs:
     devmode: bool = False
     reload: bool = False
 
-    simulate_job: str | None = None
+    # simulate_job: str | None = None
+
     # internal states
     # amount of time this worker has been reloaded
     reload_count: int = 0
@@ -54,6 +56,7 @@ class ActiveJobsResponse:
             channel.write_string(b, running_job.url)
             channel.write_string(b, running_job.token)
             channel.write_string(b, running_job.worker_id)
+            channel.write_bool(b, running_job.fake_job)
 
         channel.write_int(b, self.reload_count)
 
@@ -72,6 +75,7 @@ class ActiveJobsResponse:
                     url=channel.read_string(b),
                     token=channel.read_string(b),
                     worker_id=channel.read_string(b),
+                    fake_job=channel.read_bool(b),
                 )
             )
 

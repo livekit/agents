@@ -18,7 +18,7 @@ from spitch import AsyncSpitch
 
 SAMPLE_RATE = 24_000
 NUM_CHANNELS = 1
-MIME_TYPE = "audio/wav"
+MIME_TYPE = "audio/mpeg"
 
 
 @dataclass
@@ -35,6 +35,14 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(language=language, voice=voice)
         self._client = AsyncSpitch()
+
+    @property
+    def model(self) -> str:
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "Spitch"
 
     def synthesize(
         self,
@@ -70,6 +78,7 @@ class ChunkedStream(tts.ChunkedStream):
             text=self.input_text,
             language=self._opts.language,  # type: ignore
             voice=self._opts.voice,  # type: ignore
+            format="mp3",
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 

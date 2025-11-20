@@ -5,10 +5,10 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     UserStateChangedEvent,
-    WorkerOptions,
     cli,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -17,7 +17,10 @@ logger = logging.getLogger("get-email-agent")
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -39,8 +42,7 @@ async def entrypoint(ctx: JobContext):
             )
             await asyncio.sleep(10)
 
-        await asyncio.shield(session.aclose())
-        ctx.delete_room()
+        session.shutdown()
 
     @session.on("user_state_changed")
     def _user_state_changed(ev: UserStateChangedEvent):
@@ -57,4 +59,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

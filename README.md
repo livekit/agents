@@ -116,6 +116,7 @@ You'll need the following environment variables for this example:
 
 - DEEPGRAM_API_KEY
 - OPENAI_API_KEY
+- ELEVEN_API_KEY
 
 ### Multi-agent handoff
 

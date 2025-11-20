@@ -27,13 +27,13 @@ import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
-from multiprocessing.context import ForkServerContext
-from typing import Any, Callable, Generic, Literal, TypeVar
+from typing import Any, Callable, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
 from aiohttp import web
+from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
@@ -146,7 +146,7 @@ _default_permissions = WorkerPermissions()
 
 # NOTE: this object must be pickle-able
 @dataclass
-class WorkerOptions:
+class ServerOptions:
     entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     """Entrypoint function that will be called when a job is assigned to this worker."""
     request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
@@ -224,6 +224,11 @@ class WorkerOptions:
     """
     prometheus_port: NotGivenOr[int] = NOT_GIVEN
     """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
+    prometheus_multiproc_dir: str | None = None
+    """Directory for prometheus multiprocess mode to enable metrics collection from child job processes.
+    When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
+    When None (default), multiprocess mode is disabled and only main process metrics are collected.
+    Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
 
     def validate_config(self, devmode: bool) -> None:
         load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
@@ -231,6 +236,9 @@ class WorkerOptions:
             logger.warning(
                 f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
             )
+
+
+WorkerOptions = ServerOptions
 
 
 @dataclass
@@ -243,6 +251,11 @@ EventTypes = Literal["worker_started", "worker_registered"]
 
 
 class AgentServer(utils.EventEmitter[EventTypes]):
+    _default_num_idle_processes = ServerEnvOption(
+        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+    )
+    _default_port = ServerEnvOption(dev_default=0, prod_default=8081)
+
     def __init__(
         self,
         *,
@@ -251,9 +264,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_memory_warn_mb: float = 500,
         job_memory_limit_mb: float = 0,
         drain_timeout: int = 1800,
-        num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
-            dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
-        ),
+        num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
@@ -262,11 +273,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         api_key: str | None = None,
         api_secret: str | None = None,
         host: str = "",  # default to all interfaces
-        port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081),
-        http_proxy: str | None = None,
+        port: int | ServerEnvOption[int] = _default_port,
+        http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
         multiprocessing_context: Literal["spawn", "forkserver"] = (
             "spawn" if not sys.platform.startswith("linux") else "forkserver"
         ),
+        setup_fnc: Callable[[JobProcess], Any] | None = None,
+        load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
     ) -> None:
         super().__init__()
@@ -274,17 +287,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
-
-        if not self._ws_url:
-            raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
-
-        if not self._api_key:
-            raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
-
-        if not self._api_secret:
-            raise ValueError(
-                "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
-            )
 
         self._host = host
         self._port = port
@@ -299,10 +301,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._permissions = permissions
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
+        self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
-        self._http_proxy = (
-            http_proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None
-        )
+
+        if not is_given(http_proxy):
+            http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
+        self._http_proxy = http_proxy
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -310,58 +315,146 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # currently only one rtc_session
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
+        self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
 
         # worker cb
-        self._prewarm_fnc: Callable[[JobProcess], Any] | None = None
-        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
+        self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
+        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
         self._closed, self._draining, self._connecting = True, False, False
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
 
-    def realtime_session(
+    if sys.version_info < (3, 10):
+        # Python 3.9 cannot pickle asyncio.Lock, customize for pickle support
+        def __getstate__(self) -> dict[str, Any]:
+            """Custom pickle support - exclude unpickleable asyncio objects."""
+            state = self.__dict__.copy()
+            # remove unpickleable asyncio.Lock (will be recreated in __setstate__)
+            state.pop("_lock", None)
+            return state
+
+        def __setstate__(self, state: dict[str, Any]) -> None:
+            """Restore state and recreate asyncio.Lock."""
+            self.__dict__.update(state)
+            # recreate the lock
+            self._lock = asyncio.Lock()
+
+    @property
+    def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
+        return self._setup_fnc
+
+    @setup_fnc.setter
+    def setup_fnc(self, value: Callable[[JobProcess], Any] | None) -> None:
+        if value is not None and not callable(value):
+            raise TypeError("setup_fnc must be a callable or None")
+        self._setup_fnc = value
+
+    @property
+    def load_fnc(self) -> Callable[[AgentServer], float] | Callable[[], float] | None:
+        return self._load_fnc
+
+    @load_fnc.setter
+    def load_fnc(self, value: Callable[..., float] | None) -> None:
+        if value is not None and not callable(value):
+            raise TypeError("load_fnc must be a callable or None")
+        self._load_fnc = value
+
+    @classmethod
+    def from_server_options(cls, options: ServerOptions) -> AgentServer:
+        server = cls(
+            job_executor_type=options.job_executor_type,
+            load_threshold=options.load_threshold,
+            job_memory_limit_mb=options.job_memory_limit_mb,
+            job_memory_warn_mb=options.job_memory_warn_mb,
+            drain_timeout=options.drain_timeout,
+            num_idle_processes=options.num_idle_processes,
+            shutdown_process_timeout=options.shutdown_process_timeout,
+            initialize_process_timeout=options.initialize_process_timeout,
+            permissions=options.permissions,
+            max_retry=options.max_retry,
+            api_key=options.api_key,
+            api_secret=options.api_secret,
+            host=options.host,
+            port=options.port,
+            http_proxy=options.http_proxy,
+            multiprocessing_context=options.multiprocessing_context,
+            prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
+            setup_fnc=options.prewarm_fnc,
+            load_fnc=options.load_fnc,
+        )
+        server.rtc_session(
+            options.entrypoint_fnc,
+            agent_name=options.agent_name,
+            type=options.worker_type,
+            on_request=options.request_fnc,
+        )
+        return server
+
+    @overload
+    def rtc_session(
+        self,
+        func: Callable[[JobContext], Awaitable[None]],
+        *,
+        agent_name: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+    ) -> Callable[[JobContext], Awaitable[None]]: ...
+
+    @overload
+    def rtc_session(
         self,
         *,
         agent_name: str = "",
         type: ServerType = ServerType.ROOM,
-        request_cb: Callable[[JobRequest], Any] | None = None,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
-    ]:
+    ]: ...
+
+    def rtc_session(
+        self,
+        func: Callable[[JobContext], Awaitable[None]] | None = None,
+        *,
+        agent_name: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+    ) -> (
+        Callable[[JobContext], Awaitable[None]]
+        | Callable[
+            [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
+        ]
+    ):
         """
-        Decorator for registering the RTC session entrypoint.
+        Decorator or direct registrar for the RTC session entrypoint.
+
         Usage:
             @server.rtc_session(agent_name="survey_agent")
-            async def my_agent(job_ctx: JobContext):
-                ...
-        """
-        if self._entrypoint_fnc is not None:
-            raise RuntimeError(
-                "The AgentServer currently only supports registering only one rtc_session"
-            )
+            async def my_agent(job_ctx: JobContext): ...
 
-        def decorator(func: Callable[[JobContext], Awaitable[None]]):
-            self._entrypoint_fnc = func
-            self._request_fnc = request_cb
+            server.rtc_session(my_agent, agent_name="survey_agent")
+        """
+
+        def decorator(
+            f: Callable[[JobContext], Awaitable[None]],
+        ) -> Callable[[JobContext], Awaitable[None]]:
+            if self._entrypoint_fnc is not None:
+                raise RuntimeError(
+                    "The AgentServer currently only supports registering only one rtc_session"
+                )
+            self._entrypoint_fnc = f
+            self._request_fnc = on_request
+            self._session_end_fnc = on_session_end
             self._agent_name = agent_name
             self._server_type = type
-            return func
+            return f
 
-        return decorator
-
-    def setup(self) -> Callable[[Callable[[JobProcess], Any]], Callable[[JobProcess], Any]]:
-        """
-        Decorator for registering the setup/prewarm function.
-        Usage:
-            @server.setup()
-            def setup_process(job_proc: JobProcess):
-                ...
-        """
-
-        def decorator(func: Callable[[JobProcess], Any]):
-            self._prewarm_fnc = func
-            return func
+        if func is not None:
+            return decorator(func)
 
         return decorator
 
@@ -409,8 +502,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
 
-            if self._prewarm_fnc is None:
-                self._prewarm_fnc = _default_setup_fnc
+            if self._setup_fnc is None:
+                self._setup_fnc = _default_setup_fnc
 
             if self._load_fnc is None:
                 self._load_fnc = _DefaultLoadCalc.get_load
@@ -453,8 +546,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             self._proc_pool = ipc.proc_pool.ProcPool(
-                initialize_process_fnc=self._prewarm_fnc,
+                initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=self._entrypoint_fnc,
+                session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
                 job_executor_type=self._job_executor_type,
@@ -474,6 +568,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._http_server = http_server.HttpServer(
                 self._host, ServerEnvOption.getvalue(self._port, devmode), loop=self._loop
             )
+            self._worker_load: float = 0.0
 
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
@@ -486,6 +581,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     {
                         "agent_name": self._agent_name,
                         "worker_type": agent.JobType.Name(self._server_type.value),
+                        "worker_load": self._worker_load,
                         "active_jobs": len(self.active_jobs),
                         "sdk_version": __version__,
                         "project_type": "python",
@@ -504,14 +600,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
-            self._worker_load: float = 0.0
+
+            if not self._ws_url:
+                raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
+
+            if not self._api_key:
+                raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
+
+            if not self._api_secret:
+                raise ValueError(
+                    "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+                )
 
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
             )
 
-            if isinstance(self._mp_ctx, ForkServerContext):
+            if self._mp_ctx_str == "forkserver":
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
@@ -565,6 +671,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         None, load_fnc
                     )
 
+                    telemetry.metrics._update_worker_load(self._worker_load)
+
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
                         self._num_idle_processes, devmode
@@ -596,6 +704,58 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self.emit("worker_started")
 
         await self._close_future
+
+    def update_options(
+        self,
+        *,
+        ws_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        max_retry: NotGivenOr[int] = NOT_GIVEN,
+        job_executor_type: NotGivenOr[JobExecutorType] = NOT_GIVEN,
+        load_threshold: NotGivenOr[float] = NOT_GIVEN,
+        job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
+        job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[int] = NOT_GIVEN,
+        num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
+        shutdown_process_timeout: float = 10.0,
+        initialize_process_timeout: float = 10.0,
+    ) -> None:
+        if not self._closed:
+            raise RuntimeError("cannot update options after starting the server")
+
+        if is_given(ws_url):
+            self._ws_url = ws_url
+
+        if is_given(api_key):
+            self._api_key = api_key
+
+        if is_given(api_secret):
+            self._api_secret = api_secret
+
+        if is_given(max_retry):
+            self._max_retry = max_retry
+
+        if is_given(job_executor_type):
+            self._job_executor_type = job_executor_type
+
+        if is_given(load_threshold):
+            self._load_threshold = load_threshold
+
+        if is_given(job_memory_warn_mb):
+            self._job_memory_warn_mb = job_memory_warn_mb
+
+        if is_given(job_memory_limit_mb):
+            self._job_memory_limit_mb = job_memory_limit_mb
+
+        if is_given(drain_timeout):
+            self._drain_timeout = drain_timeout
+
+        if is_given(num_idle_processes):
+            self._num_idle_processes = num_idle_processes
+
+        if is_given(shutdown_process_timeout):
+            self._shutdown_process_timeout = shutdown_process_timeout
 
     @property
     def id(self) -> str:
@@ -630,6 +790,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             else:
                 await _join_jobs()
 
+    @utils.log_exceptions(logger=logger)
     async def simulate_job(
         self,
         room: str,
@@ -637,8 +798,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         fake_job: bool = False,
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
+        token: str | None = None,
     ) -> None:
         async with self._lock:
+            if token is not None:
+                # read identity from token if provided
+                agent_identity = api.TokenVerifier().verify(token, verify_signature=False).identity
+
             if agent_identity is None:
                 if not fake_job:
                     raise ValueError("agent_identity is None but fake_job is False")
@@ -662,18 +828,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 participant=None,
             )
 
+            token = token or (
+                api.AccessToken(self._api_key, self._api_secret)
+                .with_identity(agent_identity)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
                 job=job,
                 url=self._ws_url,
-                token=(
-                    api.AccessToken(self._api_key, self._api_secret)
-                    .with_identity(agent_identity)
-                    .with_kind("agent")
-                    .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                    .to_jwt()
-                ),
+                token=token,
                 fake_job=fake_job,
             )
 
@@ -921,6 +1088,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         logger.info(
             "registered worker",
             extra={
+                "agent_name": self._agent_name,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,
@@ -995,9 +1163,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             extra={
                 "job_id": msg.job.id,
                 "dispatch_id": msg.job.dispatch_id,
-                "room_name": msg.job.room.name,
+                "room": msg.job.room.name,
+                "room_id": msg.job.room.sid,
                 "agent_name": self._agent_name,
                 "resuming": msg.resuming,
+                "enable_recording": msg.job.enable_recording,
             },
         )
 
@@ -1024,6 +1194,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         user_task.add_done_callback(self._tasks.discard)
 
     def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
+        logger.debug(
+            "received assignment",
+            extra={
+                "agent_name": self._agent_name,
+                "room_id": assignment.job.room.sid,
+                "room": assignment.job.room.name,
+                "job_id": assignment.job.id,
+                "dispatch_id": assignment.job.dispatch_id,
+                "enable_recording": assignment.job.enable_recording,
+            },
+        )
         if assignment.job.id in self._pending_assignments:
             with contextlib.suppress(asyncio.InvalidStateError):
                 fut = self._pending_assignments.pop(assignment.job.id)
@@ -1031,7 +1212,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         else:
             logger.warning(
                 "received assignment for an unknown job",
-                extra={"job": assignment.job, "agent_name": self._agent_name},
+                extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
 
     async def _handle_termination(self, msg: agent.JobTermination) -> None:

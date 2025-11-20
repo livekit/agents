@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -33,6 +37,9 @@ jobs:
 
       - name: Run tests
 
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
         run: uv run pytest tests/test_agent_session.py
           tests/test_tts_fallback.py
           tests/test_stt_fallback.py
@@ -44,6 +51,8 @@ jobs:
           tests/test_transcription_filter.py
 
   evaluation:
+    # don't run tests for PRs on forks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,16 +84,10 @@ jobs:
         plugin:
           [
             cartesia,
-            aws,
-            azure,
             deepgram,
             elevenlabs,
-            google,
             groq,
             openai,
-            rime,
-            speechify,
-            hume,
             inworld,
           ]
 
@@ -133,6 +136,7 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
         working-directory: tests
         run: make test
 

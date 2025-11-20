@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import ClassVar, List
+from typing import Callable, ClassVar
 
 __all__ = ["readchar", "readkey", "key"]
 
@@ -148,7 +148,7 @@ class _WinKey(_BaseKey):
 # base key here mirrors the upstream behaviour: on both Windows and
 # POSIX, pressing CTRL+C should raise KeyboardInterrupt instead of
 # being returned by readkey().
-INTERRUPT_KEYS: List[str] = [_BaseKey.CTRL_C]
+INTERRUPT_KEYS: list[str] = [_BaseKey.CTRL_C]
 
 
 def _posix_readchar() -> str:
@@ -161,18 +161,28 @@ def _posix_readchar() -> str:
     ``_posix_read.readchar`` function.
     """
     import termios
+    import tty
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     term = termios.tcgetattr(fd)
     try:
-        # Disable canonical input, echo, and break handling
-        term[3] &= ~(termios.ICANON | termios.ECHO | termios.IGNBRK | termios.BRKINT)
+        term[3] &= ~(termios.ICANON | termios.ECHO)
+        term[3] |= termios.ISIG
         termios.tcsetattr(fd, termios.TCSAFLUSH, term)
 
         ch = sys.stdin.read(1)
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            try:
+                tty.setcbreak(fd)
+                cur = termios.tcgetattr(fd)
+                cur[3] |= termios.ICANON | termios.ECHO | termios.ISIG
+                termios.tcsetattr(fd, termios.TCSADRAIN, cur)
+            except Exception:
+                pass
     return ch
 
 
@@ -223,7 +233,7 @@ def _win_readchar() -> str:
     """
     import msvcrt
 
-    return msvcrt.getwch()
+    return msvcrt.getwch()  # type: ignore
 
 
 def _win_readkey() -> str:
@@ -251,6 +261,10 @@ def _win_readkey() -> str:
 
     return ch
 
+
+key: type[_PosixKey | _WinKey]
+readchar: Callable[[], str]
+readkey: Callable[[], str]
 
 if sys.platform.startswith(("linux", "darwin", "freebsd", "openbsd")):
     key = _PosixKey

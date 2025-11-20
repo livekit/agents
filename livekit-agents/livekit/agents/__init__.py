@@ -20,7 +20,7 @@ documentation, and examples.
 
 import typing
 
-from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice  # noqa: F401
+from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -51,6 +51,7 @@ from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    FlushSentinel,
     NotGiven,
     NotGivenOr,
 )
@@ -75,6 +76,7 @@ from .voice import (
     UserStateChangedEvent,
     avatar,
     io,
+    room_io,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -126,6 +128,7 @@ __all__ = [
     "function_tool",
     "ChatContext",
     "ChatItem",
+    "room_io",
     "RoomIO",
     "RoomInputOptions",
     "RoomOutputOptions",
@@ -168,6 +171,7 @@ __all__ = [
     "BuiltinAudioClip",
     "AudioConfig",
     "PlayHandle",
+    "FlushSentinel",
     "io",
     "avatar",
     "cli",
@@ -175,6 +179,7 @@ __all__ = [
     "llm",
     "metrics",
     "stt",
+    "inference",
     "tokenize",
     "tts",
     "utils",

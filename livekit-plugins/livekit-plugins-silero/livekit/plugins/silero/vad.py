@@ -18,6 +18,7 @@ import asyncio
 import time
 import weakref
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -59,12 +60,13 @@ class VAD(agents.vad.VAD):
         cls,
         *,
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.4,
+        min_silence_duration: float = 0.55,
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
+        onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
@@ -101,6 +103,7 @@ class VAD(agents.vad.VAD):
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+            onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -119,7 +122,7 @@ class VAD(agents.vad.VAD):
             )
             prefix_padding_duration = padding_duration
 
-        session = onnx_model.new_inference_session(force_cpu)
+        session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
@@ -140,6 +143,14 @@ class VAD(agents.vad.VAD):
         self._onnx_session = session
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
+
+    @property
+    def model(self) -> str:
+        return "silero"
+
+    @property
+    def provider(self) -> str:
+        return "ONNX"
 
     def stream(self) -> VADStream:
         """
@@ -372,7 +383,7 @@ class VADStream(agents.vad.VADStream):
                     speech_buffer_index += to_copy_buffer
                 elif not self._speech_buffer_max_reached:
                     # reached self._opts.max_buffered_speech (padding is included)
-                    speech_buffer_max_reached = True
+                    self._speech_buffer_max_reached = True
                     logger.warning(
                         "max_buffered_speech reached, ignoring further data for the current speech input"  # noqa: E501
                     )
@@ -389,7 +400,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index, speech_buffer_max_reached
+                    nonlocal speech_buffer_index
                     assert self._speech_buffer is not None
 
                     if speech_buffer_index <= self._prefix_padding_samples:
@@ -477,7 +488,6 @@ class VADStream(agents.vad.VADStream):
                         and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
-                        pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
                         self._event_ch.send_nowait(
@@ -491,6 +501,8 @@ class VADStream(agents.vad.VADStream):
                                 speaking=False,
                             )
                         )
+
+                        pub_speech_duration = 0.0
 
                         _reset_write_cursor()
 
