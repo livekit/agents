@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
+from livekit.agents import bargein
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
@@ -49,6 +50,7 @@ class Agent:
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        bargein_detector: NotGivenOr[bargein.BargeinDetector | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
@@ -82,6 +84,7 @@ class Agent:
         self._llm = llm
         self._tts = tts
         self._vad = vad
+        self._bargein_detector = bargein_detector
         self._allow_interruptions = allow_interruptions
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
@@ -661,6 +664,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        bargein_detector: NotGivenOr[bargein.BargeinDetector | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
@@ -676,6 +680,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             turn_detection=turn_detection,
             stt=stt,
             vad=vad,
+            bargein_detector=bargein_detector,
             llm=llm,
             tts=tts,
             mcp_servers=mcp_servers,

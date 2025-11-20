@@ -16,6 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
+from livekit.plugins.bargein_detector import BargeinDetector
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -94,6 +95,7 @@ async def entrypoint(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
+        bargein_detector=BargeinDetector(),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
@@ -127,6 +129,7 @@ async def entrypoint(ctx: JobContext):
                 # noise_cancellation=noise_cancellation.BVC(),
             ),
         ),
+        record=True,
     )
 
 
