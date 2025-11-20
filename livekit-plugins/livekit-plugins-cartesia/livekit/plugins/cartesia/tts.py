@@ -157,7 +157,7 @@ class TTS(tts.TTS):
             pronunciation_dict_id=pronunciation_dict_id,
         )
 
-        if speed or emotion or volume:
+        if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
         self._session = http_session
@@ -269,7 +269,7 @@ class TTS(tts.TTS):
         if is_given(api_version):
             self._opts.api_version = api_version
 
-        if speed or emotion:
+        if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
     def synthesize(
@@ -311,6 +311,15 @@ class TTS(tts.TTS):
                     "model": self._opts.model,
                     "speed": self._opts.speed,
                     "emotion": self._opts.emotion,
+                },
+            )
+
+        if self._opts.pronunciation_dict_id and not _is_sonic_3(self._opts.model):
+            logger.warning(
+                "pronunciation_dict_id is only supported for sonic-3 models",
+                extra={
+                    "model": self._opts.model,
+                    "pronunciation_dict_id": self._opts.pronunciation_dict_id,
                 },
             )
 
