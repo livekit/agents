@@ -264,9 +264,17 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
+        try:
+            job_ctx = get_job_context()
+            local_participant_identity = job_ctx.token_claims().identity
+        except RuntimeError as e:
+            if not room.isconnected():
+                raise BitHumanException("failed to get local participant identity") from e
+            local_participant_identity = room.local_participant.identity
+
         # Prepare attributes for JWT token
         attributes: dict[str, str] = {
-            ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
+            ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity,
         }
 
         # Only add api_secret if it's not None

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import sys
 from collections import OrderedDict
@@ -11,7 +9,7 @@ if sys.version_info >= (3, 11):
 else:
     from typing_extensions import Self
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 from pydantic import Field
 
@@ -104,7 +102,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
         self.complete(TaskGroupResult(task_results=task_results))
 
-    def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
+    def _build_out_of_scope_tool(self, *, active_task_id: str) -> Optional[FunctionTool]:
         if not self._visited_tasks:
             return None
 
