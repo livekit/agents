@@ -41,7 +41,7 @@ SAMPLE_RATE = 16000
 THRESHOLD = 0.95
 MIN_BARGEIN_DURATION = 0.05  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.2 * 16000)  # 0.2 second at 16000 Hz
+STEP_SIZE = int(0.1 * 16000)  # 0.1 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
@@ -440,7 +440,13 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     pass
                 elif msg_type == "inference_done":
                     is_bargein_result = data.get("is_bargein", False)
-                    logger.debug("inference done", extra={"is_bargein": is_bargein_result})
+                    logger.debug(
+                        "inference done",
+                        extra={
+                            "is_bargein": is_bargein_result,
+                            "inference_duration": time.time() - data.get("created_at", 0.0),
+                        },
+                    )
                     self._event_ch.send_nowait(
                         BargeinEvent(
                             type=BargeinEventType.INFERENCE_DONE,
@@ -489,7 +495,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         """Connect to the LiveKit STT WebSocket."""
         params: dict[str, Any] = {
             "settings": {
-                "sample_rate": str(self._opts.sample_rate),
+                "sample_rate": self._opts.sample_rate,
             },
         }
 

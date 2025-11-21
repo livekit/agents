@@ -53,6 +53,7 @@ class BargeinRequest(BaseModel):
     agentId: str | None = Field(None, description="Optional agent ID")
     threshold: float = Field(0.95, description="Threshold for bargein detection")
     min_frames: int = Field(2, description="Minimum number of frames for bargein detection")
+    created_at: float = Field(..., description="Timestamp of the audio waveform")
 
 
 class BargeinResponse(BaseModel):
@@ -60,6 +61,7 @@ class BargeinResponse(BaseModel):
 
     is_bargein: bool = Field(..., description="Whether bargein is detected")
     confidence: float | None = Field(None, description="Confidence score (optional)")
+    created_at: float = Field(..., description="Timestamp of the data creation")
 
 
 def load_onnx_model(model_path: str) -> ort.InferenceSession:
@@ -165,7 +167,9 @@ async def detect_bargein(request: BargeinRequest) -> BargeinResponse:
 
         logger.info(f"Bargein detection result: is_bargein={is_bargein}")
 
-        return BargeinResponse(is_bargein=is_bargein, confidence=None)
+        return BargeinResponse(
+            is_bargein=is_bargein, confidence=None, created_at=request.created_at
+        )
 
     except Exception as e:
         logger.error(f"Error during bargein detection: {e}", exc_info=True)
@@ -246,7 +250,12 @@ async def websocket_bargein(websocket: WebSocket) -> None:
                         delta = time.time() - created_at
 
                         await websocket.send_json(
-                            {"type": "inference_done", "delta": delta, "is_bargein": is_bargein}
+                            {
+                                "type": "inference_done",
+                                "delta": delta,
+                                "is_bargein": is_bargein,
+                                "created_at": created_at,
+                            }
                         )
 
                         if is_bargein:
