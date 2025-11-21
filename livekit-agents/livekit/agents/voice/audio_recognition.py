@@ -103,6 +103,7 @@ class AudioRecognition:
         turn_detection: TurnDetectionMode | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
+        preflight_delay: float | None,
     ) -> None:
         self._session = session
         self._hooks = hooks
@@ -113,6 +114,7 @@ class AudioRecognition:
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._min_endpointing_delay = min_endpointing_delay
         self._max_endpointing_delay = max_endpointing_delay
+        self._preflight_delay = preflight_delay
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
@@ -342,6 +344,21 @@ class AudioRecognition:
             # ignore transcript for manual turn detection when user turn already committed
             # and EOU task is done or this is an interim transcript
             return
+
+        if (
+            ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+            and self._preflight_delay is not None
+            and self._last_speaking_time is not None
+            and self._vad is not None
+        ):
+            # convert interim transcript to preflight transcript if silence duration is longer than preflight delay
+            silence_duration = time.time() - self._last_speaking_time
+            if silence_duration > self._preflight_delay:
+                ev.type = stt.SpeechEventType.PREFLIGHT_TRANSCRIPT
+                logger.debug(
+                    "converted interim transcript to preflight transcript",
+                    extra={"silence_duration": silence_duration},
+                )
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text

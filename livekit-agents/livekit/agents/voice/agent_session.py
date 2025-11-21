@@ -80,6 +80,7 @@ class AgentSessionOptions:
     min_interruption_words: int
     min_endpointing_delay: float
     max_endpointing_delay: float
+    preflight_delay: float | None
     max_tool_steps: int
     user_away_timeout: float | None
     false_interruption_timeout: float | None
@@ -149,6 +150,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_interruption_words: int = 0,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 3.0,
+        preflight_delay: float | None = 0.3,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
@@ -212,6 +214,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Default ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
+            preflight_delay (float, optional): Minimum silence duration in seconds
+                before converting interim transcript to preflight transcript.
+                Set to ``None`` to disable. Default ``0.3`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
                 Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
@@ -273,6 +278,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             min_interruption_words=min_interruption_words,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
+            preflight_delay=preflight_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             false_interruption_timeout=false_interruption_timeout,
