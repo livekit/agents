@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import numpy as np
 import onnxruntime as ort
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
@@ -153,7 +155,6 @@ async def detect_bargein(request: BargeinRequest) -> BargeinResponse:
     try:
         # Decode the waveform
         waveform = decode_waveform(request.waveform)
-        logger.info(f"Decoded waveform shape: {waveform.shape}")
 
         # Run inference
         is_bargein = run_inference(waveform, request.threshold, request.min_frames)
@@ -172,6 +173,120 @@ async def detect_bargein(request: BargeinRequest) -> BargeinResponse:
             status_code=500,
             detail=f"Error during bargein detection: {str(e)}",
         ) from None
+
+
+@app.websocket("/bargein")
+async def websocket_bargein(websocket: WebSocket) -> None:
+    """
+    WebSocket endpoint for bargein detection.
+
+    Protocol:
+    - Client sends: {"type": "session.create", "settings": {"sample_rate": "16000"}}
+    - Server sends: {"type": "session.created"}
+    - Client sends: {"type": "input_audio", "audio": "<base64>", "sample_rate": 16000, "num_channels": 1, "threshold": 0.95, "min_frames": 2}
+    - Server sends: {"type": "bargein_detected"} (when detected)
+    - Client sends: {"type": "session.finalize"}
+    - Server sends: {"type": "session.finalized"}
+    """
+    await websocket.accept()
+    logger.info("WebSocket connection established")
+
+    if onnx_session is None:
+        await websocket.send_json({"type": "error", "message": "ONNX model not loaded"})
+        await websocket.close()
+        return
+
+    try:
+        # Wait for session.create message
+        while True:
+            try:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                msg_type = msg.get("type")
+
+                if msg_type == "session.create":
+                    logger.info("Session created")
+                    await websocket.send_json({"type": "session.created"})
+                    break
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Expected session.create, got {msg_type}"}
+                    )
+                    await websocket.close()
+                    return
+            except json.JSONDecodeError as e:
+                await websocket.send_json({"type": "error", "message": f"Invalid JSON: {str(e)}"})
+                await websocket.close()
+                return
+
+        # Process audio frames
+        while True:
+            try:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                msg_type = msg.get("type")
+
+                if msg_type == "input_audio":
+                    # Decode and process audio
+
+                    audio_b64 = msg.get("audio")
+                    threshold = msg.get("threshold", 0.95)
+                    min_frames = msg.get("min_frames", 2)
+                    created_at = msg.get("created_at", time.time())
+
+                    if not audio_b64:
+                        await websocket.send_json(
+                            {"type": "error", "message": "Missing audio data"}
+                        )
+                        continue
+
+                    try:
+                        waveform = decode_waveform(audio_b64)
+                        is_bargein = run_inference(waveform, threshold, min_frames)
+                        delta = time.time() - created_at
+
+                        await websocket.send_json(
+                            {"type": "inference_done", "delta": delta, "is_bargein": is_bargein}
+                        )
+
+                        if is_bargein:
+                            logger.info("Bargein detected via WebSocket")
+                            await websocket.send_json({"type": "bargein_detected"})
+
+                    except Exception as e:
+                        logger.error(f"Error processing audio: {e}", exc_info=True)
+                        await websocket.send_json(
+                            {"type": "error", "message": f"Error processing audio: {str(e)}"}
+                        )
+
+                elif msg_type == "session.finalize":
+                    logger.info("Session finalized")
+                    await websocket.send_json({"type": "session.finalized"})
+                    break
+
+                else:
+                    logger.warning(f"Unknown message type: {msg_type}")
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Unknown message type: {msg_type}"}
+                    )
+
+            except json.JSONDecodeError as e:
+                await websocket.send_json({"type": "error", "message": f"Invalid JSON: {str(e)}"})
+                continue
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+        try:
+            await websocket.send_json({"type": "error", "message": f"Internal error: {str(e)}"})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.get("/health")
