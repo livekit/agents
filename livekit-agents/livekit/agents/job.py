@@ -311,6 +311,13 @@ class JobContext:
         return self._room.local_participant
 
     @property
+    def local_participant_identity(self) -> str:
+        if identity := self.token_claims().identity:
+            return identity
+
+        return self._room.local_participant.identity
+
+    @property
     def log_context_fields(self) -> dict[str, Any]:
         """
         Returns the current dictionary of log fields that will be injected into log records.
