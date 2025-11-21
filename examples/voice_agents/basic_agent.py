@@ -14,9 +14,9 @@ from livekit.agents import (
     metrics,
     room_io,
 )
+from livekit.agents.inference.bargein import BargeinDetector
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
-from livekit.plugins.bargein_detector import BargeinDetector
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -94,7 +94,7 @@ async def entrypoint(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        bargein_detector=BargeinDetector(),
+        bargein_detector=BargeinDetector(use_proxy=True),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
