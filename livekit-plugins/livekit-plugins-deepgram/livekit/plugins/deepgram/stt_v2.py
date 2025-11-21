@@ -309,9 +309,9 @@ class SpeechStreamv2(stt.SpeechStream):
                     self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        has_ended = False
+                if has_ended:
+                    self._audio_duration_collector.flush()
+                    has_ended = False
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True

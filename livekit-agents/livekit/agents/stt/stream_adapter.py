@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from livekit import rtc
 
 from .. import utils
 from ..log import logger
@@ -17,9 +19,13 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
+SilenceMode = Literal["drop", "zeros", "passthrough"]
+
+
 @dataclass
 class StreamAdapterOptions:
-    use_streaming: bool = False
+    use_streaming: bool
+    silence_mode: SilenceMode
 
 
 class StreamAdapter(STT):
@@ -29,6 +35,7 @@ class StreamAdapter(STT):
         stt: STT,
         vad: VAD,
         use_streaming: bool = False,
+        silence_mode: SilenceMode = "zeros",
     ) -> None:
         """
         Create a new instance of StreamAdapter.
@@ -37,6 +44,10 @@ class StreamAdapter(STT):
             stt: The STT to wrap.
             vad: The VAD to use.
             use_streaming: Whether to use streaming mode of the wrapped STT. Default is False.
+            silence_mode: How to handle audio frames during silent periods, only for use_streaming=True:
+                - "drop": Don't send silent frames to STT
+                - "zeros": Send zero-filled frames during silence (default)
+                - "passthrough": Send original frames even during silence
         """
         super().__init__(
             capabilities=STTCapabilities(
@@ -47,7 +58,10 @@ class StreamAdapter(STT):
         )
         self._vad = vad
         self._stt = stt
-        self._opts = StreamAdapterOptions(use_streaming=use_streaming)
+        self._opts = StreamAdapterOptions(
+            use_streaming=use_streaming,
+            silence_mode=silence_mode,
+        )
         if use_streaming and not stt.capabilities.streaming:
             raise ValueError(
                 f"STT {stt.label} does not support streaming while use_streaming is enabled"
@@ -186,14 +200,30 @@ class StreamAdapterWrapper(RecognizeStream):
             if event.type == VADEventType.START_OF_SPEECH:
                 speaking = True
                 frames = event.frames
-            elif event.type == VADEventType.INFERENCE_DONE and speaking:
-                frames = event.frames
             elif event.type == VADEventType.END_OF_SPEECH:
                 speaking = False
-                stt_stream.flush()
+            elif event.type == VADEventType.INFERENCE_DONE:
+                frames = event.frames
+
+            if not speaking:
+                if self._opts.silence_mode == "drop":
+                    frames.clear()
+                elif self._opts.silence_mode == "zeros":
+                    frames = [
+                        rtc.AudioFrame(
+                            data=b"\x00\x00" * f.samples_per_channel * f.num_channels,
+                            sample_rate=f.sample_rate,
+                            num_channels=f.num_channels,
+                            samples_per_channel=f.samples_per_channel,
+                        )
+                        for f in frames
+                    ]
 
             for f in frames:
                 stt_stream.push_frame(f)
+
+            if event.type == VADEventType.END_OF_SPEECH:
+                stt_stream.flush()
 
     async def _recognize_non_streaming(self, vad_stream: VADStream) -> None:
         """recognize speech from vad"""
