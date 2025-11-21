@@ -98,6 +98,7 @@ class STTOptions:
     enable_language_identification: bool = True
 
     client_reference_id: str | None = None
+    enable_endpoint_detection: bool = True
 
 
 class STT(stt.STT):
@@ -116,8 +117,9 @@ class STT(stt.STT):
         api_key: str | None = None,
         base_url: str = BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
-        vad: vad.VAD | None = None,
         params: STTOptions | None = None,
+        # deprecated
+        vad: vad.VAD | None = None,
     ):
         """Initialize instance of Soniox Speech-to-Text API service.
 
@@ -126,17 +128,21 @@ class STT(stt.STT):
             base_url: Base URL for Soniox Speech-to-Text API, default to BASE_URL defined in this
                 module.
             http_session: Optional aiohttp.ClientSession to use for requests.
-            vad: If passed, enable Voice Activity Detection (VAD) for audio frames.
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True, flush=True)
+        )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
         self._base_url = base_url
         self._http_session = http_session
-        self._vad_stream = vad.stream() if vad else None
         self._params = params or STTOptions()
+        if vad is not None:
+            logger.warning(
+                "`vad` is deprecated. Use `stt.StreamAdapter(..., use_streaming=True)` instead."
+            )
 
     @property
     def model(self) -> str:
@@ -198,8 +204,6 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self):
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
         initial configuration."""
-        # If VAD was passed, disable endpoint detection, otherwise enable it.
-        enable_endpoint_detection = not self._stt._vad_stream
 
         context = self._stt._params.context
         if isinstance(context, ContextObject):
@@ -211,7 +215,7 @@ class SpeechStream(stt.SpeechStream):
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
             "num_channels": self._stt._params.num_channels or 1,
-            "enable_endpoint_detection": enable_endpoint_detection,
+            "enable_endpoint_detection": self._stt._params.enable_endpoint_detection,
             "sample_rate": self._stt._params.sample_rate,
             "language_hints": self._stt._params.language_hints,
             "context": context,
@@ -238,7 +242,6 @@ class SpeechStream(stt.SpeechStream):
                 # Create task for audio processing, voice turn detection and message handling.
                 tasks = [
                     asyncio.create_task(self._prepare_audio_task()),
-                    asyncio.create_task(self._handle_vad_task()),
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
                     asyncio.create_task(self._keepalive_task()),
@@ -302,23 +305,18 @@ class SpeechStream(stt.SpeechStream):
             logger.error(f"Error while sending keep alive message: {e}")
 
     async def _prepare_audio_task(self):
-        """Read audio frames, process VAD, and enqueue PCM data for sending."""
+        """Read audio frames and enqueue PCM data for sending."""
         if not self._ws:
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
             return
 
         async for data in self._input_ch:
-            if self._stt._vad_stream:
-                # If VAD is enabled, push the audio frame to the VAD stream.
-                if isinstance(data, self._FlushSentinel):
-                    self._stt._vad_stream.flush()
-                else:
-                    self._stt._vad_stream.push_frame(data)
-
             if isinstance(data, rtc.AudioFrame):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
+            else:
+                self.audio_queue.put_nowait(FINALIZE_MESSAGE)
 
     async def _send_audio_task(self):
         """Take queued audio data and transmit it over the WebSocket."""
@@ -339,16 +337,6 @@ class SpeechStream(stt.SpeechStream):
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
-
-    async def _handle_vad_task(self):
-        """Listen for VAD events to trigger finalize or keepalive messages."""
-        if not self._stt._vad_stream:
-            logger.debug("VAD stream is not enabled, skipping VAD task")
-            return
-
-        async for event in self._stt._vad_stream:
-            if event.type == vad.VADEventType.END_OF_SPEECH:
-                self.audio_queue.put_nowait(FINALIZE_MESSAGE)
 
     async def _recv_messages_task(self):
         """Receive transcription messages, handle tokens, errors, and dispatch events."""

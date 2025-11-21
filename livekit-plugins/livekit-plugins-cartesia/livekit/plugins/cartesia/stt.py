@@ -89,7 +89,9 @@ class STT(stt.STT):
         Raises:
             ValueError: If no API key is provided or found in environment variables.
         """
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=False))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=False, flush=True)
+        )
 
         cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
@@ -248,6 +250,9 @@ class SpeechStream(stt.SpeechStream):
                 for frame in frames:
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+
+                if isinstance(data, self._FlushSentinel):
+                    await ws.send_str("finalize")
 
             closing_ws = True
             await ws.send_str("finalize")

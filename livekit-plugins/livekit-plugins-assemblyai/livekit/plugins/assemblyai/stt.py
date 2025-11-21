@@ -76,7 +76,7 @@ class STT(stt.STT):
         buffer_size_seconds: float = 0.05,
     ):
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=False),
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=False, flush=True),
         )
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if assemblyai_api_key is None:
@@ -171,6 +171,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"type": "Terminate"})
+    _FLUSH_MSG: str = json.dumps({"type": "ForceEndpoint"})
 
     def __init__(
         self,
@@ -240,6 +241,9 @@ class SpeechStream(stt.SpeechStream):
                 for frame in frames:
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+
+                if isinstance(data, self._FlushSentinel):
+                    await ws.send_str(SpeechStream._FLUSH_MSG)
 
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)

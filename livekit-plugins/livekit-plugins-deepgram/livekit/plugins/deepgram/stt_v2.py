@@ -96,7 +96,9 @@ class STTv2(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True, flush=True)
+        )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
