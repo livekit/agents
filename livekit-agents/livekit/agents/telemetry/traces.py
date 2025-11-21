@@ -92,7 +92,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
-        
+
         log_data.log_record.attributes.update(  # type: ignore
             {"logger.name": log_data.instrumentation_scope.name}
         )
