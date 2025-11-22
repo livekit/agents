@@ -17,7 +17,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        stt=stt.StreamAdapter(
+        stt=stt.StreamAdapter(  # use local VAD with the STT
             stt=elevenlabs.STT(
                 use_realtime=True,
                 server_vad=None,  # disable server-side VAD
