@@ -96,7 +96,9 @@ class STTv2(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True, flush=True)
+        )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
@@ -307,9 +309,9 @@ class SpeechStreamv2(stt.SpeechStream):
                     self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        has_ended = False
+                if has_ended:
+                    self._audio_duration_collector.flush()
+                    has_ended = False
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
