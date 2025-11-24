@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from multiprocessing import current_process
 
+from .supervised_proc import _dump_stack_traces, _dump_stack_traces_impl
+
 if current_process().name == "inference_proc":
     import signal
 
-    # ignore signals in the inference process (the parent process will handle them)
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
@@ -84,6 +87,9 @@ class _InferenceProc:
             if isinstance(msg, proto.ShutdownRequest):
                 await self._client.send(proto.Exiting(reason=msg.reason))
                 break
+
+            if isinstance(msg, proto.DumpStackTraceRequest):
+                _dump_stack_traces_impl()
 
     async def _handle_inference_request(self, msg: proto.InferenceRequest) -> None:
         loop = asyncio.get_running_loop()

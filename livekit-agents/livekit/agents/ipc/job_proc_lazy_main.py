@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from multiprocessing import current_process
 
+from .supervised_proc import _dump_stack_traces
+
 if current_process().name == "job_proc":
     import signal
 
-    # ignore signals in the jobs process (the parent process will handle them)
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
@@ -28,6 +31,7 @@ from .channel import Message
 from .inference_executor import InferenceExecutor
 from .proc_client import _ProcClient
 from .proto import (
+    DumpStackTraceRequest,
     Exiting,
     InferenceRequest,
     InferenceResponse,
@@ -35,6 +39,7 @@ from .proto import (
     ShutdownRequest,
     StartJobRequest,
 )
+from .supervised_proc import _dump_stack_traces_impl
 
 
 @dataclass
@@ -211,6 +216,9 @@ class _JobProc:
 
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
+
+                if isinstance(msg, DumpStackTraceRequest):
+                    _dump_stack_traces_impl()
 
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 
