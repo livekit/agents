@@ -8,7 +8,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass
-from time import perf_counter
+from time import perf_counter_ns
 from typing import Any, Union
 
 import aiohttp
@@ -24,7 +24,6 @@ from .. import (
     APIError,
     APIStatusError,
     NotGivenOr,
-    get_job_context,
     utils,
 )
 from ..bargein import (
@@ -284,20 +283,13 @@ class BargeinHttpStream(BargeinStreamBase):
             data_chan.close()
 
     async def predict(self, waveform: np.ndarray) -> bool:
-        ctx = get_job_context()
-        created_at = perf_counter()
+        created_at = perf_counter_ns()
         request = {
-            "jobId": ctx.job.id,
-            "workerId": ctx.worker_id,
             "waveform": self._model.encode_waveform(waveform),
             "threshold": self._opts.threshold,
             "min_frames": self._opts.min_frames,
             "created_at": created_at,
         }
-        agent_id = os.getenv("LIVEKIT_AGENT_ID")
-        if agent_id:
-            request["agentId"] = agent_id
-
         async with utils.http_context.http_session().post(
             url=f"{self._opts.base_url}/bargein",
             headers={
@@ -306,19 +298,24 @@ class BargeinHttpStream(BargeinStreamBase):
             json=request,
             timeout=aiohttp.ClientTimeout(total=self._opts.inference_timeout),
         ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            is_bargein: bool | None = data.get("is_bargein")
-            inference_duration = time.perf_counter() - created_at
-            if isinstance(is_bargein, bool):
-                logger.debug(
-                    "bargein prediction",
-                    extra={
-                        "is_bargein": is_bargein,
-                        "duration": inference_duration,
-                    },
-                )
-                return is_bargein
+            try:
+                resp.raise_for_status()
+                data = await resp.json()
+                is_bargein: bool | None = data.get("is_bargein")
+                inference_duration = (perf_counter_ns() - created_at) / 1e9
+                if isinstance(is_bargein, bool):
+                    logger.debug(
+                        "bargein prediction",
+                        extra={
+                            "is_bargein": is_bargein,
+                            "duration": inference_duration,
+                        },
+                    )
+                    return is_bargein
+            except Exception as e:
+                msg = await resp.text()
+                logger.error("error during bargein prediction", extra={"response": msg})
+                raise APIError(f"error during bargein prediction: {e}", body=msg) from e
             return False
 
 
@@ -414,7 +411,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         "num_channels": 1,
                         "threshold": self._model._opts.threshold,
                         "min_frames": self._model._opts.min_frames,
-                        "created_at": perf_counter(),
+                        "created_at": perf_counter_ns(),
                     }
                     await ws.send_str(json.dumps(msg))
                     accumulated_samples = 0
@@ -452,7 +449,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     pass
                 elif msg_type == "inference_done":
                     is_bargein_result = data.get("is_bargein", False)
-                    inference_duration = time.perf_counter() - created_at
+                    inference_duration = (perf_counter_ns() - created_at) / 1e9
                     logger.debug(
                         "inference done",
                         extra={

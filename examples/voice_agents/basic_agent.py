@@ -95,7 +95,7 @@ async def entrypoint(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        bargein_detector=BargeinDetector(use_proxy=True),
+        bargein_detector=BargeinDetector(),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
