@@ -214,6 +214,6 @@ async def test_summarize():
     import json
 
     async with openai.LLM(model="gpt-4o") as llm:
-        summary = await chat_ctx.summarize(llm, keep_last_turns=1)
+        summary = await chat_ctx._summarize(llm, keep_last_turns=1)
         print("\n=== Summary ===\n")
         print(json.dumps(summary.to_dict(), indent=2))

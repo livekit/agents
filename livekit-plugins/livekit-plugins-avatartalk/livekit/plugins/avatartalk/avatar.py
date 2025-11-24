@@ -80,23 +80,16 @@ class AvatarSession:
 
         session_task_mapping = {}
 
-        try:
-            job_ctx = get_job_context()
-            local_participant_identity = job_ctx.token_claims().identity
+        job_ctx = get_job_context()
 
-            async def _shutdown_session():
-                if room.name not in session_task_mapping:
-                    return
-                await self._avatartalk_api.stop_session(session_task_mapping[room.name])
+        async def _shutdown_session():
+            if room.name not in session_task_mapping:
+                return
+            await self._avatartalk_api.stop_session(session_task_mapping[room.name])
 
-            job_ctx.add_shutdown_callback(_shutdown_session)
-        except (RuntimeError, KeyError):
-            if not room.isconnected():
-                raise AvatarTalkException(
-                    "local participant identity not found in token, and room is not connected"
-                ) from None
-            local_participant_identity = room.local_participant.identity
+        job_ctx.add_shutdown_callback(_shutdown_session)
 
+        local_participant_identity = job_ctx.local_participant_identity
         livekit_token = self.__generate_lk_token(
             livekit_api_key,
             livekit_api_secret,

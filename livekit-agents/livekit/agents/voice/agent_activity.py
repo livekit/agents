@@ -49,6 +49,7 @@ from .agent import (
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
+    TurnDetectionMode,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
 )
@@ -77,8 +78,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from .agent_session import AgentSession, TurnDetectionMode
-
+    from .agent_session import AgentSession
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
@@ -136,94 +136,105 @@ class AgentActivity(RecognitionHooks):
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
 
-        self._turn_detection_mode = (
-            self.turn_detection if isinstance(self.turn_detection, str) else None
-        )
-
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
+        self._mcp_tools: list[mcp.MCPTool] = []
 
-        if self._turn_detection_mode == "vad" and not self.vad:
+        self._on_enter_task: asyncio.Task | None = None
+        self._on_exit_task: asyncio.Task | None = None
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and not self.allow_interruptions
+        ):
+            raise ValueError(
+                "the RealtimeModel uses a server-side turn detection, "
+                "allow_interruptions cannot be False, disable turn_detection in "
+                "the RealtimeModel and use VAD on the AgentSession instead"
+            )
+
+        # validate turn detection mode and turn detector
+        turn_detection = (
+            cast(Optional[TurnDetectionMode], self._agent.turn_detection)
+            if is_given(self._agent.turn_detection)
+            else self._session.turn_detection
+        )
+        self._turn_detection = self._validate_turn_detection(turn_detection)
+
+        # speeches that audio playout finished but not done because of tool calls
+        self._background_speeches: set[SpeechHandle] = set()
+
+    def _validate_turn_detection(
+        self, turn_detection: TurnDetectionMode | None
+    ) -> TurnDetectionMode | None:
+        if turn_detection is not None and not isinstance(turn_detection, str):
+            # return directly if turn_detection is _TurnDetector
+            return turn_detection
+
+        mode = turn_detection if isinstance(turn_detection, str) else None
+        vad_model = self.vad
+        stt_model = self.stt
+        llm_model = self.llm
+
+        if mode == "vad" and not vad_model:
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
-            self._turn_detection_mode = None
+            mode = None
 
-        if self._turn_detection_mode == "stt" and not self.stt:
+        if mode == "stt" and not stt_model:
             logger.warning(
                 "turn_detection is set to 'stt', but no STT model is provided, "
                 "ignoring the turn_detection setting"
             )
-            self._turn_detection_mode = None
+            mode = None
 
-        if isinstance(self.llm, llm.RealtimeModel):
-            if self.llm.capabilities.turn_detection and not self.allow_interruptions:
-                raise ValueError(
-                    "the RealtimeModel uses a server-side turn detection, "
-                    "allow_interruptions cannot be False, disable turn_detection in "
-                    "the RealtimeModel and use VAD on the AgentSession instead"
-                )
-
-            if (
-                self._turn_detection_mode == "realtime_llm"
-                and not self.llm.capabilities.turn_detection
-            ):
+        if isinstance(llm_model, llm.RealtimeModel):
+            if mode == "realtime_llm" and not llm_model.capabilities.turn_detection:
                 logger.warning(
                     "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
                     "or the server-side turn detection is not supported/enabled, "
                     "ignoring the turn_detection setting"
                 )
-                self._turn_detection_mode = None
+                mode = None
 
-            if self._turn_detection_mode == "stt":
+            if mode == "stt":
                 logger.warning(
                     "turn_detection is set to 'stt', but the LLM is a RealtimeModel, "
                     "ignoring the turn_detection setting"
                 )
-                self._turn_detection_mode = None
+                mode = None
 
-            elif (
-                self._turn_detection_mode
-                and self._turn_detection_mode != "realtime_llm"
-                and self.llm.capabilities.turn_detection
-            ):
+            elif mode and mode != "realtime_llm" and llm_model.capabilities.turn_detection:
                 logger.warning(
-                    f"turn_detection is set to '{self._turn_detection_mode}', but the LLM "
+                    f"turn_detection is set to '{mode}', but the LLM "
                     "is a RealtimeModel and server-side turn detection enabled, "
                     "ignoring the turn_detection setting"
                 )
-                self._turn_detection_mode = None
+                mode = None
 
             # fallback to VAD if server side turn detection is disabled and VAD is available
-            if (
-                not self.llm.capabilities.turn_detection
-                and self.vad
-                and self._turn_detection_mode is None
-            ):
-                self._turn_detection_mode = "vad"
-        elif self._turn_detection_mode == "realtime_llm":
+            if not llm_model.capabilities.turn_detection and vad_model and mode is None:
+                mode = "vad"
+
+        elif mode == "realtime_llm":
             logger.warning(
                 "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel"
             )
-            self._turn_detection_mode = None
+            mode = None
 
         if (
-            not self.vad
-            and self.stt
-            and not self.stt.capabilities.streaming
-            and isinstance(self.llm, llm.LLM)
+            not vad_model
+            and stt_model
+            and not stt_model.capabilities.streaming
+            and isinstance(llm_model, llm.LLM)
             and self.allow_interruptions
-            and self._turn_detection_mode is None
+            and mode is None
         ):
             logger.warning(
                 "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
                 "for more responsive interruption handling."
             )
 
-        self._mcp_tools: list[mcp.MCPTool] = []
-
-        self._on_enter_task: asyncio.Task | None = None
-        self._on_exit_task: asyncio.Task | None = None
-
-        # speeches that audio playout finished but not done because of tool calls
-        self._background_speeches: set[SpeechHandle] = set()
+        return mode
 
     @property
     def scheduling_paused(self) -> bool:
@@ -236,15 +247,6 @@ class AgentActivity(RecognitionHooks):
     @property
     def agent(self) -> Agent:
         return self._agent
-
-    @property
-    def turn_detection(self) -> TurnDetectionMode | None:
-        return cast(
-            "TurnDetectionMode | None",
-            self._agent.turn_detection
-            if is_given(self._agent.turn_detection)
-            else self._session.turn_detection,
-        )
 
     @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
@@ -349,6 +351,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         if utils.is_given(tool_choice):
             self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
@@ -356,10 +359,22 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
+        if utils.is_given(turn_detection):
+            turn_detection = self._validate_turn_detection(
+                cast(Optional[TurnDetectionMode], turn_detection)
+            )
+
+            if (
+                self._turn_detection == "manual" or turn_detection == "manual"
+            ) and self._false_interruption_timer is not None:
+                self._false_interruption_timer.cancel()
+                self._false_interruption_timer = None
+
         if self._audio_recognition:
             self._audio_recognition.update_options(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                turn_detection=turn_detection,
             )
 
     def _create_speech_task(
@@ -567,10 +582,9 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
-            turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
-            turn_detection_mode=self._turn_detection_mode,
+            turn_detection=self._turn_detection,
         )
         self._audio_recognition.start()
 
@@ -1222,7 +1236,7 @@ class AgentActivity(RecognitionHooks):
             self._start_false_interruption_timer(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode in ("manual", "realtime_llm"):
+        if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
@@ -1243,7 +1257,10 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-        if ev.alternatives[0].text:
+        if ev.alternatives[0].text and self._turn_detection not in (
+            "manual",
+            "realtime_llm",
+        ):
             self._interrupt_by_audio_activity()
 
             if (
@@ -1254,7 +1271,7 @@ class AgentActivity(RecognitionHooks):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
-    def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
+    def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -1267,6 +1284,23 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+        # agent speech might not be interrupted if VAD failed and a final transcript is received
+        # we call _interrupt_by_audio_activity (idempotent) to pause the speech, if possible
+        # which will also be immediately interrupted
+
+        if self._audio_recognition and self._turn_detection not in (
+            "manual",
+            "realtime_llm",
+        ):
+            self._interrupt_by_audio_activity()
+
+            if (
+                speaking is False
+                and self._paused_speech
+                and (timeout := self._session.options.false_interruption_timeout) is not None
+            ):
+                # schedule a resume timer if interrupted after end_of_speech
+                self._start_false_interruption_timer(timeout)
 
         self._interrupt_paused_speech_task = asyncio.create_task(
             self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
@@ -1333,7 +1367,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             self.stt is not None
-            and self._turn_detection_mode != "manual"
+            and self._turn_detection != "manual"
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
@@ -1506,11 +1540,11 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.interrupt()
 
         metadata: Metadata | None = None
-        if isinstance(self.turn_detection, str):
-            metadata = Metadata(model_name="unknown", model_provider=self.turn_detection)
-        elif self.turn_detection is not None:
+        if isinstance(self._turn_detection, str):
+            metadata = Metadata(model_name="unknown", model_provider=self._turn_detection)
+        elif self._turn_detection is not None:
             metadata = Metadata(
-                model_name=self.turn_detection.model, model_provider=self.turn_detection.provider
+                model_name=self._turn_detection.model, model_provider=self._turn_detection.provider
             )
 
         eou_metrics = EOUMetrics(
@@ -1813,23 +1847,7 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        # before executing tools, make sure we generated all the text
-        # (this ensure everything is kept ordered)
-        if text_forward_task:
-            await speech_handle.wait_if_not_interrupted([text_forward_task])
-
-        generated_msg: llm.ChatMessage | None = None
-        if text_out and text_out.text:
-            # emit the assistant message to the SpeechHandle before calling the tools
-            generated_msg = llm.ChatMessage(
-                role="assistant",
-                content=[text_out.text],
-                id=llm_gen_data.id,
-                interrupted=False,
-                created_at=reply_started_at,
-            )
-            speech_handle._item_added([generated_msg])
-
+        # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
 
@@ -1874,16 +1892,14 @@ class AgentActivity(RecognitionHooks):
                     started_speaking_at - user_metrics["stopped_speaking_at"]
                 )
 
-        if generated_msg and assistant_metrics:
-            generated_msg.metrics = assistant_metrics
-
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        has_speech_message = False
 
         # add the tools messages that triggers this reply to the chat context
         if _previous_tools_messages:
-            for msg in _previous_tools_messages:
+            for tool_msg in _previous_tools_messages:
                 # reset the created_at to the reply start time
-                msg.created_at = reply_started_at
+                tool_msg.created_at = reply_started_at
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
 
@@ -1892,6 +1908,8 @@ class AgentActivity(RecognitionHooks):
             await text_tee.aclose()
 
             forwarded_text = text_out.text if text_out else ""
+            if forwarded_text:
+                has_speech_message = True
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -1904,16 +1922,18 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
-            copy_msg: llm.ChatMessage | None = None
-            if generated_msg:
-                copy_msg = generated_msg.model_copy()
-                copy_msg.content = [forwarded_text]
-                copy_msg.interrupted = True
-
-                if forwarded_text:
-                    self._agent._chat_ctx.insert(copy_msg)
-                    self._session._conversation_item_added(copy_msg)
-
+            if forwarded_text:
+                msg = chat_ctx.add_message(
+                    role="assistant",
+                    content=forwarded_text,
+                    id=llm_gen_data.id,
+                    interrupted=True,
+                    created_at=reply_started_at,
+                    metrics=assistant_metrics,
+                )
+                self._agent._chat_ctx.insert(msg)
+                self._session._conversation_item_added(msg)
+                speech_handle._item_added([msg])
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
@@ -1928,13 +1948,20 @@ class AgentActivity(RecognitionHooks):
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
             )
 
-        if generated_msg:
-            chat_ctx.insert(generated_msg)
-            self._agent._chat_ctx.insert(generated_msg)
-            self._session._conversation_item_added(generated_msg)
-            current_span.set_attribute(
-                trace_types.ATTR_RESPONSE_TEXT, generated_msg.text_content or ""
+        if text_out and text_out.text:
+            has_speech_message = True
+            msg = chat_ctx.add_message(
+                role="assistant",
+                content=text_out.text,
+                id=llm_gen_data.id,
+                interrupted=False,
+                created_at=reply_started_at,
+                metrics=assistant_metrics,
             )
+            self._agent._chat_ctx.insert(msg)
+            self._session._conversation_item_added(msg)
+            speech_handle._item_added([msg])
+            current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, text_out.text)
 
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
@@ -2015,7 +2042,7 @@ class AgentActivity(RecognitionHooks):
                         ),
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
                         # tool response generation
-                        _previous_user_metrics=user_metrics if not generated_msg else None,
+                        _previous_user_metrics=user_metrics if not has_speech_message else None,
                         _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
@@ -2027,8 +2054,8 @@ class AgentActivity(RecognitionHooks):
                 )
             elif len(new_fnc_outputs) > 0:
                 # add the tool calls and outputs to the chat context even no reply is generated
-                for msg in tool_messages:
-                    msg.created_at = reply_started_at
+                for tool_msg in tool_messages:
+                    tool_msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 

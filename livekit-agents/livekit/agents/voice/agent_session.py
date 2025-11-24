@@ -5,15 +5,17 @@ import copy
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Generic,
     Literal,
+    Optional,
     Protocol,
     TypeVar,
-    Union,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -38,7 +40,7 @@ from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent
 from .agent_activity import AgentActivity
-from .audio_recognition import _TurnDetector
+from .audio_recognition import TurnDetectionMode
 from .events import (
     AgentEvent,
     AgentState,
@@ -92,22 +94,6 @@ class AgentSessionOptions:
 
 Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
-
-TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
-"""
-The mode of turn detection to use.
-
-- "stt": use speech-to-text result to detect the end of the user's turn
-- "vad": use VAD to detect the start and end of the user's turn
-- "realtime_llm": use server-side turn detection provided by the realtime LLM
-- "manual": manually manage the turn detection
-- _TurnDetector: use the default mode with the provided turn detector
-
-(default) If not provided, automatically choose the best mode based on
-    available models (realtime_llm -> vad -> stt -> manual)
-If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
-"""
-
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
 
@@ -365,6 +351,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+        self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
         self._enable_recording: bool = False
@@ -523,6 +510,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 pass
 
             self._session_span = current_span = tracer.start_span("agent_session")
+            # we detach here to avoid context issues since tokens need to be detached
+            # in the same context as it was created
+            if self._session_ctx_token is not None:
+                otel_context.detach(self._session_ctx_token)
+                self._session_ctx_token = None
+            ctx = trace.set_span_in_context(current_span)
+            self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []
             self._room_io = None
@@ -848,6 +842,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the agent session.
@@ -855,16 +850,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             min_endpointing_delay (NotGivenOr[float], optional): The minimum endpointing delay.
             max_endpointing_delay (NotGivenOr[float], optional): The maximum endpointing delay.
+            turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
+                when the user has finished speaking. ``None`` reverts to automatic selection.
         """
         if is_given(min_endpointing_delay):
             self._opts.min_endpointing_delay = min_endpointing_delay
         if is_given(max_endpointing_delay):
             self._opts.max_endpointing_delay = max_endpointing_delay
 
+        if is_given(turn_detection):
+            self._turn_detection = cast(Optional[TurnDetectionMode], turn_detection)
+
         if self._activity is not None:
             self._activity.update_options(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                turn_detection=turn_detection,
             )
 
     def say(
@@ -908,6 +909,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
 
@@ -948,6 +950,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
+                chat_ctx=chat_ctx,
             )
             if run_state:
                 run_state._watch_handle(handle)
@@ -1054,18 +1057,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
+            handoff_item = AgentHandoff(
+                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                new_agent_id=self._activity.agent.id,
+            )
             if run_state:
                 run_state._agent_handoff(
+                    item=handoff_item,
                     old_agent=previous_activity_v.agent if previous_activity_v else None,
                     new_agent=self._activity.agent,
                 )
-
-            self._chat_ctx.insert(
-                AgentHandoff(
-                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                    new_agent_id=self._activity.agent.id,
-                )
-            )
+            self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()

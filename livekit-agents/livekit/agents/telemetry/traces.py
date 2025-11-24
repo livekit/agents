@@ -80,17 +80,22 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
-            log_data.log_record.attributes.update(  # type: ignore
-                {"logger.name": log_data.instrumentation_scope.name}
-            )
         else:
             log_data.log_record.attributes = self._metadata
+
+        log_data.log_record.attributes.update(  # type: ignore
+            {"logger.name": log_data.instrumentation_scope.name}
+        )
 
     def on_emit(self, log_data: LogData) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
+
+        log_data.log_record.attributes.update(  # type: ignore
+            {"logger.name": log_data.instrumentation_scope.name}
+        )
 
     def shutdown(self) -> None:
         pass
@@ -135,8 +140,13 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         }
     )
 
-    tracer_provider = TracerProvider(resource=resource)
-    set_tracer_provider(tracer_provider)
+    if not isinstance(tracer._tracer_provider, TracerProvider):
+        tracer_provider = TracerProvider(resource=resource)
+        set_tracer_provider(tracer_provider)
+    else:
+        # attach the processor to the existing tracer provider
+        tracer_provider = tracer._tracer_provider
+        tracer_provider.resource.merge(resource)
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
