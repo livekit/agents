@@ -9,7 +9,7 @@ import time
 import weakref
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Union
 
 import aiohttp
 import numpy as np
@@ -121,7 +121,7 @@ class BargeinDetector(BargeinDetectorBase):
             use_proxy=use_proxy if utils.is_given(use_proxy) else lk_base_url == DEFAULT_BASE_URL,
         )
         self._session = http_session
-        self._streams = weakref.WeakSet[BargeinStreamBase]()
+        self._streams = weakref.WeakSet[Union[BargeinHttpStream, BargeinWebSocketStream]]()
 
     @property
     def model(self) -> str:
@@ -143,6 +143,7 @@ class BargeinDetector(BargeinDetectorBase):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> BargeinHttpStream | BargeinWebSocketStream:
+        stream: BargeinHttpStream | BargeinWebSocketStream
         if self._opts.use_proxy:
             stream = BargeinWebSocketStream(bargein_detector=self, conn_options=conn_options)
         else:
@@ -153,8 +154,8 @@ class BargeinDetector(BargeinDetectorBase):
     def update_options(
         self,
         *,
-        threshold: float = NOT_GIVEN,
-        min_bargein_duration: float = NOT_GIVEN,
+        threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_bargein_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
@@ -176,8 +177,8 @@ class BargeinHttpStream(BargeinStreamBase):
     def update_options(
         self,
         *,
-        threshold: float = NOT_GIVEN,
-        min_bargein_duration: float = NOT_GIVEN,
+        threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_bargein_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
@@ -234,7 +235,7 @@ class BargeinHttpStream(BargeinStreamBase):
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
                     continue
 
-                if not agent_speech_started:
+                if not agent_speech_started or not isinstance(input_frame, rtc.AudioFrame):
                     continue
 
                 start_idx, samples_written = _write_to_inference_f32_data(
@@ -284,13 +285,14 @@ class BargeinHttpStream(BargeinStreamBase):
 
     async def predict(self, waveform: np.ndarray) -> bool:
         ctx = get_job_context()
+        created_at = perf_counter()
         request = {
             "jobId": ctx.job.id,
             "workerId": ctx.worker_id,
             "waveform": self._model.encode_waveform(waveform),
             "threshold": self._opts.threshold,
             "min_frames": self._opts.min_frames,
-            "created_at": perf_counter(),
+            "created_at": created_at,
         }
         agent_id = os.getenv("LIVEKIT_AGENT_ID")
         if agent_id:
@@ -307,7 +309,7 @@ class BargeinHttpStream(BargeinStreamBase):
             resp.raise_for_status()
             data = await resp.json()
             is_bargein: bool | None = data.get("is_bargein")
-            inference_duration = time.perf_counter() - request["created_at"]
+            inference_duration = time.perf_counter() - created_at
             if isinstance(is_bargein, bool):
                 logger.debug(
                     "bargein prediction",
@@ -333,8 +335,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
     def update_options(
         self,
         *,
-        threshold: float = NOT_GIVEN,
-        min_bargein_duration: float = NOT_GIVEN,
+        threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_bargein_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
@@ -390,7 +392,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
                     continue
 
-                if not agent_speech_started:
+                if not agent_speech_started or not isinstance(input_frame, rtc.AudioFrame):
                     continue
 
                 assert input_frame.sample_rate == self._model._opts.sample_rate, (
@@ -445,11 +447,12 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
+                created_at = data.get("created_at", 0.0)
                 if msg_type == "session.created":
                     pass
                 elif msg_type == "inference_done":
                     is_bargein_result = data.get("is_bargein", False)
-                    inference_duration = time.perf_counter() - data.get("created_at", 0.0)
+                    inference_duration = time.perf_counter() - created_at
                     logger.debug(
                         "inference done",
                         extra={
