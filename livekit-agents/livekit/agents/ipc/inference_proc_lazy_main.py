@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from multiprocessing import current_process
 
-from .supervised_proc import _dump_stack_traces, _dump_stack_traces_impl
-
 if current_process().name == "inference_proc":
     import signal
 
-    if hasattr(signal, "SIGUSR1"):
-        signal.signal(signal.SIGUSR1, _dump_stack_traces)
     # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
+
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
 
 import asyncio
 import math
@@ -25,7 +26,7 @@ from ..log import logger
 from ..utils import aio, hw, log_exceptions
 from . import proto
 from .channel import Message
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 
 
 @dataclass

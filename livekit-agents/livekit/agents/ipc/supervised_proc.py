@@ -14,7 +14,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from types import FrameType
 from typing import Any
 
 import psutil
@@ -46,115 +45,6 @@ def _mask_ctrl_c() -> Generator[None, None, None]:
             yield
         finally:
             signal.signal(signal.SIGINT, old)
-
-
-def _dump_stack_traces_impl() -> None:
-    """Implementation of stack trace dumping (callable directly or from signal handler)."""
-    import asyncio
-    import faulthandler
-    import tempfile
-    import traceback
-    from multiprocessing import current_process
-    from pathlib import Path
-
-    import psutil
-
-    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
-        return
-
-    dir: str = os.getenv("LK_DUMP_DIR", "/tmp")
-    Path(dir).mkdir(parents=True, exist_ok=True)
-
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        dir=dir,
-        delete=False,
-        prefix=f"livekit-agents-pid-{current_process().pid}-{time.time_ns()}-",
-        suffix=".stacktrace",
-    ) as f:
-        print(f"\n{'=' * 60}", file=f)
-        print(
-            f"Process {current_process().name} (pid {current_process().pid}) stack trace dump",
-            file=f,
-        )
-        print(f"{'=' * 60}\n", file=f)
-
-        faulthandler.dump_traceback(file=f, all_threads=True)
-        print("\n", file=f)
-
-        try:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None:
-                print("=" * 60, file=f)
-                print("ASYNCIO TASKS", file=f)
-                print("=" * 60, file=f)
-
-                tasks = asyncio.all_tasks(loop)
-                print(f"Total tasks: {len(tasks)}\n", file=f)
-
-                for i, task in enumerate(tasks, 1):
-                    print(f"\n--- Task {i}/{len(tasks)} ---", file=f)
-                    print(f"Name: {task.get_name()}", file=f)
-                    print(f"Done: {task.done()}", file=f)
-
-                    if not task.done():
-                        print(f"Cancelled: {task.cancelled()}", file=f)
-
-                        try:
-                            stack = task.get_stack()
-                            print(f"Stack frames: {len(stack)}", file=f)
-                            print("Stack trace:", file=f)
-                            for frame in stack:
-                                traceback.print_stack(frame, limit=1, file=f)
-                        except Exception as e:
-                            print(f"Could not get stack: {e}", file=f)
-
-                        try:
-                            coro = task.get_coro()
-                            print(f"Coroutine: {coro}", file=f)
-                            if hasattr(coro, "cr_frame") and coro.cr_frame:
-                                print("Coroutine frame:", file=f)
-                                traceback.print_stack(coro.cr_frame, file=f)
-                        except Exception as e:
-                            print(f"Could not get coroutine: {e}", file=f)
-                    else:
-                        try:
-                            exc = task.exception()
-                            if exc:
-                                print(f"Exception: {exc}", file=f)
-                                print("Exception traceback:", file=f)
-                                traceback.print_exception(type(exc), exc, exc.__traceback__, file=f)
-                        except Exception as e:
-                            print(f"Could not get exception: {e}", file=f)
-
-                    print("", file=f)
-            else:
-                print("No asyncio event loop running", file=f)
-        except Exception as e:
-            print(f"Error dumping asyncio tasks: {e}", file=f)
-            traceback.print_exc(file=f)
-
-        try:
-            process = psutil.Process()
-            memory_info = process.memory_info()
-            memory_mb = memory_info.rss / (1024 * 1024)
-
-            print("\n" + "=" * 60, file=f)
-            print("MEMORY USAGE", file=f)
-            print("=" * 60, file=f)
-            print(f"RSS: {memory_mb:.2f} MB", file=f)
-            print(f"VMS: {memory_info.vms / (1024 * 1024):.2f} MB", file=f)
-        except Exception:
-            pass
-
-
-def _dump_stack_traces(signum: int, _: FrameType | None) -> None:
-    """Signal handler wrapper for _dump_stack_traces_impl."""
-    _dump_stack_traces_impl()
 
 
 @dataclass
@@ -334,7 +224,7 @@ class SupervisedProc(ABC):
                 asyncio.TimeoutError("process initialization timed out")
             )
             await self._send_dump_signal()
-            self._send_kill_signal()
+            await self._send_kill_signal()
             raise
         except Exception as e:
             # should be channel.ChannelClosed most of the time (or init_res error)
@@ -361,7 +251,7 @@ class SupervisedProc(ABC):
                 extra=self.logging_extra(),
             )
             await self._send_dump_signal()
-            self._send_kill_signal()
+            await self._send_kill_signal()
 
         async with self._lock:
             if self._supervise_atask:
@@ -374,7 +264,7 @@ class SupervisedProc(ABC):
 
         self._closing = True
         await self._send_dump_signal()
-        self._send_kill_signal()
+        await self._send_kill_signal()
 
         async with self._lock:
             if self._supervise_atask:
@@ -398,9 +288,8 @@ class SupervisedProc(ABC):
         except Exception:
             pass
 
-    def _send_kill_signal(self) -> None:
+    async def _send_kill_signal(self) -> None:
         """forcefully kill the process"""
-        # keep it synchronous in case the loop is already blocked
         try:
             if not self._proc.is_alive():
                 return
@@ -415,7 +304,7 @@ class SupervisedProc(ABC):
                 try:
                     logger.info("sending SIGUSR1 signal to process", extra=self.logging_extra())
                     os.kill(self._proc.pid, signal.SIGUSR1)  # type: ignore[arg-type]
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
                 except Exception:
                     pass
             self._proc.kill()
@@ -509,7 +398,7 @@ class SupervisedProc(ABC):
             await pong_timeout
             logger.error("process is unresponsive, killing process", extra=self.logging_extra())
             await self._send_dump_signal()
-            self._send_kill_signal()
+            await self._send_kill_signal()
 
         tasks = [asyncio.create_task(_send_ping_co()), asyncio.create_task(_pong_timeout_co())]
 
@@ -542,7 +431,7 @@ class SupervisedProc(ABC):
                         },
                     )
                     await self._send_dump_signal()
-                    self._send_kill_signal()
+                    await self._send_kill_signal()
                 elif self._opts.memory_warn_mb > 0 and memory_mb > self._opts.memory_warn_mb:
                     logger.warning(
                         "process memory usage is high",

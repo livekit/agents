@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from multiprocessing import current_process
 
-from .supervised_proc import _dump_stack_traces
-
 if current_process().name == "job_proc":
     import signal
 
-    if hasattr(signal, "SIGUSR1"):
-        signal.signal(signal.SIGUSR1, _dump_stack_traces)
     # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
+
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
 
 import asyncio
 import contextlib
@@ -30,7 +31,7 @@ from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
     DumpStackTraceRequest,
     Exiting,
@@ -40,7 +41,6 @@ from .proto import (
     ShutdownRequest,
     StartJobRequest,
 )
-from .supervised_proc import _dump_stack_traces_impl
 
 
 @dataclass
