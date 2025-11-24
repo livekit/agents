@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
+from types import FrameType
 from typing import Any
 
 import psutil
@@ -103,7 +104,6 @@ def _dump_stack_traces_impl() -> None:
                     if not task.done():
                         print(f"Cancelled: {task.cancelled()}", file=f)
 
-                        # Get the task's current stack
                         try:
                             stack = task.get_stack()
                             print(f"Stack frames: {len(stack)}", file=f)
@@ -113,7 +113,6 @@ def _dump_stack_traces_impl() -> None:
                         except Exception as e:
                             print(f"Could not get stack: {e}", file=f)
 
-                        # Try to get the coroutine details
                         try:
                             coro = task.get_coro()
                             print(f"Coroutine: {coro}", file=f)
@@ -123,7 +122,6 @@ def _dump_stack_traces_impl() -> None:
                         except Exception as e:
                             print(f"Could not get coroutine: {e}", file=f)
                     else:
-                        # Task is done, check if it has an exception
                         try:
                             exc = task.exception()
                             if exc:
@@ -154,7 +152,7 @@ def _dump_stack_traces_impl() -> None:
             pass
 
 
-def _dump_stack_traces(signum: int, _) -> None:
+def _dump_stack_traces(signum: int, _: FrameType | None) -> None:
     """Signal handler wrapper for _dump_stack_traces_impl."""
     _dump_stack_traces_impl()
 
@@ -216,7 +214,7 @@ class SupervisedProc(ABC):
 
     @property
     def enabled_stack_trace_dump(self) -> bool:
-        return os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("1", "true", "yes")
+        return os.getenv("LK_DUMP_STACK_TRACES", "0").lower() not in ("0", "false", "no")
 
     @property
     def exitcode(self) -> int | None:
@@ -416,7 +414,7 @@ class SupervisedProc(ABC):
             if hasattr(signal, "SIGUSR1"):
                 try:
                     logger.info("sending SIGUSR1 signal to process", extra=self.logging_extra())
-                    os.kill(self._proc.pid, signal.SIGUSR1)
+                    os.kill(self._proc.pid, signal.SIGUSR1)  # type: ignore[arg-type]
                     time.sleep(0.5)
                 except Exception:
                     pass
