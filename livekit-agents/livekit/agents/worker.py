@@ -290,7 +290,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         os.environ["LIVEKIT_URL"] = self._ws_url
         os.environ["LIVEKIT_API_KEY"] = self._api_key
         os.environ["LIVEKIT_API_SECRET"] = self._api_secret
-        
+
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
 
         self._host = host
