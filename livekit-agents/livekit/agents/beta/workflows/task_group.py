@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import sys
 from collections import OrderedDict
@@ -11,7 +9,7 @@ if sys.version_info >= (3, 11):
 else:
     from typing_extensions import Self
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 from pydantic import Field
 
@@ -95,16 +93,16 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
-                summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(
-                    llm_v=self.session.llm, keep_last_turns=0
-                )
+                summarized_chat_ctx = await self.chat_ctx.copy(
+                    exclude_instructions=True
+                )._summarize(llm_v=self.session.llm, keep_last_turns=0)
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
 
         self.complete(TaskGroupResult(task_results=task_results))
 
-    def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
+    def _build_out_of_scope_tool(self, *, active_task_id: str) -> Optional[FunctionTool]:
         if not self._visited_tasks:
             return None
 

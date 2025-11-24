@@ -86,7 +86,6 @@ class TTS(tts.TTS):
             output_format: Output format of the audio.
             base_url: Base URL for the Smallest AI API.
             http_session: An existing aiohttp ClientSession to use.
-            tokenizer: The tokenizer to use for streaming.
         """
 
         super().__init__(

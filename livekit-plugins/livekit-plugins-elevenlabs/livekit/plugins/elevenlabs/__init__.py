@@ -17,18 +17,20 @@
 See https://docs.livekit.io/agents/integrations/tts/elevenlabs/ for more information.
 """
 
-from .models import TTSEncoding, TTSModels
-from .stt import STT
+from .models import STTRealtimeSampleRates, TTSEncoding, TTSModels
+from .stt import STT, SpeechStream
 from .tts import DEFAULT_VOICE_ID, TTS, Voice, VoiceSettings
 from .version import __version__
 
 __all__ = [
     "STT",
+    "SpeechStream",
     "TTS",
     "Voice",
     "VoiceSettings",
     "TTSEncoding",
     "TTSModels",
+    "STTRealtimeSampleRates",
     "DEFAULT_VOICE_ID",
     "__version__",
 ]

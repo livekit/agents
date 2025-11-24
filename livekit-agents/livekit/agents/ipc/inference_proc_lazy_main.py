@@ -5,9 +5,14 @@ from multiprocessing import current_process
 if current_process().name == "inference_proc":
     import signal
 
-    # ignore signals in the inference process (the parent process will handle them)
+    # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
+
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
 
 import asyncio
 import math
@@ -21,7 +26,7 @@ from ..log import logger
 from ..utils import aio, hw, log_exceptions
 from . import proto
 from .channel import Message
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 
 
 @dataclass
@@ -84,6 +89,9 @@ class _InferenceProc:
             if isinstance(msg, proto.ShutdownRequest):
                 await self._client.send(proto.Exiting(reason=msg.reason))
                 break
+
+            if isinstance(msg, proto.DumpStackTraceRequest):
+                _dump_stack_traces_impl()
 
     async def _handle_inference_request(self, msg: proto.InferenceRequest) -> None:
         loop = asyncio.get_running_loop()

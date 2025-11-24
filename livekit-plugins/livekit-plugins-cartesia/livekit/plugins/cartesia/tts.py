@@ -39,6 +39,15 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
+from .constants import (
+    API_AUTH_HEADER,
+    API_VERSION,
+    API_VERSION_HEADER,
+    API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
+    MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
+    REQUEST_ID_HEADER,
+    USER_AGENT,
+)
 from .log import logger
 from .models import (
     TTSDefaultVoiceId,
@@ -48,14 +57,6 @@ from .models import (
     TTSVoiceSpeed,
     _is_sonic_3,
 )
-from .version import __version__
-
-API_AUTH_HEADER = "X-API-Key"
-API_VERSION_HEADER = "Cartesia-Version"
-API_VERSION = "2025-04-16"
-API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "2024-11-13"
-MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "sonic-2-2025-03-07"
-USER_AGENT = f"LiveKit Agents Cartesia Plugin/{__version__}"
 
 
 @dataclass
@@ -72,6 +73,7 @@ class _TTSOptions:
     language: str
     base_url: str
     api_version: str
+    pronunciation_dict_id: str | None
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -94,6 +96,7 @@ class TTS(tts.TTS):
         volume: float | None = None,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
+        pronunciation_dict_id: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
@@ -115,9 +118,10 @@ class TTS(tts.TTS):
             volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
+            pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT).
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
@@ -150,9 +154,10 @@ class TTS(tts.TTS):
             base_url=base_url,
             word_timestamps=word_timestamps,
             api_version=api_version,
+            pronunciation_dict_id=pronunciation_dict_id,
         )
 
-        if speed or emotion or volume:
+        if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
         self._session = http_session
@@ -198,9 +203,15 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
         )
-        return await asyncio.wait_for(
+        ws = await asyncio.wait_for(
             session.ws_connect(url, headers={"User-Agent": USER_AGENT}), timeout
         )
+        c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
+        logger.debug(
+            "Established new Cartesia TTS WebSocket connection",
+            extra={"cartesia_request_id": c_request_id},
+        )
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -223,6 +234,7 @@ class TTS(tts.TTS):
         speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
         emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
+        pronunciation_dict_id: NotGivenOr[str] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -237,6 +249,7 @@ class TTS(tts.TTS):
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations.
         """
         if is_given(model):
             self._opts.model = model
@@ -251,10 +264,12 @@ class TTS(tts.TTS):
             self._opts.emotion = cast(list[Union[TTSVoiceEmotion, str]], emotion)
         if is_given(volume):
             self._opts.volume = volume
+        if is_given(pronunciation_dict_id):
+            self._opts.pronunciation_dict_id = pronunciation_dict_id
         if is_given(api_version):
             self._opts.api_version = api_version
 
-        if speed or emotion:
+        if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
     def synthesize(
@@ -296,6 +311,15 @@ class TTS(tts.TTS):
                     "model": self._opts.model,
                     "speed": self._opts.speed,
                     "emotion": self._opts.emotion,
+                },
+            )
+
+        if self._opts.pronunciation_dict_id and not _is_sonic_3(self._opts.model):
+            logger.warning(
+                "pronunciation_dict_id is only supported for sonic-3 models",
+                extra={
+                    "model": self._opts.model,
+                    "pronunciation_dict_id": self._opts.pronunciation_dict_id,
                 },
             )
 
@@ -371,12 +395,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 audio_emitter=output_emitter,
             )
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            context_id = utils.shortuuid()
+        async def _sentence_stream_task(
+            ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str
+        ) -> None:
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = context_id
+                token_pkt["context_id"] = cartesia_context_id
                 token_pkt["transcript"] = ev.token + " "
                 sent_tokens.append(ev.token + " ")
                 token_pkt["continue"] = True
@@ -385,7 +410,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 input_sent_event.set()
 
             end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = context_id
+            end_pkt["context_id"] = cartesia_context_id
             end_pkt["transcript"] = " "
             sent_tokens.append(" ")
             end_pkt["continue"] = False
@@ -401,7 +426,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sent_tokenizer_stream.push_text(data)
             sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str) -> None:
             current_segment_id: str | None = None
             await input_sent_event.wait()
             skip_aligning = False
@@ -412,6 +437,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    logger.error(
+                        "Cartesia connection closed unexpectedly. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
+                        extra={"cartesia_context_id": cartesia_context_id},
+                    )
                     raise APIStatusError(
                         "Cartesia connection closed unexpectedly", request_id=request_id
                     )
@@ -458,16 +487,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                             TimedString(text=word, start_time=start, end_time=end)
                         )
                 elif data.get("type") == "error":
+                    logger.error(
+                        "Cartesia returned error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
+                        extra={"cartesia_context_id": cartesia_context_id, "error": data},
+                    )
                     raise APIError(f"Cartesia returned error: {data}")
                 else:
                     logger.warning("unexpected message %s", data)
 
+        cartesia_context_id = utils.shortuuid()
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
+                    asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),
+                    asyncio.create_task(_recv_task(ws, cartesia_context_id)),
                 ]
 
                 try:
@@ -483,6 +517,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
+            logger.error(
+                "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
+                extra={"cartesia_context_id": cartesia_context_id, "error": e},
+            )
             raise APIConnectionError() from e
 
 
@@ -516,6 +554,9 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         },
         "language": opts.language,
     }
+
+    if opts.pronunciation_dict_id:
+        options["pronunciation_dict_id"] = opts.pronunciation_dict_id
 
     if opts.api_version > API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS and _is_sonic_3(
         opts.model

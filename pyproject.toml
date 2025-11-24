@@ -37,6 +37,7 @@ livekit-plugins-rime = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-simli = { workspace = true }
+livekit-plugins-avatartalk = { workspace = true }
 livekit-plugins-smallestai = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
