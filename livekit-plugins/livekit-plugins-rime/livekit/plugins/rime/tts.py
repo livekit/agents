@@ -222,7 +222,6 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
 
         try:
-            print(format)
             async with self._tts._ensure_session().post(
                 self._tts._base_url,
                 headers={
