@@ -33,7 +33,7 @@ The example consists of three parts:
 ## Run It Yourself
 
 ### Prerequisites
-You need a LiveKit configured SIP trunk to allow the agents to call each other.
+You need a LiveKit configured SIP trunk to allow the agents to receive inbound calls and make outbound calls. See the [LiveKit telephony integration guide](https://docs.livekit.io/agents/start/telephony/) for instructions on setting up SIP trunks.
 
 1.  **Verify the dataset**
     Edit `examples/bank-ivr/data.json` if you want to customize the mock banking data.
