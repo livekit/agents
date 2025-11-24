@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import aiofiles
 import aiohttp
 from google.protobuf.json_format import MessageToDict
+from numpy import isin
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
@@ -140,8 +141,13 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         }
     )
 
-    tracer_provider = TracerProvider(resource=resource)
-    set_tracer_provider(tracer_provider)
+    if not isinstance(tracer._tracer_provider, TracerProvider):
+        tracer_provider = TracerProvider(resource=resource)
+        set_tracer_provider(tracer_provider)
+    else:
+        # attach the processor to the existing tracer provider
+        tracer_provider = tracer._tracer_provider
+        tracer_provider.resource.merge(resource)
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",

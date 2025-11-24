@@ -5,6 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
@@ -350,7 +351,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
-        self._session_ctx_token: otel_context.Token | None = None
+        self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
         self._enable_recording: bool = False
