@@ -189,7 +189,7 @@ class ChunkedStream(tts.ChunkedStream):
             "text": self._input_text,
             "modelId": self._opts.model,
         }
-        format = "audio/pcm" 
+        format = "audio/pcm"
         if self._opts.model == "arcana":
             arcana_opts = self._opts.arcana_options
             assert arcana_opts is not None
@@ -230,7 +230,9 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=self._tts._total_timeout, sock_connect=self._conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=self._tts._total_timeout, sock_connect=self._conn_options.timeout
+                ),
             ) as resp:
                 resp.raise_for_status()
 
