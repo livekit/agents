@@ -9,6 +9,7 @@ if current_process().name == "job_proc":
 
     if hasattr(signal, "SIGUSR1"):
         signal.signal(signal.SIGUSR1, _dump_stack_traces)
+    # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
