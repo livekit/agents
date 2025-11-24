@@ -30,6 +30,25 @@ lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
 
 @dataclass
+class CharacterAlignment:
+    """Character-level alignment data for lip sync and visual timing.
+
+    This provides precise timing information for each character in the synthesized
+    speech, enabling accurate lip sync animation and visual effects.
+    Currently supported by ElevenLabs TTS.
+    """
+
+    characters: list[str]
+    """List of characters in the synthesized text"""
+    start_times_seconds: list[float]
+    """Start time of each character in seconds (relative to audio start)"""
+    end_times_seconds: list[float]
+    """End time of each character in seconds (relative to audio start)"""
+    segment_id: str = ""
+    """Segment ID this alignment belongs to"""
+
+
+@dataclass
 class SynthesizedAudio:
     frame: rtc.AudioFrame
     """Synthesized audio frame"""
@@ -41,6 +60,8 @@ class SynthesizedAudio:
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
     """Current segment of the synthesized audio (streaming only)"""
+    alignment: CharacterAlignment | None = None
+    """Character-level alignment data for lip sync (optional, only supported by some TTS providers)"""
 
 
 @dataclass
