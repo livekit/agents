@@ -176,6 +176,7 @@ class AgentActivity(RecognitionHooks):
             self._bargein_detection_enabled = False
 
         # this allows taking over audio interruption temporarily until barge-in is detected
+        # by default it is true unless turn_detection is manual or realtime_llm
         self._interruption_by_audio_activity_enabled: bool = self._turn_detection not in (
             "manual",
             "realtime_llm",

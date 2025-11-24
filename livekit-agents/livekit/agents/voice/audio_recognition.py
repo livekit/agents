@@ -246,7 +246,7 @@ class AudioRecognition:
             else min(ignore_until, self._ignore_until)
         )
 
-    def should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:
+    def _should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:
         """Test if the event should be held until the ignore_until timestamp."""
         if not self._barge_in_enabled:
             return False
@@ -260,9 +260,13 @@ class AudioRecognition:
         if not ev.alternatives:
             return True
         if (
-            # most vendors don't set them properly, in which case we just assume
+            # most vendors don't set timestamps properly, in which case we just assume
             # it is a valid event after the ignore_until timestamp
             is_given(self._input_started_at)
+            # check if the event should be held if
+            # 1. the stt input stream has started
+            # 2. the current event has a valid start and end time, relative to the input stream start time
+            # 3. the event is for audio sent before the ignore_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
             and ev.alternatives[0].start_time + ev.alternatives[0].end_time
@@ -479,7 +483,7 @@ class AudioRecognition:
         # - release only relevant events
         # - allow RECOGNITION_USAGE to pass through immediately
         if ev.type != stt.SpeechEventType.RECOGNITION_USAGE:
-            if self.should_hold_stt_event(ev):
+            if self._should_hold_stt_event(ev):
                 logger.debug(
                     "holding event until ignore_until expires",
                     extra={
