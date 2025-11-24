@@ -374,6 +374,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
+            ws_url=options.ws_url,
             api_key=options.api_key,
             api_secret=options.api_secret,
             host=options.host,
