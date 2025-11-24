@@ -84,25 +84,29 @@ class BargeinDetector(BargeinDetectorBase):
             else os.environ.get("LIVEKIT_BARGEIN_INFERENCE_URL", DEFAULT_BASE_URL)
         )
 
-        lk_api_key = (
-            api_key
-            if api_key
-            else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
-        )
-        if not lk_api_key:
-            raise ValueError(
-                "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+        lk_api_key: str = ""
+        lk_api_secret: str = ""
+        # use LiveKit credentials if using the default base URL (inference gateway)
+        if lk_base_url == DEFAULT_BASE_URL:
+            lk_api_key = (
+                api_key
+                if api_key
+                else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
             )
+            if not lk_api_key:
+                raise ValueError(
+                    "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+                )
 
-        lk_api_secret = (
-            api_secret
-            if api_secret
-            else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
-        )
-        if not lk_api_secret:
-            raise ValueError(
-                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+            lk_api_secret = (
+                api_secret
+                if api_secret
+                else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
             )
+            if not lk_api_secret:
+                raise ValueError(
+                    "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+                )
 
         self._opts = BargeinOptions(
             sample_rate=sample_rate,
@@ -150,15 +154,15 @@ class BargeinDetector(BargeinDetectorBase):
         self,
         *,
         threshold: float = NOT_GIVEN,
-        min_frames: int = NOT_GIVEN,
+        min_bargein_duration: float = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
-        if is_given(min_frames):
-            self._opts.min_frames = min_frames
+        if is_given(min_bargein_duration):
+            self._opts.min_frames = math.ceil(min_bargein_duration * 40)
 
         for stream in self._streams:
-            stream.update_options(threshold=threshold, min_frames=min_frames)
+            stream.update_options(threshold=threshold, min_bargein_duration=min_bargein_duration)
 
 
 class BargeinHttpStream(BargeinStreamBase):
@@ -173,12 +177,12 @@ class BargeinHttpStream(BargeinStreamBase):
         self,
         *,
         threshold: float = NOT_GIVEN,
-        min_frames: int = NOT_GIVEN,
+        min_bargein_duration: float = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
-        if is_given(min_frames):
-            self._opts.min_frames = min_frames
+        if is_given(min_bargein_duration):
+            self._opts.min_frames = math.ceil(min_bargein_duration * 40)
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
@@ -196,7 +200,7 @@ class BargeinHttpStream(BargeinStreamBase):
             accumulated_samples: int = 0
 
             async for input_frame in self._input_ch:
-                # start accumulating user speech
+                # start accumulating user speech when agent starts speaking
                 if isinstance(input_frame, BargeinStreamBase._AgentSpeechStartedSentinel):
                     agent_speech_started = True
                     overlap_speech_started = False
@@ -204,7 +208,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     start_idx = 0
                     continue
 
-                # end of agent speech, reset state
+                # reset state when agent stops speaking
                 if isinstance(input_frame, BargeinStreamBase._AgentSpeechEndedSentinel):
                     agent_speech_started = False
                     overlap_speech_started = False
@@ -213,15 +217,17 @@ class BargeinHttpStream(BargeinStreamBase):
                     continue
 
                 # start inferencing against the overlap speech
-                if agent_speech_started and isinstance(
-                    input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel
+                if (
+                    isinstance(input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel)
+                    and agent_speech_started
                 ):
-                    logger.debug("overlap speech started")
+                    logger.debug("overlap speech started, starting barge-in inference")
                     overlap_speech_started = True
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
-                    logger.debug("overlap speech ended")
+                    if overlap_speech_started:
+                        logger.debug("overlap speech ended, stopping barge-in inference")
                     overlap_speech_started = False
                     continue
 
@@ -268,8 +274,8 @@ class BargeinHttpStream(BargeinStreamBase):
                     overlap_speech_started = False
 
         tasks = [
-            asyncio.create_task(_send_task()),
             asyncio.create_task(_forward_data()),
+            asyncio.create_task(_send_task()),
         ]
         try:
             await asyncio.gather(*tasks)
@@ -277,7 +283,6 @@ class BargeinHttpStream(BargeinStreamBase):
             data_chan.close()
 
     async def predict(self, waveform: np.ndarray) -> bool:
-        started_at = perf_counter()
         ctx = get_job_context()
         request = {
             "jobId": ctx.job.id,
@@ -285,6 +290,7 @@ class BargeinHttpStream(BargeinStreamBase):
             "waveform": self._model.encode_waveform(waveform),
             "threshold": self._opts.threshold,
             "min_frames": self._opts.min_frames,
+            "created_at": perf_counter(),
         }
         agent_id = os.getenv("LIVEKIT_AGENT_ID")
         if agent_id:
@@ -301,12 +307,13 @@ class BargeinHttpStream(BargeinStreamBase):
             resp.raise_for_status()
             data = await resp.json()
             is_bargein: bool | None = data.get("is_bargein")
+            inference_duration = time.perf_counter() - request["created_at"]
             if isinstance(is_bargein, bool):
                 logger.debug(
                     "bargein prediction",
                     extra={
                         "is_bargein": is_bargein,
-                        "duration": perf_counter() - started_at,
+                        "duration": inference_duration,
                     },
                 )
                 return is_bargein
@@ -327,12 +334,12 @@ class BargeinWebSocketStream(BargeinStreamBase):
         self,
         *,
         threshold: float = NOT_GIVEN,
-        min_frames: int = NOT_GIVEN,
+        min_bargein_duration: float = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
-        if is_given(min_frames):
-            self._opts.min_frames = min_frames
+        if is_given(min_bargein_duration):
+            self._opts.min_frames = math.ceil(min_bargein_duration * 40)
 
     async def _run(self) -> None:
         closing_ws = False
@@ -349,7 +356,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
             accumulated_samples: int = 0
 
             async for input_frame in self._input_ch:
-                # start accumulating user speech
+                # start accumulating user speech when agent starts speaking
                 if isinstance(input_frame, BargeinStreamBase._AgentSpeechStartedSentinel):
                     agent_speech_started = True
                     overlap_speech_started = False
@@ -357,7 +364,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     start_idx = 0
                     continue
 
-                # end of agent speech, reset state
+                # reset state when agent stops speaking
                 if isinstance(input_frame, BargeinStreamBase._AgentSpeechEndedSentinel):
                     agent_speech_started = False
                     overlap_speech_started = False
@@ -366,15 +373,17 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     continue
 
                 # start inferencing against the overlap speech
-                if agent_speech_started and isinstance(
-                    input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel
+                if (
+                    isinstance(input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel)
+                    and agent_speech_started
                 ):
-                    logger.debug("overlap speech started")
+                    logger.debug("overlap speech started, starting barge-in inference")
                     overlap_speech_started = True
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
-                    logger.debug("overlap speech ended")
+                    if overlap_speech_started:
+                        logger.debug("overlap speech ended, stopping barge-in inference")
                     overlap_speech_started = False
                     continue
 
@@ -403,7 +412,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         "num_channels": 1,
                         "threshold": self._model._opts.threshold,
                         "min_frames": self._model._opts.min_frames,
-                        "created_at": time.time(),
+                        "created_at": perf_counter(),
                     }
                     await ws.send_str(json.dumps(msg))
                     accumulated_samples = 0
@@ -440,11 +449,12 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     pass
                 elif msg_type == "inference_done":
                     is_bargein_result = data.get("is_bargein", False)
+                    inference_duration = time.perf_counter() - data.get("created_at", 0.0)
                     logger.debug(
                         "inference done",
                         extra={
                             "is_bargein": is_bargein_result,
-                            "inference_duration": time.time() - data.get("created_at", 0.0),
+                            "inference_duration": inference_duration,
                         },
                     )
                     self._event_ch.send_nowait(
@@ -452,7 +462,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             type=BargeinEventType.INFERENCE_DONE,
                             timestamp=time.time(),
                             is_bargein=is_bargein_result,
-                            inference_duration=data.get("delta", 0.0),
+                            inference_duration=inference_duration,
                         )
                     )
                 elif msg_type == "bargein_detected":

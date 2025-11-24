@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
-from livekit.agents import bargein
 
-from .. import inference, llm, stt, tokenize, tts, utils, vad
+from .. import bargein, inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
