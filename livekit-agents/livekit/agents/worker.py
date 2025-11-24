@@ -286,6 +286,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
 
         self._host = host
@@ -612,6 +613,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise ValueError(
                     "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
                 )
+
+            os.environ["LIVEKIT_URL"] = self._ws_url
+            os.environ["LIVEKIT_API_KEY"] = self._api_key
+            os.environ["LIVEKIT_API_SECRET"] = self._api_secret
 
             logger.info(
                 "starting worker",
