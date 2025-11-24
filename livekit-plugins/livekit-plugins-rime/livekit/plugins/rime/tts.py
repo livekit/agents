@@ -230,7 +230,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(total=self._tts._total_timeout, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
 
