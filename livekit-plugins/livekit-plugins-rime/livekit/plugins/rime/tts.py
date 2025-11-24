@@ -189,7 +189,7 @@ class ChunkedStream(tts.ChunkedStream):
             "text": self._input_text,
             "modelId": self._opts.model,
         }
-        format = "audio/pcm"  # Changed from "audio/mp3" to "audio/pcm"
+        format = "audio/pcm" 
         if self._opts.model == "arcana":
             arcana_opts = self._opts.arcana_options
             assert arcana_opts is not None
