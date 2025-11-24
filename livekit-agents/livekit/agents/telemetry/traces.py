@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 import aiofiles
 import aiohttp
 from google.protobuf.json_format import MessageToDict
-from numpy import isin
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
