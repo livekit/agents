@@ -190,7 +190,7 @@ class ServerOptions:
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
     """Maximum number of times to retry connecting to LiveKit."""
-    ws_url: str = "ws://localhost:7880"
+    ws_url: str | None = None
     """URL to connect to the LiveKit server.
 
     By default it uses ``LIVEKIT_URL`` from environment"""
