@@ -783,8 +783,13 @@ class RichLoggingHandler(logging.Handler):
         log_time = datetime.datetime.fromtimestamp(record.created)
 
         log_time = log_time or self.c.console.get_datetime()
-        time_format = time_format or "%X"
-        log_time_display = Text(log_time.strftime(time_format))
+
+        log_time_display = (
+            Text(log_time.strftime(time_format))
+            if time_format
+            else Text(log_time.strftime("%H:%M:%S.%f")[:-3])
+        )
+
         if log_time_display == self._last_time:
             row.append(Text(" " * len(log_time_display)))
         else:
