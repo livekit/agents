@@ -47,10 +47,7 @@ app = FastAPI(
 class BargeinRequest(BaseModel):
     """Request model for bargein detection."""
 
-    jobId: str = Field(..., description="Job ID from LiveKit")
-    workerId: str = Field(..., description="Worker ID from LiveKit")
     waveform: str = Field(..., description="Base64-encoded audio waveform (float32)")
-    agentId: str | None = Field(None, description="Optional agent ID")
     threshold: float = Field(0.95, description="Threshold for bargein detection")
     min_frames: int = Field(2, description="Minimum number of frames for bargein detection")
     created_at: float = Field(..., description="Timestamp of the audio waveform")
@@ -144,9 +141,6 @@ async def detect_bargein(request: BargeinRequest) -> BargeinResponse:
     Returns:
         BargeinResponse with detection result
     """
-    logger.info(
-        f"Received bargein detection request for job={request.jobId}, worker={request.workerId}"
-    )
 
     if onnx_session is None:
         raise HTTPException(
