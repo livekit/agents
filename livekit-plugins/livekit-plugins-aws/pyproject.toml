@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.3.4",
+    "livekit-agents>=1.3.5",
     "aioboto3>=14.1.0",
     "amazon-transcribe>=0.6.4",
 ]

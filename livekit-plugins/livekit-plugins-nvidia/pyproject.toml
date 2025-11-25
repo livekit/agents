@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.3.4",
+    "livekit-agents>=1.3.5",
     "nvidia-riva-client",
 ]
 
