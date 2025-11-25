@@ -697,15 +697,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         else:
                             self._proc_pool.set_target_idle_processes(default_num_idle_processes)
 
-            tasks = []
             self._load_task = asyncio.create_task(_load_task(), name="load_task")
-            tasks.append(self._load_task)
 
             if not unregistered:
                 self._conn_task = asyncio.create_task(
                     self._connection_task(), name="worker_conn_task"
                 )
-                tasks.append(self._conn_task)
 
             self.emit("worker_started")
 
@@ -786,8 +783,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             async def _join_jobs() -> None:
                 for proc in self._proc_pool.processes:
-                    if proc.running_job:
-                        await proc.join()
+                    if not proc.running_job:
+                        await proc.aclose()
+
+                    await proc.join()
 
             if timeout:
                 await asyncio.wait_for(
