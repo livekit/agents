@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.3.4"]
+dependencies = ["livekit-agents[codecs]>=1.3.5"]
 
 
 [tool.mypy]

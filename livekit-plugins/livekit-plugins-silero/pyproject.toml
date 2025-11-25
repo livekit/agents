@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.3.4",
+    "livekit-agents>=1.3.5",
     # onnxruntime 1.23.2 is missing wheel on MacOS
     "onnxruntime>=1.18,<=1.23.1",
     "numpy>=1.26",
