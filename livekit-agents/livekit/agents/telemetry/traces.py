@@ -157,8 +157,10 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    logger_provider = LoggerProvider()
-    set_logger_provider(logger_provider)
+    logger_provider = get_logger_provider()
+    if not isinstance(logger_provider, LoggerProvider):
+        logger_provider = LoggerProvider()
+        set_logger_provider(logger_provider)
 
     log_exporter = OTLPLogExporter(
         endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
@@ -391,3 +393,16 @@ async def _upload_session_report(
         resp.raise_for_status()
 
     logger.debug("finished uploading")
+
+
+def _shutdown_telemetry() -> None:
+    if isinstance(tracer_provider := tracer._tracer_provider, TracerProvider):
+        logger.debug("shutting down telemetry tracer provider")
+        tracer_provider.force_flush()
+        tracer_provider.shutdown()
+
+    if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
+        # force_flush will cause deadlock when new logs from OTLPLogExporter are emitted
+        # logger_provider.force_flush()
+        logger.debug("shutting down telemetry logger provider")
+        logger_provider.shutdown()  # type: ignore
