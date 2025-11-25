@@ -15,7 +15,7 @@ from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
-from .. import bargein, llm, stt, tts, utils, vad
+from .. import inference, llm, stt, tts, utils, vad
 from ..llm.tool_context import (
     StopResponse,
     ToolFlag,
@@ -1280,7 +1280,7 @@ class AgentActivity(RecognitionHooks):
         if ev.speech_duration >= self._session.options.min_interruption_duration:
             self._interrupt_by_audio_activity()
 
-    def on_bargein_detected(self, ev: bargein.BargeinEvent) -> None:
+    def on_bargein_detected(self, ev: inference.BargeinEvent) -> None:
         logger.debug("bargein detected", extra={"timestamp": ev.timestamp})
         # restore interruption by audio activity
         self._interruption_by_audio_activity_enabled = self._turn_detection not in (
@@ -1291,7 +1291,7 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition:
             self._audio_recognition.end_barge_in_monitoring(ev.timestamp)
 
-    def on_bargein_inference_done(self, ev: bargein.BargeinEvent) -> None:
+    def on_bargein_inference_done(self, ev: inference.BargeinEvent) -> None:
         self._interruption_by_audio_activity_enabled = False
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
@@ -2761,7 +2761,7 @@ class AgentActivity(RecognitionHooks):
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
-    def bargein_detector(self) -> bargein.BargeinDetector | None:
+    def bargein_detector(self) -> inference.BargeinDetector | None:
         return (
             self._agent._bargein_detector
             if is_given(self._agent._bargein_detector)
