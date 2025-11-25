@@ -216,9 +216,9 @@ def _dump_stack_traces_impl() -> None:
                         try:
                             coro = task.get_coro()
                             print(f"Coroutine: {coro}", file=f)
-                            if hasattr(coro, "cr_frame") and coro.cr_frame:
+                            if hasattr(coro, "cr_frame") and coro.cr_frame:  # type: ignore
                                 print("Coroutine frame:", file=f)
-                                traceback.print_stack(coro.cr_frame, file=f)
+                                traceback.print_stack(coro.cr_frame, file=f)  # type: ignore
                         except Exception as e:
                             print(f"Could not get coroutine: {e}", file=f)
                     else:
