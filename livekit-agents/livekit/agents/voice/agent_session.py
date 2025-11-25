@@ -24,7 +24,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from .. import bargein, cli, inference, llm, stt, tts, utils, vad
+from .. import cli, inference, llm, stt, tts, utils, vad
 from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
@@ -139,7 +139,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        bargein_detector: NotGivenOr[bargein.BargeinDetector] = NOT_GIVEN,
+        bargein_detector: NotGivenOr[inference.BargeinDetector] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
@@ -192,7 +192,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 automatically falls back if the necessary model is missing.
             stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
-            bargein_detector (bargein.BargeinDetector, optional): Barge-in detector
+            bargein_detector (inference.BargeinDetector, optional): Barge-in detector
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
@@ -1262,7 +1262,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._vad
 
     @property
-    def bargein_detector(self) -> bargein.BargeinDetector | None:
+    def bargein_detector(self) -> inference.BargeinDetector | None:
         return self._bargein_detector
 
     # -- User changed input/output streams/sinks --

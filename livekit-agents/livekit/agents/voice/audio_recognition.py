@@ -13,8 +13,7 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from .. import bargein, llm, stt, utils, vad
-from ..bargein import BargeinDetector, BargeinStream
+from .. import inference, llm, stt, utils, vad
 from ..log import logger
 from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
@@ -84,8 +83,8 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 
 class RecognitionHooks(Protocol):
-    def on_bargein_detected(self, ev: bargein.BargeinEvent) -> None: ...
-    def on_bargein_inference_done(self, ev: bargein.BargeinEvent) -> None: ...
+    def on_bargein_detected(self, ev: inference.BargeinEvent) -> None: ...
+    def on_bargein_inference_done(self, ev: inference.BargeinEvent) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -105,7 +104,7 @@ class AudioRecognition:
         hooks: RecognitionHooks,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
-        bargein_detector: BargeinDetector | None,
+        bargein_detector: inference.BargeinDetector | None,
         turn_detection: TurnDetectionMode | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
@@ -153,10 +152,10 @@ class AudioRecognition:
         self._bargein_ch: (
             aio.Chan[
                 rtc.AudioFrame
-                | BargeinStream._AgentSpeechStartedSentinel
-                | BargeinStream._AgentSpeechEndedSentinel
-                | BargeinStream._OverlapSpeechStartedSentinel
-                | BargeinStream._OverlapSpeechEndedSentinel
+                | inference.BargeinStreamBase._AgentSpeechStartedSentinel
+                | inference.BargeinStreamBase._AgentSpeechEndedSentinel
+                | inference.BargeinStreamBase._OverlapSpeechStartedSentinel
+                | inference.BargeinStreamBase._OverlapSpeechEndedSentinel
             ]
             | None
         ) = None
@@ -217,20 +216,22 @@ class AudioRecognition:
         if not self._barge_in_enabled or not self._bargein_ch:
             return
         self._agent_speaking = True
-        self._bargein_ch.send_nowait(BargeinStream._AgentSpeechStartedSentinel())
+        self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechStartedSentinel())
 
     def start_barge_in_inference(self) -> None:
         """Start barge-in inference when agent is speaking and overlap speech starts."""
         if not self._barge_in_enabled or not self._bargein_ch:
             return
         if self._agent_speaking:
-            self._bargein_ch.send_nowait(BargeinStream._OverlapSpeechStartedSentinel())
+            self._bargein_ch.send_nowait(
+                inference.BargeinStreamBase._OverlapSpeechStartedSentinel()
+            )
 
     def end_barge_in_inference(self) -> None:
         """End barge-in inference when agent is speaking and overlap speech ends."""
         if not self._barge_in_enabled or not self._bargein_ch:
             return
-        self._bargein_ch.send_nowait(BargeinStream._OverlapSpeechEndedSentinel())
+        self._bargein_ch.send_nowait(inference.BargeinStreamBase._OverlapSpeechEndedSentinel())
 
     def end_barge_in_monitoring(self, ignore_until: float) -> None:
         """End barge-in monitoring and ignore transcript until the given timestamp (when agent stops speaking or barge-in is detected)."""
@@ -344,16 +345,16 @@ class AudioRecognition:
             self._vad_atask = None
             self._vad_ch = None
 
-    def update_bargein_detector(self, bargein_detector: BargeinDetector | None) -> None:
+    def update_bargein_detector(self, bargein_detector: inference.BargeinDetector | None) -> None:
         self._bargein_detector = bargein_detector
         if bargein_detector:
             self._bargein_ch = aio.Chan[
                 Union[
                     rtc.AudioFrame,
-                    BargeinStream._AgentSpeechStartedSentinel,
-                    BargeinStream._AgentSpeechEndedSentinel,
-                    BargeinStream._OverlapSpeechStartedSentinel,
-                    BargeinStream._OverlapSpeechEndedSentinel,
+                    inference.BargeinStreamBase._AgentSpeechStartedSentinel,
+                    inference.BargeinStreamBase._AgentSpeechEndedSentinel,
+                    inference.BargeinStreamBase._OverlapSpeechStartedSentinel,
+                    inference.BargeinStreamBase._OverlapSpeechEndedSentinel,
                 ]
             ]()
             self._bargein_atask = asyncio.create_task(
@@ -513,6 +514,8 @@ class AudioRecognition:
                 }:
                     await self._on_stt_event(prev_event)
 
+                # no return here to allow the new event to be processed normally
+
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -669,10 +672,10 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
-    async def _on_bargein_event(self, ev: bargein.BargeinEvent) -> None:
-        if ev.type == bargein.BargeinEventType.BARGEIN:
+    async def _on_bargein_event(self, ev: inference.BargeinEvent) -> None:
+        if ev.type == inference.BargeinEventType.BARGEIN:
             self._hooks.on_bargein_detected(ev)
-        elif ev.type == bargein.BargeinEventType.INFERENCE_DONE:
+        elif ev.type == inference.BargeinEventType.INFERENCE_DONE:
             self._hooks.on_bargein_inference_done(ev)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
@@ -868,13 +871,13 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _bargein_task(
         self,
-        bargein_detector: BargeinDetector,
+        bargein_detector: inference.BargeinDetector,
         audio_input: AsyncIterable[
             rtc.AudioFrame
-            | BargeinStream._AgentSpeechStartedSentinel
-            | BargeinStream._AgentSpeechEndedSentinel
-            | BargeinStream._OverlapSpeechStartedSentinel
-            | BargeinStream._OverlapSpeechEndedSentinel
+            | inference.BargeinStreamBase._AgentSpeechStartedSentinel
+            | inference.BargeinStreamBase._AgentSpeechEndedSentinel
+            | inference.BargeinStreamBase._OverlapSpeechStartedSentinel
+            | inference.BargeinStreamBase._OverlapSpeechEndedSentinel
         ],
         task: asyncio.Task[None] | None,
     ) -> None:

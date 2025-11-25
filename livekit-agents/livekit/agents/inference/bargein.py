@@ -7,33 +7,23 @@ import math
 import os
 import time
 import weakref
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from enum import Enum, unique
 from time import perf_counter_ns
-from typing import Any, Union
+from typing import Any, Literal, Union
 
 import aiohttp
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from .. import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    APIStatusError,
-    NotGivenOr,
-    utils,
-)
-from ..bargein import (
-    BargeinDetector as BargeinDetectorBase,
-    BargeinEvent,
-    BargeinEventType,
-    BargeinStream as BargeinStreamBase,
-)
+from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
-from ..utils import aio, is_given
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import aio, http_context, is_given, log_exceptions, shortuuid
 from ._utils import create_access_token
 
 SAMPLE_RATE = 16000
@@ -43,6 +33,40 @@ MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
 STEP_SIZE = int(0.1 * 16000)  # 0.1 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
+
+
+@unique
+class BargeinEventType(str, Enum):
+    INFERENCE_DONE = "inference_done"
+    BARGEIN = "bargein"
+
+
+@dataclass
+class BargeinEvent:
+    """
+    Represents an event detected by the Bargein detection model.
+    """
+
+    type: BargeinEventType
+    """Type of the bargein event (e.g., inference done, bargein)."""
+
+    timestamp: float
+    """Timestamp (in seconds) when the event was fired."""
+
+    is_bargein: bool = False
+    """Whether bargein is detected (only for `INFERENCE_DONE` events)."""
+
+    inference_duration: float = 0.0
+    """Time taken to perform the inference, in seconds."""
+
+
+class BargeinError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["bargein_error"] = "bargein_error"
+    timestamp: float
+    label: str
+    error: Exception = Field(..., exclude=True)
+    recoverable: bool
 
 
 @dataclass
@@ -59,7 +83,9 @@ class BargeinOptions:
     use_proxy: bool
 
 
-class BargeinDetector(BargeinDetectorBase):
+class BargeinDetector(
+    rtc.EventEmitter[Literal["bargein_detected", "error"]],
+):
     def __init__(
         self,
         *,
@@ -75,8 +101,7 @@ class BargeinDetector(BargeinDetectorBase):
         http_session: aiohttp.ClientSession | None = None,
         use_proxy: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        super().__init__(sample_rate=sample_rate)
-
+        super().__init__()
         lk_base_url = (
             base_url
             if base_url
@@ -117,8 +142,10 @@ class BargeinDetector(BargeinDetectorBase):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            use_proxy=use_proxy if utils.is_given(use_proxy) else lk_base_url == DEFAULT_BASE_URL,
+            use_proxy=use_proxy if is_given(use_proxy) else lk_base_url == DEFAULT_BASE_URL,
         )
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._sample_rate = sample_rate
         self._session = http_session
         self._streams = weakref.WeakSet[Union[BargeinHttpStream, BargeinWebSocketStream]]()
 
@@ -130,13 +157,32 @@ class BargeinDetector(BargeinDetectorBase):
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def label(self) -> str:
+        return self._label
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self.emit(
+            "error",
+            BargeinError(
+                timestamp=time.time(),
+                label=self._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
     @staticmethod
     def encode_waveform(array: np.ndarray) -> str:
         return base64.b64encode(array.tobytes()).decode("utf-8")
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            self._session = http_context.http_session()
         return self._session
 
     def stream(
@@ -165,6 +211,193 @@ class BargeinDetector(BargeinDetectorBase):
             stream.update_options(threshold=threshold, min_bargein_duration=min_bargein_duration)
 
 
+class BargeinStreamBase(ABC):
+    class _AgentSpeechStartedSentinel:
+        pass
+
+    class _AgentSpeechEndedSentinel:
+        pass
+
+    class _OverlapSpeechStartedSentinel:
+        pass
+
+    class _OverlapSpeechEndedSentinel:
+        pass
+
+    class _FlushSentinel:
+        pass
+
+    def __init__(self, bargein_detector: BargeinDetector, conn_options: APIConnectOptions) -> None:
+        self._bargein_detector = bargein_detector
+        self._last_activity_time = time.perf_counter()
+        self._input_ch = aio.Chan[
+            Union[
+                rtc.AudioFrame,
+                BargeinStreamBase._AgentSpeechStartedSentinel,
+                BargeinStreamBase._AgentSpeechEndedSentinel,
+                BargeinStreamBase._OverlapSpeechStartedSentinel,
+                BargeinStreamBase._OverlapSpeechEndedSentinel,
+                BargeinStreamBase._FlushSentinel,
+            ]
+        ]()
+        self._event_ch = aio.Chan[BargeinEvent]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._num_retries = 0
+        self._conn_options = conn_options
+        self._sample_rate = bargein_detector._sample_rate
+        self._resampler: rtc.AudioResampler | None = None
+
+    @abstractmethod
+    async def _run(self) -> None: ...
+
+    @log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        max_retries = self._conn_options.max_retry
+
+        while self._num_retries <= max_retries:
+            try:
+                return await self._run()
+            except APIError as e:
+                if max_retries == 0:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif self._num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f"failed to detect bargein after {self._num_retries} attempts",
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
+
+                    retry_interval = self._conn_options._interval_for_retry(self._num_retries)
+                    logger.warning(
+                        f"failed to detect bargein, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={
+                            "bargein_detector": self._bargein_detector._label,
+                            "attempt": self._num_retries,
+                        },
+                    )
+                    await asyncio.sleep(retry_interval)
+
+                self._num_retries += 1
+
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self._bargein_detector.emit(
+            "error",
+            BargeinError(
+                timestamp=time.time(),
+                label=self._bargein_detector._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    def start_agent_speech(self) -> None:
+        """Mark the start of the agent's speech"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._AgentSpeechStartedSentinel())
+
+    def end_agent_speech(self) -> None:
+        """Mark the end of the agent's speech"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._AgentSpeechEndedSentinel())
+
+    def start_overlap_speech(self) -> None:
+        """Mark the start of the overlap speech"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._OverlapSpeechStartedSentinel())
+
+    def end_overlap_speech(self) -> None:
+        """Mark the end of the overlap speech"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._OverlapSpeechEndedSentinel())
+
+    def push_frame(
+        self,
+        frame: rtc.AudioFrame
+        | BargeinStreamBase._AgentSpeechStartedSentinel
+        | BargeinStreamBase._AgentSpeechEndedSentinel
+        | BargeinStreamBase._OverlapSpeechStartedSentinel
+        | BargeinStreamBase._OverlapSpeechEndedSentinel,
+    ) -> None:
+        """Push some audio frame to be analyzed"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+
+        if not isinstance(frame, rtc.AudioFrame):
+            self._input_ch.send_nowait(frame)
+            return
+
+        if self._sample_rate != frame.sample_rate:
+            if not self._resampler:
+                self._resampler = rtc.AudioResampler(
+                    input_rate=frame.sample_rate,
+                    output_rate=self._sample_rate,
+                    num_channels=1,
+                    quality=rtc.AudioResamplerQuality.LOW,
+                )
+            elif self._resampler._input_rate != frame.sample_rate:
+                raise ValueError("the sample rate of the input frames must be consistent")
+
+        if self._resampler:
+            frames = self._resampler.push(frame)
+            for frame in frames:
+                self._input_ch.send_nowait(frame)
+        else:
+            self._input_ch.send_nowait(frame)
+
+    def flush(self) -> None:
+        """Mark the end of the current segment"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input, no more audio will be pushed"""
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close the stream immediately"""
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> BargeinEvent:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -> AsyncIterator[BargeinEvent]:
+        return self
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+
 class BargeinHttpStream(BargeinStreamBase):
     def __init__(
         self, *, bargein_detector: BargeinDetector, conn_options: APIConnectOptions
@@ -184,12 +417,12 @@ class BargeinHttpStream(BargeinStreamBase):
         if is_given(min_bargein_duration):
             self._opts.min_frames = math.ceil(min_bargein_duration * 40)
 
-    @utils.log_exceptions(logger=logger)
+    @log_exceptions(logger=logger)
     async def _run(self) -> None:
         data_chan = aio.Chan[np.ndarray]()
         overlap_speech_started: bool = False
 
-        @utils.log_exceptions(logger=logger)
+        @log_exceptions(logger=logger)
         async def _forward_data() -> None:
             nonlocal data_chan
             nonlocal overlap_speech_started
@@ -248,7 +481,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     data_chan.send_nowait(inference_f32_data[:start_idx])
                     accumulated_samples = 0
 
-        @utils.log_exceptions(logger=logger)
+        @log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal overlap_speech_started
             async for data in data_chan:
@@ -290,7 +523,7 @@ class BargeinHttpStream(BargeinStreamBase):
             "min_frames": self._opts.min_frames,
             "created_at": created_at,
         }
-        async with utils.http_context.http_session().post(
+        async with http_context.http_session().post(
             url=f"{self._opts.base_url}/bargein",
             headers={
                 "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
@@ -327,7 +560,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         self._model: BargeinDetector = bargein_detector
         self._opts = bargein_detector._opts
         self._session = bargein_detector._ensure_session()
-        self._request_id = str(utils.shortuuid("bargein_request_"))
+        self._request_id = str(shortuuid("bargein_request_"))
 
     def update_options(
         self,
@@ -344,7 +577,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         closing_ws = False
         overlap_speech_started: bool = False
 
-        @utils.log_exceptions(logger=logger)
+        @log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             nonlocal overlap_speech_started
@@ -422,7 +655,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
             }
             await ws.send_str(json.dumps(finalize_msg))
 
-        @utils.log_exceptions(logger=logger)
+        @log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             nonlocal overlap_speech_started
@@ -496,7 +729,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await aio.gracefully_cancel(*tasks)
             finally:
                 if ws is not None:
                     await ws.close()
