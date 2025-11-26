@@ -1,0 +1,65 @@
+# LiveKit Agents Framework
+livekit-agents>=0.8.0
+livekit-api>=0.5.0
+
+# LLM Providers
+livekit-plugins-openai>=0.6.0
+livekit-plugins-anthropic>=0.6.0
+livekit-plugins-google>=0.5.0
+
+# STT Providers
+livekit-plugins-deepgram>=0.6.0
+livekit-plugins-assemblyai>=0.5.0
+
+# TTS Providers
+livekit-plugins-elevenlabs>=0.6.0
+livekit-plugins-cartesia>=0.5.0
+
+# VAD
+livekit-plugins-silero>=0.6.0
+
+# RAG and Vector Store
+llama-index>=0.10.0
+llama-index-core>=0.10.0
+llama-index-embeddings-openai>=0.1.0
+llama-index-llms-openai>=0.1.0
+llama-index-vector-stores-qdrant>=0.2.0
+
+# Optional Vector Databases
+qdrant-client>=1.7.0
+# pinecone-client>=3.0.0
+# chromadb>=0.4.0
+
+# Document Processing
+pypdf>=3.17.0
+python-docx>=1.1.0
+python-pptx>=0.6.23
+markdown>=3.5.0
+
+# API Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Data Validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Database
+aiosqlite>=0.19.0
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.26.0
+aiofiles>=23.2.0
+
+# Monitoring and Telemetry
+opentelemetry-api>=1.22.0
+opentelemetry-sdk>=1.22.0
+prometheus-client>=0.19.0
+
+# Development Tools
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.12.0
+ruff>=0.1.11
