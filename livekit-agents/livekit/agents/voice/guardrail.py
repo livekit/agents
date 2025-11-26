@@ -157,7 +157,9 @@ class _GuardrailRunner:
         if not hasattr(item, "role"):
             return
 
-        if item.role == "user":
+        # Evaluate after agent responds - ensures complete exchange context
+        # and avoids partial evaluation during user's continuous speech
+        if item.role == "assistant":
             self._state.turn_count += 1
             if self._state.turn_count % self._config.eval_interval == 0:
                 task = asyncio.create_task(self._evaluate(), name="guardrail_evaluate")
