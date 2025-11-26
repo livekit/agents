@@ -366,7 +366,7 @@ class TTS(tts.TTS):
             TTS: TTS instance
         """
         model, voice = parse_model_string(model)
-        return cls(model=model, voice=voice)
+        return cls(model=model, voice=voice if voice else NOT_GIVEN)
 
     @property
     def model(self) -> str:
