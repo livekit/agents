@@ -803,9 +803,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-            if self._room_io:
-                await self._room_io.aclose()
-
             if self._recorder_io:
                 await self._recorder_io.aclose()
 
@@ -819,6 +816,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
+
+            if self._room_io:
+                # close room io after close event is emitted, ensure the room io's close callback is called
+                await self._room_io.aclose()
 
             self._cancel_user_away_timer()
             self._user_state = "listening"
@@ -909,6 +910,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
 
@@ -949,6 +951,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
+                chat_ctx=chat_ctx,
             )
             if run_state:
                 run_state._watch_handle(handle)

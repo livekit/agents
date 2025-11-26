@@ -57,6 +57,7 @@ from .utils import AsyncAzureADTokenProvider
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
+PromptCacheRetention = Literal["in_memory", "24h"]
 
 
 @dataclass
@@ -75,6 +76,7 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+    prompt_cache_retention: NotGivenOr[PromptCacheRetention]
     extra_body: NotGivenOr[dict[str, Any]]
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
@@ -103,6 +105,7 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
@@ -138,6 +141,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            prompt_cache_retention=prompt_cache_retention,
             extra_body=extra_body,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -926,6 +930,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.verbosity):
             extra["verbosity"] = self._opts.verbosity
+
+        if is_given(self._opts.prompt_cache_retention):
+            extra["prompt_cache_retention"] = self._opts.prompt_cache_retention
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
