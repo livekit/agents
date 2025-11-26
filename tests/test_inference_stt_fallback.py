@@ -1,11 +1,4 @@
-from __future__ import annotations
-
-from livekit.agents.inference.stt import (
-    ConnectionOptions,
-    Fallback,
-    FallbackModel,
-    STT,
-)
+from livekit.agents.inference.stt import STT, ConnectionOptions, Fallback, FallbackModel
 
 
 def _make_inference_stt(fallback_input):

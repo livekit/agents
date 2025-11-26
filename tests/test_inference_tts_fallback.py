@@ -1,11 +1,4 @@
-from __future__ import annotations
-
-from livekit.agents.inference.tts import (
-    ConnectionOptions,
-    Fallback,
-    FallbackModel,
-    TTS,
-)
+from livekit.agents.inference.tts import TTS, ConnectionOptions, Fallback, FallbackModel
 
 
 def _make_inference_tts(fallback_input):
