@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
+import ctypes
 import queue
 import threading
 import time
@@ -303,10 +303,8 @@ class RecorderAudioOutput(io.AudioOutput):
         self.__acc_frames: list[rtc.AudioFrame] = []
         self.__started_time: None | float = None
 
-        # Pause tracking: store wall times of pause/resume events
-        # We infer playback positions retroactively in on_playback_finished
+        # pause tracking
         self.__current_pause_start: float | None = None
-        # List of (pause_start_wall_time, pause_end_wall_time)
         self.__pause_wall_times: list[tuple[float, float]] = []
 
     @property
@@ -323,7 +321,7 @@ class RecorderAudioOutput(io.AudioOutput):
 
     def pause(self) -> None:
         """Pause playback and record the wall time."""
-        if self.__current_pause_start is None:
+        if self.__current_pause_start is None and self.__recording_io.recording:
             self.__current_pause_start = time.time()
 
         if self.next_in_chain:
@@ -331,7 +329,7 @@ class RecorderAudioOutput(io.AudioOutput):
 
     def resume(self) -> None:
         """Resume playback and record the pause interval."""
-        if self.__current_pause_start is not None:
+        if self.__current_pause_start is not None and self.__recording_io.recording:
             self.__pause_wall_times.append((self.__current_pause_start, time.time()))
             self.__current_pause_start = None
 
@@ -358,12 +356,15 @@ class RecorderAudioOutput(io.AudioOutput):
         )
 
         if not self.__recording_io.recording:
-            self._reset_pause_state()
             return
 
         if self.__current_pause_start is not None:
             self.__pause_wall_times.append((self.__current_pause_start, finish_time))
             self.__current_pause_start = None
+
+        if not self.__acc_frames:
+            self._reset_pause_state()
+            return
 
         pause_events: deque[tuple[float, float]] = deque()  # (position, duration)
 
@@ -381,56 +382,41 @@ class RecorderAudioOutput(io.AudioOutput):
 
         buf: list[rtc.AudioFrame] = []
         acc_dur = 0.0
-        sample_rate = self.__acc_frames[0].sample_rate if self.__acc_frames else 48000
-        num_channels = self.__acc_frames[0].num_channels if self.__acc_frames else 1
+        sample_rate = self.__acc_frames[0].sample_rate
+        num_channels = self.__acc_frames[0].num_channels
 
-        valid_frames: deque[tuple[float, float, rtc.AudioFrame]] = deque()
+        should_break = False
         for frame in self.__acc_frames:
-            if frame.duration + acc_dur <= playback_position:
-                valid_frames.append((acc_dur, acc_dur + frame.duration, frame))
-                acc_dur += frame.duration
-            else:
-                left, _ = _split_frame(frame, playback_position - acc_dur)
-                valid_frames.append((acc_dur, acc_dur + left.duration, left))
-                break
-
-        while valid_frames:
-            start, end, frame = valid_frames.popleft()
-            sample_rate = frame.sample_rate
-            num_channels = frame.num_channels
-
-            if not pause_events or end <= pause_events[0][0]:
-                buf.append(frame)
-                continue
+            if frame.duration + acc_dur > playback_position:
+                frame, _ = _split_frame(frame, playback_position - acc_dur)
+                should_break = True
 
             # process any pauses before this frame starts
-            pushed = False
-            while pause_events and pause_events[0][0] <= start:
+            while pause_events and pause_events[0][0] <= acc_dur:
                 pause_pos, pause_dur = pause_events.popleft()
-                silence_frame = _create_silence_frame(pause_dur, sample_rate, num_channels)
-                buf.append(silence_frame)
-                pushed = True
+                buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
 
-            if pushed or not pause_events:
-                valid_frames.appendleft((start, end, frame))
-                continue
+            # process any pauses within this frame
+            while pause_events and pause_events[0][0] < acc_dur + frame.duration:
+                pause_pos, pause_dur = pause_events.popleft()
+                left, frame = _split_frame(frame, pause_pos - acc_dur)
+                buf.append(left)
+                acc_dur += left.duration
+                buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
 
-            # the frame overlaps with the current pause
-            left, right = _split_frame(frame, pause_events[0][0] - start)
-            if right is not None:
-                valid_frames.appendleft((start + left.duration, end, right))
-                valid_frames.appendleft((start, start + left.duration, left))
-            else:
-                # numeric precision error, the frame is too short to split
-                buf.append(frame)
+            buf.append(frame)
+            acc_dur += frame.duration
+
+            if should_break:
+                break
 
         while pause_events:
             pause_pos, pause_dur = pause_events.popleft()
             if pause_pos <= playback_position:
-                silence_frame = _create_silence_frame(pause_dur, sample_rate, num_channels)
-                buf.append(silence_frame)
+                buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
 
         if buf:
+            logger.debug(f"Writing {len(buf)} frames to output: {acc_dur}s, {playback_position}s")
             self.__write(buf)
 
         self.__acc_frames = []
@@ -460,6 +446,7 @@ class RecorderAudioOutput(io.AudioOutput):
 
 
 def _create_silence_frame(duration: float, sample_rate: int, num_channels: int) -> rtc.AudioFrame:
+    logger.debug(f"Creating silence frame: {duration}s, {sample_rate}Hz, {num_channels}ch")
     samples = int(duration * sample_rate)
     return rtc.AudioFrame(
         data=b"\x00\x00" * samples * num_channels,
@@ -469,31 +456,42 @@ def _create_silence_frame(duration: float, sample_rate: int, num_channels: int) 
     )
 
 
-def _split_frame(
-    frame: rtc.AudioFrame, position: float
-) -> tuple[rtc.AudioFrame, rtc.AudioFrame | None]:
-    samples_needed: int = math.floor(int(position * frame.sample_rate))
-    samples_needed -= samples_needed % frame.num_channels
+def _split_frame(frame: rtc.AudioFrame, position: float) -> tuple[rtc.AudioFrame, rtc.AudioFrame]:
+    if position <= 0.0:
+        return rtc.AudioFrame(
+            data=b"",
+            num_channels=frame.num_channels,
+            samples_per_channel=0,
+            sample_rate=frame.sample_rate,
+        ), frame
 
-    if len(frame.data) <= samples_needed * frame.num_channels * 2:
-        return frame, None
+    if position >= frame.duration:
+        return frame, rtc.AudioFrame(
+            data=b"",
+            num_channels=frame.num_channels,
+            samples_per_channel=0,
+            sample_rate=frame.sample_rate,
+        )
+
+    samples_needed = int(position * frame.sample_rate)
+    bytes_per_sample = frame.num_channels * ctypes.sizeof(ctypes.c_int16)
 
     data_x, data_y = (
-        frame.data[: samples_needed * frame.num_channels * 2],
-        frame.data[samples_needed * frame.num_channels * 2 :],
+        frame.data[: samples_needed * bytes_per_sample],
+        frame.data[samples_needed * bytes_per_sample :],
     )
 
     return (
         rtc.AudioFrame(
             data=data_x,
             num_channels=frame.num_channels,
-            samples_per_channel=len(data_x) // (frame.num_channels * 2),
+            samples_per_channel=len(data_x) // bytes_per_sample,
             sample_rate=frame.sample_rate,
         ),
         rtc.AudioFrame(
             data=data_y,
             num_channels=frame.num_channels,
-            samples_per_channel=len(data_y) // (frame.num_channels * 2),
+            samples_per_channel=len(data_y) // bytes_per_sample,
             sample_rate=frame.sample_rate,
         ),
     )
