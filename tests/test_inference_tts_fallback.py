@@ -31,12 +31,12 @@ def test_tts_fallback_from_model_objects() -> None:
         FallbackModel(
             name="cartesia/sonic",
             voice="sonic-voice",
-            extra={"speed": "fast"},
+            extra_kwargs={"speed": "fast"},
         ),
         FallbackModel(
             name="elevenlabs/eleven_flash_v2",
             voice="flash-voice",
-            extra={"style": "casual"},
+            extra_kwargs={"style": "casual"},
         ),
     ]
 
@@ -48,9 +48,9 @@ def test_tts_fallback_from_model_objects() -> None:
 
     models_dict = fallback.to_dict()["models"]
     assert models_dict[0]["voice"] == "sonic-voice"
-    assert models_dict[0]["extra"]["speed"] == "fast"
+    assert models_dict[0]["extra_kwargs"]["speed"] == "fast"
     assert models_dict[1]["voice"] == "flash-voice"
-    assert models_dict[1]["extra"]["style"] == "casual"
+    assert models_dict[1]["extra_kwargs"]["style"] == "casual"
 
 
 def test_fallback_from_fallback_object() -> None:

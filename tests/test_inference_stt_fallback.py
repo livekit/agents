@@ -27,8 +27,8 @@ def test_fallback_from_string_names() -> None:
 
 def test_fallback_from_model_objects() -> None:
     fallback_models = [
-        FallbackModel(name="deepgram/nova-3", extra={"keywords": ["livekit"]}),
-        FallbackModel(name="cartesia/ink-whisper", extra={"max_silence_duration_secs": 1.5}),
+        FallbackModel(name="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]}),
+        FallbackModel(name="cartesia/ink-whisper", extra_kwargs={"max_silence_duration_secs": 1.5}),
     ]
 
     stt = _make_inference_stt(fallback_models)
@@ -38,8 +38,8 @@ def test_fallback_from_model_objects() -> None:
     assert all(isinstance(model, FallbackModel) for model in fallback.models)
 
     models_dict = fallback.to_dict()["models"]
-    assert models_dict[0]["extra"]["keywords"] == ["livekit"]
-    assert models_dict[1]["extra"]["max_silence_duration_secs"] == 1.5
+    assert models_dict[0]["extra_kwargs"]["keywords"] == ["livekit"]
+    assert models_dict[1]["extra_kwargs"]["max_silence_duration_secs"] == 1.5
 
 
 def test_fallback_passes_through_existing_instance() -> None:

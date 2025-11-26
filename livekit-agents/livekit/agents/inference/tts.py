@@ -83,7 +83,7 @@ class FallbackModel(BaseModel):
     voice: str | None = None
     """Voice to use for the model."""
 
-    extra: dict[str, Any] | None = None
+    extra_kwargs: dict[str, Any] | None = None
     """Extra configuration for the model."""
 
     @classmethod
