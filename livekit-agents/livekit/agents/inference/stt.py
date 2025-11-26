@@ -131,7 +131,7 @@ STTModels = Union[
 ]
 STTEncoding = Literal["pcm_s16le"]
 
-FallbackType = list[STTModels | str | FallbackModel] | Fallback
+FallbackType = Union[list[Union[STTModels, str, FallbackModel]], Fallback]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000

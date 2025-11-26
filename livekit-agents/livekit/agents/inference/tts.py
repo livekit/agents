@@ -151,7 +151,7 @@ TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
 TTSEncoding = Literal["pcm_s16le"]
 
-FallbackType = list[TTSModels | str | FallbackModel] | Fallback
+FallbackType = Union[list[Union[TTSModels, str, FallbackModel]], Fallback]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 24000
