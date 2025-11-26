@@ -593,7 +593,7 @@ class _Connection:
                             if is_given(self._opts.voice_settings)
                             else {}
                         )
-                        init_pkt = {
+                        init_pkt: dict[str, Any] = {
                             "text": " ",
                             "voice_settings": voice_settings,
                             "context_id": msg.context_id,
