@@ -169,13 +169,13 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN,
-        # Arcana options
+        # Arcana parameters
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        # Mistv2 options
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        # Mistv2 parameters
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -183,7 +183,7 @@ class TTS(tts.TTS):
     ) -> None:
         if is_given(model):
             self._opts.model = model
-            # If model is changed, ensure appropriate options structure exists
+
             if model == "arcana" and self._opts.arcana_options is None:
                 self._opts.arcana_options = _ArcanaOptions()
             elif model == "mistv2" and self._opts.mistv2_options is None:
@@ -192,7 +192,7 @@ class TTS(tts.TTS):
         if is_given(speaker):
             self._opts.speaker = speaker
 
-        # Update options based on CURRENT model
+    
         if self._opts.model == "arcana" and self._opts.arcana_options is not None:
             if is_given(repetition_penalty):
                 self._opts.arcana_options.repetition_penalty = repetition_penalty
