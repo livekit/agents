@@ -82,7 +82,7 @@ class FallbackModel(TypedDict, total=False):
     name: Required[str]
     """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
 
-    voice: Required[str]
+    voice: Required[str | None]
     """Voice to use for the model."""
 
     extra_kwargs: dict[str, Any]
