@@ -5,11 +5,12 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, Union, overload
 
 import aiohttp
-from pydantic import BaseModel
+from typing_extensions import Required
 
 from .. import tokenize, tts, utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
@@ -43,6 +44,7 @@ InworldModels = Literal[
     "inworld/inworld-tts-1",
 ]
 
+TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
 def parse_model_string(model: str) -> tuple[str, str | None]:
     """Parse a model string into a model and voice
@@ -58,17 +60,17 @@ def parse_model_string(model: str) -> tuple[str, str | None]:
     return model, voice
 
 
-class ConnectionOptions(BaseModel):
+class ConnectionOptions(TypedDict, total=False):
     """Connection options for fallback attempts."""
 
-    timeout: float | None = None
+    timeout: float
     """Connection timeout in seconds."""
 
-    retries: int | None = None
+    retries: int
     """Number of retries per model."""
 
 
-class FallbackModel(BaseModel):
+class FallbackModel(TypedDict, total=False):
     """A fallback model with optional extra configuration.
 
     Extra fields are passed through to the provider.
@@ -77,56 +79,51 @@ class FallbackModel(BaseModel):
         >>> FallbackModel(name="cartesia/sonic", voice="")
     """
 
-    name: TTSModels | str
+    name: Required[str]
     """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
 
-    voice: str | None = None
+    voice: Required[str]
     """Voice to use for the model."""
 
-    extra_kwargs: dict[str, Any] | None = None
+    extra_kwargs: dict[str, Any]
     """Extra configuration for the model."""
 
-    @classmethod
-    def from_model_string(cls, model: str) -> FallbackModel:
-        """Create a FallbackModel instance from a model string
 
-        Args:
-            model (str): Fallback TTS model to use, in "provider/model[:voice_id]" format
-
-        Returns:
-            FallbackModel: FallbackModel instance
-        """
-        model, voice = parse_model_string(model)
-        return cls(name=model, voice=voice)
+FallbackModelType = Union[FallbackModel, str]
 
 
-class Fallback(BaseModel):
-    """Configuration for fallback models when the primary model fails.
-    Models can be specified as simple strings or FallbackModel instances for extra options.
-    """
+class Fallback(TypedDict, total=False):
+    """Configuration for fallback models when the primary model fails."""
 
-    models: list[TTSModels | str | FallbackModel]
-    """Fallback models in priority order. Can be model name strings or FallbackModel instances."""
+    models: Required[Sequence[FallbackModelType]]
+    """Fallback models in priority order."""
 
-    connection: ConnectionOptions | None = None
+    connection: ConnectionOptions
     """Connection options for fallback attempts."""
 
-    def to_dict(self) -> dict[str, Any]:
-        models_list: list[dict[str, Any]] = []
-        for m in self.models:
-            if isinstance(m, str):
-                model, voice = parse_model_string(m)
-                fallback_model = FallbackModel(name=model, voice=voice)
-                models_list.append(fallback_model.model_dump(exclude_none=True))
-            else:
-                models_list.append(m.model_dump(exclude_none=True))
 
-        result: dict[str, Any] = {"models": models_list}
-        if self.connection:
-            conn = self.connection.model_dump(exclude_none=True)
-            if conn:
-                result["connection"] = conn
-        return result
+FallbackType = Union[Sequence[FallbackModelType], Fallback]
+
+
+def _normalize_fallback(fallback: FallbackType) -> Fallback:
+    options: ConnectionOptions = {}
+    models: Sequence[FallbackModelType]
+    if isinstance(fallback, Mapping):
+        models = fallback.get("models", ())
+        options = fallback.get("connection", options)
+    else:
+        models = fallback
+
+    models_list: list[FallbackModel] = []
+    for m in models:
+        if isinstance(m, str):
+            model, voice = parse_model_string(m)
+            fm: FallbackModel = {"name": model, "voice": voice}
+        else:
+            fm = m
+        models_list.append(fm)
+
+    return Fallback(models=models_list, connection=options)
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -147,11 +144,7 @@ class InworldOptions(TypedDict, total=False):
     pass
 
 
-TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
-
 TTSEncoding = Literal["pcm_s16le"]
-
-FallbackType = Union[list[Union[TTSModels, str, FallbackModel]], Fallback]
 
 DEFAULT_ENCODING: TTSEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 24000
@@ -329,10 +322,7 @@ class TTS(tts.TTS):
 
         fallback_model: NotGivenOr[Fallback] = NOT_GIVEN
         if is_given(fallback):
-            if isinstance(fallback, Fallback):
-                fallback_model = fallback
-            else:
-                fallback_model = Fallback(models=fallback)
+            fallback_model = _normalize_fallback(fallback)  # type: ignore[arg-type]
 
         self._opts = _TTSOptions(
             model=model,
@@ -409,7 +399,7 @@ class TTS(tts.TTS):
         if self._opts.language:
             params["language"] = self._opts.language
         if self._opts.fallback:
-            params["fallback"] = self._opts.fallback.to_dict()
+            params["fallback"] = self._opts.fallback
 
         try:
             await ws.send_str(json.dumps(params))
