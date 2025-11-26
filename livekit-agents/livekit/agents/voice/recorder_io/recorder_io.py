@@ -416,7 +416,6 @@ class RecorderAudioOutput(io.AudioOutput):
                 buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
 
         if buf:
-            logger.debug(f"Writing {len(buf)} frames to output: {acc_dur}s, {playback_position}s")
             self.__write(buf)
 
         self.__acc_frames = []
@@ -446,7 +445,6 @@ class RecorderAudioOutput(io.AudioOutput):
 
 
 def _create_silence_frame(duration: float, sample_rate: int, num_channels: int) -> rtc.AudioFrame:
-    logger.debug(f"Creating silence frame: {duration}s, {sample_rate}Hz, {num_channels}ch")
     samples = int(duration * sample_rate)
     return rtc.AudioFrame(
         data=b"\x00\x00" * samples * num_channels,
