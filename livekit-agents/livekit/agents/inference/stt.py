@@ -5,11 +5,12 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, Union, overload
 
 import aiohttp
-from pydantic import BaseModel
+from typing_extensions import Required
 
 from livekit import rtc
 
@@ -70,58 +71,54 @@ class AssemblyaiOptions(TypedDict, total=False):
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
-class ConnectionOptions(BaseModel):
+class ConnectionOptions(TypedDict, total=False):
     """Connection options for fallback attempts."""
 
-    timeout: float | None = None
+    timeout: float
     """Connection timeout in seconds."""
 
-    retries: int | None = None
+    retries: int
     """Number of retries per model."""
 
 
-class FallbackModel(BaseModel):
+class FallbackModel(TypedDict, total=False):
     """A fallback model with optional extra configuration.
 
     Extra fields are passed through to the provider.
 
     Example:
-        >>> FallbackModel(name="deepgram/nova-3", keywords=["livekit"])
+        >>> FallbackModel(name="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]})
     """
 
-    name: STTModels | str
+    name: Required[str]
     """Model name (e.g. "deepgram/nova-3", "assemblyai/universal-streaming", "cartesia/ink-whisper")."""
 
-    extra_kwargs: dict[str, Any] | None = None
+    extra_kwargs: dict[str, Any]
     """Extra configuration for the model."""
 
 
-class Fallback(BaseModel):
-    """Configuration for fallback models when the primary model fails.
-    Models can be specified as simple strings or FallbackModel instances for extra options.
-    """
+FallbackModelType = Union[FallbackModel, str]
+class Fallback(TypedDict, total=False):
+    """Configuration for fallback models when the primary model fails."""
 
-    models: list[STTModels | str | FallbackModel]
-    """Fallback models in priority order. Can be model name strings or FallbackModel instances."""
+    models: Required[Sequence[FallbackModelType]]
+    """Fallback models in priority order."""
 
-    connection: ConnectionOptions | None = None
+    connection: ConnectionOptions
     """Connection options for fallback attempts."""
 
-    def to_dict(self) -> dict[str, Any]:
-        models_list: list[dict[str, Any]] = []
-        for m in self.models:
-            if isinstance(m, str):
-                models_list.append({"name": m})
-            else:
-                models_list.append(m.model_dump(exclude_none=True))
-
-        result: dict[str, Any] = {"models": models_list}
-        if self.connection:
-            conn = self.connection.model_dump(exclude_none=True)
-            if conn:
-                result["connection"] = conn
-        return result
-
+def _normalize_fallback(fallback: FallbackType) -> Fallback:
+    options: ConnectionOptions = {}
+    models: Sequence[FallbackModelType]
+    if isinstance(fallback, Mapping):
+        models = fallback.get("models", ())
+        options = fallback.get("connection", options)
+    else:
+        models = fallback
+    models_list = [
+        FallbackModel(name=m) if isinstance(m, str) else m for m in models
+    ]
+    return Fallback(models=models_list, connection=options)
 
 STTModels = Union[
     DeepgramModels,
@@ -131,7 +128,7 @@ STTModels = Union[
 ]
 STTEncoding = Literal["pcm_s16le"]
 
-FallbackType = Union[list[Union[STTModels, str, FallbackModel]], Fallback]
+FallbackType = Union[Sequence[FallbackModelType], Fallback]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -244,8 +241,8 @@ class STT(stt.STT):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
-            fallback (STTFallbackType, optional): Fallback models - either a list of model names,
-                a list of FallbackModel instances or an STTFallback object for full configuration.
+            fallback (FallbackType, optional): Fallback models - either a list of model names,
+                a list of FallbackModel instances or an Fallback object for full configuration.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
@@ -279,10 +276,7 @@ class STT(stt.STT):
 
         fallback_model: NotGivenOr[Fallback] = NOT_GIVEN
         if is_given(fallback):
-            if isinstance(fallback, Fallback):
-                fallback_model = fallback
-            else:
-                fallback_model = Fallback(models=fallback)
+            fallback_model = _normalize_fallback(fallback)  # type: ignore[arg-type]
 
         self._opts = STTOptions(
             model=model,
@@ -532,7 +526,7 @@ class SpeechStream(stt.SpeechStream):
             params["settings"]["language"] = self._opts.language
 
         if self._opts.fallback:
-            params["fallback"] = self._opts.fallback.to_dict()
+            params["fallback"] = self._opts.fallback
 
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
