@@ -181,6 +181,7 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        print("model")
         if is_given(model):
             self._opts.model = model
             # If model is changed, ensure appropriate options structure exists
