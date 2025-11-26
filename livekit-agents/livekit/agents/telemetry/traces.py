@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiofiles
 import aiohttp
+import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
@@ -124,6 +125,15 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     token_ttl = timedelta(hours=6)
     refresh_margin = timedelta(minutes=5)
 
+    class _AuthRefreshingSession(requests.Session):
+        def __init__(self, header_provider: "_AuthHeaderProvider") -> None:
+            super().__init__()
+            self._header_provider = header_provider
+
+        def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+            self.headers.update(self._header_provider())
+            return super().request(*args, **kwargs)
+
     class _AuthHeaderProvider:
         def __init__(self) -> None:
             self._lock = threading.Lock()
@@ -149,6 +159,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
             return {"Authorization": self._auth_header}
 
     header_provider = _AuthHeaderProvider()
+    session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
     metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
 
@@ -170,8 +181,9 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
-        headers=header_provider,
+        headers=header_provider(),
         compression=otlp_compression,
+        session=session,
     )
 
     tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
@@ -182,8 +194,9 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     log_exporter = OTLPLogExporter(
         endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        headers=header_provider,
+        headers=header_provider(),
         compression=otlp_compression,
+        session=session,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
