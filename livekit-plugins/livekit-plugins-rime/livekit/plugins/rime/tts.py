@@ -192,7 +192,6 @@ class TTS(tts.TTS):
         if is_given(speaker):
             self._opts.speaker = speaker
 
-    
         if self._opts.model == "arcana" and self._opts.arcana_options is not None:
             if is_given(repetition_penalty):
                 self._opts.arcana_options.repetition_penalty = repetition_penalty
