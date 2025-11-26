@@ -43,6 +43,7 @@ InworldModels = Literal[
     "inworld/inworld-tts-1",
 ]
 
+
 def parse_model_string(model: str) -> tuple[str, str | None]:
     """Parse a model string into a model and voice
     Args:
@@ -55,6 +56,7 @@ def parse_model_string(model: str) -> tuple[str, str | None]:
         voice = model[idx + 1 :]
         model = model[:idx]
     return model, voice
+
 
 class ConnectionOptions(BaseModel):
     """Connection options for fallback attempts."""
@@ -74,6 +76,7 @@ class FallbackModel(BaseModel):
     Example:
         >>> FallbackModel(name="cartesia/sonic", voice="")
     """
+
     name: TTSModels | str
     """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
 
@@ -95,6 +98,7 @@ class FallbackModel(BaseModel):
         """
         model, voice = parse_model_string(model)
         return cls(name=model, voice=voice)
+
 
 class Fallback(BaseModel):
     """Configuration for fallback models when the primary model fails.
@@ -123,6 +127,7 @@ class Fallback(BaseModel):
             if conn:
                 result["connection"] = conn
         return result
+
 
 class CartesiaOptions(TypedDict, total=False):
     duration: float  # max duration of audio in seconds

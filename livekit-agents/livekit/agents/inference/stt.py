@@ -88,12 +88,12 @@ class FallbackModel(BaseModel):
     Example:
         >>> FallbackModel(name="deepgram/nova-3", keywords=["livekit"])
     """
+
     name: STTModels | str
     """Model name (e.g. "deepgram/nova-3", "assemblyai/universal-streaming", "cartesia/ink-whisper")."""
 
     extra: dict[str, Any] | None = None
     """Extra configuration for the model."""
-
 
 
 class Fallback(BaseModel):
@@ -121,6 +121,7 @@ class Fallback(BaseModel):
             if conn:
                 result["connection"] = conn
         return result
+
 
 STTModels = Union[
     DeepgramModels,
