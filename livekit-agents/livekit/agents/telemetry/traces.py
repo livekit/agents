@@ -126,7 +126,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     refresh_margin = timedelta(minutes=5)
 
     class _AuthRefreshingSession(requests.Session):
-        def __init__(self, header_provider: "_AuthHeaderProvider") -> None:
+        def __init__(self, header_provider: _AuthHeaderProvider) -> None:
             super().__init__()
             self._header_provider = header_provider
 
