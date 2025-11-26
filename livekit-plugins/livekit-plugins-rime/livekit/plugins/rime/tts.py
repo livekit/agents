@@ -168,12 +168,12 @@ class TTS(tts.TTS):
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
+        lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN,
         # Arcana options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN,
         # Mistv2 options
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
