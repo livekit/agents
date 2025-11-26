@@ -181,7 +181,6 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
-        headers=header_provider(),
         compression=otlp_compression,
         session=session,
     )
@@ -196,7 +195,6 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     log_exporter = OTLPLogExporter(
         endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        headers=header_provider(),
         compression=otlp_compression,
         session=session,
     )
