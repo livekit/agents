@@ -293,7 +293,8 @@ class RecorderAudioOutput(io.AudioOutput):
         super().__init__(
             label="RecorderIO",
             next_in_chain=audio_output,
-            sample_rate=None,
+            sample_rate=audio_output.sample_rate if audio_output else None,
+            # TODO: support pause
             capabilities=io.AudioOutputCapabilities(pause=True),  # depends on the next_in_chain
         )
         self.__recording_io = recording_io
