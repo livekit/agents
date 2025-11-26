@@ -7,11 +7,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Literal
 
 from .. import inference
-from ..llm import ChatContext
+from ..llm import LLM, ChatContext
 from ..log import logger
 
 if TYPE_CHECKING:
-    from ..llm import LLM
     from .agent_session import AgentSession
     from .events import ConversationItemAddedEvent
 
@@ -113,6 +112,7 @@ class _GuardrailRunner:
         self._event_handler: Callable | None = None
         self._pending_tasks: set[asyncio.Task] = set()
 
+        self._llm: LLM
         if isinstance(config.llm, str):
             self._llm = inference.LLM.from_model_string(config.llm)
         else:
@@ -249,7 +249,9 @@ class _GuardrailRunner:
             start = text.find("{")
             end = text.rfind("}") + 1
             if start >= 0 and end > start:
-                return json.loads(text[start:end])
+                result = json.loads(text[start:end])
+                if isinstance(result, dict):
+                    return result
         except json.JSONDecodeError:
             logger.warning(f"guardrail: failed to parse JSON: {text[:100]}")
         return None
