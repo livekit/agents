@@ -6,11 +6,7 @@ from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
-# For local development, use direct import from the plugin source:
-import sys
-sys.path.insert(0, "livekit-plugins/livekit-plugins-inworld")
 from livekit.plugins import inworld
-# from livekit.plugins import inworld
 
 load_dotenv()
 
@@ -26,7 +22,7 @@ async def entrypoint(job: JobContext):
 
     tts = inworld.TTS(
         voice="Alex", # Voice ID (or custom cloned voice ID)
-        timestamp_type="TIMESTAMP_TYPE_UNSPECIFIED", # CHARACTER or WORD
+        timestamp_type="WORD", # CHARACTER or WORD
         text_normalization="ON", # ON or OFF
     )
 
@@ -39,7 +35,7 @@ async def entrypoint(job: JobContext):
     publication = await job.room.local_participant.publish_track(track, options)
     await publication.wait_for_subscription()
 
-    text = "Hello from Inworld. I hope you are having a spectacular day."
+    text = "Hello from Inworld. I hope you are having a spectacular and /ˈwʌn.dɚ.fəl/ day." # Note that we can use IPA for pronunciation
 
     logger.info(f'synthesizing: "{text}"')
     async for audio in tts.synthesize(text):

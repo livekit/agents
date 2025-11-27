@@ -38,6 +38,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.voice.io import TimedString
 
+from .log import logger
+
 DEFAULT_BIT_RATE = 64000
 DEFAULT_ENCODING = "OGG_OPUS"
 DEFAULT_MODEL = "inworld-tts-1"
@@ -59,9 +61,9 @@ class _TTSOptions:
     encoding: Encoding
     voice: str
     sample_rate: int
-    bit_rate: NotGivenOr[int] = NOT_GIVEN
-    speaking_rate: NotGivenOr[float] = NOT_GIVEN
-    temperature: NotGivenOr[float] = NOT_GIVEN
+    bit_rate: int
+    speaking_rate: float
+    temperature: float
     timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
 
@@ -129,7 +131,7 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.getenv("INWORLD_API_KEY", "")
+        api_key = api_key or os.getenv("INWORLD_API_KEY")
         if not api_key:
             raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
 
@@ -229,24 +231,19 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             audio_config: dict[str, Any] = {
                 "audioEncoding": self._opts.encoding,
+                "bitrate": self._opts.bit_rate,
+                "sampleRateHertz": self._opts.sample_rate,
+                "temperature": self._opts.temperature,
+                "speakingRate": self._opts.speaking_rate,
             }
-            if utils.is_given(self._opts.bit_rate):
-                audio_config["bitrate"] = self._opts.bit_rate
-            if utils.is_given(self._opts.sample_rate):
-                audio_config["sampleRateHertz"] = self._opts.sample_rate
-            if utils.is_given(self._opts.temperature):
-                audio_config["temperature"] = self._opts.temperature
-            if utils.is_given(self._opts.speaking_rate):
-                audio_config["speakingRate"] = self._opts.speaking_rate
 
             body_params: dict[str, Any] = {
                 "text": self._input_text,
                 "voiceId": self._opts.voice,
                 "modelId": self._opts.model,
                 "audioConfig": audio_config,
+                "temperature": self._opts.temperature,
             }
-            if utils.is_given(self._opts.temperature):
-                body_params["temperature"] = self._opts.temperature
             if utils.is_given(self._opts.timestamp_type):
                 body_params["timestampType"] = self._opts.timestamp_type
             if utils.is_given(self._opts.text_normalization):
@@ -272,10 +269,17 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=self._opts.mime_type,
                 )
 
-                async for line in resp.content:
+                async for raw_line in resp.content:
+                    line = raw_line.strip()
                     if not line:
-                        break
-                    data = json.loads(line)
+                        continue
+
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning("failed to parse Inworld response line: %s", line)
+                        continue
+
                     if result := data.get("result"):
                         # Handle timestamp info if present
                         if timestamp_info := result.get("timestampInfo"):

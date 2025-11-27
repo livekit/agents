@@ -14,6 +14,9 @@ Set `INWORLD_API_KEY` in your `.env` file ([get one here](https://platform.inwor
 
 ## Usage
 
+Use Inworld TTS within an `AgentSession` or as a standalone speech generator. For example,
+you can use this TTS in the [Voice AI quickstart](/agents/start/voice-ai/).
+
 ```python
 from livekit.plugins import inworld
 
@@ -22,7 +25,7 @@ tts = inworld.TTS()
 
 Or with options:
 
-```python 
+```python
 from livekit.plugins import inworld
 
 tts = inworld.TTS(
