@@ -40,3 +40,33 @@ tts = inworld.TTS(
     text_normalization="OFF",      # ON, OFF, or APPLY_TEXT_NORMALIZATION_UNSPECIFIED
 )
 ```
+
+## Streaming
+
+Inworld TTS supports WebSocket streaming for lower latency real-time synthesis. Use the
+`stream()` method for streaming text as it's generated:
+
+```python
+from livekit.plugins import inworld
+
+tts = inworld.TTS(
+    voice="Hades",
+    model="inworld-tts-1",
+    buffer_char_threshold=100,     # chars before triggering synthesis (default: 100)
+    max_buffer_delay_ms=3000,      # max buffer time in ms (default: 3000)
+)
+
+# Create a stream for real-time synthesis
+stream = tts.stream()
+
+# Push text incrementally
+stream.push_text("Hello, ")
+stream.push_text("how are you today?")
+stream.flush()  # Flush any remaining buffered text
+stream.end_input()  # Signal end of input
+
+# Consume audio as it's generated
+async for audio in stream:
+    # Process audio frames
+    pass
+```
