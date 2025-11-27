@@ -16,8 +16,8 @@ ATTR_ROOM_NAME = "lk.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
 
 # agent turn
-ATTR_AGENT_TURN_ID = "lk.agent_turn.id"
-ATTR_AGENT_PARENT_TURN_ID = "lk.agent_turn.parent_id"
+ATTR_AGENT_TURN_ID = "lk.generation_id"
+ATTR_AGENT_PARENT_TURN_ID = "lk.parent_generation_id"
 ATTR_USER_INPUT = "lk.user_input"
 ATTR_INSTRUCTIONS = "lk.instructions"
 ATTR_SPEECH_INTERRUPTED = "lk.interrupted"

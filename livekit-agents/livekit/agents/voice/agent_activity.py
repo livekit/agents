@@ -1576,6 +1576,30 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
     ) -> None:
+        with tracer.start_as_current_span(
+            "agent_turn", context=self._session._root_span_context
+        ) as current_span:
+            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle.generation_id)
+            if parent_id := speech_handle.parent_generation_id:
+                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
+            speech_handle._agent_turn_context = otel_context.get_current()
+
+            await self._tts_task_impl(
+                speech_handle=speech_handle,
+                text=text,
+                audio=audio,
+                add_to_chat_ctx=add_to_chat_ctx,
+                model_settings=model_settings,
+            )
+
+    async def _tts_task_impl(
+        self,
+        speech_handle: SpeechHandle,
+        text: str | AsyncIterable[str],
+        audio: AsyncIterable[rtc.AudioFrame] | None,
+        add_to_chat_ctx: bool,
+        model_settings: ModelSettings,
+    ) -> None:
         tr_output = (
             self._session.output.transcription
             if self._session.output.transcription_enabled
@@ -1697,6 +1721,7 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
+    @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
         self,
         *,
@@ -1708,13 +1733,14 @@ class AgentActivity(RecognitionHooks):
         instructions: str | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
         _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
-        _parent_turn_id: str | None = None,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
-            if _parent_turn_id is not None:
-                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, _parent_turn_id)
+            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle.generation_id)
+            if parent_id := speech_handle.parent_generation_id:
+                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
+            speech_handle._agent_turn_context = otel_context.get_current()
 
             await self._pipeline_reply_task_impl(
                 speech_handle=speech_handle,
@@ -1727,7 +1753,6 @@ class AgentActivity(RecognitionHooks):
                 _previous_tools_messages=_previous_tools_messages,
             )
 
-    @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task_impl(
         self,
         *,
@@ -1742,18 +1767,8 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
-        turn_id = utils.shortuuid("agent_turn_")
-
         current_span = trace.get_current_span()
-        current_span.set_attributes(
-            {trace_types.ATTR_AGENT_TURN_ID: turn_id, trace_types.ATTR_SPEECH_ID: speech_handle.id}
-        )
-        if _previous_tools_messages:
-            tool_ids = {
-                fnc.id for fnc in _previous_tools_messages if isinstance(fnc, llm.FunctionCall)
-            }
-            current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ids)))
-
+        current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
         if new_message:
@@ -2083,7 +2098,6 @@ class AgentActivity(RecognitionHooks):
                         # tool response generation
                         _previous_user_metrics=user_metrics if not has_speech_message else None,
                         _previous_tools_messages=tool_messages,
-                        _parent_turn_id=turn_id,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",
@@ -2107,7 +2121,6 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         user_input: str | None = None,
         instructions: str | None = None,
-        _parent_turn_id: str | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
@@ -2141,7 +2154,6 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
-                _parent_turn_id=_parent_turn_id,
             )
         finally:
             # reset tool_choice value
@@ -2151,6 +2163,7 @@ class AgentActivity(RecognitionHooks):
             ):
                 self._rt_session.update_options(tool_choice=ori_tool_choice)
 
+    @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
         *,
@@ -2158,13 +2171,14 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
-        _parent_turn_id: str | None = None,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
-            if _parent_turn_id is not None:
-                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, _parent_turn_id)
+            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle.generation_id)
+            if parent_id := speech_handle.parent_generation_id:
+                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
+            speech_handle._agent_turn_context = otel_context.get_current()
 
             await self._realtime_generation_task_impl(
                 speech_handle=speech_handle,
@@ -2173,7 +2187,6 @@ class AgentActivity(RecognitionHooks):
                 instructions=instructions,
             )
 
-    @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task_impl(
         self,
         *,
@@ -2182,11 +2195,8 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
     ) -> None:
-        turn_id = utils.shortuuid("agent_turn_")
         current_span = trace.get_current_span()
-        current_span.set_attributes(
-            {trace_types.ATTR_AGENT_TURN_ID: turn_id, trace_types.ATTR_SPEECH_ID: speech_handle.id}
-        )
+        current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
         room_io = self._session._room_io
         if room_io and room_io.room.isconnected():
@@ -2586,7 +2596,6 @@ class AgentActivity(RecognitionHooks):
                             if draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
-                        _parent_turn_id=turn_id,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.realtime_reply",
@@ -2622,7 +2631,9 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.done()
             ):
-                self._session._update_agent_state("speaking")
+                self._session._update_agent_state(
+                    "speaking", otel_context=self._paused_speech._agent_turn_context
+                )
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
