@@ -1635,11 +1635,16 @@ class AgentActivity(RecognitionHooks):
             audio_source = _read_text()
 
         tasks: list[asyncio.Task[Any]] = []
+        started_speaking_at: float | None = None
+        stopped_speaking_at: float | None = None
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            nonlocal started_speaking_at
+            started_speaking_at = time.time()
             self._session._update_agent_state("speaking")
 
         audio_out: _AudioOutput | None = None
+        tts_gen_data: _TTSGenerationData | None = None
         if audio_output is not None:
             if audio is None:
                 # generate audio using TTS
@@ -1692,6 +1697,7 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
+        stopped_speaking_at = time.time()
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1716,8 +1722,20 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         if forwarded_text and add_to_chat_ctx:
+            assistant_metrics: llm.MetricsReport = {}
+
+            if tts_gen_data and tts_gen_data.ttfb is not None:
+                assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+
+            if stopped_speaking_at and started_speaking_at:
+                assistant_metrics["started_speaking_at"] = started_speaking_at
+                assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
             msg = self._agent._chat_ctx.add_message(
-                role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
+                role="assistant",
+                content=forwarded_text,
+                interrupted=speech_handle.interrupted,
+                metrics=assistant_metrics,
             )
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
