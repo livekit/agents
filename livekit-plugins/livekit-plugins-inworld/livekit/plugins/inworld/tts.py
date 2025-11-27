@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, cast
 from urllib.parse import urljoin
 
 import aiohttp
@@ -131,7 +131,7 @@ class TTS(tts.TTS):
             text_normalization (str, optional): Controls text normalization. When "ON", numbers,
                 dates, and abbreviations are expanded (e.g., "Dr." -> "Doctor"). When "OFF",
                 text is read exactly as written. Defaults to automatic.
-            buffer_char_threshold (int, optional): For streaming, the minimum number of characters
+                _threshold (int, optional): For streaming, the minimum number of characters
                 in the buffer that automatically triggers audio generation. Defaults to 100.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
                 before starting generation. Defaults to 3000.
@@ -155,11 +155,11 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.getenv("INWORLD_API_KEY")
-        if not api_key:
+        key = api_key if is_given(api_key) else os.getenv("INWORLD_API_KEY")
+        if not key:
             raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
 
-        self._authorization = f"Basic {api_key}"
+        self._authorization = f"Basic {key}"
         self._base_url = base_url
         self._ws_url = ws_url
         self._session = http_session
@@ -261,9 +261,9 @@ class TTS(tts.TTS):
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(timestamp_type):
-            self._opts.timestamp_type = timestamp_type
+            self._opts.timestamp_type = cast(TimestampType, timestamp_type)
         if is_given(text_normalization):
-            self._opts.text_normalization = text_normalization
+            self._opts.text_normalization = cast(TextNormalization, text_normalization)
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
