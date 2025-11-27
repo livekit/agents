@@ -1,11 +1,15 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
+
+# For local development, use direct import from the plugin source:
+import sys
+sys.path.insert(0, "livekit-plugins/livekit-plugins-inworld")
 from livekit.plugins import inworld
+# from livekit.plugins import inworld
 
 load_dotenv()
 
@@ -21,8 +25,8 @@ async def entrypoint(job: JobContext):
 
     tts = inworld.TTS(
         # voice="Ashley",  # default voice
-        # speaking_rate=1.0,
-        # pitch=0.0,
+        timestamp_type="WORD",  # get word-level timestamps
+        text_normalization="OFF",  # read text exactly as written
     )
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
@@ -36,7 +40,6 @@ async def entrypoint(job: JobContext):
 
     text = "Hello from Inworld. I hope you are having a great day."
 
-    # Inworld TTS does not support streaming, so we use synthesize()
     logger.info(f'synthesizing: "{text}"')
     async for audio in tts.synthesize(text):
         await source.capture_frame(audio.frame)

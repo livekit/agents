@@ -36,6 +36,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from livekit.agents.voice.io import TimedString
 
 DEFAULT_BIT_RATE = 64000
 DEFAULT_ENCODING = "OGG_OPUS"
@@ -43,9 +44,13 @@ DEFAULT_MODEL = "inworld-tts-1"
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
+DEFAULT_TEMPERATURE = 1.1
+DEFAULT_SPEAKING_RATE = 1.0
 NUM_CHANNELS = 1
 
-Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS"], str]
+Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"], str]
+TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
+TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
 
 @dataclass
@@ -55,9 +60,10 @@ class _TTSOptions:
     voice: str
     sample_rate: int
     bit_rate: NotGivenOr[int] = NOT_GIVEN
-    pitch: NotGivenOr[float] = NOT_GIVEN
     speaking_rate: NotGivenOr[float] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
+    timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN
+    text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
 
     @property
     def mime_type(self) -> str:
@@ -65,6 +71,10 @@ class _TTSOptions:
             return "audio/mpeg"
         elif self.encoding == "OGG_OPUS":
             return "audio/ogg"
+        elif self.encoding == "FLAC":
+            return "audio/flac"
+        elif self.encoding in ("ALAW", "MULAW"):
+            return "audio/basic"
         else:
             return "audio/wav"
 
@@ -79,9 +89,10 @@ class TTS(tts.TTS):
         encoding: NotGivenOr[Encoding] = NOT_GIVEN,
         bit_rate: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        pitch: NotGivenOr[float] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
+        text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
         base_url: str = DEFAULT_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -93,13 +104,19 @@ class TTS(tts.TTS):
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             voice (str, optional): The voice to use. Defaults to "Ashley".
             model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
-            encoding (str, optional): The encoding to use. Defaults to "MP3".
+            encoding (str, optional): The encoding to use. Defaults to "OGG_OPUS".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
-            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
-            pitch (float, optional): The pitch of the voice. Defaults to 0.0.
-            speaking_rate (float, optional): The speed of the voice. Defaults to 1.0.
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 48000.
+            speaking_rate (float, optional): The speed of the voice, in the range [0.5, 1.5].
+                Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
-                tokens to generate the response. Defaults to 0.8.
+                tokens to generate the response. Range [0, 2]. Defaults to 1.1.
+            timestamp_type (str, optional): Controls timestamp metadata returned with the audio.
+                Use "WORD" for word-level timestamps or "CHARACTER" for character-level.
+                Useful for karaoke-style captions, word highlighting, and lipsync.
+            text_normalization (str, optional): Controls text normalization. When "ON", numbers,
+                dates, and abbreviations are expanded (e.g., "Dr." -> "Doctor"). When "OFF",
+                text is read exactly as written. Defaults to automatic.
             base_url (str, optional): The base URL for the Inworld TTS API.
                 Defaults to "https://api.inworld.ai/".
             http_session (aiohttp.ClientSession, optional): The HTTP session to use.
@@ -126,9 +143,10 @@ class TTS(tts.TTS):
             encoding=encoding if utils.is_given(encoding) else DEFAULT_ENCODING,
             bit_rate=bit_rate if utils.is_given(bit_rate) else DEFAULT_BIT_RATE,
             sample_rate=sample_rate if utils.is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
-            pitch=pitch,
-            speaking_rate=speaking_rate,
-            temperature=temperature,
+            speaking_rate=speaking_rate if utils.is_given(speaking_rate) else DEFAULT_SPEAKING_RATE,
+            temperature=temperature if utils.is_given(temperature) else DEFAULT_TEMPERATURE,
+            timestamp_type=timestamp_type,
+            text_normalization=text_normalization,
         )
 
     @property
@@ -147,9 +165,10 @@ class TTS(tts.TTS):
         encoding: NotGivenOr[Encoding] = NOT_GIVEN,
         bit_rate: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        pitch: NotGivenOr[float] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
+        text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS configuration options.
@@ -160,10 +179,11 @@ class TTS(tts.TTS):
             encoding (str, optional): The encoding to use.
             bit_rate (int, optional): Bits per second of the audio.
             sample_rate (int, optional): The audio sample rate in Hz.
-            pitch (float, optional): The pitch of the voice.
             speaking_rate (float, optional): The speed of the voice.
             temperature (float, optional): Determines the degree of randomness when sampling audio
-                tokens to generate the response. Defaults to 0.8.
+                tokens to generate the response.
+            timestamp_type (str, optional): Controls timestamp metadata ("WORD" or "CHARACTER").
+            text_normalization (str, optional): Controls text normalization ("ON" or "OFF").
         """
         if utils.is_given(voice):
             self._opts.voice = voice
@@ -175,12 +195,14 @@ class TTS(tts.TTS):
             self._opts.bit_rate = bit_rate
         if utils.is_given(sample_rate):
             self._opts.sample_rate = sample_rate
-        if utils.is_given(pitch):
-            self._opts.pitch = pitch
         if utils.is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
         if utils.is_given(temperature):
             self._opts.temperature = temperature
+        if utils.is_given(timestamp_type):
+            self._opts.timestamp_type = timestamp_type
+        if utils.is_given(text_normalization):
+            self._opts.text_normalization = text_normalization
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -212,8 +234,6 @@ class ChunkedStream(tts.ChunkedStream):
                 audio_config["bitrate"] = self._opts.bit_rate
             if utils.is_given(self._opts.sample_rate):
                 audio_config["sampleRateHertz"] = self._opts.sample_rate
-            if utils.is_given(self._opts.pitch):
-                audio_config["pitch"] = self._opts.pitch
             if utils.is_given(self._opts.temperature):
                 audio_config["temperature"] = self._opts.temperature
             if utils.is_given(self._opts.speaking_rate):
@@ -227,6 +247,10 @@ class ChunkedStream(tts.ChunkedStream):
             }
             if utils.is_given(self._opts.temperature):
                 body_params["temperature"] = self._opts.temperature
+            if utils.is_given(self._opts.timestamp_type):
+                body_params["timestampType"] = self._opts.timestamp_type
+            if utils.is_given(self._opts.text_normalization):
+                body_params["applyTextNormalization"] = self._opts.text_normalization
 
             async with self._tts._ensure_session().post(
                 urljoin(self._tts._base_url, "/tts/v1/voice:stream"),
@@ -253,6 +277,12 @@ class ChunkedStream(tts.ChunkedStream):
                         break
                     data = json.loads(line)
                     if result := data.get("result"):
+                        # Handle timestamp info if present
+                        if timestamp_info := result.get("timestampInfo"):
+                            timed_strings = _parse_timestamp_info(timestamp_info)
+                            if timed_strings:
+                                output_emitter.push_timed_transcript(timed_strings)
+
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
                             output_emitter.flush()
@@ -271,3 +301,28 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
+
+
+def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:
+    """Parse timestamp info from API response into TimedString objects."""
+    timed_strings: list[TimedString] = []
+
+    # Handle word-level alignment
+    if word_align := timestamp_info.get("wordAlignment"):
+        words = word_align.get("words", [])
+        starts = word_align.get("wordStartTimeSeconds", [])
+        ends = word_align.get("wordEndTimeSeconds", [])
+
+        for word, start, end in zip(words, starts, ends):
+            timed_strings.append(TimedString(word, start_time=start, end_time=end))
+
+    # Handle character-level alignment
+    if char_align := timestamp_info.get("characterAlignment"):
+        chars = char_align.get("characters", [])
+        starts = char_align.get("characterStartTimeSeconds", [])
+        ends = char_align.get("characterEndTimeSeconds", [])
+
+        for char, start, end in zip(chars, starts, ends):
+            timed_strings.append(TimedString(char, start_time=start, end_time=end))
+
+    return timed_strings

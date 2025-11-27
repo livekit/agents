@@ -1,8 +1,6 @@
 # Inworld plugin for LiveKit Agents
 
-Support for voice synthesis with [Inworld](https://docs.inworld.ai/docs/tts/tts).
-
-See [https://docs.livekit.io/agents/integrations/tts/inworld/](https://docs.livekit.io/agents/integrations/tts/inworld/) for more information.
+Support for voice synthesis with [Inworld TTS](https://docs.inworld.ai/docs/tts/tts).
 
 ## Installation
 
@@ -12,20 +10,23 @@ pip install livekit-plugins-inworld
 
 ## Authentication
 
-The Inworld plugin requires a [Inworld API key](https://platform.inworld.ai/login).
-
-Set `INWORLD_API_KEY` in your `.env` file.
+Set `INWORLD_API_KEY` in your `.env` file ([get one here](https://platform.inworld.ai/login)).
 
 ## Usage
-
-Use Inworld TTS within an `AgentSession` or as a standalone speech generator. For example,
-you can use this TTS in the [Voice AI quickstart](/agents/start/voice-ai/).
 
 ```python
 from livekit.plugins import inworld
 
-session = AgentSession(
-   tts=inworld.TTS(voice="Hades")
-   # ... llm, stt, etc.
+tts = inworld.TTS(
+    voice="Ashley",
+    timestamp_type="WORD",        # word-level timestamps for captions/lipsync
+    text_normalization="OFF",     # read text exactly as written
 )
 ```
+
+## Features
+
+- **Voice cloning**: Use custom voice IDs from [Inworld Portal](https://platform.inworld.ai/tts-playground)
+- **Timestamps**: Word or character-level timing for karaoke, captions, lipsync
+- **Custom pronunciation**: Inline IPA notation (e.g., `"Visit /kriːt/ today"`)
+- **Text normalization**: Control expansion of numbers, dates, abbreviations
