@@ -17,9 +17,9 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-from aws_sdk_transcribe_streaming.config import Config
-from aws_sdk_transcribe_streaming.models import (
+from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
+from aws_sdk_transcribe_streaming.config import Config  # type: ignore
+from aws_sdk_transcribe_streaming.models import (  # type: ignore
     AudioEvent,
     AudioStream,
     AudioStreamAudioEvent,
@@ -30,7 +30,10 @@ from aws_sdk_transcribe_streaming.models import (
     TranscriptResultStream,
 )
 from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
-from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+from smithy_core.aio.interfaces.eventstream import (
+    EventPublisher,
+    EventReceiver,
+)
 
 from livekit import rtc
 from livekit.agents import (
@@ -171,14 +174,12 @@ class SpeechStream(stt.SpeechStream):
                 config_kwargs["aws_session_token"] = self._credentials.session_token
             else:
                 config_kwargs["aws_credentials_identity_resolver"] = (
-                    EnvironmentCredentialsResolver()
+                    EnvironmentCredentialsResolver()  # type: ignore
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
                 config=Config(**config_kwargs)
             )
-
-            logger.info("TEST TEST TEST 1")
 
             live_config = {
                 "language_code": self._opts.language,
