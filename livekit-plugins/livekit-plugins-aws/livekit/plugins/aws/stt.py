@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -149,7 +151,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         return SpeechStream(
-            stt=self, conn_options=conn_options, opts=self._config, credentials=self._credentials
+            stt=self,
+            conn_options=conn_options,
+            opts=self._config,
+            credentials=self._credentials,
         )
 
 
@@ -206,33 +211,45 @@ class SpeechStream(stt.SpeechStream):
                 # Get the output stream
                 _, output_stream = await stream.await_output()
 
-                async def input_generator(audio_stream: EventPublisher[AudioStream]) -> None:
-                    async for frame in self._input_ch:
-                        if isinstance(frame, rtc.AudioFrame):
-                            await audio_stream.send(
-                                AudioStreamAudioEvent(
-                                    value=AudioEvent(audio_chunk=frame.data.tobytes())
+                async def input_generator(
+                    audio_stream: EventPublisher[AudioStream],
+                ) -> None:
+                    try:
+                        async for frame in self._input_ch:
+                            if isinstance(frame, rtc.AudioFrame):
+                                await audio_stream.send(
+                                    AudioStreamAudioEvent(
+                                        value=AudioEvent(audio_chunk=frame.data.tobytes())
+                                    )
                                 )
-                            )
-                    # Send empty frame to close
-                    await audio_stream.send(
-                        AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
-                    )
-                    await audio_stream.close()
+                        # Send empty frame to close
+                        await audio_stream.send(
+                            AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                        )
+                    finally:
+                        with contextlib.suppress(Exception):
+                            await audio_stream.close()
 
                 async def handle_transcript_events(
                     output_stream: EventReceiver[TranscriptResultStream],
                 ) -> None:
-                    async for event in output_stream:
-                        if isinstance(event.value, TranscriptEvent):
-                            self._process_transcript_event(event.value)
+                    try:
+                        async for event in output_stream:
+                            if isinstance(event.value, TranscriptEvent):
+                                self._process_transcript_event(event.value)
+                    except concurrent.futures.InvalidStateError:
+                        logger.warning(
+                            "AWS Transcribe stream closed unexpectedly (InvalidStateError)"
+                        )
+                        pass
 
                 tasks = [
                     asyncio.create_task(input_generator(stream.input_stream)),
                     asyncio.create_task(handle_transcript_events(output_stream)),
                 ]
+                gather_future = asyncio.gather(*tasks)
 
-                await asyncio.gather(*tasks)
+                await asyncio.shield(gather_future)
             except BadRequestException as e:
                 if e.message and e.message.startswith("Your request timed out"):
                     # AWS times out after 15s of inactivity, this tends to happen
@@ -243,7 +260,18 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     raise e
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                # Close input stream first
+                await utils.aio.gracefully_cancel(tasks[0])
+
+                # Wait for output stream to close cleanly
+                try:
+                    await asyncio.wait_for(tasks[1], timeout=3.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    await utils.aio.gracefully_cancel(tasks[1])
+
+                # Ensure gather future is retrieved to avoid "exception never retrieved"
+                with contextlib.suppress(Exception):
+                    await gather_future
 
     def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         if not transcript_event.transcript or not transcript_event.transcript.results:
