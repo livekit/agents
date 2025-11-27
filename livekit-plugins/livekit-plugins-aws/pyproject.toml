@@ -47,3 +47,11 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[[tool.mypy.overrides]]
+module = [
+    "aws_sdk_transcribe_streaming.*",
+    "aws_sdk_bedrock_runtime.*",
+    "boto3"
+]
+ignore_missing_imports = true
