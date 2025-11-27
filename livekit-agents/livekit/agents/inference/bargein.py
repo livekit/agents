@@ -59,6 +59,9 @@ class BargeinEvent:
     inference_duration: float = 0.0
     """Time taken to perform the inference, in seconds."""
 
+    overlap_speech_started_at: float | None = None
+    """Timestamp (in seconds) when the overlap speech started. Useful for emitting held transcripts."""
+
 
 class BargeinError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -247,6 +250,7 @@ class BargeinStreamBase(ABC):
         self._conn_options = conn_options
         self._sample_rate = bargein_detector._sample_rate
         self._resampler: rtc.AudioResampler | None = None
+        self._overlap_speech_started_at: float | None = None
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -315,6 +319,7 @@ class BargeinStreamBase(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._OverlapSpeechStartedSentinel())
+        self._overlap_speech_started_at = time.time()
 
     def end_overlap_speech(self) -> None:
         """Mark the end of the overlap speech"""
@@ -494,6 +499,7 @@ class BargeinHttpStream(BargeinStreamBase):
                         timestamp=time.time(),
                         is_bargein=is_bargein,
                         inference_duration=inference_duration,
+                        overlap_speech_started_at=self._overlap_speech_started_at,
                     )
                 )
 
@@ -501,6 +507,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     ev = BargeinEvent(
                         type=BargeinEventType.BARGEIN,
                         timestamp=time.time(),
+                        overlap_speech_started_at=self._overlap_speech_started_at,
                     )
                     self._event_ch.send_nowait(ev)
                     self._bargein_detector.emit("bargein_detected", ev)
@@ -696,6 +703,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             timestamp=time.time(),
                             is_bargein=is_bargein_result,
                             inference_duration=inference_duration,
+                            overlap_speech_started_at=self._overlap_speech_started_at,
                         )
                     )
                 elif msg_type == "bargein_detected":
@@ -703,6 +711,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     ev = BargeinEvent(
                         type=BargeinEventType.BARGEIN,
                         timestamp=time.time(),
+                        overlap_speech_started_at=self._overlap_speech_started_at,
                     )
                     self._event_ch.send_nowait(ev)
                     self._bargein_detector.emit("bargein_detected", ev)

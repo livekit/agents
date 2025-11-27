@@ -247,10 +247,65 @@ class AudioRecognition:
             else min(ignore_until, self._ignore_until)
         )
 
+        # flush held transcripts if possible
+        task = asyncio.create_task(self._flush_held_transcripts())
+        task.add_done_callback(lambda _: self._tasks.discard(task))
+        self._tasks.add(task)
+
+    async def _flush_held_transcripts(self) -> None:
+        """Flush held transcripts whose *end time* is after the ignore_until timestamp.
+
+        If the event has no timestamps, we assume it is the same as the next valid event.
+        """
+        if not self._barge_in_enabled:
+            return
+        if not is_given(self._ignore_until):
+            return
+        if not self._transcript_buffer:
+            return
+
+        emit_from_index = float("inf")
+        for i, ev in enumerate(self._transcript_buffer):
+            if not ev.alternatives:
+                emit_from_index = min(emit_from_index, i)
+                continue
+            # vendor doesn't set timestamps properly, in which case we just return
+            if ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0:
+                self._transcript_buffer.clear()
+                return
+
+            if (
+                ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
+                < self._ignore_until
+            ):
+                emit_from_index = float("inf")
+            else:
+                emit_from_index = min(emit_from_index, i)
+                break
+
+        # extract events to emit and reset BEFORE iterating
+        # to prevent recursive calls
+        events_to_emit = (
+            self._transcript_buffer[emit_from_index:] if emit_from_index != float("inf") else []
+        )
+        self._transcript_buffer.clear()
+        self._ignore_until = NOT_GIVEN
+
+        for ev in events_to_emit:
+            logger.debug(
+                "re-emitting held transcript",
+                extra={
+                    "event": ev.type,
+                    "ignore_until": self._ignore_until if is_given(self._ignore_until) else None,
+                },
+            )
+            await self._on_stt_event(ev)
+
     def _should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:
         """Test if the event should be held until the ignore_until timestamp."""
         if not self._barge_in_enabled:
             return False
+
         if self._agent_speaking:
             return True
 
@@ -270,13 +325,11 @@ class AudioRecognition:
             # 3. the event is for audio sent before the ignore_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
-            and ev.alternatives[0].start_time + ev.alternatives[0].end_time
-            < self._ignore_until - self._input_started_at
+            and ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
+            < self._ignore_until
         ):
             return True
 
-        # ignore_until expired or we don't have the right timestamp
-        self._ignore_until = NOT_GIVEN
         return False
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -483,7 +536,7 @@ class AudioRecognition:
         # - hold the event until the ignore_until expires
         # - release only relevant events
         # - allow RECOGNITION_USAGE to pass through immediately
-        if ev.type != stt.SpeechEventType.RECOGNITION_USAGE:
+        if ev.type != stt.SpeechEventType.RECOGNITION_USAGE and self._barge_in_enabled:
             if self._should_hold_stt_event(ev):
                 logger.debug(
                     "holding event until ignore_until expires",
@@ -497,23 +550,7 @@ class AudioRecognition:
                 self._transcript_buffer.append(ev)
                 return
             elif self._transcript_buffer:
-                # emit the preceding sentinel event immediately before this event
-                # assuming *only one* sentinel event could precede the current event
-                # ignore if the previous event is not a sentinel event
-                logger.debug(
-                    "emitting held events",
-                    extra={
-                        "event": ev.type,
-                        "previous_event": self._transcript_buffer[-1].type,
-                    },
-                )
-                prev_event = self._transcript_buffer.pop()
-                self._transcript_buffer.clear()
-                if prev_event.type in {
-                    stt.SpeechEventType.START_OF_SPEECH,
-                }:
-                    await self._on_stt_event(prev_event)
-
+                await self._flush_held_transcripts()
                 # no return here to allow the new event to be processed normally
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
