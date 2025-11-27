@@ -237,20 +237,21 @@ class AudioRecognition:
         """End barge-in monitoring and ignore transcript until the given timestamp (when agent stops speaking or barge-in is detected)."""
         if not self._barge_in_enabled:
             return
-        self._agent_speaking = False
-        # no barge-in is detected, end the inference (idempotent)
-        if not is_given(self._ignore_until):
-            self.end_barge_in_inference()
-        self._ignore_until = (
-            ignore_until
-            if not is_given(self._ignore_until)
-            else min(ignore_until, self._ignore_until)
-        )
+        if self._agent_speaking:
+            # no barge-in is detected, end the inference (idempotent)
+            if not is_given(self._ignore_until):
+                self.end_barge_in_inference()
+            self._ignore_until = (
+                ignore_until
+                if not is_given(self._ignore_until)
+                else min(ignore_until, self._ignore_until)
+            )
 
-        # flush held transcripts if possible
-        task = asyncio.create_task(self._flush_held_transcripts())
-        task.add_done_callback(lambda _: self._tasks.discard(task))
-        self._tasks.add(task)
+            # flush held transcripts if possible
+            task = asyncio.create_task(self._flush_held_transcripts())
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._tasks.add(task)
+        self._agent_speaking = False
 
     async def _flush_held_transcripts(self) -> None:
         """Flush held transcripts whose *end time* is after the ignore_until timestamp.
@@ -265,6 +266,7 @@ class AudioRecognition:
             return
 
         emit_from_index = float("inf")
+        should_flush = False
         for i, ev in enumerate(self._transcript_buffer):
             if not ev.alternatives:
                 emit_from_index = min(emit_from_index, i)
@@ -281,12 +283,15 @@ class AudioRecognition:
                 emit_from_index = float("inf")
             else:
                 emit_from_index = min(emit_from_index, i)
+                should_flush = True
                 break
 
         # extract events to emit and reset BEFORE iterating
         # to prevent recursive calls
         events_to_emit = (
-            self._transcript_buffer[emit_from_index:] if emit_from_index != float("inf") else []
+            list(self._transcript_buffer)[emit_from_index:]
+            if emit_from_index != float("inf") and should_flush
+            else []
         )
         self._transcript_buffer.clear()
         self._ignore_until = NOT_GIVEN
@@ -296,7 +301,6 @@ class AudioRecognition:
                 "re-emitting held transcript",
                 extra={
                     "event": ev.type,
-                    "ignore_until": self._ignore_until if is_given(self._ignore_until) else None,
                 },
             )
             await self._on_stt_event(ev)
