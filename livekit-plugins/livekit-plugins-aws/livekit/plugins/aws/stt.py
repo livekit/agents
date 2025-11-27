@@ -16,11 +16,17 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from amazon_transcribe.auth import AwsCrtCredentialResolver, CredentialResolver, Credentials
-from amazon_transcribe.client import TranscribeStreamingClient
-from amazon_transcribe.exceptions import BadRequestException
-from amazon_transcribe.model import Result, StartStreamTranscriptionEventStream, TranscriptEvent
-from awscrt.auth import AwsCredentialsProvider  # type: ignore[import-untyped]
+from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
+from aws_sdk_transcribe_streaming.config import Config
+from aws_sdk_transcribe_streaming.models import (
+    AudioEvent,
+    AudioStreamAudioEvent,
+    BadRequestException,
+    StartStreamTranscriptionInput,
+    TranscriptEvent,
+    Result,
+)
+from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
 
 from livekit import rtc
 from livekit.agents import (
@@ -34,6 +40,13 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .utils import DEFAULT_REGION
+
+
+@dataclass
+class Credentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None = None
 
 
 @dataclass
@@ -145,36 +158,21 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._credentials = credentials
 
-    def _credential_resolver(self) -> CredentialResolver:
-        if self._credentials is None:
-            return AwsCrtCredentialResolver(None)  # type: ignore
-
-        credentials = self._credentials
-
-        class CustomAwsCrtCredentialResolver(CredentialResolver):
-            def __init__(self) -> None:
-                self._crt_resolver = AwsCredentialsProvider.new_static(
-                    credentials.access_key_id,
-                    credentials.secret_access_key,
-                    credentials.session_token,
-                )
-
-            async def get_credentials(self) -> Credentials | None:
-                credentials = await asyncio.wrap_future(self._crt_resolver.get_credentials())
-                return credentials  # type: ignore[no-any-return]
-
-        return CustomAwsCrtCredentialResolver()
-
     async def _run(self) -> None:
         while True:
-            client = TranscribeStreamingClient(
-                region=self._opts.region,
-                credential_resolver=self._credential_resolver(),
-            )
+            config_kwargs = {"region": self._opts.region}
+            if self._credentials:
+                config_kwargs["aws_access_key_id"] = self._credentials.access_key_id
+                config_kwargs["aws_secret_access_key"] = self._credentials.secret_access_key
+                config_kwargs["aws_session_token"] = self._credentials.session_token
+            else:
+                config_kwargs["aws_credentials_identity_resolver"] = EnvironmentCredentialsResolver()
+
+            client = TranscribeStreamingClient(config=Config(**config_kwargs))
 
             live_config = {
                 "language_code": self._opts.language,
-                "media_sample_rate_hz": self._opts.sample_rate,
+                "media_sample_rate_hertz": self._opts.sample_rate,
                 "media_encoding": self._opts.encoding,
                 "vocabulary_name": self._opts.vocabulary_name,
                 "session_id": self._opts.session_id,
@@ -183,29 +181,40 @@ class SpeechStream(stt.SpeechStream):
                 "show_speaker_label": self._opts.show_speaker_label,
                 "enable_channel_identification": self._opts.enable_channel_identification,
                 "number_of_channels": self._opts.number_of_channels,
-                "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,  # noqa: E501
+                "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
                 "partial_results_stability": self._opts.partial_results_stability,
                 "language_model_name": self._opts.language_model_name,
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
-            stream = await client.start_stream_transcription(**filtered_config)  # type: ignore
-
-            async def input_generator(stream: StartStreamTranscriptionEventStream) -> None:
-                async for frame in self._input_ch:
-                    if isinstance(frame, rtc.AudioFrame):
-                        await stream.input_stream.send_audio_event(audio_chunk=frame.data.tobytes())
-                await stream.input_stream.end_stream()  # type: ignore
-
-            async def handle_transcript_events(stream: StartStreamTranscriptionEventStream) -> None:
-                async for event in stream.output_stream:
-                    if isinstance(event, TranscriptEvent):
-                        self._process_transcript_event(event)
-
-            tasks = [
-                asyncio.create_task(input_generator(stream)),
-                asyncio.create_task(handle_transcript_events(stream)),
-            ]
+            
             try:
+                stream = await client.start_stream_transcription(
+                    input=StartStreamTranscriptionInput(**filtered_config)
+                )
+                
+                # Get the output stream
+                _, output_stream = await stream.await_output()
+
+                async def input_generator(audio_stream) -> None:
+                    async for frame in self._input_ch:
+                        if isinstance(frame, rtc.AudioFrame):
+                            await audio_stream.send(
+                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=frame.data.tobytes()))
+                            )
+                    # Send empty frame to close
+                    await audio_stream.send(AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b"")))
+                    await audio_stream.close()
+
+                async def handle_transcript_events(output_stream) -> None:
+                    async for event in output_stream:
+                        if isinstance(event.value, TranscriptEvent):
+                            self._process_transcript_event(event.value)
+
+                tasks = [
+                    asyncio.create_task(input_generator(stream.input_stream)),
+                    asyncio.create_task(handle_transcript_events(output_stream)),
+                ]
+                
                 await asyncio.gather(*tasks)
             except BadRequestException as e:
                 if e.message and e.message.startswith("Your request timed out"):
@@ -220,14 +229,17 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.gracefully_cancel(*tasks)
 
     def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
+        if not transcript_event.transcript or not transcript_event.transcript.results:
+            return
+            
         stream = transcript_event.transcript.results
         for resp in stream:
-            if resp.start_time and resp.start_time == 0.0:
+            if resp.start_time is not None and resp.start_time == 0.0:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 )
 
-            if resp.end_time and resp.end_time > 0.0:
+            if resp.end_time is not None and resp.end_time > 0.0:
                 if resp.is_partial:
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
