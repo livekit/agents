@@ -281,6 +281,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
+        prometheus_multiproc_dir: str | None = None,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -302,6 +303,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._permissions = permissions
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
+        self._prometheus_multiproc_dir = prometheus_multiproc_dir
         self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
 
@@ -594,12 +596,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._http_server.app.add_routes([web.get("/", health_check)])
             self._http_server.app.add_routes([web.get("/worker", worker)])
 
-            self._prometheus_server: telemetry.http_server.HttpServer | None = None
-            if self._prometheus_port is not None:
-                self._prometheus_server = telemetry.http_server.HttpServer(
-                    self._host, self._prometheus_port, loop=self._loop
-                )
-
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
 
@@ -613,6 +609,33 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise ValueError(
                     "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
                 )
+
+            self._prometheus_server: telemetry.http_server.HttpServer | None = None
+            if self._prometheus_port is not None:
+                self._prometheus_server = telemetry.http_server.HttpServer(
+                    self._host, self._prometheus_port, loop=self._loop
+                )
+
+            if self._prometheus_multiproc_dir:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = self._prometheus_multiproc_dir
+            elif "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+                self._prometheus_multiproc_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
+
+            if self._prometheus_multiproc_dir:
+                os.makedirs(self._prometheus_multiproc_dir, exist_ok=True)
+
+            if self._prometheus_multiproc_dir and os.path.exists(self._prometheus_multiproc_dir):
+                logger.debug(
+                    "cleaning prometheus multiprocess directory",
+                    extra={"path": self._prometheus_multiproc_dir},
+                )
+                for filename in os.listdir(self._prometheus_multiproc_dir):
+                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                    except Exception as e:
+                        logger.warning(f"failed to remove {file_path}", exc_info=e)
 
             os.environ["LIVEKIT_URL"] = self._ws_url
             os.environ["LIVEKIT_API_KEY"] = self._api_key
@@ -641,9 +664,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 t.add_done_callback(self._tasks.discard)
 
             await self._http_server.start()
+            logger.info(
+                f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
+            )
 
             if self._prometheus_server:
                 await self._prometheus_server.start()
+                logger.info(
+                    "Prometheus metrics exposed at http://%s:%s/metrics",
+                    self._prometheus_server.host,
+                    self._prometheus_server.port,
+                )
 
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
@@ -678,6 +709,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
 
                     telemetry.metrics._update_worker_load(self._worker_load)
+                    telemetry.metrics._update_child_proc_count()
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
