@@ -1600,6 +1600,9 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
     ) -> None:
+        current_span = trace.get_current_span()
+        current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+
         tr_output = (
             self._session.output.transcription
             if self._session.output.transcription_enabled
@@ -1612,6 +1615,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
+            current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             await utils.aio.cancel_and_wait(wait_for_authorization)
             return
 
@@ -1688,6 +1692,7 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
+        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
 
@@ -1698,25 +1703,24 @@ class AgentActivity(RecognitionHooks):
         if tee is not None:
             await tee.aclose()
 
-        if add_to_chat_ctx:
-            # use synchronized transcript when available after interruption
-            forwarded_text = text_out.text if text_out else ""
-            if speech_handle.interrupted and audio_output is not None:
-                playback_ev = await audio_output.wait_for_playout()
+        # use synchronized transcript when available after interruption
+        forwarded_text = text_out.text if text_out else ""
+        if speech_handle.interrupted and audio_output is not None:
+            playback_ev = await audio_output.wait_for_playout()
 
-                if audio_out is not None and audio_out.first_frame_fut.done():
-                    if playback_ev.synchronized_transcript is not None:
-                        forwarded_text = playback_ev.synchronized_transcript
-                else:
-                    forwarded_text = ""
+            if audio_out is not None and audio_out.first_frame_fut.done():
+                if playback_ev.synchronized_transcript is not None:
+                    forwarded_text = playback_ev.synchronized_transcript
+            else:
+                forwarded_text = ""
+        current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-            msg: llm.ChatMessage | None = None
-            if forwarded_text:
-                msg = self._agent._chat_ctx.add_message(
-                    role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
-                )
-                speech_handle._item_added([msg])
-                self._session._conversation_item_added(msg)
+        if forwarded_text and add_to_chat_ctx:
+            msg = self._agent._chat_ctx.add_message(
+                role="assistant", content=forwarded_text, interrupted=speech_handle.interrupted
+            )
+            speech_handle._item_added([msg])
+            self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
