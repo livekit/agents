@@ -156,7 +156,9 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.getenv("INWORLD_API_KEY")
         if not api_key:
-            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
+            raise ValueError(
+                "Inworld API key required. Set INWORLD_API_KEY or provide api_key."
+            )
 
         self._authorization = f"Basic {api_key}"
         self._base_url = base_url
@@ -297,7 +299,9 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -387,6 +391,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        self._context_id = utils.shortuuid()
+        self._sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        self._input_flushed = asyncio.Event()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -398,168 +405,21 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        context_id = utils.shortuuid()
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
-        input_flushed = asyncio.Event()
-
-        async def _create_context(ws: aiohttp.ClientWebSocketResponse) -> None:
-            """Create a new context on the WebSocket connection."""
-            create_msg: dict[str, Any] = {
-                "create": {
-                    "voiceId": self._opts.voice,
-                    "modelId": self._opts.model,
-                    "audioConfig": {
-                        "audioEncoding": self._opts.encoding,
-                        "sampleRateHertz": self._opts.sample_rate,
-                        "bitrate": self._opts.bit_rate,
-                        "speakingRate": self._opts.speaking_rate,
-                    },
-                    "temperature": self._opts.temperature,
-                    "bufferCharThreshold": self._opts.buffer_char_threshold,
-                    "maxBufferDelayMs": self._opts.max_buffer_delay_ms,
-                },
-                "contextId": context_id,
-            }
-            if is_given(self._opts.timestamp_type):
-                create_msg["create"]["timestampType"] = self._opts.timestamp_type
-            if is_given(self._opts.text_normalization):
-                create_msg["create"]["applyTextNormalization"] = self._opts.text_normalization
-            await ws.send_str(json.dumps(create_msg))
-
-        async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    sent_tokenizer_stream.flush()
-                    continue
-                sent_tokenizer_stream.push_text(data)
-            sent_tokenizer_stream.end_input()
-
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for ev in sent_tokenizer_stream:
-                send_msg = {
-                    "send_text": {
-                        "text": ev.token,
-                    },
-                    "contextId": context_id,
-                }
-                self._mark_started()
-                await ws.send_str(json.dumps(send_msg))
-
-            # Flush remaining text and close the context
-            flush_msg = {"flush_context": {}, "contextId": context_id}
-            await ws.send_str(json.dumps(flush_msg))
-
-            close_msg = {"close_context": {}, "contextId": context_id}
-            await ws.send_str(json.dumps(close_msg))
-            input_flushed.set()
-
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            current_segment_id: str | None = None
-
-            while True:
-                try:
-                    # If we've flushed input, we expect a response reasonably quickly
-                    # But if it times out, we can assume we're done if we received data
-                    timeout = 0.5 if input_flushed.is_set() else self._conn_options.timeout
-                    msg = await ws.receive(timeout=timeout)
-                except asyncio.TimeoutError:
-                    if input_flushed.is_set():
-                        # Inworld server sometimes doesn't send the contextClosed message
-                        # or closes the connection silently. Since we've flushed the input,
-                        # we treat this timeout as a successful completion of the stream.
-                        logger.debug(
-                            "Inworld stream completed",
-                            extra={"context_id": context_id},
-                        )
-                        output_emitter.end_input()
-                        return
-                    raise
-
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    # If input was flushed and connection closed, treat as success
-                    if input_flushed.is_set():
-                        logger.debug(
-                            "Inworld WebSocket closed after flush",
-                            extra={"context_id": context_id},
-                        )
-                        output_emitter.end_input()
-                        return
-                    logger.error(
-                        "Inworld WebSocket connection closed unexpectedly",
-                        extra={"context_id": context_id},
-                    )
-                    raise APIStatusError(
-                        "Inworld connection closed unexpectedly", request_id=request_id
-                    )
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected Inworld message type %s", msg.type)
-                    continue
-
-                data = json.loads(msg.data)
-                result = data.get("result", {})
-                result_context_id = result.get("contextId")
-
-                # Check for errors in status
-                status = result.get("status", {})
-                if status.get("code", 0) != 0:
-                    raise APIError(
-                        f"Inworld error: {status.get('message', 'Unknown error')}"
-                    )
-
-                # Handle context created response
-                if result.get("contextCreated"):
-                    logger.debug(
-                        "Inworld context created",
-                        extra={"context_id": result_context_id},
-                    )
-                    continue
-
-                # Handle context closed response - this is the completion signal
-                # Similar to ElevenLabs isFinal or Cartesia done
-                if result.get("contextClosed"):
-                    logger.debug(
-                        "Inworld context closed",
-                        extra={"context_id": result_context_id},
-                    )
-                    output_emitter.end_input()
-                    return
-
-                # Handle audio chunks
-                if audio_chunk := result.get("audioChunk"):
-                    if current_segment_id is None:
-                        current_segment_id = result_context_id or context_id
-                        output_emitter.start_segment(segment_id=current_segment_id)
-
-                    # Handle timestamp info if present
-                    if timestamp_info := audio_chunk.get("timestampInfo"):
-                        timed_strings = _parse_timestamp_info(timestamp_info)
-                        for ts in timed_strings:
-                            output_emitter.push_timed_transcript(ts)
-
-                    # Handle audio content
-                    if audio_content := audio_chunk.get("audioContent"):
-                        output_emitter.push(base64.b64decode(audio_content))
-
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                # Create the context first
-                await _create_context(ws)
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.timeout
+            ) as ws:
+                await self._create_context(ws)
 
                 tasks = [
-                    asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
+                    asyncio.create_task(self._input_task()),
+                    asyncio.create_task(self._send_task(ws)),
+                    asyncio.create_task(self._recv_task(ws, output_emitter, request_id)),
                 ]
 
                 try:
                     await asyncio.gather(*tasks)
                 finally:
-                    await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -572,9 +432,152 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             logger.error(
                 "Inworld WebSocket connection error",
-                extra={"context_id": context_id, "error": e},
+                extra={"context_id": self._context_id, "error": e},
             )
             raise APIConnectionError() from e
+        finally:
+            await self._sent_tokenizer_stream.aclose()
+
+    async def _create_context(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Create a new context on the WebSocket connection."""
+        create_msg: dict[str, Any] = {
+            "create": {
+                "voiceId": self._opts.voice,
+                "modelId": self._opts.model,
+                "audioConfig": {
+                    "audioEncoding": self._opts.encoding,
+                    "sampleRateHertz": self._opts.sample_rate,
+                    "bitrate": self._opts.bit_rate,
+                    "speakingRate": self._opts.speaking_rate,
+                },
+                "temperature": self._opts.temperature,
+                "bufferCharThreshold": self._opts.buffer_char_threshold,
+                "maxBufferDelayMs": self._opts.max_buffer_delay_ms,
+            },
+            "contextId": self._context_id,
+        }
+        if is_given(self._opts.timestamp_type):
+            create_msg["create"]["timestampType"] = self._opts.timestamp_type
+        if is_given(self._opts.text_normalization):
+            create_msg["create"]["applyTextNormalization"] = self._opts.text_normalization
+        await ws.send_str(json.dumps(create_msg))
+
+    async def _input_task(self) -> None:
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                self._sent_tokenizer_stream.flush()
+                continue
+            self._sent_tokenizer_stream.push_text(data)
+        self._sent_tokenizer_stream.end_input()
+
+    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        async for ev in self._sent_tokenizer_stream:
+            send_msg = {
+                "send_text": {
+                    "text": ev.token,
+                },
+                "contextId": self._context_id,
+            }
+            self._mark_started()
+            await ws.send_str(json.dumps(send_msg))
+
+        # Flush remaining text and close the context
+        flush_msg = {"flush_context": {}, "contextId": self._context_id}
+        await ws.send_str(json.dumps(flush_msg))
+
+        close_msg = {"close_context": {}, "contextId": self._context_id}
+        await ws.send_str(json.dumps(close_msg))
+        self._input_flushed.set()
+
+    async def _recv_task(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        output_emitter: tts.AudioEmitter,
+        request_id: str,
+    ) -> None:
+        current_segment_id: str | None = None
+
+        while True:
+            try:
+                timeout = 0.5 if self._input_flushed.is_set() else self._conn_options.timeout
+                msg = await ws.receive(timeout=timeout)
+            except asyncio.TimeoutError:
+                if self._input_flushed.is_set():
+                    logger.debug(
+                        "Inworld stream completed",
+                        extra={"context_id": self._context_id},
+                    )
+                    output_emitter.end_input()
+                    return
+                raise
+
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                if self._input_flushed.is_set():
+                    logger.debug(
+                        "Inworld WebSocket closed after flush",
+                        extra={"context_id": self._context_id},
+                    )
+                    output_emitter.end_input()
+                    return
+                logger.error(
+                    "Inworld WebSocket connection closed unexpectedly",
+                    extra={"context_id": self._context_id},
+                )
+                raise APIStatusError(
+                    "Inworld connection closed unexpectedly", request_id=request_id
+                )
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                logger.warning("unexpected Inworld message type %s", msg.type)
+                continue
+
+            data = json.loads(msg.data)
+            result = data.get("result", {})
+            result_context_id = result.get("contextId")
+
+            # Check for errors in status
+            status = result.get("status", {})
+            if status.get("code", 0) != 0:
+                raise APIError(
+                    f"Inworld error: {status.get('message', 'Unknown error')}"
+                )
+
+            # Handle context created response
+            if result.get("contextCreated"):
+                logger.debug(
+                    "Inworld context created",
+                    extra={"context_id": result_context_id},
+                )
+                continue
+
+            # Handle context closed response - this is the completion signal
+            if result.get("contextClosed"):
+                logger.debug(
+                    "Inworld context closed",
+                    extra={"context_id": result_context_id},
+                )
+                output_emitter.end_input()
+                return
+
+            # Handle audio chunks
+            if audio_chunk := result.get("audioChunk"):
+                if current_segment_id is None:
+                    current_segment_id = result_context_id or self._context_id
+                    output_emitter.start_segment(segment_id=current_segment_id)
+
+                # Handle timestamp info if present
+                if timestamp_info := audio_chunk.get("timestampInfo"):
+                    timed_strings = _parse_timestamp_info(timestamp_info)
+                    for ts in timed_strings:
+                        output_emitter.push_timed_transcript(ts)
+
+                # Handle audio content
+                if audio_content := audio_chunk.get("audioContent"):
+                    output_emitter.push(base64.b64decode(audio_content))
 
 
 def _parse_timestamp_info(timestamp_info: dict[str, Any]) -> list[TimedString]:

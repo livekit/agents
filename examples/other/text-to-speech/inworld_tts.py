@@ -23,11 +23,9 @@ async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
     tts = inworld.TTS(
-        voice="Alex",  # Voice ID (or custom cloned voice ID)
-        timestamp_type="WORD",  # CHARACTER or WORD
-        text_normalization="ON",  # ON or OFF
-        # Optimize for real-time streaming
-        buffer_char_threshold=1,
+        # voice="Alex",  # Voice ID (or custom cloned voice ID)
+        # timestamp_type="WORD",  # CHARACTER or WORD
+        # text_normalization="ON",  # ON or OFF
     )
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
