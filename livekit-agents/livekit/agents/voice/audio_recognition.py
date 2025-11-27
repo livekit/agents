@@ -265,6 +265,11 @@ class AudioRecognition:
         if not self._transcript_buffer:
             return
 
+        if not self._input_started_at:
+            self._transcript_buffer.clear()
+            self._ignore_until = NOT_GIVEN
+            return
+
         emit_from_index = float("inf")
         should_flush = False
         for i, ev in enumerate(self._transcript_buffer):
@@ -274,6 +279,7 @@ class AudioRecognition:
             # vendor doesn't set timestamps properly, in which case we just return
             if ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0:
                 self._transcript_buffer.clear()
+                self._ignore_until = NOT_GIVEN
                 return
 
             if (
@@ -289,7 +295,7 @@ class AudioRecognition:
         # extract events to emit and reset BEFORE iterating
         # to prevent recursive calls
         events_to_emit = (
-            list(self._transcript_buffer)[emit_from_index:]
+            list(self._transcript_buffer)[int(emit_from_index) :]
             if emit_from_index != float("inf") and should_flush
             else []
         )
