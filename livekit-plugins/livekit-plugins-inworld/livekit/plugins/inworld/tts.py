@@ -148,7 +148,8 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=is_given(timestamp_type) and timestamp_type != "TIMESTAMP_TYPE_UNSPECIFIED",
+                aligned_transcript=is_given(timestamp_type)
+                and timestamp_type != "TIMESTAMP_TYPE_UNSPECIFIED",
             ),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
@@ -156,9 +157,7 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.getenv("INWORLD_API_KEY")
         if not api_key:
-            raise ValueError(
-                "Inworld API key required. Set INWORLD_API_KEY or provide api_key."
-            )
+            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
 
         self._authorization = f"Basic {api_key}"
         self._base_url = base_url
@@ -175,8 +174,12 @@ class TTS(tts.TTS):
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
-            buffer_char_threshold=buffer_char_threshold if is_given(buffer_char_threshold) else DEFAULT_BUFFER_CHAR_THRESHOLD,
-            max_buffer_delay_ms=max_buffer_delay_ms if is_given(max_buffer_delay_ms) else DEFAULT_MAX_BUFFER_DELAY_MS,
+            buffer_char_threshold=buffer_char_threshold
+            if is_given(buffer_char_threshold)
+            else DEFAULT_BUFFER_CHAR_THRESHOLD,
+            max_buffer_delay_ms=max_buffer_delay_ms
+            if is_given(max_buffer_delay_ms)
+            else DEFAULT_MAX_BUFFER_DELAY_MS,
         )
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -285,7 +288,7 @@ class TTS(tts.TTS):
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SynthesizeStream":
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -299,9 +302,7 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -406,9 +407,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.timeout
-            ) as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 await self._create_context(ws)
 
                 tasks = [
@@ -542,9 +541,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Check for errors in status
             status = result.get("status", {})
             if status.get("code", 0) != 0:
-                raise APIError(
-                    f"Inworld error: {status.get('message', 'Unknown error')}"
-                )
+                raise APIError(f"Inworld error: {status.get('message', 'Unknown error')}")
 
             # Handle context created response
             if result.get("contextCreated"):

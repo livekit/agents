@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
-
 from livekit.plugins import inworld
 
 load_dotenv()
@@ -44,7 +43,9 @@ async def entrypoint(job: JobContext):
         # Print timestamp information if available
         timed_strings = audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
         for ts in timed_strings:
-            start = f"{ts.start_time:.3f}s" if hasattr(ts, "start_time") and ts.start_time else "N/A"
+            start = (
+                f"{ts.start_time:.3f}s" if hasattr(ts, "start_time") and ts.start_time else "N/A"
+            )
             end = f"{ts.end_time:.3f}s" if hasattr(ts, "end_time") and ts.end_time else "N/A"
             logger.info(f"  [{start} - {end}] {ts}")
 
@@ -55,7 +56,9 @@ async def entrypoint(job: JobContext):
     await asyncio.sleep(1)
 
     # --- Example 2: Using stream() (WebSocket streaming) ---
-    streamed_text = "This is an example using WebSocket streaming for lower latency real-time synthesis."
+    streamed_text = (
+        "This is an example using WebSocket streaming for lower latency real-time synthesis."
+    )
     logger.info(f'streaming (WebSocket): "{streamed_text}"')
 
     stream = tts.stream()
@@ -68,11 +71,11 @@ async def entrypoint(job: JobContext):
         "for lower latency ",
         "real-time synthesis.",
     ]
-    
+
     for chunk in chunks:
         logger.debug(f"pushing chunk: {chunk!r}")
         stream.push_text(chunk)
-        await asyncio.sleep(0.1) # Simulate generation delay
+        await asyncio.sleep(0.1)  # Simulate generation delay
 
     stream.flush()
     stream.end_input()
@@ -85,7 +88,11 @@ async def entrypoint(job: JobContext):
             # Print timestamp information if available
             timed_strings = ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
             for ts in timed_strings:
-                start = f"{ts.start_time:.3f}s" if hasattr(ts, "start_time") and ts.start_time else "N/A"
+                start = (
+                    f"{ts.start_time:.3f}s"
+                    if hasattr(ts, "start_time") and ts.start_time
+                    else "N/A"
+                )
                 end = f"{ts.end_time:.3f}s" if hasattr(ts, "end_time") and ts.end_time else "N/A"
                 logger.info(f"  [{start} - {end}] {ts}")
 
