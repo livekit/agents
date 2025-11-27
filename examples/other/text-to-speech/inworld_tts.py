@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
+from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
 # For local development, use direct import from the plugin source:
 import sys
@@ -24,9 +25,9 @@ async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
     tts = inworld.TTS(
-        # voice="Ashley",  # default voice
-        timestamp_type="WORD",  # get word-level timestamps
-        text_normalization="OFF",  # read text exactly as written
+        voice="Alex", # Voice ID (or custom cloned voice ID)
+        timestamp_type="TIMESTAMP_TYPE_UNSPECIFIED", # CHARACTER or WORD
+        text_normalization="ON", # ON or OFF
     )
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
@@ -38,10 +39,17 @@ async def entrypoint(job: JobContext):
     publication = await job.room.local_participant.publish_track(track, options)
     await publication.wait_for_subscription()
 
-    text = "Hello from Inworld. I hope you are having a great day."
+    text = "Hello from Inworld. I hope you are having a spectacular day."
 
     logger.info(f'synthesizing: "{text}"')
     async for audio in tts.synthesize(text):
+        # Print timestamp information if available
+        timed_strings = audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
+        for ts in timed_strings:
+            start = f"{ts.start_time:.3f}s" if hasattr(ts, "start_time") and ts.start_time else "N/A"
+            end = f"{ts.end_time:.3f}s" if hasattr(ts, "end_time") and ts.end_time else "N/A"
+            logger.info(f"  [{start} - {end}] {ts}")
+
         await source.capture_frame(audio.frame)
 
     logger.info("synthesis complete")
