@@ -24,13 +24,15 @@ SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "avatario-avatar-agent"
 _AVATAR_AGENT_NAME = "avatario-avatar-agent"
 
+
 class AvatarSession:
     """An Avatario avatar session"""
+
     @dataclass
     class VideoInfo:
-        video_height: int=720
-        video_width: int=1280
-        custom_background_url: str | None=None
+        video_height: int = 720
+        video_width: int = 1280
+        custom_background_url: str | None = None
 
     def __init__(
         self,

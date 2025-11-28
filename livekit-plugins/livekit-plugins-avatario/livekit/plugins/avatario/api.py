@@ -23,6 +23,7 @@ class AvatarioException(Exception):
 
 DEFAULT_API_URL = "https://avatario.ai/api/sdk"
 
+
 class AvatarioAPI:
     def __init__(
         self,
