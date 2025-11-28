@@ -115,7 +115,7 @@ async def entrypoint(job: JobContext):
     await stream.aclose()
 
     logger.info("WebSocket streaming complete")
-        # List available voices
+    # List available voices
     try:
         voices = await tts.list_voices()
         logger.info(f"[Inworld TTS] {len(voices)} voices available in this workspace")
