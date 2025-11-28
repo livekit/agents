@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from typing import Optional
 
@@ -114,6 +115,16 @@ async def entrypoint(job: JobContext):
     await stream.aclose()
 
     logger.info("WebSocket streaming complete")
+        # List available voices
+    try:
+        voices = await tts.list_voices()
+        logger.info(f"[Inworld TTS] {len(voices)} voices available in this workspace")
+        if voices:
+            logger.info(
+                f"[Inworld TTS] Logging information for first voice: {json.dumps(voices[0], indent=2)}"
+            )
+    except Exception as e:
+        logger.error(f"[Inworld TTS] Failed to list voices: {e}")
 
 
 if __name__ == "__main__":

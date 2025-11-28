@@ -300,6 +300,35 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._pool.aclose()
 
+    async def list_voices(self, language: str | None = None) -> list[dict[str, Any]]:
+        """
+        List all available voices in the workspace associated with the API key.
+
+        Args:
+            language (str, optional): ISO 639-1 language code to filter voices (e.g., 'en', 'es', 'fr').
+        """
+        url = urljoin(self._base_url, "tts/v1/voices")
+        params = {}
+        if language:
+            params["filter"] = f"language={language}"
+
+        async with self._ensure_session().get(
+            url,
+            headers={"Authorization": self._authorization},
+            params=params,
+        ) as resp:
+            if not resp.ok:
+                error_body = await resp.json()
+                raise APIStatusError(
+                    message=error_body.get("message"),
+                    status_code=resp.status,
+                    request_id=None,
+                    body=None,
+                )
+
+            data = await resp.json()
+            return cast(list[dict[str, Any]], data.get("voices", []))
+
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
