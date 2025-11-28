@@ -20,7 +20,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import trace_types, tracer, utils as telemetry_utils
+from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -169,7 +169,11 @@ class LLMStream(ABC):
         )
 
         async def _traceable_main_task() -> None:
-            with tracer.start_as_current_span(self._llm_request_span_name, end_on_exit=False):
+            with tracer.start_as_current_span(
+                self._llm_request_span_name, end_on_exit=False
+            ) as span:
+                for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
+                    span.add_event(name, attributes)
                 await self._main_task()
 
         self._task = asyncio.create_task(_traceable_main_task(), name="LLM._main_task")
