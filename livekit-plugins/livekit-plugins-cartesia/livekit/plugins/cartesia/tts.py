@@ -73,6 +73,7 @@ class _TTSOptions:
     language: str
     base_url: str
     api_version: str
+    pronunciation_dict_id: str | None
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -95,6 +96,7 @@ class TTS(tts.TTS):
         volume: float | None = None,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
+        pronunciation_dict_id: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
@@ -116,6 +118,7 @@ class TTS(tts.TTS):
             volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
+            pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
@@ -151,9 +154,10 @@ class TTS(tts.TTS):
             base_url=base_url,
             word_timestamps=word_timestamps,
             api_version=api_version,
+            pronunciation_dict_id=pronunciation_dict_id,
         )
 
-        if speed or emotion or volume:
+        if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
         self._session = http_session
@@ -230,6 +234,7 @@ class TTS(tts.TTS):
         speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
         emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
+        pronunciation_dict_id: NotGivenOr[str] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -244,6 +249,7 @@ class TTS(tts.TTS):
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations.
         """
         if is_given(model):
             self._opts.model = model
@@ -258,10 +264,12 @@ class TTS(tts.TTS):
             self._opts.emotion = cast(list[Union[TTSVoiceEmotion, str]], emotion)
         if is_given(volume):
             self._opts.volume = volume
+        if is_given(pronunciation_dict_id):
+            self._opts.pronunciation_dict_id = pronunciation_dict_id
         if is_given(api_version):
             self._opts.api_version = api_version
 
-        if speed or emotion:
+        if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
     def synthesize(
@@ -303,6 +311,15 @@ class TTS(tts.TTS):
                     "model": self._opts.model,
                     "speed": self._opts.speed,
                     "emotion": self._opts.emotion,
+                },
+            )
+
+        if self._opts.pronunciation_dict_id and not _is_sonic_3(self._opts.model):
+            logger.warning(
+                "pronunciation_dict_id is only supported for sonic-3 models",
+                extra={
+                    "model": self._opts.model,
+                    "pronunciation_dict_id": self._opts.pronunciation_dict_id,
                 },
             )
 
@@ -537,6 +554,9 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         },
         "language": opts.language,
     }
+
+    if opts.pronunciation_dict_id:
+        options["pronunciation_dict_id"] = opts.pronunciation_dict_id
 
     if opts.api_version > API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS and _is_sonic_3(
         opts.model

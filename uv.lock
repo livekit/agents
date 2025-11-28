@@ -1914,7 +1914,6 @@ clova = [
     { name = "livekit-plugins-clova" },
 ]
 codecs = [
-    { name = "av" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
@@ -2025,8 +2024,7 @@ upliftai = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=24" },
     { name = "aiohttp", specifier = "~=3.10" },
-    { name = "av", specifier = ">=14.0.0,<16" },
-    { name = "av", marker = "extra == 'codecs'", specifier = ">=12.0.0" },
+    { name = "av", specifier = ">=14.0.0" },
     { name = "certifi", specifier = ">=2025.6.15" },
     { name = "click", specifier = "~=8.1" },
     { name = "colorama", specifier = ">=0.4.6" },
@@ -2742,7 +2740,7 @@ requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
-    { name = "transformers", specifier = ">=4.47.1" },
+    { name = "transformers", specifier = ">=4.47.1,<=4.57.1" },
 ]
 
 [[package]]

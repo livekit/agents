@@ -5,6 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
@@ -350,6 +351,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+        self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
         self._enable_recording: bool = False
@@ -508,6 +510,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 pass
 
             self._session_span = current_span = tracer.start_span("agent_session")
+            # we detach here to avoid context issues since tokens need to be detached
+            # in the same context as it was created
+            if self._session_ctx_token is not None:
+                otel_context.detach(self._session_ctx_token)
+                self._session_ctx_token = None
+            ctx = trace.set_span_in_context(current_span)
+            self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []
             self._room_io = None
@@ -797,9 +806,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-            if self._room_io:
-                await self._room_io.aclose()
-
             if self._recorder_io:
                 await self._recorder_io.aclose()
 
@@ -813,6 +819,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = False
 
             self.emit("close", CloseEvent(error=error, reason=reason))
+
+            if self._room_io:
+                # close room io after close event is emitted, ensure the room io's close callback is called
+                await self._room_io.aclose()
 
             self._cancel_user_away_timer()
             self._user_state = "listening"
@@ -903,6 +913,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
     ) -> SpeechHandle:
         """Generate a reply for the agent to speak to the user.
 
@@ -943,6 +954,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
+                chat_ctx=chat_ctx,
             )
             if run_state:
                 run_state._watch_handle(handle)
@@ -1151,7 +1163,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
-    def _update_agent_state(self, state: AgentState) -> None:
+    def _update_agent_state(
+        self, state: AgentState, *, otel_context: otel_context.Context | None = None
+    ) -> None:
         if self._agent_state == state:
             return
 
@@ -1160,7 +1174,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._tts_error_counts = 0
 
             if self._agent_speaking_span is None:
-                self._agent_speaking_span = tracer.start_span("agent_speaking")
+                self._agent_speaking_span = tracer.start_span(
+                    "agent_speaking", context=otel_context
+                )
 
                 if self._room_io:
                     _set_participant_attributes(

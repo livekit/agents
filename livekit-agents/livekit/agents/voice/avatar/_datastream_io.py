@@ -320,6 +320,11 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             if self._current_reader:
                 self._current_reader_cleared = True
+
+            # clear the audio internal buffer
+            while not self._data_ch.empty():
+                self._data_ch.recv_nowait()
+
             self.emit("clear_buffer")
             return "ok"
 
@@ -417,7 +422,11 @@ class DataStreamAudioReceiver(AudioReceiver):
                     async for data in self._current_reader:
                         if self._current_reader_cleared:
                             # ignore the rest data of the current reader if clear_buffer was called
+                            while not self._data_ch.empty():
+                                self._data_ch.recv_nowait()
+                            bstream.clear()
                             break
+
                         for frame in bstream.push(data):
                             self._data_ch.send_nowait(frame)
 

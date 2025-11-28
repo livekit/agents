@@ -514,7 +514,7 @@ class ChatContext:
 
         return 0
 
-    async def summarize(
+    async def _summarize(
         self,
         llm_v: LLM,
         *,

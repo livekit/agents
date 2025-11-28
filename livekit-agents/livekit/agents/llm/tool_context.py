@@ -114,7 +114,6 @@ class RawFunctionDescription(TypedDict):
     name: str
     description: NotRequired[str | None]
     parameters: dict[str, object]
-    flags: ToolFlag
 
 
 @dataclass

@@ -39,7 +39,7 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, tracer
-from .telemetry.traces import _setup_cloud_tracer
+from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
@@ -201,6 +201,7 @@ class JobContext:
 
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
+        _shutdown_telemetry()
 
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
@@ -309,6 +310,13 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    @property
+    def local_participant_identity(self) -> str:
+        if identity := self.token_claims().identity:
+            return identity
+
+        return self._room.local_participant.identity
 
     @property
     def log_context_fields(self) -> dict[str, Any]:

@@ -57,6 +57,7 @@ from .utils import AsyncAzureADTokenProvider
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
+PromptCacheRetention = Literal["in_memory", "24h"]
 
 
 @dataclass
@@ -75,6 +76,7 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+    prompt_cache_retention: NotGivenOr[PromptCacheRetention]
     extra_body: NotGivenOr[dict[str, Any]]
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
@@ -103,6 +105,7 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
@@ -119,7 +122,7 @@ class LLM(llm.LLM):
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
             if model == "gpt-5.1":
-                reasoning_effort = "none"  # type: ignore
+                reasoning_effort = "none"  # type: ignore[assignment]
             else:
                 reasoning_effort = "minimal"
 
@@ -138,6 +141,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            prompt_cache_retention=prompt_cache_retention,
             extra_body=extra_body,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -191,6 +195,7 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -229,6 +234,7 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            verbosity=verbosity,
         )
 
     @staticmethod
@@ -607,6 +613,50 @@ class LLM(llm.LLM):
         )
 
     @staticmethod
+    def with_ovhcloud(
+        *,
+        model: str = "gpt-oss-120b",
+        api_key: str | None = None,
+        base_url: str = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of OVHcloud AI Endpoints LLM.
+
+        ``api_key`` must be set to your OVHcloud AI Endpoints API key, either using the argument or by setting
+        the ``OVHCLOUD_API_KEY`` environmental variable.
+        """
+
+        api_key = api_key or os.environ.get("OVHCLOUD_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "OVHcloud AI Endpoints API key is required, either as argument or set OVHCLOUD_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
+    @staticmethod
     def with_perplexity(
         *,
         model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
@@ -880,6 +930,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.verbosity):
             extra["verbosity"] = self._opts.verbosity
+
+        if is_given(self._opts.prompt_cache_retention):
+            extra["prompt_cache_retention"] = self._opts.prompt_cache_retention
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls

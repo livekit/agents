@@ -5,6 +5,8 @@ import contextlib
 from collections.abc import Generator, Sequence
 from typing import Any, Callable
 
+from opentelemetry import context as otel_context
+
 from .. import llm, utils
 
 
@@ -31,6 +33,7 @@ class SpeechHandle:
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
         self._num_steps = 1
+        self._agent_turn_context: otel_context.Context | None = None
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
@@ -56,6 +59,16 @@ class SpeechHandle:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def generation_id(self) -> str:
+        return f"{self._id}_{self._num_steps}"
+
+    @property
+    def parent_generation_id(self) -> str | None:
+        if self._num_steps <= 1:
+            return None
+        return f"{self._id}_{self._num_steps - 1}"
 
     @property
     def scheduled(self) -> bool:

@@ -93,9 +93,9 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
-                summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(
-                    llm_v=self.session.llm, keep_last_turns=0
-                )
+                summarized_chat_ctx = await self.chat_ctx.copy(
+                    exclude_instructions=True
+                )._summarize(llm_v=self.session.llm, keep_last_turns=0)
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))
