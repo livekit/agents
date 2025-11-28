@@ -19,24 +19,6 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
-from aws_sdk_transcribe_streaming.config import Config  # type: ignore
-from aws_sdk_transcribe_streaming.models import (  # type: ignore
-    AudioEvent,
-    AudioStream,
-    AudioStreamAudioEvent,
-    BadRequestException,
-    Result,
-    StartStreamTranscriptionInput,
-    TranscriptEvent,
-    TranscriptResultStream,
-)
-from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
-from smithy_core.aio.interfaces.eventstream import (
-    EventPublisher,
-    EventReceiver,
-)
-
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -49,6 +31,29 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .utils import DEFAULT_REGION
+
+try:
+    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
+    from aws_sdk_transcribe_streaming.config import Config  # type: ignore
+    from aws_sdk_transcribe_streaming.models import (  # type: ignore
+        AudioEvent,
+        AudioStream,
+        AudioStreamAudioEvent,
+        BadRequestException,
+        Result,
+        StartStreamTranscriptionInput,
+        TranscriptEvent,
+        TranscriptResultStream,
+    )
+    from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
+    from smithy_core.aio.interfaces.eventstream import (
+        EventPublisher,
+        EventReceiver,
+    )
+
+    _AWS_SDK_AVAILABLE = True
+except ImportError:
+    _AWS_SDK_AVAILABLE = False
 
 
 @dataclass
@@ -97,6 +102,12 @@ class STT(stt.STT):
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+
+        if not _AWS_SDK_AVAILABLE:
+            raise ImportError(
+                "The 'aws_sdk_transcribe_streaming' package is not installed. "
+                "This implementation requires Python 3.12+ and the 'aws_sdk_transcribe_streaming' dependency."
+            )
 
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
