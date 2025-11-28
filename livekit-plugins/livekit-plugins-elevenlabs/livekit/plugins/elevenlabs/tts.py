@@ -75,7 +75,7 @@ AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
 
 
-class TTS(tts.TTS):
+class TTS(tts.TTS[Literal["alignment_received"]]):
     def __init__(
         self,
         *,
@@ -97,6 +97,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
         preferred_alignment: Literal["normalized", "original"] = "normalized",
+        enable_alignment_forwarding: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -118,6 +119,7 @@ class TTS(tts.TTS):
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
+            enable_alignment_forwarding (bool): Forward character-level alignment data for lip sync. Emits "alignment_received" events. Defaults to True.
         """  # noqa: E501
 
         if not is_given(encoding):
@@ -171,6 +173,7 @@ class TTS(tts.TTS):
             auto_mode=auto_mode,
             apply_text_normalization=apply_text_normalization,
             preferred_alignment=preferred_alignment,
+            enable_alignment_forwarding=enable_alignment_forwarding,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -464,6 +467,7 @@ class _TTSOptions:
     apply_text_normalization: Literal["auto", "on", "off"]
     preferred_alignment: Literal["normalized", "original"]
     auto_mode: NotGivenOr[bool]
+    enable_alignment_forwarding: bool
 
 
 @dataclass
@@ -484,6 +488,7 @@ class _StreamData:
     stream: SynthesizeStream
     waiter: asyncio.Future[None]
     timeout_timer: asyncio.TimerHandle | None = None
+    pending_alignment: tts.CharacterAlignment | None = None
 
 
 class _Connection:
@@ -658,6 +663,31 @@ class _Connection:
                     starts = alignment.get("charStartTimesMs") or alignment.get("charsStartTimesMs")
                     durs = alignment.get("charDurationsMs") or alignment.get("charsDurationsMs")
                     if starts and durs and len(chars) == len(durs) and len(starts) == len(durs):
+                        # NEW: Capture character-level alignment for lip sync
+                        if self._opts.enable_alignment_forwarding:
+                            char_alignment = tts.CharacterAlignment(
+                                characters=list(chars),
+                                start_times_seconds=[s / 1000.0 for s in starts],
+                                end_times_seconds=[
+                                    (starts[i] + durs[i]) / 1000.0 for i in range(len(starts))
+                                ],
+                                segment_id=context_id,
+                            )
+
+                            # Store for potential use and emit event
+                            ctx.pending_alignment = char_alignment
+
+                            # Emit event for applications that want direct access
+                            stream._tts.emit(
+                                "alignment_received",
+                                {
+                                    "context_id": context_id,
+                                    "segment_id": context_id,
+                                    "alignment": char_alignment,
+                                },
+                            )
+
+                        # Existing code: build text buffer for word-level transcription
                         stream._text_buffer += "".join(chars)
                         # in case item in chars has multiple characters
                         for char, start, dur in zip(chars, starts, durs):

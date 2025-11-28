@@ -9,6 +9,7 @@ from .stream_pacer import SentenceStreamPacer
 from .tts import (
     TTS,
     AudioEmitter,
+    CharacterAlignment,
     ChunkedStream,
     SynthesizedAudio,
     SynthesizeStream,
@@ -18,6 +19,7 @@ from .tts import (
 
 __all__ = [
     "TTS",
+    "CharacterAlignment",
     "SynthesizedAudio",
     "SynthesizeStream",
     "TTSCapabilities",
