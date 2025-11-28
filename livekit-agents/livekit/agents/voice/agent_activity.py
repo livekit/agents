@@ -1799,7 +1799,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ToolSet],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
