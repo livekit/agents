@@ -33,6 +33,7 @@ from .models import (
     TTSModels,
     TTSVoices,
 )
+from .responses_llm import ResponsesLLM, ResponsesLLMStream
 from .stt import STT
 from .tts import TTS
 from .version import __version__
@@ -42,6 +43,8 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "ResponsesLLM",
+    "ResponsesLLMStream",
     "OpenRouterProviderPreferences",
     "OpenRouterWebPlugin",
     "STTModels",
