@@ -518,7 +518,7 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.fallback:
             params["fallback"] = [
-                {"name": m.get("name"), "extra": m.get("extra_kwargs")} 
+                {"name": m.get("name"), "extra": m.get("extra_kwargs")}
                 for m in self._opts.fallback
             ]
 
