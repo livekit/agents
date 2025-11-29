@@ -12,6 +12,7 @@ from livekit.agents import (
     AgentSession,
     AudioConfig,
     BackgroundAudioPlayer,
+    BuiltinAudioClip,
     JobContext,
     PlayHandle,
     RunContext,
@@ -125,6 +126,7 @@ class SessionManager:
                 room_options=room_io.RoomOptions(
                     close_on_disconnect=True,
                 ),
+                record=False,
             )
 
             # dial the supervisor
@@ -221,7 +223,7 @@ class SessionManager:
         self.customer_session.input.set_audio_enabled(False)
         self.customer_session.output.set_audio_enabled(False)
         self.hold_audio_handle = self.background_audio.play(
-            AudioConfig("hold_music.mp3", volume=0.8),
+            AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8),
             loop=True,
         )
 
@@ -268,6 +270,8 @@ class SupervisorAgent(Agent):
             exclude_empty_message=True, exclude_instructions=True, exclude_function_call=True
         )
         for msg in context_copy.items:
+            if msg.type != "message":
+                continue
             if msg.role == "user":
                 prev_convo += f"Customer: {msg.text_content}\n"
             else:

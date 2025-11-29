@@ -86,7 +86,10 @@ class RoomIO:
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
 
-    async def start(self) -> None:
+    async def start(self, *, room: NotGivenOr[rtc.Room] = NOT_GIVEN) -> None:
+        if utils.is_given(room):
+            self._room = room
+
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:

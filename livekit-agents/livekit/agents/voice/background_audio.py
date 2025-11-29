@@ -30,6 +30,7 @@ class BuiltinAudioClip(enum.Enum):
     OFFICE_AMBIENCE = "office-ambience.ogg"
     KEYBOARD_TYPING = "keyboard-typing.ogg"
     KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
+    HOLD_MUSIC = "hold_music.mp3"
 
     def path(self) -> str:
         file_path = files("livekit.agents.resources") / self.value
