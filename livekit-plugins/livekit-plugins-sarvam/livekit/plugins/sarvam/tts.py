@@ -553,9 +553,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(json.dumps(config_msg))
 
                 # Count text chunks sent
+                started = False
                 text_chunks_sent = 0
                 # Send text chunks
                 async for word in word_stream:
+                    if not started:
+                        self._mark_started()
+                        started = True
                     text_msg = {"type": "text", "data": {"text": word.token}}
                     await ws.send_str(json.dumps(text_msg))
                     text_chunks_sent += 1
