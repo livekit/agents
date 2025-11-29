@@ -42,6 +42,7 @@ from .tool_context import (
     ToolChoice,
     ToolContext,
     ToolError,
+    ToolSet,
     find_function_tools,
     function_tool,
     is_function_tool,
@@ -77,6 +78,7 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "StopResponse",
+    "ToolSet",
     "utils",
     "remote_chat_context",
     "FunctionToolCall",
@@ -93,6 +95,7 @@ __all__ = [
     "RealtimeSessionReconnectedEvent",
     "RealtimeSessionRestoredEvent",
     "LLMError",
+    "AgentHandoff",
 ]
 
 # Cleanup docs of unexported modules
