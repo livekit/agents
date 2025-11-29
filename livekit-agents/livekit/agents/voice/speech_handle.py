@@ -61,11 +61,11 @@ class SpeechHandle:
         return self._id
 
     @property
-    def generation_id(self) -> str:
+    def _generation_id(self) -> str:
         return f"{self._id}_{self._num_steps}"
 
     @property
-    def parent_generation_id(self) -> str | None:
+    def _parent_generation_id(self) -> str | None:
         if self._num_steps <= 1:
             return None
         return f"{self._id}_{self._num_steps - 1}"

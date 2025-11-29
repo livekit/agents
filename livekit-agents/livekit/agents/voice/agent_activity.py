@@ -1579,8 +1579,8 @@ class AgentActivity(RecognitionHooks):
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle.generation_id)
-            if parent_id := speech_handle.parent_generation_id:
+            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
+            if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
             speech_handle._agent_turn_context = otel_context.get_current()
 
@@ -1759,8 +1759,8 @@ class AgentActivity(RecognitionHooks):
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle.generation_id)
-            if parent_id := speech_handle.parent_generation_id:
+            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
+            if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
             speech_handle._agent_turn_context = otel_context.get_current()
 
@@ -2197,8 +2197,8 @@ class AgentActivity(RecognitionHooks):
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle.generation_id)
-            if parent_id := speech_handle.parent_generation_id:
+            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
+            if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
             speech_handle._agent_turn_context = otel_context.get_current()
 
