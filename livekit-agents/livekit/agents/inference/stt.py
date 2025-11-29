@@ -524,7 +524,7 @@ class SpeechStream(stt.SpeechStream):
             params["fallback"] = {"models": models}
 
         if self._opts.connect_options:
-            params["options"] = {
+            params["connection"] = {
                 "timeout": self._opts.connect_options.timeout,
                 "retries": self._opts.connect_options.max_retry,
             }
