@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import sys
 
@@ -19,6 +21,7 @@ from pydantic import Field
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AudioConfig,
     BackgroundAudioPlayer,
@@ -26,7 +29,6 @@ from livekit.agents import (
     JobContext,
     RunContext,
     ToolError,
-    WorkerOptions,
     cli,
     function_tool,
 )
@@ -34,6 +36,8 @@ from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
+
+logger = logging.getLogger("drive-thru")
 
 
 @dataclass
@@ -392,9 +396,16 @@ async def new_userdata() -> Userdata:
     return userdata
 
 
-async def entrypoint(ctx: JobContext):
-    await ctx.connect()
+server = AgentServer()
 
+
+async def on_session_end(ctx: JobContext) -> None:
+    report = ctx.make_session_report()
+    _ = json.dumps(report.to_dict(), indent=2)
+
+
+@server.rtc_session(on_session_end=on_session_end)
+async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
@@ -413,13 +424,6 @@ async def entrypoint(ctx: JobContext):
             mip_opt_out=True,
         ),
         llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        # tts=elevenlabs.TTS(
-        #     model="eleven_turbo_v2_5",
-        #     voice_id="21m00Tcm4TlvDq8ikWAM",
-        #     voice_settings=elevenlabs.VoiceSettings(
-        #         speed=1.15, stability=0.5, similarity_boost=0.75
-        #     ),
-        # ),
         tts=cartesia.TTS(voice="f786b574-daa5-4673-aa0c-cbe3e8534c02", speed="fast"),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
@@ -438,4 +442,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

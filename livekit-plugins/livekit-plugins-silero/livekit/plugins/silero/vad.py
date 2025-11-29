@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -217,9 +216,6 @@ class VADStream(agents.vad.VADStream):
         super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
-
-        self._executor = ThreadPoolExecutor(max_workers=1)
-        self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
         self._exp_filter = utils.ExpFilter(alpha=0.35)
 
         self._input_sample_rate = 0
@@ -362,9 +358,7 @@ class VADStream(agents.vad.VADStream):
                 )
 
                 # run the inference
-                p = await self._loop.run_in_executor(
-                    self._executor, self._model, inference_f32_data
-                )
+                p = await self._loop.run_in_executor(None, self._model, inference_f32_data)
                 p = self._exp_filter.apply(exp=1.0, sample=p)
 
                 window_duration = self._model.window_size_samples / self._opts.sample_rate
@@ -494,7 +488,6 @@ class VADStream(agents.vad.VADStream):
                         and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
-                        pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
                         self._event_ch.send_nowait(
@@ -503,11 +496,15 @@ class VADStream(agents.vad.VADStream):
                                 samples_index=pub_current_sample,
                                 timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,
-                                speech_duration=pub_speech_duration,
+                                speech_duration=max(
+                                    0.0, pub_speech_duration - silence_threshold_duration
+                                ),
                                 frames=[_copy_speech_buffer()],
                                 speaking=False,
                             )
                         )
+
+                        pub_speech_duration = 0.0
 
                         _reset_write_cursor()
 

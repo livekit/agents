@@ -1,25 +1,18 @@
 from __future__ import annotations
 
 from multiprocessing import current_process
-from types import TracebackType
 
 if current_process().name == "inference_proc":
     import signal
-    import sys
 
-    # ignore signals in the inference process (the parent process will handle them)
+    # ignore signals in the jobs process (the parent process will handle them)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    def _no_traceback_excepthook(
-        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
-    ) -> None:
-        if isinstance(exc_val, KeyboardInterrupt):
-            return
-        sys.__excepthook__(exc_type, exc_val, traceback)
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
 
-    sys.excepthook = _no_traceback_excepthook
-
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
 
 import asyncio
 import math
@@ -33,7 +26,7 @@ from ..log import logger
 from ..utils import aio, hw, log_exceptions
 from . import proto
 from .channel import Message
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 
 
 @dataclass
@@ -48,18 +41,12 @@ def proc_main(args: ProcStartArgs) -> None:
 
     inf_proc = _InferenceProc(args.runners)
 
-    client = _ProcClient(
-        args.mp_cch,
-        args.log_cch,
-        inf_proc.initialize,
-        inf_proc.entrypoint,
-    )
-
-    client.initialize_logger()
+    client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc.entrypoint)
     try:
         client.initialize()
     except Exception:
         return  # initialization failed, exit (initialize will send an error to the worker)
+
     client.run()
 
 
@@ -103,6 +90,9 @@ class _InferenceProc:
                 await self._client.send(proto.Exiting(reason=msg.reason))
                 break
 
+            if isinstance(msg, proto.DumpStackTraceRequest):
+                _dump_stack_traces_impl()
+
     async def _handle_inference_request(self, msg: proto.InferenceRequest) -> None:
         loop = asyncio.get_running_loop()
 
@@ -113,13 +103,7 @@ class _InferenceProc:
             data = await loop.run_in_executor(
                 self._executor, self._runners[msg.method].run, msg.data
             )
-            await self._client.send(
-                proto.InferenceResponse(
-                    request_id=msg.request_id,
-                    data=data,
-                )
-            )
-
+            await self._client.send(proto.InferenceResponse(request_id=msg.request_id, data=data))
         except Exception as e:
             logger.exception("error running inference")
             await self._client.send(

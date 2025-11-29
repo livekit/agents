@@ -60,6 +60,7 @@ class _ArcanaOptions:
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
 
 
 @dataclass
@@ -127,6 +128,7 @@ class TTS(tts.TTS):
                 top_p=top_p,
                 max_tokens=max_tokens,
                 lang=lang,
+                sample_rate=sample_rate,
             )
         elif model == "mistv2":
             self._opts.mistv2_options = _Mistv2Options(
@@ -187,7 +189,7 @@ class ChunkedStream(tts.ChunkedStream):
             "text": self._input_text,
             "modelId": self._opts.model,
         }
-        format = "audio/mp3"
+        format = "audio/pcm"
         if self._opts.model == "arcana":
             arcana_opts = self._opts.arcana_options
             assert arcana_opts is not None
@@ -201,7 +203,8 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["max_tokens"] = arcana_opts.max_tokens
             if is_given(arcana_opts.lang):
                 payload["lang"] = arcana_opts.lang
-            format = "audio/wav"
+            if is_given(arcana_opts.sample_rate):
+                payload["samplingRate"] = arcana_opts.sample_rate
         elif self._opts.model == "mistv2":
             mistv2_opts = self._opts.mistv2_options
             assert mistv2_opts is not None
@@ -227,7 +230,9 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=self._tts._total_timeout, sock_connect=self._conn_options.timeout
+                ),
             ) as resp:
                 resp.raise_for_status()
 

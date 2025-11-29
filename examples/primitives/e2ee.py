@@ -3,14 +3,17 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, JobContext, cli
 
 logger = logging.getLogger("e2ee-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     e2ee_config = rtc.E2EEOptions(
         key_provider_options=rtc.KeyProviderOptions(
@@ -26,4 +29,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
