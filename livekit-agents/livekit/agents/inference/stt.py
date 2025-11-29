@@ -517,10 +517,11 @@ class SpeechStream(stt.SpeechStream):
             params["settings"]["language"] = self._opts.language
 
         if self._opts.fallback:
-            params["fallback"] = [
+            models = [
                 {"name": m.get("name"), "extra": m.get("extra_kwargs")}
                 for m in self._opts.fallback
             ]
+            params["fallback"] = {"models": models}
 
         if self._opts.connect_options:
             params["options"] = {

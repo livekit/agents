@@ -378,10 +378,12 @@ class TTS(tts.TTS):
         if self._opts.language:
             params["language"] = self._opts.language
         if self._opts.fallback:
-            params["fallback"] = [
+            models = [
                 {"name": m.get("name"), "voice": m.get("voice"), "extra": m.get("extra_kwargs", {})}
                 for m in self._opts.fallback
             ]
+            params["fallback"] = {"models": models}
+
         if self._opts.connect_options:
             params["options"] = {
                 "timeout": self._opts.connect_options.timeout,
