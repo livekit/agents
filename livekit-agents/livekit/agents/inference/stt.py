@@ -5,10 +5,12 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, Union, overload
 
 import aiohttp
+from typing_extensions import Required
 
 from livekit import rtc
 
@@ -69,6 +71,55 @@ class AssemblyaiOptions(TypedDict, total=False):
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
+class ConnectionOptions(TypedDict, total=False):
+    """Connection options for fallback attempts."""
+
+    timeout: float
+    """Connection timeout in seconds."""
+
+    retries: int
+    """Number of retries per model."""
+
+
+class FallbackModel(TypedDict, total=False):
+    """A fallback model with optional extra configuration.
+
+    Extra fields are passed through to the provider.
+
+    Example:
+        >>> FallbackModel(name="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]})
+    """
+
+    name: Required[str]
+    """Model name (e.g. "deepgram/nova-3", "assemblyai/universal-streaming", "cartesia/ink-whisper")."""
+
+    extra_kwargs: dict[str, Any]
+    """Extra configuration for the model."""
+
+
+FallbackModelType = Union[FallbackModel, str]
+class Fallback(TypedDict, total=False):
+    """Configuration for fallback models when the primary model fails."""
+
+    models: Required[Sequence[FallbackModelType]]
+    """Fallback models in priority order."""
+
+    connection: ConnectionOptions
+    """Connection options for fallback attempts."""
+
+def _normalize_fallback(fallback: FallbackType) -> Fallback:
+    options: ConnectionOptions = {}
+    models: Sequence[FallbackModelType]
+    if isinstance(fallback, Mapping):
+        models = fallback.get("models", ())
+        options = fallback.get("connection", options)
+    else:
+        models = fallback
+    models_list = [
+        FallbackModel(name=m) if isinstance(m, str) else m for m in models
+    ]
+    return Fallback(models=models_list, connection=options)
+
 STTModels = Union[
     DeepgramModels,
     CartesiaModels,
@@ -76,6 +127,8 @@ STTModels = Union[
     Literal["auto"],  # automatically select a provider based on the language
 ]
 STTEncoding = Literal["pcm_s16le"]
+
+FallbackType = Union[Sequence[FallbackModelType], Fallback]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -92,6 +145,7 @@ class STTOptions:
     api_key: str
     api_secret: str
     extra_kwargs: dict[str, Any]
+    fallback: NotGivenOr[Fallback]
 
 
 class STT(stt.STT):
@@ -108,6 +162,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -123,6 +178,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -138,6 +194,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -153,6 +210,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
     ) -> None: ...
 
     def __init__(
@@ -169,6 +227,7 @@ class STT(stt.STT):
         extra_kwargs: NotGivenOr[
             dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
         ] = NOT_GIVEN,
+        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -182,6 +241,8 @@ class STT(stt.STT):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
+            fallback (FallbackType, optional): Fallback models - either a list of model names,
+                a list of FallbackModel instances or an Fallback object for full configuration.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
@@ -213,6 +274,10 @@ class STT(stt.STT):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
+        fallback_model: NotGivenOr[Fallback] = NOT_GIVEN
+        if is_given(fallback):
+            fallback_model = _normalize_fallback(fallback)  # type: ignore[arg-type]
+
         self._opts = STTOptions(
             model=model,
             language=language,
@@ -222,6 +287,7 @@ class STT(stt.STT):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            fallback=fallback_model,
         )
 
         self._session = http_session
@@ -458,6 +524,9 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.language:
             params["settings"]["language"] = self._opts.language
+
+        if self._opts.fallback:
+            params["fallback"] = self._opts.fallback
 
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
