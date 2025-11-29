@@ -5,7 +5,6 @@ import base64
 import json
 import os
 import weakref
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, Union, overload
 
@@ -71,16 +70,6 @@ class AssemblyaiOptions(TypedDict, total=False):
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
-class ConnectionOptions(TypedDict, total=False):
-    """Connection options for fallback attempts."""
-
-    timeout: float
-    """Connection timeout in seconds."""
-
-    retries: int
-    """Number of retries per model."""
-
-
 class FallbackModel(TypedDict, total=False):
     """A fallback model with optional extra configuration.
 
@@ -98,27 +87,27 @@ class FallbackModel(TypedDict, total=False):
 
 
 FallbackModelType = Union[FallbackModel, str]
-class Fallback(TypedDict, total=False):
-    """Configuration for fallback models when the primary model fails."""
 
-    models: Required[Sequence[FallbackModelType]]
-    """Fallback models in priority order."""
+def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
+    language: NotGivenOr[str] = NOT_GIVEN
+    if (idx := model.rfind(":")) != -1:
+        language = model[idx + 1 :]
+        model = model[:idx]
+    return model, language
 
-    connection: ConnectionOptions
-    """Connection options for fallback attempts."""
 
-def _normalize_fallback(fallback: FallbackType) -> Fallback:
-    options: ConnectionOptions = {}
-    models: Sequence[FallbackModelType]
-    if isinstance(fallback, Mapping):
-        models = fallback.get("models", ())
-        options = fallback.get("connection", options)
-    else:
-        models = fallback
-    models_list = [
-        FallbackModel(name=m) if isinstance(m, str) else m for m in models
-    ]
-    return Fallback(models=models_list, connection=options)
+def _normalize_fallback(fallback: list[FallbackModelType] | FallbackModelType) -> list[FallbackModel]:
+    def _make_fallback(model: FallbackModelType) -> FallbackModel:
+        if isinstance(model, str):
+            name, _ = _parse_model_string(model)
+            return FallbackModel(name=name)
+        return model
+
+    if isinstance(fallback, list):
+        return [_make_fallback(m) for m in fallback]
+
+    return [_make_fallback(fallback)]
+
 
 STTModels = Union[
     DeepgramModels,
@@ -128,7 +117,6 @@ STTModels = Union[
 ]
 STTEncoding = Literal["pcm_s16le"]
 
-FallbackType = Union[Sequence[FallbackModelType], Fallback]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -145,7 +133,8 @@ class STTOptions:
     api_key: str
     api_secret: str
     extra_kwargs: dict[str, Any]
-    fallback: NotGivenOr[Fallback]
+    fallback: NotGivenOr[list[FallbackModel]]
+    connect_options: NotGivenOr[APIConnectOptions]
 
 
 class STT(stt.STT):
@@ -162,7 +151,8 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -178,7 +168,8 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -194,7 +185,8 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -210,7 +202,8 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     def __init__(
@@ -227,7 +220,8 @@ class STT(stt.STT):
         extra_kwargs: NotGivenOr[
             dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
         ] = NOT_GIVEN,
-        fallback: NotGivenOr[FallbackType] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -241,8 +235,9 @@ class STT(stt.STT):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
-            fallback (FallbackType, optional): Fallback models - either a list of model names,
-                a list of FallbackModel instances or an Fallback object for full configuration.
+            fallback (FallbackModelType, optional): Fallback models - either a list of model names,
+                a list of FallbackModel instances.
+            connect_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
@@ -273,10 +268,9 @@ class STT(stt.STT):
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
-
-        fallback_model: NotGivenOr[Fallback] = NOT_GIVEN
+        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
-            fallback_model = _normalize_fallback(fallback)  # type: ignore[arg-type]
+            fallback_models = _normalize_fallback(fallback) # type: ignore[arg-type]
 
         self._opts = STTOptions(
             model=model,
@@ -287,7 +281,8 @@ class STT(stt.STT):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
-            fallback=fallback_model,
+            fallback=fallback_models,
+            connect_options=connect_options if is_given(connect_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
 
         self._session = http_session
@@ -303,12 +298,8 @@ class STT(stt.STT):
         Returns:
             STT: STT instance
         """
-
-        language: NotGivenOr[str] = NOT_GIVEN
-        if (idx := model.rfind(":")) != -1:
-            language = model[idx + 1 :]
-            model = model[:idx]
-        return cls(model, language=language)
+        model_name, language = _parse_model_string(model)
+        return cls(model=model_name, language=language)
 
     @property
     def model(self) -> str:
@@ -526,7 +517,13 @@ class SpeechStream(stt.SpeechStream):
             params["settings"]["language"] = self._opts.language
 
         if self._opts.fallback:
-            params["fallback"] = self._opts.fallback
+            params["fallback"] = [{"name": m["name"], "extra": m["extra_kwargs"]} for m in self._opts.fallback]
+
+        if self._opts.connect_options:
+            params["options"] = {
+                "timeout": self._opts.connect_options.timeout,
+                "retries": self._opts.connect_options.max_retry,
+            }
 
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
