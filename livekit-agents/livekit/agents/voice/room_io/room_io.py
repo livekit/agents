@@ -16,7 +16,7 @@ from ...types import (
     NotGivenOr,
 )
 from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
-from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
+from ..io import AudioInput, AudioOutput, TextOutput, VideoInput, _collect_chain, _collect_source
 from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
 
@@ -76,7 +76,7 @@ class RoomIO:
         self._room_connected_fut = asyncio.Future[None]()
 
         self._init_atask: asyncio.Task[None] | None = None
-        self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
+        self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
@@ -85,10 +85,14 @@ class RoomIO:
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
+        self._started = False
 
-    async def start(self, *, room: NotGivenOr[rtc.Room] = NOT_GIVEN) -> None:
-        if utils.is_given(room):
-            self._room = room
+    async def start(self) -> None:
+        await self._start_impl(attach_to_session=True)
+
+    async def _start_impl(self, *, attach_to_session: bool) -> None:
+        if self._started:
+            return
 
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
@@ -147,7 +151,10 @@ class RoomIO:
             self._user_tr_output = _ParticipantTranscriptionOutput(
                 room=self._room, is_delta_stream=False, participant=self._participant_identity
             )
-            self._user_transcript_atask = asyncio.create_task(self._forward_user_transcript())
+            self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
+            self._user_transcript_atask = asyncio.create_task(
+                self._forward_user_transcript(self._user_transcript_ch)
+            )
 
             # TODO(long): add next in the chain for session.output.transcription
             self._agent_tr_output = _ParticipantTranscriptionOutput(
@@ -175,21 +182,87 @@ class RoomIO:
         self._init_atask = asyncio.create_task(self._init_task())
 
         # -- attach to the agent session --
-        if self.audio_input:
-            self._agent_session.input.audio = self.audio_input
+        if attach_to_session:
+            if self.audio_input:
+                self._agent_session.input.audio = self.audio_input
 
-        if self.video_input:
-            self._agent_session.input.video = self.video_input
+            if self.video_input:
+                self._agent_session.input.video = self.video_input
 
-        if self.audio_output:
-            self._agent_session.output.audio = self.audio_output
+            if self.audio_output:
+                self._agent_session.output.audio = self.audio_output
 
-        if self.transcription_output:
-            self._agent_session.output.transcription = self.transcription_output
+            if self.transcription_output:
+                self._agent_session.output.transcription = self.transcription_output
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.on("close", self._on_agent_session_close)
+        self._started = True
+
+    async def redirect(
+        self,
+        *,
+        room: NotGivenOr[rtc.Room],
+        participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
+    ) -> None:
+        assert self._started, "RoomIO must be started before redirecting"
+
+        if room is self._room:
+            if utils.is_given(participant_identity):
+                self.set_participant(participant_identity)
+            return
+
+        # disable the input and output of the agent session
+        session_input = self._agent_session.input
+        session_output = self._agent_session.output
+
+        audio_input_used = (audio_input := self.audio_input) and audio_input in _collect_source(
+            session_input.audio
+        )
+        video_input_used = (video_input := self.video_input) and video_input in _collect_source(
+            session_input.video
+        )
+        audio_output_used = (audio_output := self.audio_output) and audio_output in _collect_chain(
+            session_output.audio
+        )
+        transcription_output_used = (
+            transcription_output := self.transcription_output
+        ) and transcription_output in _collect_chain(session_output.transcription)
+
+        if audio_input_used:
+            session_input.set_audio_enabled(False)
+        if video_input_used:
+            session_input.set_video_enabled(False)
+        if audio_output_used:
+            session_output.set_audio_enabled(False)
+        if transcription_output_used:
+            session_output.set_transcription_enabled(False)
+
+        await self.aclose()
+
+        if utils.is_given(room):
+            self._room = room
+
+        self.unset_participant()  # reset the participant
+        if utils.is_given(participant_identity):
+            self.set_participant(participant_identity)
+
+        await self._start_impl(
+            attach_to_session=False,  # already attached to the session
+        )
+
+        # re-enable the inputs and outputs
+        if audio_input_used:
+            session_input.set_audio_enabled(True)
+        if video_input_used:
+            session_input.set_video_enabled(True)
+        if audio_output_used:
+            session_output.set_audio_enabled(True)
+        if transcription_output_used:
+            session_output.set_transcription_enabled(True)
+
+        logger.debug("RoomIO redirected to new room", extra={"new_room": room.name})
 
     @property
     def room(self) -> rtc.Room:
@@ -209,7 +282,8 @@ class RoomIO:
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
 
-        self._user_transcript_ch.close()
+        if self._user_transcript_ch:
+            self._user_transcript_ch.close()
         if self._user_transcript_atask:
             await utils.aio.cancel_and_wait(self._user_transcript_atask)
 
@@ -233,6 +307,7 @@ class RoomIO:
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
+        self._started = False
 
     @property
     def audio_output(self) -> AudioOutput | None:
@@ -328,8 +403,10 @@ class RoomIO:
             await self._audio_output.start()
 
     @utils.log_exceptions(logger=logger)
-    async def _forward_user_transcript(self) -> None:
-        async for ev in self._user_transcript_ch:
+    async def _forward_user_transcript(
+        self, event_ch: utils.aio.Chan[UserInputTranscribedEvent]
+    ) -> None:
+        async for ev in event_ch:
             if self._user_tr_output is None:
                 continue
 
@@ -386,7 +463,7 @@ class RoomIO:
             self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        if self._user_transcript_atask:
+        if self._user_transcript_ch:
             self._user_transcript_ch.send_nowait(ev)
 
     def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
