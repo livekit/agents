@@ -32,6 +32,9 @@ def _mask_ctrl_c() -> Generator[None, None, None]:
     POSIX: block SIGINT on this thread (defer delivery).
     Windows/others: temporarily ignore SIGINT (best available), then restore.
     Keep the critical section *tiny* (just around Process.start()).
+
+    On Windows, signal.signal() can only be called from the main thread.
+    If we're not in the main thread, skip the signal masking entirely.
     """
     if hasattr(signal, "pthread_sigmask"):  # POSIX
         signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGINT])
@@ -39,12 +42,16 @@ def _mask_ctrl_c() -> Generator[None, None, None]:
             yield
         finally:
             signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGINT])
-    else:
+    elif threading.current_thread() is threading.main_thread():
+        # Windows: signal.signal() only works in the main thread
         old = signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
             yield
         finally:
             signal.signal(signal.SIGINT, old)
+    else:
+        # Not in main thread on Windows, skip signal masking
+        yield
 
 
 @dataclass
