@@ -44,7 +44,7 @@ def run_app(server: AgentServer | WorkerOptions, *, jupyter_url: str | None = No
 
         server = AgentServer.from_server_options(server)
 
-    server._job_executor_type = JobExecutorType.THREAD
+    server.job_executor_type = JobExecutorType.THREAD
 
     # create user and agent tokens
     if jupyter_url:

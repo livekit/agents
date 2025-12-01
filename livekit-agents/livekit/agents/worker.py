@@ -364,6 +364,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             raise TypeError("load_fnc must be a callable or None")
         self._load_fnc = value
 
+    @property
+    def job_executor_type(self) -> JobExecutorType:
+        return self._job_executor_type
+
+    @job_executor_type.setter
+    def job_executor_type(self, value: JobExecutorType) -> None:
+        if not isinstance(value, JobExecutorType):
+            raise TypeError("job_executor_type must be a JobExecutorType")
+        self._job_executor_type = value
+
     @classmethod
     def from_server_options(cls, options: ServerOptions) -> AgentServer:
         server = cls(

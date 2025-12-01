@@ -1205,7 +1205,7 @@ class _ConsoleWorker:
                     self._shutdown_cb()
                     return
 
-            self._server._job_executor_type = JobExecutorType.THREAD  # TODO: better setter
+            self._server.job_executor_type = JobExecutorType.THREAD
 
             @self._server.once("worker_started")
             def _simulate_job() -> None:
