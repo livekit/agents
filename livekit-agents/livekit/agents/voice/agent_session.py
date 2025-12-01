@@ -1219,7 +1219,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             # end_time = last_speaking_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end()
+            self._user_speaking_span.end(end_time=last_speaking_time or time.time_ns())
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
