@@ -132,9 +132,7 @@ def test_runner_parse_json():
         "advice": "do X",
     }
     # Markdown wrapped
-    assert runner._parse_json('```json\n{"intervene": false}\n```') == {
-        "intervene": False
-    }
+    assert runner._parse_json('```json\n{"intervene": false}\n```') == {"intervene": False}
     # Invalid
     assert runner._parse_json("not json") is None
 
