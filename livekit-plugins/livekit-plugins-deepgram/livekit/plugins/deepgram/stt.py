@@ -772,10 +772,8 @@ def _validate_keyterms(
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterms) and (
-        (model.startswith("nova-3") and language == "multi") or not model.startswith("nova-3")
-    ):
+    if is_given(keyterms) and (not model.startswith("nova-3")):
         raise ValueError(
-            "Keyterm Prompting is only available for monolingual transcription using the Nova-3 Model. "
+            "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
         )
