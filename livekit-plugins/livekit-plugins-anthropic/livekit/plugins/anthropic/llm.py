@@ -35,7 +35,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import ChatModels
-from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
+from .utils import CACHE_CONTROL_EPHEMERAL, AsyncAzureADTokenProvider, to_fnc_ctx
 
 
 @dataclass
@@ -97,21 +97,98 @@ class LLM(llm.LLM):
             max_tokens=max_tokens,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
-        if not anthropic_api_key:
-            raise ValueError("Anthropic API key is required")
 
-        self._client = anthropic.AsyncClient(
-            api_key=anthropic_api_key,
-            base_url=base_url if is_given(base_url) else None,
-            http_client=httpx.AsyncClient(
-                timeout=5.0,
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=1000,
-                    max_keepalive_connections=100,
-                    keepalive_expiry=120,
+        if client:
+            self._client = client
+        else:
+            if not anthropic_api_key:
+                raise ValueError("Anthropic API key is required")
+
+            self._client = anthropic.AsyncClient(
+                api_key=anthropic_api_key,
+                base_url=base_url if is_given(base_url) else None,
+                http_client=httpx.AsyncClient(
+                    timeout=5.0,
+                    follow_redirects=True,
+                    limits=httpx.Limits(
+                        max_connections=1000,
+                        max_keepalive_connections=100,
+                        keepalive_expiry=120,
+                    ),
                 ),
-            ),
+            )
+
+    @staticmethod
+    def with_azure(
+        *,
+        azure_endpoint: str,
+        azure_deployment: str,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        base_url: str | None = None,
+        model: str | ChatModels | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        client: anthropic.AsyncClient | None = None,
+        top_k: NotGivenOr[int] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of Anthropic LLM with Azure AI Foundry support.
+
+        This method automatically configures the client to use Azure's endpoint structure.
+        """
+        api_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+
+        if base_url is None:
+            azure_endpoint = azure_endpoint.rstrip("/")
+            if azure_endpoint.endswith("/anthropic"):
+                base_url = azure_endpoint
+            else:
+                base_url = f"{azure_endpoint}/anthropic"
+
+        default_headers = {}
+        if api_version:
+            default_headers["anthropic-version"] = api_version
+
+        if azure_ad_token:
+            default_headers["Authorization"] = f"Bearer {azure_ad_token}"
+            # We need to pass a non-empty api_key to AsyncClient as it is required
+            if not api_key:
+                api_key = "dummy"
+
+        if not client:
+            client = anthropic.AsyncClient(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers=default_headers,
+                http_client=httpx.AsyncClient(
+                    timeout=5.0,
+                    follow_redirects=True,
+                    limits=httpx.Limits(
+                        max_connections=1000,
+                        max_keepalive_connections=100,
+                        keepalive_expiry=120,
+                    ),
+                ),
+            )
+
+        return LLM(
+            model=model or azure_deployment,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            caching=caching,
+            top_k=top_k,
+            max_tokens=max_tokens,
+            api_key=api_key or NOT_GIVEN,
         )
 
     @property

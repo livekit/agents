@@ -1,4 +1,5 @@
-from typing import Literal, Optional, Union
+from collections.abc import Awaitable
+from typing import Callable, Literal, Optional, Union
 
 import anthropic
 from livekit.agents import llm
@@ -9,6 +10,8 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 
+AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
+
 # We can define up to 4 cache breakpoints, we will add them at:
 # - the last tool definition
 # - the last system message
@@ -17,7 +20,7 @@ from livekit.agents.llm.tool_context import (
 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#structuring-your-prompt
 CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephemeral")
 
-__all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
+__all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL", "AsyncAzureADTokenProvider"]
 
 
 def to_fnc_ctx(
