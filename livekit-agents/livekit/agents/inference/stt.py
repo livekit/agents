@@ -88,6 +88,7 @@ class FallbackModel(TypedDict, total=False):
 
 FallbackModelType = Union[FallbackModel, str]
 
+
 def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
     language: NotGivenOr[str] = NOT_GIVEN
     if (idx := model.rfind(":")) != -1:
@@ -96,7 +97,9 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[str]]:
     return model, language
 
 
-def _normalize_fallback(fallback: list[FallbackModelType] | FallbackModelType) -> list[FallbackModel]:
+def _normalize_fallback(
+    fallback: list[FallbackModelType] | FallbackModelType,
+) -> list[FallbackModel]:
     def _make_fallback(model: FallbackModelType) -> FallbackModel:
         if isinstance(model, str):
             name, _ = _parse_model_string(model)
@@ -270,7 +273,7 @@ class STT(stt.STT):
             )
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback) # type: ignore[arg-type]
+            fallback_models = _normalize_fallback(fallback)  # type: ignore[arg-type]
 
         self._opts = STTOptions(
             model=model,
@@ -282,7 +285,9 @@ class STT(stt.STT):
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
-            connect_options=connect_options if is_given(connect_options) else DEFAULT_API_CONNECT_OPTIONS,
+            connect_options=connect_options
+            if is_given(connect_options)
+            else DEFAULT_API_CONNECT_OPTIONS,
         )
 
         self._session = http_session
@@ -518,8 +523,7 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.fallback:
             models = [
-                {"name": m.get("name"), "extra": m.get("extra_kwargs")}
-                for m in self._opts.fallback
+                {"name": m.get("name"), "extra": m.get("extra_kwargs")} for m in self._opts.fallback
             ]
             params["fallback"] = {"models": models}
 

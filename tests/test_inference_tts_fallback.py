@@ -61,7 +61,6 @@ class TestParseModelString:
         assert model == expected_model
         assert voice == expected_voice
 
-
     def test_empty_voice_after_colon(self):
         """Empty string after colon still counts as voice."""
         model, voice = _parse_model_string("cartesia/sonic:")

@@ -45,6 +45,7 @@ InworldModels = Literal[
 
 TTSModels = Union[CartesiaModels, ElevenlabsModels, RimeModels, InworldModels]
 
+
 def _parse_model_string(model: str) -> tuple[str, str | None]:
     """Parse a model string into a model and voice
     Args:
@@ -81,7 +82,9 @@ class FallbackModel(TypedDict):
 FallbackModelType = Union[FallbackModel, str]
 
 
-def _normalize_fallback(fallback: list[FallbackModelType] | FallbackModelType) -> list[FallbackModel]:
+def _normalize_fallback(
+    fallback: list[FallbackModelType] | FallbackModelType,
+) -> list[FallbackModel]:
     def _make_fallback(model: FallbackModelType) -> FallbackModel:
         if isinstance(model, str):
             name, voice = _parse_model_string(model)
@@ -313,7 +316,9 @@ class TTS(tts.TTS):
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
-            connect_options=connect_options if is_given(connect_options) else DEFAULT_API_CONNECT_OPTIONS,
+            connect_options=connect_options
+            if is_given(connect_options)
+            else DEFAULT_API_CONNECT_OPTIONS,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
