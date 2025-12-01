@@ -51,7 +51,6 @@ class LogQueueListener:
                 break
 
             record = pickle.loads(data)
-
             self.handle(record)
 
 
