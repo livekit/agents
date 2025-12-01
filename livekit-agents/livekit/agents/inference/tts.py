@@ -134,7 +134,7 @@ class _TTSOptions:
     api_secret: str
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
-    connect_options: NotGivenOr[APIConnectOptions]
+    conn_options: NotGivenOr[APIConnectOptions]
 
 
 class TTS(tts.TTS):
@@ -153,7 +153,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -172,7 +172,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -191,7 +191,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[RimeOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -210,7 +210,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[InworldOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -229,7 +229,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
 
@@ -249,7 +249,7 @@ class TTS(tts.TTS):
             dict[str, Any] | CartesiaOptions | ElevenlabsOptions | RimeOptions | InworldOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference TTS
 
@@ -266,7 +266,7 @@ class TTS(tts.TTS):
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
-            connect_options (APIConnectOptions, optional): Connection options for request attempts.
+            conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
         super().__init__(
@@ -316,9 +316,7 @@ class TTS(tts.TTS):
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
-            connect_options=connect_options
-            if is_given(connect_options)
-            else DEFAULT_API_CONNECT_OPTIONS,
+            conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -389,10 +387,10 @@ class TTS(tts.TTS):
             ]
             params["fallback"] = {"models": models}
 
-        if self._opts.connect_options:
+        if self._opts.conn_options:
             params["connection"] = {
-                "timeout": self._opts.connect_options.timeout,
-                "retries": self._opts.connect_options.max_retry,
+                "timeout": self._opts.conn_options.timeout,
+                "retries": self._opts.conn_options.max_retry,
             }
 
         try:

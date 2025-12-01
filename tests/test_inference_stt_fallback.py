@@ -233,27 +233,27 @@ class TestSTTConstructorFallbackAndConnectOptions:
     def test_connect_options_not_given_uses_default(self):
         """When connect_options is not provided, uses DEFAULT_API_CONNECT_OPTIONS."""
         stt = _make_stt()
-        assert stt._opts.connect_options == DEFAULT_API_CONNECT_OPTIONS
+        assert stt._opts.conn_options == DEFAULT_API_CONNECT_OPTIONS
 
     def test_connect_options_custom_timeout(self):
         """Custom connect_options with timeout is stored."""
         custom_opts = APIConnectOptions(timeout=30.0)
-        stt = _make_stt(connect_options=custom_opts)
-        assert stt._opts.connect_options == custom_opts
-        assert stt._opts.connect_options.timeout == 30.0
+        stt = _make_stt(conn_options=custom_opts)
+        assert stt._opts.conn_options == custom_opts
+        assert stt._opts.conn_options.timeout == 30.0
 
     def test_connect_options_custom_max_retry(self):
-        """Custom connect_options with max_retry is stored."""
+        """Custom conn_options with max_retry is stored."""
         custom_opts = APIConnectOptions(max_retry=5)
-        stt = _make_stt(connect_options=custom_opts)
-        assert stt._opts.connect_options == custom_opts
-        assert stt._opts.connect_options.max_retry == 5
+        stt = _make_stt(conn_options=custom_opts)
+        assert stt._opts.conn_options == custom_opts
+        assert stt._opts.conn_options.max_retry == 5
 
     def test_connect_options_full_custom(self):
         """Fully custom connect_options is stored correctly."""
         custom_opts = APIConnectOptions(timeout=60.0, max_retry=10, retry_interval=2.0)
-        stt = _make_stt(connect_options=custom_opts)
-        assert stt._opts.connect_options == custom_opts
-        assert stt._opts.connect_options.timeout == 60.0
-        assert stt._opts.connect_options.max_retry == 10
-        assert stt._opts.connect_options.retry_interval == 2.0
+        stt = _make_stt(conn_options=custom_opts)
+        assert stt._opts.conn_options == custom_opts
+        assert stt._opts.conn_options.timeout == 60.0
+        assert stt._opts.conn_options.max_retry == 10
+        assert stt._opts.conn_options.retry_interval == 2.0

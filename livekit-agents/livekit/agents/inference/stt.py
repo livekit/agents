@@ -137,7 +137,7 @@ class STTOptions:
     api_secret: str
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
-    connect_options: NotGivenOr[APIConnectOptions]
+    conn_options: NotGivenOr[APIConnectOptions]
 
 
 class STT(stt.STT):
@@ -155,7 +155,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -172,7 +172,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -189,7 +189,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -206,7 +206,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
 
     def __init__(
@@ -224,7 +224,7 @@ class STT(stt.STT):
             dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        connect_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -240,7 +240,7 @@ class STT(stt.STT):
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
-            connect_options (APIConnectOptions, optional): Connection options for request attempts.
+            conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
@@ -285,9 +285,7 @@ class STT(stt.STT):
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
-            connect_options=connect_options
-            if is_given(connect_options)
-            else DEFAULT_API_CONNECT_OPTIONS,
+            conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
 
         self._session = http_session
@@ -527,10 +525,10 @@ class SpeechStream(stt.SpeechStream):
             ]
             params["fallback"] = {"models": models}
 
-        if self._opts.connect_options:
+        if self._opts.conn_options:
             params["connection"] = {
-                "timeout": self._opts.connect_options.timeout,
-                "retries": self._opts.connect_options.max_retry,
+                "timeout": self._opts.conn_options.timeout,
+                "retries": self._opts.conn_options.max_retry,
             }
 
         base_url = self._opts.base_url
