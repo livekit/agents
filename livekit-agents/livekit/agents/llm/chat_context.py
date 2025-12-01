@@ -159,6 +159,7 @@ class ChatMessage(BaseModel):
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
+    persist_to_session_history: bool = True
 
     @property
     def text_content(self) -> str | None:
@@ -183,6 +184,7 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    persist_to_session_history: bool = True
 
 
 class FunctionCallOutput(BaseModel):
@@ -193,6 +195,7 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    persist_to_session_history: bool = True
 
 
 class AgentHandoff(BaseModel):
@@ -201,6 +204,7 @@ class AgentHandoff(BaseModel):
     old_agent_id: str | None
     new_agent_id: str
     created_at: float = Field(default_factory=time.time)
+    persist_to_session_history: bool = True
 
 
 ChatItem = Annotated[
@@ -234,6 +238,7 @@ class ChatContext:
         created_at: NotGivenOr[float] = NOT_GIVEN,
         metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        persist_to_session_history: NotGivenOr[bool] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -246,6 +251,8 @@ class ChatContext:
             kwargs["metrics"] = metrics
         if is_given(extra):
             kwargs["extra"] = extra
+        if is_given(persist_to_session_history):
+            kwargs["persist_to_session_history"] = persist_to_session_history
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
