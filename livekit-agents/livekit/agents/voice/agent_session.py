@@ -1174,7 +1174,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span(
-                    "agent_speaking", context=otel_context, start_time=start_time or time.time_ns()
+                    "agent_speaking", context=otel_context, start_time=start_time
                 )
 
                 if self._room_io:
@@ -1207,7 +1207,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if state == "speaking" and self._user_speaking_span is None:
             self._user_speaking_span = tracer.start_span(
-                "user_speaking", start_time=last_speaking_time or time.time_ns()
+                "user_speaking", start_time=last_speaking_time
             )
 
             if self._room_io and self._room_io.linked_participant:
@@ -1219,7 +1219,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             # end_time = last_speaking_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=last_speaking_time or time.time_ns())
+            self._user_speaking_span.end(end_time=last_speaking_time)
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
