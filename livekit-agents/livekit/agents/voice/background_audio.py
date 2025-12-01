@@ -69,6 +69,7 @@ class BackgroundAudioPlayer:
         thinking_sound: NotGivenOr[
             AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
+        loop_thinking_sound: bool = False,
         stream_timeout_ms: int = 200,
     ) -> None:
         """
@@ -93,10 +94,14 @@ class BackgroundAudioPlayer:
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
                 sound source or a list of AudioConfig objects (with volume and probability settings).
 
+            loop_thinking_sound (bool, optional):
+                Wether to loop the thinking sound or not. Defaults to False.
+
         """  # noqa: E501
 
         self._ambient_sound = ambient_sound if is_given(ambient_sound) else None
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
+        self._loop_thinking_sound = loop_thinking_sound
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
         self._audio_mixer = rtc.AudioMixer(
@@ -321,7 +326,8 @@ class BackgroundAudioPlayer:
 
             assert self._thinking_sound is not None
             self._thinking_handle = self.play(
-                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
+                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound),
+                loop=self._loop_thinking_sound,
             )
 
         elif self._thinking_handle:
