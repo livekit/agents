@@ -336,7 +336,7 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut: asyncio.Future[None]
+    first_frame_fut: asyncio.Future[float]
 
 
 def perform_audio_forwarding(
@@ -356,6 +356,12 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
+
+    @audio_output.on("playback_started")
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.timestamp)
+
     try:
         audio_output.resume()
         async for frame in tts_output:
@@ -379,11 +385,6 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
-            # set the first frame future if not already set
-            # (after completing the first frame)
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(None)
-
         if resampler:
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
@@ -396,6 +397,7 @@ async def _audio_forwarding_task(
                 logger.error("error while closing tts output", exc_info=e)
 
         audio_output.flush()
+        audio_output.off("playback_started", _on_playback_started)
 
 
 @dataclass
