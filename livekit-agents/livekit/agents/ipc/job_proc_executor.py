@@ -88,8 +88,10 @@ class ProcJobExecutor(SupervisedProc):
         levels = {}
         root = logging.getLogger()
         levels["root"] = root.level
-        for child in root.getChildren():
-            levels[child.name] = child.level
+        children = logging.Logger.manager.loggerDict.values()
+        for child in children:
+            if isinstance(child, logging.Logger):
+                levels[child.name] = child.level
 
         proc_args = ProcStartArgs(
             initialize_process_fnc=self._initialize_process_fnc,
