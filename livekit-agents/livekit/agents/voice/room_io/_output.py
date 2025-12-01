@@ -188,10 +188,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 # ignore frames if interrupted
                 continue
 
-            await self._audio_source.capture_frame(frame)
             if not self._first_frame_event.is_set():
                 self._first_frame_event.set()
                 self.on_playback_started(timestamp=time.time())
+            await self._audio_source.capture_frame(frame)
 
     def _on_reconnected(self) -> None:
         if self._republish_task:

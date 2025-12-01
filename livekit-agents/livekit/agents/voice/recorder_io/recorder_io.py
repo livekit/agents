@@ -303,6 +303,17 @@ class RecorderAudioOutput(io.AudioOutput):
         self.__write = write_fnc
         self.__acc_frames: list[rtc.AudioFrame] = []
         self.__started_time: None | float = None
+        self.__playback_started_fut = asyncio.Future[float]()
+
+        @audio_output.on("playback_started")
+        def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+            if not self.__playback_started_fut.done():
+                self.__playback_started_fut.set_result(ev.timestamp)
+                self.__started_time = ev.timestamp
+
+        self.__playback_started_fut.add_done_callback(
+            lambda _: audio_output.off("playback_started", _on_playback_started)
+        )
 
         # pause tracking
         self.__current_pause_start: float | None = None
@@ -429,9 +440,6 @@ class RecorderAudioOutput(io.AudioOutput):
         await super().capture_frame(frame)
 
         if self.__recording_io.recording:
-            if self.__started_time is None:
-                self.__started_time = time.time()
-
             self.__acc_frames.append(frame)
 
     def flush(self) -> None:
