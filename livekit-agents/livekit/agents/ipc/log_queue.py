@@ -51,6 +51,7 @@ class LogQueueListener:
                 break
 
             record = pickle.loads(data)
+
             self.handle(record)
 
 
@@ -93,7 +94,9 @@ class LogQueueHandler(logging.Handler):
             record.message = msg
             record.msg = msg
             record.args = None
-            record.exc_info = None
+            if record.exc_info is not None:
+                # stack trace is not pickleable
+                record.exc_info = (record.exc_info[0], record.exc_info[1], None)
             record.exc_text = None
             record.stack_info = None
 

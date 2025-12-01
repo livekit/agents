@@ -857,8 +857,15 @@ class RichLoggingHandler(logging.Handler):
 
     def _print_plain_traceback(self, record: logging.LogRecord) -> None:
         try:
-            exc_type, exc_value, exc_tb = record.exc_info  # type: ignore[misc]
-            tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            if (
+                isinstance(record.exc_info, tuple)
+                and len(record.exc_info) == 3
+                and record.exc_info[2] is not None
+            ):
+                exc_type, exc_value, exc_tb = record.exc_info
+                tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            else:
+                tb_str = record.msg
 
             tb_text = Text(tb_str, style="red")
             self.c.console.print(tb_text, end="")
