@@ -361,7 +361,7 @@ class BackgroundAudioPlayer:
         gen = _gen_wrapper()
         try:
             self._audio_mixer.add_stream(gen)
-            await play_handle.wait_for_playout()  # wait for playout or interruption
+            await play_handle._wait_for_playout_or_stop()  # wait for playout or interruption
         finally:
             self._audio_mixer.remove_stream(gen)
             play_handle._mark_playout_done()
@@ -411,7 +411,6 @@ class PlayHandle:
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._stop_fut.set_result(None)
-            self._mark_playout_done()  # TODO(theomonnom): move this to _play_task
 
     async def wait_for_playout(self) -> None:
         """
@@ -425,6 +424,13 @@ class PlayHandle:
             return self
 
         return _await_impl().__await__()
+
+    async def _wait_for_playout_or_stop(self) -> None:
+        """
+        Waits for either playout completion or stop signal.
+        Used internally by _play_task.
+        """
+        await asyncio.wait([self._done_fut, self._stop_fut], return_when=asyncio.FIRST_COMPLETED)
 
     def _mark_playout_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
