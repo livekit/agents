@@ -807,7 +807,7 @@ class RichLoggingHandler(logging.Handler):
 
         console_width = self.c.console.width
         tag_width = 2  # matches self.c._render_tag(..., tag_width=2)
-        available_width = max(console_width - tag_width, 20)
+        available_width = max(console_width - tag_width - 6, 20)
 
         time_len = log_time_display.cell_len
         level_len = 8
