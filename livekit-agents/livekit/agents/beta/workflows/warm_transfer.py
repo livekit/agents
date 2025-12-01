@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast, Union, Optional
+from typing import TYPE_CHECKING, Optional, Union, cast
 
 from livekit import api, rtc
 
