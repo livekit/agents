@@ -48,9 +48,10 @@ class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    user_arguments: Any | None
     mp_cch: socket.socket
     log_cch: socket.socket
-    user_arguments: Any | None = None
+    logger_levels: dict[str, int]
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -60,7 +61,8 @@ def proc_main(args: ProcStartArgs) -> None:
     from .proc_client import _ProcClient
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.NOTSET)
+    for name, level in args.logger_levels.items():
+        logging.getLogger(name).setLevel(level)
 
     log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
     log_handler = LogQueueHandler(log_cch)
