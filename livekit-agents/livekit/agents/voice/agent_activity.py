@@ -14,6 +14,7 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.voice.io import PlaybackStartedEvent
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import (
@@ -1212,7 +1213,12 @@ class AgentActivity(RecognitionHooks):
     # region recognition hooks
 
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
-        self._session._update_user_state("speaking")
+        speech_start_time = time.time()
+        if ev:
+            speech_start_time = speech_start_time - ev.speech_duration
+        self._session._update_user_state(
+            "speaking", last_speaking_time=int(speech_start_time * 1_000_000_000)
+        )
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1638,10 +1644,12 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float]) -> None:
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            started_speaking_at = fut.result()
+            self._session._update_agent_state(
+                "speaking", start_time=int(started_speaking_at * 1_000_000_000)
+            )
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1905,10 +1913,12 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float]) -> None:
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            started_speaking_at = fut.result()
+            self._session._update_agent_state(
+                "speaking", start_time=int(started_speaking_at * 1_000_000_000)
+            )
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2251,10 +2261,12 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float]) -> None:
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            started_speaking_at = fut.result()
+            self._session._update_agent_state(
+                "speaking", start_time=int(started_speaking_at * 1_000_000_000)
+            )
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -2653,9 +2665,24 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.done()
             ):
-                self._session._update_agent_state(
-                    "speaking", otel_context=self._paused_speech._agent_turn_context
+                playback_started_fut = asyncio.Future[float]()
+
+                @audio_output.on("playback_started")
+                def _on_playback_started(ev: PlaybackStartedEvent) -> None:
+                    if not playback_started_fut.done():
+                        playback_started_fut.set_result(ev.timestamp)
+
+                playback_started_fut.add_done_callback(
+                    lambda fut: self._session._update_agent_state(
+                        "speaking",
+                        otel_context=self._paused_speech._agent_turn_context,
+                        start_time=int(fut.result() * 1_000_000_000),
+                    )
                 )
+                playback_started_fut.add_done_callback(
+                    lambda _: audio_output.off("playback_started", _on_playback_started)
+                )
+
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
