@@ -53,6 +53,8 @@ Start by giving them a summary of the conversation so far, and answer any questi
 {conversation_history}
 ## End of conversation history with caller
 
+You are talking to the human agent now,
+give a brief introduction of the conversation so far, and ask if they want to connect to the caller.
 """
 
 
@@ -120,6 +122,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
     def get_instructions(
         self, *, chat_ctx: NotGivenOr[llm.ChatContext], extra_instructions: str = ""
     ) -> str:
+        # users can override this method if they want to customize the instructions
         prev_convo = ""
         if chat_ctx:
             context_copy = chat_ctx.copy(
@@ -153,13 +156,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 raise RuntimeError()
 
             self._human_agent_sess = dial_human_agent_task.result()
-            self._human_agent_sess.generate_reply(
-                instructions=(
-                    "you are talking to the human agent now. "
-                    "give a brief introduction of the conversation so far. "
-                    "ask if they want to connect to the caller."
-                )
-            )
+            # let the human speak first
 
         except Exception:
             logger.exception("could not dial human agent")
