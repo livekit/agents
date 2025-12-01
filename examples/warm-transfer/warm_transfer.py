@@ -83,8 +83,13 @@ When such is requested, you would always confirm with the user before initiating
             "Please hold while I connect you to a human agent.", allow_interruptions=False
         )
         try:
+            assert SIP_TRUNK_ID is not None
+            assert SUPERVISOR_PHONE_NUMBER is not None
+
             result = await WarmTransferTask(
-                target_phone_number=SUPERVISOR_PHONE_NUMBER, chat_ctx=self.chat_ctx
+                target_phone_number=SUPERVISOR_PHONE_NUMBER,
+                sip_trunk_id=SIP_TRUNK_ID,
+                chat_ctx=self.chat_ctx,
             )
         except Exception as e:
             logger.error(f"failed to transfer to supervisor: {e}")
