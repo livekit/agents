@@ -1027,15 +1027,13 @@ class RealtimeSession(  # noqa: F811
                     ModelStreamErrorException,
                 ) as re:
                     logger.warning(
-                        f"Retryable error: {re}\nAttempting to recover...",
-                        exc_info=True
+                        f"Retryable error: {re}\nAttempting to recover...", exc_info=True
                     )
                     await self._restart_session(re)
                     break
                 except ModelTimeoutException as mte:
                     logger.warning(
-                        f"Model timeout error: {mte}\nAttempting to recover...",
-                        exc_info=True
+                        f"Model timeout error: {mte}\nAttempting to recover...", exc_info=True
                     )
                     await self._restart_session(mte)
                     break
