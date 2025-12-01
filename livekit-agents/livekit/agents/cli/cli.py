@@ -35,7 +35,6 @@ from rich.style import Style
 from rich.table import Column, Table
 from rich.text import Text
 from rich.theme import Theme
-from rich.traceback import Traceback as RichTraceback
 
 from livekit import rtc
 

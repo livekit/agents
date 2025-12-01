@@ -1181,7 +1181,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
-    def _update_agent_state(self, state: AgentState) -> None:
+    def _update_agent_state(
+        self, state: AgentState, *, otel_context: otel_context.Context | None = None
+    ) -> None:
         if self._agent_state == state:
             return
 
@@ -1190,7 +1192,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._tts_error_counts = 0
 
             if self._agent_speaking_span is None:
-                self._agent_speaking_span = tracer.start_span("agent_speaking")
+                self._agent_speaking_span = tracer.start_span(
+                    "agent_speaking", context=otel_context
+                )
 
                 if self._room_io:
                     _set_participant_attributes(
