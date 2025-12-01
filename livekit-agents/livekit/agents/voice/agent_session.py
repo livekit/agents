@@ -161,7 +161,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
-        guardrail: Guardrail | None = None,
+        guardrails: list[Guardrail] | None = None,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -248,10 +248,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
-            guardrail (Guardrail, optional): Configuration for conversation guardrails.
-                When set, enables automatic conversation monitoring and agent guidance.
-                The guardrail evaluates conversations in the background and injects
-                advice to the agent when specific situations are detected.
+            guardrails (list[Guardrail], optional): List of conversation guardrails.
+                Each guardrail runs independently, monitoring conversations and injecting
+                advice to the agent when specific situations are detected. Multiple
+                guardrails can watch for different things (compliance, sentiment, etc.).
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -366,9 +366,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr activity
         self._ivr_activity: IVRActivity | None = None
 
-        # guardrail
-        self._guardrail = guardrail
-        self._guardrail_runner: _GuardrailRunner | None = None
+        # guardrails
+        self._guardrails = guardrails or []
+        self._guardrail_runners: list[_GuardrailRunner] = []
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
@@ -617,10 +617,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         asyncio.create_task(self._ivr_activity.start(), name="_ivr_activity_start")
                     )
 
-            # Initialize guardrail if configured
-            if self._guardrail is not None:
-                self._guardrail_runner = _GuardrailRunner(self._guardrail, self)
-                self._guardrail_runner.start()
+            for guardrail in self._guardrails:
+                runner = _GuardrailRunner(guardrail, self)
+                runner.start()
+                self._guardrail_runners.append(runner)
 
             if job_ctx:
                 current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
@@ -777,10 +777,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._closing = True
             self._cancel_user_away_timer()
 
-            # Stop guardrail runner if active
-            if self._guardrail_runner is not None:
-                self._guardrail_runner.stop()
-                self._guardrail_runner = None
+            for runner in self._guardrail_runners:
+                runner.stop()
+            self._guardrail_runners.clear()
 
             if self._activity is not None:
                 if not drain:

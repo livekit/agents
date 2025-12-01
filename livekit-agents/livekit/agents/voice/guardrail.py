@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
     from .events import ConversationItemAddedEvent
 
-InjectRole = Literal["system", "assistant", "developer"]
+InjectRole = Literal["system", "assistant"]
 
 
 @dataclass
@@ -29,16 +29,19 @@ class Guardrail:
         ```python
         session = AgentSession(
             llm="openai/gpt-4o",
-            guardrail=Guardrail(
-                llm="openai/gpt-4o-mini",
-                instructions=\"\"\"
-                    If customer asks for supervisor:
-                    → "Offer to escalate or resolve directly with authority."
-
-                    If customer mentions canceling:
-                    → "Retention risk. Offer concrete solution."
-                \"\"\",
-            ),
+            guardrails=[
+                Guardrail(
+                    name="compliance",
+                    llm="openai/gpt-4o-mini",
+                    instructions="Watch for pricing claims without disclaimers",
+                ),
+                Guardrail(
+                    name="sentiment",
+                    llm="openai/gpt-4o-mini",
+                    instructions="Flag frustrated customers",
+                    eval_interval=1,
+                ),
+            ],
         )
         ```
     """
@@ -48,6 +51,9 @@ class Guardrail:
 
     llm: str | LLM
     """LLM for evaluation."""
+
+    name: str | None = None
+    """Optional name for logging. Example: "compliance", "sentiment"."""
 
     eval_interval: int = 3
     """Evaluate every N user turns. Default: 3"""
@@ -63,6 +69,9 @@ class Guardrail:
 
     inject_prefix: str = "[GUARDRAIL ADVISOR]:"
     """Prefix for injected advice messages. Default: "[GUARDRAIL ADVISOR]:" """
+
+    max_history: int | None = None
+    """Max messages to include in evaluation. None = all history. Default: None"""
 
 
 @dataclass
@@ -118,6 +127,12 @@ class _GuardrailRunner:
         else:
             self._llm = config.llm
 
+    @property
+    def _log_prefix(self) -> str:
+        if self._config.name:
+            return f"guardrail[{self._config.name}]"
+        return "guardrail"
+
     def start(self) -> None:
         if self._started:
             return
@@ -128,17 +143,14 @@ class _GuardrailRunner:
         self._event_handler = _on_conversation_item
         self._session.on("conversation_item_added", _on_conversation_item)
         self._started = True
-        logger.debug("guardrail: started")
+        logger.debug(f"{self._log_prefix}: started")
 
     def stop(self) -> None:
         if not self._started:
             return
 
         if self._event_handler is not None:
-            try:
-                self._session.off("conversation_item_added", self._event_handler)
-            except Exception:
-                pass
+            self._session.off("conversation_item_added", self._event_handler)
             self._event_handler = None
 
         for task in self._pending_tasks:
@@ -147,7 +159,7 @@ class _GuardrailRunner:
         self._pending_tasks.clear()
 
         self._started = False
-        logger.debug("guardrail: stopped")
+        logger.debug(f"{self._log_prefix}: stopped")
 
     def _on_item(self, event: ConversationItemAddedEvent) -> None:
         if not self._started:
@@ -157,8 +169,6 @@ class _GuardrailRunner:
         if not hasattr(item, "role"):
             return
 
-        # Evaluate after agent responds - ensures complete exchange context
-        # and avoids partial evaluation during user's continuous speech
         if item.role == "assistant":
             self._state.turn_count += 1
             if self._state.turn_count % self._config.eval_interval == 0:
@@ -166,31 +176,46 @@ class _GuardrailRunner:
                 self._pending_tasks.add(task)
                 task.add_done_callback(self._pending_tasks.discard)
 
-    def _build_transcript(self, max_messages: int = 15) -> str:
-        items = self._session.history.items
+    def _build_transcript(self) -> str:
+        agent = self._session._agent
+        if agent is None:
+            return ""
+
+        items = agent.chat_ctx.items
         messages = []
+        first_system_skipped = False
+
         for item in items:
             if item.type != "message":
                 continue
-            if item.role not in ("user", "assistant"):
-                continue
             content = item.text_content
-            if content:
+            if not content:
+                continue
+
+            if item.role == "system":
+                if not first_system_skipped:
+                    first_system_skipped = True
+                    continue
+                if self._config.inject_prefix and content.startswith(self._config.inject_prefix):
+                    messages.append(f"[PREVIOUS ADVICE]: {content}")
+            elif item.role in ("user", "assistant"):
                 messages.append(f"[{item.role.upper()}]: {content}")
 
-        recent = messages[-max_messages:] if len(messages) > max_messages else messages
-        return "\n".join(recent)
+        if self._config.max_history and len(messages) > self._config.max_history:
+            messages = messages[-self._config.max_history :]
+
+        return "\n".join(messages)
 
     async def _evaluate(self) -> None:
         if self._eval_lock.locked():
             return
 
+        transcript = self._build_transcript()
+        if not transcript:
+            return
+
         async with self._eval_lock:
             try:
-                transcript = self._build_transcript()
-                if not transcript:
-                    return
-
                 system_prompt = GUARDRAIL_SYSTEM_PROMPT.format(
                     user_instructions=self._config.instructions
                 )
@@ -212,29 +237,31 @@ class _GuardrailRunner:
                         await self._maybe_inject(advice)
 
             except Exception:
-                logger.exception("guardrail: evaluation failed")
+                logger.exception(f"{self._log_prefix}: evaluation failed")
 
     async def _maybe_inject(self, advice: str) -> None:
         now = time.time()
 
         if self._state.interventions_count >= self._config.max_interventions:
-            logger.debug("guardrail: max interventions reached, skipping")
+            logger.debug(f"{self._log_prefix}: max interventions reached, skipping")
             return
 
         time_since_last = now - self._state.last_intervention_time
         if self._state.last_intervention_time > 0 and time_since_last < self._config.cooldown:
-            logger.debug("guardrail: cooldown active, skipping")
+            logger.debug(f"{self._log_prefix}: cooldown active, skipping")
             return
 
         await self._inject(advice)
         self._state.interventions_count += 1
         self._state.last_intervention_time = now
-        logger.info(f"guardrail: intervention #{self._state.interventions_count} - {advice[:50]}...")
+        logger.info(
+            f"{self._log_prefix}: intervention #{self._state.interventions_count} - {advice}"
+        )
 
     async def _inject(self, advice: str) -> None:
         agent = self._session._agent
         if agent is None:
-            logger.warning("guardrail: no active agent")
+            logger.warning(f"{self._log_prefix}: no active agent")
             return
 
         prefix = self._config.inject_prefix
@@ -253,5 +280,5 @@ class _GuardrailRunner:
                 if isinstance(result, dict):
                     return result
         except json.JSONDecodeError:
-            logger.warning(f"guardrail: failed to parse JSON: {text[:100]}")
+            logger.warning(f"{self._log_prefix}: failed to parse JSON: {text[:100]}")
         return None
