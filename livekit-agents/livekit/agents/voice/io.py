@@ -590,15 +590,3 @@ class AgentOutput:
                 self._transcription_sink.on_attached()
             else:
                 self._transcription_sink.on_detached()
-
-
-def _collect_source(
-    inp: AudioInput | VideoInput | None,
-) -> list[AudioInput | VideoInput]:
-    return [] if inp is None else [inp] + _collect_source(inp.source)
-
-
-def _collect_chain(
-    out: TextOutput | VideoOutput | AudioOutput | None,
-) -> list[VideoOutput | AudioOutput | TextOutput]:
-    return [] if out is None else [out] + _collect_chain(out.next_in_chain)

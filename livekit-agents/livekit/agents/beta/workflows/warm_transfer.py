@@ -3,10 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import re
 from dataclasses import dataclass
-from json import detect_encoding
-from typing import TYPE_CHECKING, assert_type
+from typing import TYPE_CHECKING, cast
 
 from livekit import api, rtc
 
@@ -26,7 +24,6 @@ from ...voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
-from ...voice.events import RunContext
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -35,7 +32,7 @@ if TYPE_CHECKING:
 BASE_INSTRUCTIONS = """
 # Identity
 
-You are an agent that is reaching out to a supervisor for help. There has been a previous conversation
+You are an agent that is reaching out to a human supervisor for help. There has been a previous conversation
 between you and a customer, the conversation history is included below.
 
 # Goal
@@ -54,6 +51,7 @@ Start by giving them a summary of the conversation so far, and answer any questi
 
 ## Conversation history with customer
 {conversation_history}
+## End of conversation history with customer
 
 """
 
@@ -66,9 +64,8 @@ class WarmTransferResult:
 class WarmTransferTask(AgentTask[WarmTransferResult]):
     def __init__(
         self,
+        target_phone_number: str,
         *,
-        target_phone_number: NotGivenOr[str] = NOT_GIVEN,
-        target_rtc_room: NotGivenOr[str] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         sip_trunk_id: NotGivenOr[str] = NOT_GIVEN,
         extra_instructions: str = "",
@@ -81,13 +78,6 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        self._target_phone_number = target_phone_number or ""
-        self._target_rtc_room = target_rtc_room or ""
-        if self._target_phone_number and self._target_rtc_room:
-            raise ValueError("only one of `target_phone_number` or `target_rtc_room` can be given")
-        if not self._target_phone_number and not self._target_rtc_room:
-            raise ValueError("one of `target_phone_number` or `target_rtc_room` must be given")
-
         super().__init__(
             instructions=self.get_instructions(
                 chat_ctx=chat_ctx, extra_instructions=extra_instructions
@@ -105,12 +95,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._customer_room: rtc.Room | None = None
         self._supervisor_sess: AgentSession | None = None
         self._supervisor_failed_fut: asyncio.Future[None] = asyncio.Future()
-        self._supervisor_identity = "supervisor"
+        self._supervisor_identity = "supervisor-sip"
 
+        self._target_phone_number = target_phone_number
         self._sip_trunk_id = (
             sip_trunk_id if is_given(sip_trunk_id) else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
         )
-        if self._target_phone_number and not self._sip_trunk_id:
+        if not self._sip_trunk_id:
             raise ValueError(
                 "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable or `sip_trunk_id` argument must be set"
             )
@@ -119,7 +110,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._background_audio = BackgroundAudioPlayer()
         self._hold_audio_handle: PlayHandle | None = None
         self._hold_audio = (
-            hold_audio
+            cast(AudioSource | AudioConfig | list[AudioConfig] | None, hold_audio)
             if is_given(hold_audio)
             else AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
         )
@@ -142,12 +133,6 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         return BASE_INSTRUCTIONS.format(conversation_history=prev_convo) + extra_instructions
 
     async def on_enter(self) -> None:
-        # # disable `delete_on_close` for RoomIO
-        # if room_io := self.session.room_io:
-        #     # backup the original value
-        #     self._room_delete_on_close = room_io._options.delete_room_on_close
-        #     room_io._options.delete_room_on_close = False
-
         job_ctx = get_job_context()
         self._customer_room = job_ctx.room
 
@@ -156,18 +141,21 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             await self._background_audio.start(room=self._customer_room)
             self._hold_audio_handle = self._background_audio.play(self._hold_audio, loop=True)
 
-        self._toggle_io(False)
+        self._set_io_enabled(False)
 
         try:
             dial_supervisor_task = asyncio.create_task(self._dial_supervisor())
             done, _ = await asyncio.wait(
-                [dial_supervisor_task, self._supervisor_failed_fut],
+                (dial_supervisor_task, self._supervisor_failed_fut),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if dial_supervisor_task not in done:
                 raise RuntimeError()
 
             self._supervisor_sess = dial_supervisor_task.result()
+            self._supervisor_sess.generate_reply(
+                instructions="you are talking to the supervisor now. give a brief introduction of the conversation so far."
+            )
 
         except Exception:
             logger.exception("could not dial supervisor")
@@ -177,31 +165,17 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         finally:
             await utils.aio.cancel_and_wait(dial_supervisor_task)
 
-        logger.info("supervisor agent entered")
-
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def connect_to_customer(self):
+    async def connect_to_customer(self) -> None:
         """Called when the supervisor wants to connect to the customer."""
-        logger.info("Connecting to customer")
+        logger.debug("connecting to customer")
+        assert self._customer_room is not None
 
-        try:
-            merge_calls_task = asyncio.create_task(self._merge_calls())
-            done, _ = await asyncio.wait(
-                [merge_calls_task, self._supervisor_failed_fut],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if merge_calls_task not in done:
-                raise RuntimeError()
-
-        except Exception:
-            logger.exception("supervisor failed to join the room")
-            self._set_result(ToolError("supervisor failed to join the room"))
-            return
-
-        finally:
-            await utils.aio.cancel_and_wait(merge_calls_task)
-
+        await self._merge_calls()
         self._set_result(WarmTransferResult(supervisor_identity=self._supervisor_identity))
+
+        # when the customer or supervisor leaves the room, we'll delete the room
+        self._customer_room.on("participant_connected", self._on_customer_participant_connected)
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_transfer(self, reason: str) -> None:
@@ -211,6 +185,35 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             reason: A short explanation of why the supervisor declined to connect to the customer
         """
         self._set_result(ToolError(f"supervisor declined to connect: {reason}"))
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def voicemail_detected(self) -> None:
+        """Called when the call reaches voicemail. Use this tool AFTER you hear the voicemail greeting"""
+        self._set_result(ToolError("voicemail detected"))
+
+    def _on_supervisor_room_close(self, reason: rtc.DisconnectReason.ValueType) -> None:
+        logger.debug(
+            "supervisor's room closed",
+            extra={"reason": rtc.DisconnectReason.Name(reason)},
+        )
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._supervisor_failed_fut.set_result(None)
+
+        self._set_result(ToolError(f"room closed: {rtc.DisconnectReason.Name(reason)}"))
+
+    def _on_customer_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
+        if participant.kind not in (
+            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+            rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        ):
+            return
+
+        logger.info(f"participant connected from customer room: {participant.identity}")
+
+        assert self._customer_room is not None
+        self._customer_room.off("participant_connected", self._on_customer_participant_connected)
+        job_ctx = get_job_context()
+        job_ctx.delete_room(room_name=self._customer_room.name)
 
     def _set_result(self, result: WarmTransferResult | Exception) -> None:
         if self.done():
@@ -224,7 +227,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             self._hold_audio_handle.stop()
             self._hold_audio_handle = None
 
-        self._toggle_io(True)
+        self._set_io_enabled(True)
         self.complete(result)
 
     async def _dial_supervisor(self) -> AgentSession:
@@ -234,7 +237,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         ws_url = job_ctx._info.url
 
         # create a new room for the supervisor
-        supervisor_room_name = self._target_rtc_room or self._customer_room.name + "-supervisor"
+        supervisor_room_name = self._customer_room.name + "-supervisor"
         room = rtc.Room()
         token = (
             api.AccessToken()
@@ -252,21 +255,22 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         ).to_jwt()
 
         logger.debug(
-            f"connecting to supervisor room {supervisor_room_name}",
-            extra={"token": f"{token[:10]}...", "url": ws_url},
+            "connecting to supervisor room",
+            extra={"ws_url": ws_url, "supervisor_room_name": supervisor_room_name},
         )
         await room.connect(ws_url, token)
 
         # if supervisor hung up for whatever reason, we'd resume the customer conversation
         room.on("disconnected", self._on_supervisor_room_close)
 
-        supervisor_sess = AgentSession(
-            vad=self.session.vad,
-            llm=self.session.llm,
-            stt=self.session.stt,
-            tts=self.session.tts,
-            turn_detection=self.session.turn_detection,
+        supervisor_sess: AgentSession = AgentSession(
+            vad=self.session.vad or NOT_GIVEN,
+            llm=self.session.llm or NOT_GIVEN,
+            stt=self.session.stt or NOT_GIVEN,
+            tts=self.session.tts or NOT_GIVEN,
+            turn_detection=self.session.turn_detection or NOT_GIVEN,
         )
+        # create a copy of this AgentTask
         supervisor_agent = Agent(
             instructions=self.instructions,
             turn_detection=self.turn_detection,
@@ -281,32 +285,24 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         await supervisor_sess.start(
             agent=supervisor_agent,
             room=room,
-            room_options=room_io.RoomInputOptions(
-                close_on_disconnect=False,
+            room_options=room_io.RoomOptions(
+                close_on_disconnect=True,
                 delete_room_on_close=True,
-                participant_identity=(
-                    self._supervisor_identity if self._target_phone_number else NOT_GIVEN
-                ),
+                participant_identity=self._supervisor_identity,
             ),
-            record=False,
+            record=False,  # TODO: support recording on multiple sessions?
         )
 
         # dial the supervisor
-        if self._target_phone_number:
-            await job_ctx.api.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(
-                    sip_trunk_id=self._sip_trunk_id,
-                    sip_call_to=self._target_phone_number,
-                    room_name=supervisor_room_name,
-                    participant_identity=self._supervisor_identity,
-                    wait_until_answered=True,
-                )
+        await job_ctx.api.sip.create_sip_participant(
+            api.CreateSIPParticipantRequest(
+                sip_trunk_id=self._sip_trunk_id,
+                sip_call_to=self._target_phone_number,
+                room_name=supervisor_room_name,
+                participant_identity=self._supervisor_identity,
+                wait_until_answered=True,
             )
-        else:
-            # read the actual supervisor identity
-            self._supervisor_identity = (
-                await supervisor_sess.room_io._participant_available_fut
-            ).identity
+        )
 
         return supervisor_sess
 
@@ -319,8 +315,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # we no longer care about the supervisor session. it's supposed to be over
         supervisor_room.off("disconnected", self._on_supervisor_room_close)
 
-        logger.info(
-            f"moving supervisor {self._supervisor_identity} to customer room {self._customer_room.name}"
+        logger.debug(
+            f"moving {self._supervisor_identity} to customer room {self._customer_room.name}"
         )
         await job_ctx.api.room.move_participant(
             api.MoveParticipantRequest(
@@ -330,11 +326,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             )
         )
 
-    def _on_supervisor_room_close(self, reason: rtc.DisconnectReason) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
-            self._supervisor_failed_fut.set_result(None)
-
-    def _toggle_io(self, enabled: bool) -> None:
+    def _set_io_enabled(self, enabled: bool) -> None:
         input = self.session.input
         output = self.session.output
 
@@ -359,9 +351,3 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             )
         if output.video:
             output.set_video_enabled(enabled and self._original_io_state["video_output"])
-
-    async def llm_node(self, chat_ctx: llm.ChatContext, tools, model_settings):
-        import pprint
-
-        pprint.pprint(chat_ctx.to_dict())
-        return super().llm_node(chat_ctx, tools, model_settings)

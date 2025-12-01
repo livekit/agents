@@ -662,12 +662,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
 
             # log used IO
-            audio_input = io._collect_source(self.input.audio)[::-1]
-            video_input = io._collect_source(self.input.video)[::-1]
+            def _collect_source(
+                inp: io.AudioInput | io.VideoInput | None,
+            ) -> list[io.AudioInput | io.VideoInput]:
+                return [] if inp is None else [inp] + _collect_source(inp.source)
 
-            audio_output = io._collect_chain(self.output.audio)
-            video_output = io._collect_chain(self.output.video)
-            transcript_output = io._collect_chain(self.output.transcription)
+            def _collect_chain(
+                out: io.TextOutput | io.VideoOutput | io.AudioOutput | None,
+            ) -> list[io.VideoOutput | io.AudioOutput | io.TextOutput]:
+                return [] if out is None else [out] + _collect_chain(out.next_in_chain)
+
+            audio_input = _collect_source(self.input.audio)[::-1]
+            video_input = _collect_source(self.input.video)[::-1]
+
+            audio_output = _collect_chain(self.output.audio)
+            video_output = _collect_chain(self.output.video)
+            transcript_output = _collect_chain(self.output.transcription)
 
             logger.debug(
                 "using audio io: %s -> `AgentSession` -> %s",

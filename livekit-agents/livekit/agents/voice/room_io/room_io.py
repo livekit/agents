@@ -16,7 +16,7 @@ from ...types import (
     NotGivenOr,
 )
 from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
-from ..io import AudioInput, AudioOutput, TextOutput, VideoInput, _collect_chain, _collect_source
+from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
 
@@ -85,15 +85,8 @@ class RoomIO:
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
-        self._started = False
 
     async def start(self) -> None:
-        await self._start_impl(attach_to_session=True)
-
-    async def _start_impl(self, *, attach_to_session: bool) -> None:
-        if self._started:
-            return
-
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:
@@ -182,87 +175,21 @@ class RoomIO:
         self._init_atask = asyncio.create_task(self._init_task())
 
         # -- attach to the agent session --
-        if attach_to_session:
-            if self.audio_input:
-                self._agent_session.input.audio = self.audio_input
+        if self.audio_input:
+            self._agent_session.input.audio = self.audio_input
 
-            if self.video_input:
-                self._agent_session.input.video = self.video_input
+        if self.video_input:
+            self._agent_session.input.video = self.video_input
 
-            if self.audio_output:
-                self._agent_session.output.audio = self.audio_output
+        if self.audio_output:
+            self._agent_session.output.audio = self.audio_output
 
-            if self.transcription_output:
-                self._agent_session.output.transcription = self.transcription_output
+        if self.transcription_output:
+            self._agent_session.output.transcription = self.transcription_output
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.on("close", self._on_agent_session_close)
-        self._started = True
-
-    async def redirect(
-        self,
-        *,
-        room: NotGivenOr[rtc.Room],
-        participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
-    ) -> None:
-        assert self._started, "RoomIO must be started before redirecting"
-
-        if room is self._room:
-            if utils.is_given(participant_identity):
-                self.set_participant(participant_identity)
-            return
-
-        # disable the input and output of the agent session
-        session_input = self._agent_session.input
-        session_output = self._agent_session.output
-
-        audio_input_used = (audio_input := self.audio_input) and audio_input in _collect_source(
-            session_input.audio
-        )
-        video_input_used = (video_input := self.video_input) and video_input in _collect_source(
-            session_input.video
-        )
-        audio_output_used = (audio_output := self.audio_output) and audio_output in _collect_chain(
-            session_output.audio
-        )
-        transcription_output_used = (
-            transcription_output := self.transcription_output
-        ) and transcription_output in _collect_chain(session_output.transcription)
-
-        if audio_input_used:
-            session_input.set_audio_enabled(False)
-        if video_input_used:
-            session_input.set_video_enabled(False)
-        if audio_output_used:
-            session_output.set_audio_enabled(False)
-        if transcription_output_used:
-            session_output.set_transcription_enabled(False)
-
-        await self.aclose()
-
-        if utils.is_given(room):
-            self._room = room
-
-        self.unset_participant()  # reset the participant
-        if utils.is_given(participant_identity):
-            self.set_participant(participant_identity)
-
-        await self._start_impl(
-            attach_to_session=False,  # already attached to the session
-        )
-
-        # re-enable the inputs and outputs
-        if audio_input_used:
-            session_input.set_audio_enabled(True)
-        if video_input_used:
-            session_input.set_video_enabled(True)
-        if audio_output_used:
-            session_output.set_audio_enabled(True)
-        if transcription_output_used:
-            session_output.set_transcription_enabled(True)
-
-        logger.debug("RoomIO redirected to new room", extra={"new_room": room.name})
 
     @property
     def room(self) -> rtc.Room:
@@ -307,7 +234,6 @@ class RoomIO:
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
-        self._started = False
 
     @property
     def audio_output(self) -> AudioOutput | None:
@@ -454,6 +380,7 @@ class RoomIO:
                 "closing agent session due to participant disconnect "
                 "(disable via `RoomInputOptions.close_on_disconnect=False`)",
                 extra={
+                    "room_name": self._room.name,
                     "participant": participant.identity,
                     "reason": rtc.DisconnectReason.Name(
                         participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
@@ -513,7 +440,10 @@ class RoomIO:
         if self._options.delete_room_on_close and self._delete_room_task is None:
             job_ctx = get_job_context()
             logger.info(
-                "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)"
+                "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)",
+                extra={
+                    "room_name": self._room.name,
+                },
             )
-            self._delete_room_task = job_ctx.delete_room()
+            self._delete_room_task = job_ctx.delete_room(room_name=self._room.name)
             self._delete_room_task.add_done_callback(_on_delete_room_task_done)
