@@ -159,6 +159,7 @@ class ChatMessage(BaseModel):
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
+    should_merge: bool = True
 
     @property
     def text_content(self) -> str | None:
@@ -183,6 +184,7 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    should_merge: bool = True
 
 
 class FunctionCallOutput(BaseModel):
@@ -193,6 +195,7 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    should_merge: bool = True
 
 
 class AgentHandoff(BaseModel):
@@ -201,6 +204,7 @@ class AgentHandoff(BaseModel):
     old_agent_id: str | None
     new_agent_id: str
     created_at: float = Field(default_factory=time.time)
+    should_merge: bool = True
 
 
 ChatItem = Annotated[
@@ -234,6 +238,7 @@ class ChatContext:
         created_at: NotGivenOr[float] = NOT_GIVEN,
         metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        should_merge: NotGivenOr[bool] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -246,6 +251,8 @@ class ChatContext:
             kwargs["metrics"] = metrics
         if is_given(extra):
             kwargs["extra"] = extra
+        if is_given(should_merge):
+            kwargs["should_merge"] = should_merge
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
@@ -369,6 +376,10 @@ class ChatContext:
         existing_ids = {item.id for item in self._items}
 
         for item in other_chat_ctx.items:
+            # Skip items marked as should_merge=False
+            if not item.should_merge:
+                continue
+
             if exclude_function_call and item.type in [
                 "function_call",
                 "function_call_output",
