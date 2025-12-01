@@ -1655,10 +1655,10 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(fut: asyncio.Future[float]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             nonlocal started_speaking_at
             try:
-                started_speaking_at = fut.result()
+                started_speaking_at = fut.result() or time.time()
             except BaseException:
                 started_speaking_at = time.time()
 
@@ -1932,10 +1932,10 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(fut: asyncio.Future[float]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             nonlocal started_speaking_at
             try:
-                started_speaking_at = fut.result()
+                started_speaking_at = fut.result() or time.time()
             except BaseException:
                 started_speaking_at = time.time()
             self._session._update_agent_state(
@@ -2289,10 +2289,10 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(fut: asyncio.Future[float]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             nonlocal started_speaking_at
             try:
-                started_speaking_at = fut.result()
+                started_speaking_at = fut.result() or time.time()
             except BaseException:
                 started_speaking_at = time.time()
             self._session._update_agent_state(
