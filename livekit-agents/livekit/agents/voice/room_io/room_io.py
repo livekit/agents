@@ -380,7 +380,7 @@ class RoomIO:
                 "closing agent session due to participant disconnect "
                 "(disable via `RoomInputOptions.close_on_disconnect=False`)",
                 extra={
-                    "room_name": self._room.name,
+                    "closed_room": self._room.name,
                     "participant": participant.identity,
                     "reason": rtc.DisconnectReason.Name(
                         participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
@@ -442,7 +442,7 @@ class RoomIO:
             logger.info(
                 "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)",
                 extra={
-                    "room_name": self._room.name,
+                    "deleted_room": self._room.name,
                 },
             )
             self._delete_room_task = job_ctx.delete_room(room_name=self._room.name)

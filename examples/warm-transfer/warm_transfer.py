@@ -8,13 +8,12 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    RunContext,
     cli,
     room_io,
 )
 from livekit.agents.beta.workflows import WarmTransferTask
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
+from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("warm-transfer")
@@ -63,7 +62,7 @@ When such is requested, you would always confirm with the user before initiating
         self.session.generate_reply()
 
     @function_tool
-    async def transfer_to_human(self, context: RunContext):
+    async def transfer_to_human(self) -> None:
         """Called when the user asks to speak to a human agent. This will put the user on
            hold while the supervisor is connected.
 
@@ -84,14 +83,16 @@ When such is requested, you would always confirm with the user before initiating
             "Please hold while I connect you to a human agent.", allow_interruptions=False
         )
         try:
-            result = await WarmTransferTask(target_phone_number=SUPERVISOR_PHONE_NUMBER)
+            result = await WarmTransferTask(
+                target_phone_number=SUPERVISOR_PHONE_NUMBER, chat_ctx=self.chat_ctx
+            )
         except Exception as e:
             logger.error(f"failed to transfer to supervisor: {e}")
             raise e
 
         logger.info(
             "transfer to supervisor successful",
-            extra={"supervisor_identity": result.supervisor_identity},
+            extra={"supervisor_identity": result.human_agent_identity},
         )
         await self.session.say(
             "you are on the line with my supervisor. I'll be hanging up now.",
@@ -125,8 +126,9 @@ async def entrypoint(ctx: JobContext):
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
                 # enable Krisp BVC noise cancellation
-                # noise_cancellation=noise_cancellation.BVCTelephony(),
+                noise_cancellation=noise_cancellation.BVCTelephony(),
             ),
+            delete_room_on_close=False,  # keep the room open for the customer and supervisor
         ),
     )
 

@@ -156,8 +156,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             self._human_agent_sess.generate_reply(
                 instructions=(
                     "you are talking to the human agent now. "
-                    "give a brief introduction of the conversation so far."
-                    "and ask if they want to connect to the caller."
+                    "give a brief introduction of the conversation so far. "
+                    "ask if they want to connect to the caller."
                 )
             )
 
@@ -179,7 +179,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._set_result(WarmTransferResult(human_agent_identity=self._human_agent_identity))
 
         # when the caller or human agent leaves the room, we'll delete the room
-        self._caller_room.on("participant_connected", self._on_caller_participant_connected)
+        self._caller_room.on("participant_disconnected", self._on_caller_participant_disconnected)
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_transfer(self, reason: str) -> None:
@@ -205,17 +205,17 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         self._set_result(ToolError(f"room closed: {rtc.DisconnectReason.Name(reason)}"))
 
-    def _on_caller_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
+    def _on_caller_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if participant.kind not in (
             rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
             rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
         ):
             return
 
-        logger.info(f"participant connected from caller room: {participant.identity}")
+        logger.info(f"participant disconnected from caller room: {participant.identity}, closing")
 
         assert self._caller_room is not None
-        self._caller_room.off("participant_connected", self._on_caller_participant_connected)
+        self._caller_room.off("participant_disconnected", self._on_caller_participant_disconnected)
         job_ctx = get_job_context()
         job_ctx.delete_room(room_name=self._caller_room.name)
 
