@@ -1231,7 +1231,7 @@ class AgentActivity(RecognitionHooks):
             speech_end_time = speech_end_time - ev.silence_duration
         self._session._update_user_state(
             "listening",
-            last_speaking_time=speech_end_time,
+            last_speaking_time=int(speech_end_time * 1_000_000_000),
         )
 
         if (
