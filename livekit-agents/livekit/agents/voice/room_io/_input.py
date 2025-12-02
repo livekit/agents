@@ -50,6 +50,7 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unpublished", self._on_track_unavailable)
+        self._room.on("token_refreshed", self._on_token_refreshed)
 
         self.processor = processor
 
@@ -186,11 +187,12 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track, participant)
         self._publication = publication
         if self.processor:
-            self.processor.set_context(
-                room=self._room,
+            self.processor._update_stream_info(
+                room_name=self._room.name,
                 participant_identity=participant.identity,
                 publication_sid=publication.sid,
             )
+            self.processor._update_credentials(token=self._room._token, url=self._room._server_url)
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
         )
@@ -214,6 +216,10 @@ class _ParticipantInputStream(Generic[T], ABC):
                 continue
             if self._on_track_available(publication.track, publication, participant):
                 return
+
+    def _on_token_refreshed(self) -> None:
+        if self.processor is not None:
+            self.processor._update_credentials(token=self._room._token, url=self._room._server_url)
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
