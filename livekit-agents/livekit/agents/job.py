@@ -103,6 +103,32 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
 ]
 
 
+class _ContextLogFieldsFilter(logging.Filter):
+    """Filter that adds job context fields to log records without overwriting."""
+
+    def __init__(self, job_ctx: JobContext) -> None:
+        super().__init__()
+        self.job_ctx = job_ctx
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # only add fields for the current job context
+        if self.job_ctx.proc.executor_type != JobExecutorType.PROCESS:
+            try:
+                ctx = get_job_context()
+            except RuntimeError:
+                return True
+            else:
+                if ctx != self.job_ctx:
+                    return True
+
+        # add context fields only if they don't already exist in the record
+        for key, value in self.job_ctx._log_fields.items():
+            if not hasattr(record, key):
+                setattr(record, key, value)
+
+        return True
+
+
 class JobContext:
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
@@ -138,8 +164,9 @@ class JobContext:
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
-        self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
+        self._log_filter = _ContextLogFieldsFilter(self)
+        self._handlers_with_filter: list[logging.Handler] = []
 
         self._primary_agent_session: AgentSession | None = None
 
@@ -157,7 +184,10 @@ class JobContext:
         self._lock = asyncio.Lock()
 
     def _on_setup(self) -> None:
-        pass
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers:
+            handler.addFilter(self._log_filter)
+            self._handlers_with_filter.append(handler)
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -203,27 +233,9 @@ class JobContext:
         self._tempdir.cleanup()
         _shutdown_telemetry()
 
-    def _init_log_factory(self) -> None:
-        old_factory = logging.getLogRecordFactory()
-
-        def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-            record = old_factory(*args, **kwargs)
-
-            if self.proc.executor_type != JobExecutorType.PROCESS:
-                try:
-                    ctx = get_job_context()
-                except RuntimeError:
-                    return record
-                else:
-                    if ctx != self:
-                        return record
-
-            for key, value in self._log_fields.items():
-                setattr(record, key, value)
-
-            return record
-
-        logging.setLogRecordFactory(record_factory)
+        for handler in self._handlers_with_filter:
+            handler.removeFilter(self._log_filter)
+        self._handlers_with_filter.clear()
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
