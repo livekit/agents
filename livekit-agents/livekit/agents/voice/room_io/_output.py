@@ -17,6 +17,10 @@ from .. import io
 from ..transcription import find_micro_track_id
 
 
+class _InterruptedError(Exception):
+    pass
+
+
 class _ParticipantAudioOutput(io.AudioOutput):
     def __init__(
         self,
@@ -56,6 +60,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
+
+        self._first_frame: rtc.AudioFrame | None = None
+        self._first_frame_fut: asyncio.Future[None] | None = None
 
     async def _publish_track(self) -> None:
         async with self._lock:
@@ -97,7 +104,22 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await self._flush_task
 
         for f in self._audio_bstream.push(frame.data):
+            if self._pushed_duration == 0:
+                self._first_frame = f
+                self._first_frame_fut = asyncio.Future[None]()
+
             await self._audio_buf.send(f)
+
+            # wait for the first frame to be captured
+            if self._first_frame and self._first_frame_fut:
+                try:
+                    await self._first_frame_fut
+                except _InterruptedError:
+                    continue
+                finally:
+                    self._first_frame = None
+                    self._first_frame_fut = None
+
             self._pushed_duration += f.duration
 
     def flush(self) -> None:
@@ -167,6 +189,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._pushed_duration = 0
         self._interrupted_event.clear()
+        if self._first_frame_fut and not self._first_frame_fut.done():
+            self._first_frame_fut.set_exception(_InterruptedError())
+        self._first_frame = None
+        self._first_frame_fut = None
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
@@ -177,12 +203,20 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 # TODO(long): save the frames in the queue and play them later
                 # TODO(long): ignore frames from previous syllable
 
-            if self._interrupted_event.is_set() or self._pushed_duration == 0:
+            if self._interrupted_event.is_set() or (
+                self._pushed_duration == 0 and not self._first_frame
+            ):
                 if self._interrupted_event.is_set() and self._flush_task:
                     await self._flush_task
 
                 # ignore frames if interrupted
                 continue
+
+            if self._first_frame and self._first_frame_fut:
+                if frame is self._first_frame:
+                    self._first_frame_fut.set_result(None)
+                    self._first_frame = None
+                    self._first_frame_fut = None
 
             await self._audio_source.capture_frame(frame)
 
