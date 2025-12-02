@@ -6,6 +6,7 @@ import contextlib
 import os
 import uuid
 from collections.abc import Iterator
+from typing import Any
 
 import aiohttp
 
@@ -20,6 +21,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.voice.avatar import QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -48,10 +50,13 @@ class AvatarSession:
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._main_atask = asyncio.Task | None
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._main_atask: asyncio.Task | None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._session_data = None
         self._msg_ch = utils.aio.Chan[dict]()
+        self._audio_playing = False
+        self._playback_position = 0.0
 
     async def start(
         self,
@@ -119,20 +124,30 @@ class AvatarSession:
             if ev.new_state == "idle":
                 self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
-        @self._agent_session.on("conversation_item_added")
-        def on_conversation_item_added(ev):
-            if (
-                self._agent_session.current_speech is not None
-                and self._agent_session.current_speech.interrupted
-            ):
-                self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
+        self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE)
+        await self._audio_buffer.start()
+        self._audio_buffer.on("clear_buffer", self._on_clear_buffer)
 
-        @self._room.on("local_track_published")
-        def on_local_track_published(publication, track):
-            self._agent_audio_track = track
-            self._main_atask = asyncio.create_task(
-                self._main_task(), name="AvatarSession._main_task"
-            )
+        agent_session.output.audio = self._audio_buffer
+        self._main_atask = asyncio.create_task(self._main_task(), name="AvatarSession._main_task")
+
+    def _on_clear_buffer(self) -> None:
+        @utils.log_exceptions(logger=logger)
+        async def _handle_clear_buffer(audio_playing: bool) -> None:
+            if audio_playing:
+                notify_task = self._audio_buffer.notify_playback_finished(
+                    playback_position=self._playback_position,
+                    interrupted=True,
+                )
+                self.send_event({"type": "agent.interrupt", "event_id": str(uuid.uuid4())})
+                self._playback_position = 0.0
+                if asyncio.iscoroutine(notify_task):
+                    await notify_task
+
+        clear_buffer_task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
+        self._tasks.add(clear_buffer_task)
+        clear_buffer_task.add_done_callback(self._tasks.discard)
+        self._audio_playing = False
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._audio_resampler:
@@ -158,38 +173,26 @@ class AvatarSession:
             self._msg_ch.send_nowait(msg)
 
     async def _main_task(self) -> None:
-        local_participant = self._room.local_participant
-        track_perms = rtc.ParticipantTrackPermission(
-            participant_identity=_AVATAR_AGENT_IDENTITY, allow_all=True
-        )
-        local_participant.set_track_subscription_permissions(
-            allow_all_participants=False, participant_permissions=[track_perms]
-        )
-
-        if self._agent_audio_track is not None:
-            agent_audio_stream = rtc.AudioStream.from_track(track=self._agent_audio_track)
         ws_conn = await self._api._ensure_http_session().ws_connect(url=self._ws_url)
-
         closing = False
 
         async def _forward_audio() -> None:
-            async for audio_event in agent_audio_stream:
-                audio_frame = audio_event.frame
+            async for audio_frame in self._audio_buffer:
+                if isinstance(audio_frame, rtc.AudioFrame):
+                    if not self._audio_playing:
+                        self._audio_playing = True
+                    for resampled_frame in self._resample_audio(audio_frame):
+                        data = resampled_frame.data.tobytes()
+                        encoded_audio = base64.b64encode(data).decode("utf-8")
 
-                if not any(audio_frame.data):
-                    continue
+                        msg = {
+                            "type": "agent.speak",
+                            "event_id": str(uuid.uuid4()),
+                            "audio": encoded_audio,
+                        }
 
-                for resampled_frame in self._resample_audio(audio_frame):
-                    data = resampled_frame.data.tobytes()
-                    encoded_audio = base64.b64encode(data).decode("utf-8")
-
-                    msg = {
-                        "type": "agent.speak",
-                        "event_id": str(uuid.uuid4()),
-                        "audio": encoded_audio,
-                    }
-
-                    self.send_event(msg)
+                        self.send_event(msg)
+                        self._playback_position += resampled_frame.duration
 
         @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
@@ -216,15 +219,17 @@ class AvatarSession:
                         return
                     raise APIConnectionError(message="LiveAvatar connection closed unexpectedly.")
 
-        tasks = [
+        io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
             asyncio.create_task(_recv_task(), name="_recv_task"),
         ]
         try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(io_tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
+            await utils.aio.cancel_and_wait(*io_tasks)
+            await utils.aio.cancel_and_wait(*self._tasks)
+            await self._audio_buffer.aclose()
             await ws_conn.close()
