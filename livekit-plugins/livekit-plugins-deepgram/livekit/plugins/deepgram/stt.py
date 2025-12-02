@@ -198,6 +198,7 @@ class STT(stt.STT):
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
             "numerals": config.numerals,
+            "mip_opt_out": config.mip_opt_out,
         }
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
