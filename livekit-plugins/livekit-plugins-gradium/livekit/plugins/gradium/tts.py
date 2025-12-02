@@ -37,7 +37,6 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 
-
 SUPPORTED_SAMPLE_RATE = 48000
 
 
