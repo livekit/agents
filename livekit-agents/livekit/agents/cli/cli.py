@@ -755,12 +755,13 @@ class RichLoggingHandler(logging.Handler):
         has_exc = bool(record.exc_info and record.exc_info != (None, None, None))
 
         if has_exc:
-            exc_info = record.exc_info
+            exc_info, exc_text = record.exc_info, record.exc_text
             record.exc_info = None  # temporarily strip for clean message
+            record.exc_text = None
             try:
                 message = self.format(record)
             finally:
-                record.exc_info = exc_info
+                record.exc_info, record.exc_text = exc_info, exc_text
         else:
             message = self.format(record)
 
@@ -807,7 +808,7 @@ class RichLoggingHandler(logging.Handler):
 
         console_width = self.c.console.width
         tag_width = 2  # matches self.c._render_tag(..., tag_width=2)
-        available_width = max(console_width - tag_width, 20)
+        available_width = max(console_width - tag_width - 6, 20)
 
         time_len = log_time_display.cell_len
         level_len = 8
@@ -857,8 +858,11 @@ class RichLoggingHandler(logging.Handler):
 
     def _print_plain_traceback(self, record: logging.LogRecord) -> None:
         try:
-            exc_type, exc_value, exc_tb = record.exc_info  # type: ignore[misc]
-            tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            if record.exc_text:
+                tb_str = record.exc_text
+            else:
+                exc_type, exc_value, exc_tb = record.exc_info  # type: ignore[misc]
+                tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
             tb_text = Text(tb_str, style="red")
             self.c.console.print(tb_text, end="")

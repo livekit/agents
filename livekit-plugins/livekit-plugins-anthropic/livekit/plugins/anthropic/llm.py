@@ -100,7 +100,7 @@ class LLM(llm.LLM):
         if not anthropic_api_key:
             raise ValueError("Anthropic API key is required")
 
-        self._client = anthropic.AsyncClient(
+        self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
             http_client=httpx.AsyncClient(

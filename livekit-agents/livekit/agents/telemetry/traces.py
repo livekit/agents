@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import aiofiles
 import aiohttp
+import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
@@ -120,16 +122,45 @@ def set_tracer_provider(
 
 
 def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> None:
-    access_token = (
-        api.AccessToken()
-        .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(timedelta(hours=6))
-    )
+    token_ttl = timedelta(hours=6)
+    refresh_margin = timedelta(minutes=5)
 
+    class _AuthRefreshingSession(requests.Session):
+        def __init__(self, header_provider: _AuthHeaderProvider) -> None:
+            super().__init__()
+            self._header_provider = header_provider
+
+        def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+            self.headers.update(self._header_provider())
+            return super().request(*args, **kwargs)
+
+    class _AuthHeaderProvider:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._auth_header = ""
+            self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
+            self._refresh()
+
+        def _refresh(self) -> None:
+            access_token = (
+                api.AccessToken()
+                .with_observability_grants(api.ObservabilityGrants(write=True))
+                .with_ttl(token_ttl)
+            )
+            self._auth_header = f"Bearer {access_token.to_jwt()}"
+            self._expires_at = datetime.now(timezone.utc) + token_ttl
+
+        def __call__(self) -> dict[str, str]:
+            now = datetime.now(timezone.utc)
+            if now >= self._expires_at - refresh_margin:
+                with self._lock:
+                    if now >= self._expires_at - refresh_margin:
+                        self._refresh()
+            return {"Authorization": self._auth_header}
+
+    header_provider = _AuthHeaderProvider()
+    session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
-    headers = {
-        "Authorization": f"Bearer {access_token.to_jwt()}",
-    }
     metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
 
     resource = Resource.create(
@@ -150,8 +181,8 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
-        headers=headers,
         compression=otlp_compression,
+        session=session,
     )
 
     tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
@@ -164,8 +195,8 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     log_exporter = OTLPLogExporter(
         endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        headers=headers,
         compression=otlp_compression,
+        session=session,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
@@ -251,30 +282,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    item_dict = MessageToDict(item_pb)
-
-    # patch `arguments` & `output` to make them indexable attributes
-    try:
-        if item.type == "function_call":
-            item_dict["arguments"] = json.loads(item_dict["arguments"])
-        elif item.type == "function_call_output":
-            item_dict["output"] = json.loads(item_dict["output"])
-    except Exception:
-        pass  # ignore
-
-    return item_dict
-
-
-def _to_rfc3339(value: int | float | datetime) -> str:
-    if isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(value, tz=timezone.utc)
-    elif isinstance(value, datetime):
-        dt = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    else:
-        raise TypeError(f"Unsupported type for RFC3339 conversion: {type(value)!r}")
-
-    dt = dt.replace(microsecond=(dt.microsecond // 1000) * 1000)
-    return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return MessageToDict(item_pb)
 
 
 async def _upload_session_report(
@@ -350,7 +358,6 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
-        duration=int((report.duration or 0) * 1000),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
@@ -380,7 +387,6 @@ async def _upload_session_report(
             part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
-            part.headers["Created-At"] = _to_rfc3339(report.audio_recording_started_at)
 
     url = f"https://{cloud_hostname}/observability/recordings/v0"
     headers = {
