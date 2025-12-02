@@ -2,6 +2,8 @@
 
 Support for voice synthesis with [Inworld TTS](https://docs.inworld.ai/docs/tts/tts).
 
+See [https://docs.livekit.io/agents/integrations/tts/inworld/](https://docs.livekit.io/agents/integrations/tts/inworld/) for more information.
+
 ## Installation
 
 ```bash
