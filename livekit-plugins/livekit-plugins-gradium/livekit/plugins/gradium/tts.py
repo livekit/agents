@@ -18,7 +18,6 @@ import asyncio
 import base64
 import json
 import os
-import ssl
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -38,9 +37,6 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
 
 SUPPORTED_SAMPLE_RATE = 48000
 
