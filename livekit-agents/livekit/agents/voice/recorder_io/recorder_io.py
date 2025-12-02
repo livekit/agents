@@ -49,6 +49,8 @@ class RecorderIO:
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
         self._output_path: Path | None = None
 
+        self._input_speech_padded = False
+
     async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
             if self._started:
@@ -114,7 +116,7 @@ class RecorderIO:
     def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
         assert self._in_record is not None
 
-        input_buf = self._in_record.take_buf()
+        input_buf = self._in_record.take_buf(pad_since=self._out_record._last_speech_end_time)
         self._in_q.put_nowait(input_buf)
         self._out_q.put_nowait(buf)
 
@@ -129,7 +131,7 @@ class RecorderIO:
                 # if the output is currenetly playing audio, wait for it to stay in sync
                 continue  # always wait for the complete output
 
-            input_buf = self._in_record.take_buf()
+            input_buf = self._in_record.take_buf(pad_since=self._out_record._last_speech_end_time)
             self._in_q.put_nowait(input_buf)
             self._out_q.put_nowait([])
 
@@ -259,14 +261,35 @@ class RecorderAudioInput(io.AudioInput):
         self.__recording_io = recording_io
         self.__acc_frames: list[rtc.AudioFrame] = []
         self.__started_time: None | float = None
+        self.__padded: bool = False
 
     @property
     def started_wall_time(self) -> float | None:
         return self.__started_time
 
-    def take_buf(self) -> list[rtc.AudioFrame]:
+    def take_buf(self, pad_since: float | None = None) -> list[rtc.AudioFrame]:
         frames = self.__acc_frames
         self.__acc_frames = []
+        if (
+            pad_since
+            and self.__started_time
+            and (padding := self.__started_time - pad_since) > 0
+            and not self.__padded
+            and len(frames) > 0
+        ):
+            logger.warning(
+                "input speech started after last agent speech ended",
+                extra={
+                    "last_agent_speech_time": pad_since,
+                    "input_started_time": self.__started_time,
+                },
+            )
+            self.__padded = True
+            frames = [
+                _create_silence_frame(padding, frames[0].sample_rate, frames[0].num_channels),
+                *frames,
+            ]
+
         return frames
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
@@ -303,19 +326,17 @@ class RecorderAudioOutput(io.AudioOutput):
         self.__write = write_fnc
         self.__acc_frames: list[rtc.AudioFrame] = []
         self.__started_time: None | float = None
+        self._last_speech_end_time: None | float = None
+        self._last_speech_start_time: None | float = None
 
         if audio_output:
-            self.__playback_started_fut = asyncio.Future[float]()
 
             @audio_output.on("playback_started")
             def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
-                if not self.__playback_started_fut.done():
-                    self.__playback_started_fut.set_result(ev.timestamp)
+                if self.__started_time is None:
                     self.__started_time = ev.timestamp
 
-            self.__playback_started_fut.add_done_callback(
-                lambda _: audio_output.off("playback_started", _on_playback_started)
-            )
+                self._last_speech_start_time = ev.timestamp
 
         # pause tracking
         self.__current_pause_start: float | None = None
@@ -363,6 +384,18 @@ class RecorderAudioOutput(io.AudioOutput):
         synchronized_transcript: str | None = None,
     ) -> None:
         finish_time = time.time()
+
+        if self._last_speech_start_time is None:
+            logger.warning(
+                "playback finished before speech started",
+                extra={
+                    "finish_time": finish_time,
+                    "playback_position": playback_position,
+                    "interrupted": interrupted,
+                },
+            )
+            playback_position = 0.0
+
         super().on_playback_finished(
             playback_position=playback_position,
             interrupted=interrupted,
@@ -378,10 +411,11 @@ class RecorderAudioOutput(io.AudioOutput):
 
         if not self.__acc_frames:
             self._reset_pause_state()
+            self._last_speech_end_time = finish_time
+            self._last_speech_start_time = None
             return
 
         pause_events: deque[tuple[float, float]] = deque()  # (position, duration)
-
         if self.__pause_wall_times:
             total_pause_duration = sum(end - start for start, end in self.__pause_wall_times)
             playback_start_time = finish_time - playback_position - total_pause_duration
@@ -434,6 +468,8 @@ class RecorderAudioOutput(io.AudioOutput):
 
         self.__acc_frames = []
         self._reset_pause_state()
+        self._last_speech_end_time = finish_time
+        self._last_speech_start_time = None
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         if self.next_in_chain:
