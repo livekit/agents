@@ -30,6 +30,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         room: rtc.Room,
         *,
         track_source: rtc.TrackSource.ValueType | list[rtc.TrackSource.ValueType],
+        processor: rtc.FrameProcessor[T] | None = None,
     ) -> None:
         self._room = room
         self._accepted_sources = (
@@ -49,6 +50,8 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unpublished", self._on_track_unavailable)
+
+        self.processor = processor
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -123,6 +126,8 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.off("track_subscribed", self._on_track_available)
         self._data_ch.close()
+        if self.processor:
+            self.processor.close()
 
     @log_exceptions(logger=logger)
     async def _forward_task(
@@ -144,7 +149,10 @@ class _ParticipantInputStream(Generic[T], ABC):
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
-            await self._data_ch.send(cast(T, event.frame))
+            frame = cast(T, event.frame)
+            if self.processor:
+                frame = self.processor.process(frame)
+            await self._data_ch.send(frame)
 
         logger.debug("stream closed", extra=extra)
 
@@ -177,6 +185,12 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._publication = publication
+        if self.processor:
+            self.processor.set_context(
+                room=self._room,
+                participant_identity=participant.identity,
+                publication_sid=publication.sid,
+            )
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
         )
@@ -209,12 +223,22 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         *,
         sample_rate: int,
         num_channels: int,
-        noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None,
+        noise_cancellation: rtc.NoiseCancellationOptions
+        | NoiseCancellationSelector
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
+        audio_processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None
+        if isinstance(noise_cancellation, rtc.FrameProcessor):
+            audio_processor = noise_cancellation
+
         _ParticipantInputStream.__init__(
-            self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
+            self,
+            room=room,
+            track_source=rtc.TrackSource.SOURCE_MICROPHONE,
+            processor=audio_processor,
         )
         AudioInput.__init__(self, label="RoomIO")
         if frame_size_ms <= 0:
@@ -265,7 +289,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             try:
                 duration: float = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
-                for frame in self._resample_frames(frames):
+                for frame in self._resample_frames(self._apply_audio_filter(frames)):
                     if self._attached:
                         await self._data_ch.send(frame)
                         duration += frame.duration
@@ -318,6 +342,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         if resampler:
             yield from resampler.flush()
+
+    def _apply_audio_filter(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
+        for frame in frames:
+            if self.audio_filter is not None:
+                yield self.audio_filter.process(frame)
+            else:
+                yield frame
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):
