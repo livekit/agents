@@ -329,15 +329,6 @@ class RecorderAudioOutput(io.AudioOutput):
         self._last_speech_end_time: None | float = None
         self._last_speech_start_time: None | float = None
 
-        if audio_output:
-
-            @audio_output.on("playback_started")
-            def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
-                if self.__started_time is None:
-                    self.__started_time = ev.timestamp
-
-                self._last_speech_start_time = ev.timestamp
-
         # pause tracking
         self.__current_pause_start: float | None = None
         self.__pause_wall_times: list[tuple[float, float]] = []
@@ -479,6 +470,12 @@ class RecorderAudioOutput(io.AudioOutput):
 
         if self.__recording_io.recording:
             self.__acc_frames.append(frame)
+
+        if self.__started_time is None:
+            self.__started_time = time.time()
+
+        if self._last_speech_start_time is None:
+            self._last_speech_start_time = time.time()
 
     def flush(self) -> None:
         super().flush()

@@ -357,11 +357,6 @@ async def _audio_forwarding_task(
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
-    @audio_output.on("playback_started")
-    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
-        if not out.first_frame_fut.done():
-            out.first_frame_fut.set_result(ev.timestamp)
-
     try:
         audio_output.resume()
         async for frame in tts_output:
@@ -385,6 +380,9 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
+            if not out.first_frame_fut.done():
+                out.first_frame_fut.set_result(time.time())
+
         if resampler:
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
@@ -397,7 +395,6 @@ async def _audio_forwarding_task(
                 logger.error("error while closing tts output", exc_info=e)
 
         audio_output.flush()
-        audio_output.off("playback_started", _on_playback_started)
 
 
 @dataclass

@@ -116,11 +116,6 @@ class VideoInput:
 
 
 @dataclass
-class PlaybackStartedEvent:
-    timestamp: float
-
-
-@dataclass
 class PlaybackFinishedEvent:
     playback_position: float
     """How much of the audio was played back"""
@@ -136,7 +131,7 @@ class AudioOutputCapabilities:
     pause: bool
 
 
-class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_started", "playback_finished"]]):
+class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def __init__(
         self,
         *,
@@ -172,10 +167,6 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_started", "playback_fi
                     synchronized_transcript=ev.synchronized_transcript,
                 ),
             )
-            self.next_in_chain.on(
-                "playback_started",
-                lambda ev: self.on_playback_started(timestamp=ev.timestamp),
-            )
 
     @property
     def label(self) -> str:
@@ -184,9 +175,6 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_started", "playback_fi
     @property
     def next_in_chain(self) -> AudioOutput | None:
         return self.__next_in_chain
-
-    def on_playback_started(self, *, timestamp: float) -> None:
-        self.emit("playback_started", PlaybackStartedEvent(timestamp=timestamp))
 
     def on_playback_finished(
         self,

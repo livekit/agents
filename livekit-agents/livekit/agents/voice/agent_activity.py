@@ -14,7 +14,6 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
-from livekit.agents.voice.io import PlaybackStartedEvent
 
 from .. import llm, stt, tts, utils, vad
 from ..llm.tool_context import FunctionToolInfo, RawFunctionToolInfo, StopResponse, ToolFlag
@@ -2696,29 +2695,11 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.done()
             ):
-                playback_started_fut = asyncio.Future[float]()
-                # hold this context temporarily to avoid None _paused_speech issue
-                _ctx = self._paused_speech._agent_turn_context
-
-                @audio_output.on("playback_started")
-                def _on_playback_started(ev: PlaybackStartedEvent) -> None:
-                    if not playback_started_fut.done():
-                        playback_started_fut.set_result(ev.timestamp)
-
-                def _on_playback_started_done(fut: asyncio.Future[float]) -> None:
-                    try:
-                        start_time = fut.result()
-                    except BaseException:
-                        start_time = time.time()
-                    self._session._update_agent_state(
-                        "speaking", otel_context=_ctx, start_time=int(start_time * 1_000_000_000)
-                    )
-
-                playback_started_fut.add_done_callback(_on_playback_started_done)
-                playback_started_fut.add_done_callback(
-                    lambda _: audio_output.off("playback_started", _on_playback_started)
+                self._session._update_agent_state(
+                    "speaking",
+                    otel_context=self._paused_speech._agent_turn_context,
+                    start_time=time.time_ns(),
                 )
-
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
