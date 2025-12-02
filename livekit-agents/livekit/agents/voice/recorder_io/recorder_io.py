@@ -116,7 +116,9 @@ class RecorderIO:
     def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
         assert self._in_record is not None
 
-        input_buf = self._in_record.take_buf(pad_since=self._out_record._last_speech_end_time)
+        input_buf = self._in_record.take_buf(
+            pad_since=self._out_record._last_speech_end_time if self._out_record else None
+        )
         self._in_q.put_nowait(input_buf)
         self._out_q.put_nowait(buf)
 
