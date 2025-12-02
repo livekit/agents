@@ -20,7 +20,6 @@ import base64
 import dataclasses
 import json
 import os
-import ssl
 import weakref
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -47,7 +46,6 @@ bytes_per_frame = {
     "pcm_s16le": 2,
 }
 
-ssl_context = ssl._create_unverified_context()
 
 SUPPORTED_SAMPLE_RATE = 24000
 
@@ -403,7 +401,7 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
+        ws = await self._session.ws_connect(self._model_endpoint, headers=headers)
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
