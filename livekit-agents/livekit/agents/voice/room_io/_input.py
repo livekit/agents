@@ -128,7 +128,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._room.off("track_subscribed", self._on_track_available)
         self._data_ch.close()
         if self.processor:
-            self.processor.close()
+            self.processor._close()
 
     @log_exceptions(logger=logger)
     async def _forward_task(
@@ -152,7 +152,7 @@ class _ParticipantInputStream(Generic[T], ABC):
                 continue
             frame = cast(T, event.frame)
             if self.processor:
-                frame = self.processor.process(frame)
+                frame = self.processor._process(frame)
             await self._data_ch.send(frame)
 
         logger.debug("stream closed", extra=extra)
@@ -192,7 +192,10 @@ class _ParticipantInputStream(Generic[T], ABC):
                 participant_identity=participant.identity,
                 publication_sid=publication.sid,
             )
-            self.processor._update_credentials(token=self._room._token, url=self._room._server_url)
+            if self._room._token is not None and self._room._server_url is not None:
+                self.processor._update_credentials(
+                    token=self._room._token, url=self._room._server_url
+                )
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
         )
@@ -218,7 +221,11 @@ class _ParticipantInputStream(Generic[T], ABC):
                 return
 
     def _on_token_refreshed(self) -> None:
-        if self.processor is not None:
+        if (
+            self.processor is not None
+            and self._room._token is not None
+            and self._room._server_url is not None
+        ):
             self.processor._update_credentials(token=self._room._token, url=self._room._server_url)
 
 
@@ -295,7 +302,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             try:
                 duration: float = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
-                for frame in self._resample_frames(self._apply_audio_filter(frames)):
+                for frame in self._resample_frames(self._apply_audio_processor(frames)):
                     if self._attached:
                         await self._data_ch.send(frame)
                         duration += frame.duration
@@ -349,10 +356,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         if resampler:
             yield from resampler.flush()
 
-    def _apply_audio_filter(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
+    def _apply_audio_processor(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         for frame in frames:
-            if self.audio_filter is not None:
-                yield self.audio_filter.process(frame)
+            if self.processor is not None:
+                yield self.processor._process(frame)
             else:
                 yield frame
 
