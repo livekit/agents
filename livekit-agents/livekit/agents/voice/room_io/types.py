@@ -169,7 +169,7 @@ class RoomOptions:
         if isinstance(options, RoomOptions):
             return options
         elif is_given(options):
-            raise ValueError(f"expect RoomOptions, got {type(options)}")
+            raise ValueError(f"expected RoomOptions, got {type(options)}")
         else:
             return cls()
 

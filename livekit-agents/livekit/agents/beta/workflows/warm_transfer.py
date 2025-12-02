@@ -122,7 +122,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
     def get_instructions(
         self, *, chat_ctx: NotGivenOr[llm.ChatContext], extra_instructions: str = ""
     ) -> str:
-        # users can override this method if they want to customize the instructions
+        # users can override this method if they want to customize the entire instructions
         prev_convo = ""
         if chat_ctx:
             context_copy = chat_ctx.copy(

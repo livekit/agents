@@ -12,7 +12,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.workflows import WarmTransferTask
-from livekit.agents.llm import function_tool
+from livekit.agents.llm import ToolError, function_tool
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -91,9 +91,12 @@ When such is requested, you would always confirm with the user before initiating
                 sip_trunk_id=SIP_TRUNK_ID,
                 chat_ctx=self.chat_ctx,
             )
-        except Exception as e:
-            logger.error(f"failed to transfer to supervisor: {e}")
+        except ToolError as e:
+            logger.error(f"failed to transfer to supervisor with tool error: {e}")
             raise e
+        except Exception as e:
+            logger.exception("failed to transfer to supervisor")
+            raise ToolError(f"failed to transfer to supervisor with error: {e}") from e
 
         logger.info(
             "transfer to supervisor successful",
@@ -111,10 +114,6 @@ server = AgentServer()
 
 @server.rtc_session(agent_name="sip-inbound")
 async def entrypoint(ctx: JobContext):
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
-
     session = AgentSession(
         vad=silero.VAD.load(),
         llm="openai/gpt-4.1-mini",
