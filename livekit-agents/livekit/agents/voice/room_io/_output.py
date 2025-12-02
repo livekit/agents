@@ -212,7 +212,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 # ignore frames if interrupted
                 continue
 
-            if self._first_frame and self._first_frame_fut:
+            if self._first_frame and self._first_frame_fut and not self._first_frame_fut.done():
                 if frame is self._first_frame:
                     self._first_frame_fut.set_result(None)
                     self._first_frame = None
