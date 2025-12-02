@@ -25,7 +25,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Literal, TypeVar
+from typing import Literal, TypeVar, cast
 from urllib.parse import urlencode
 
 import aiohttp
@@ -107,7 +107,7 @@ def _get_option_value(default_value: T, override_value: NotGivenOr[T]) -> T:
     """Helper to get option value with NOT_GIVEN handling."""
     if isinstance(override_value, type(NOT_GIVEN)):
         return default_value
-    return override_value
+    return cast(T, override_value)
 
 
 def _get_urls_for_model(model: str) -> tuple[str, str]:
