@@ -18,17 +18,16 @@ from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import (
-    LogData,
     LoggerProvider,
     LoggingHandler,
-    LogRecord,
     LogRecordProcessor,
+    ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, TraceFlags, Tracer
+from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
 
@@ -79,7 +78,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
-    def emit(self, log_data: LogData) -> None:
+    def emit(self, log_data: ReadWriteLogRecord) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
@@ -89,7 +88,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
             {"logger.name": log_data.instrumentation_scope.name}
         )
 
-    def on_emit(self, log_data: LogData) -> None:
+    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
@@ -309,16 +308,11 @@ async def _upload_session_report(
         severity_text: str = "unspecified",
     ) -> None:
         chat_logger.emit(
-            LogRecord(
-                body=body,
-                timestamp=timestamp,
-                attributes=attributes,
-                trace_id=0,
-                span_id=0,
-                severity_number=severity,
-                severity_text=severity_text,
-                trace_flags=TraceFlags.get_default(),
-            )
+            body=body,
+            timestamp=timestamp,
+            attributes=attributes,
+            severity_number=severity,
+            severity_text=severity_text,
         )
 
     _log(
