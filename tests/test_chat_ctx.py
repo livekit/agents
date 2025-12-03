@@ -50,6 +50,18 @@ def test_dict():
     print(ChatContext.from_dict(chat_ctx.to_dict()).items)
 
 
+def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
+    from livekit.agents.llm import AgentHandoff, ChatContext, ChatMessage
+
+    items = [
+        AgentHandoff(new_agent_id="default_agent", old_agent_id=None),
+        ChatMessage(role="user", content=["Hello, world!"]),
+        ChatMessage(role="assistant", content=["Hi there!"]),
+    ]
+    chat_ctx = ChatContext(items)
+    assert chat_ctx.is_equivalent(ChatContext.from_dict(chat_ctx.to_dict()))
+
+
 async def test_summarize():
     from livekit.agents import ChatContext
 
