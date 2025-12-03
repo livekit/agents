@@ -51,7 +51,6 @@ def to_fnc_ctx(
 
             if is_given(tool_behavior):
                 fnc_kwargs["behavior"] = tool_behavior
-
             tools.append(types.FunctionDeclaration(**fnc_kwargs))
 
         elif is_function_tool(fnc):
@@ -138,7 +137,6 @@ def _build_gemini_fnc(
     }
     if is_given(tool_behavior):
         kwargs["behavior"] = tool_behavior
-
     return types.FunctionDeclaration(**kwargs)
 
 
@@ -203,6 +201,9 @@ class _GeminiJsonSchema:
             schema.update(schema_def)
             return
 
+        if "enum" in schema and "type" not in schema:
+            schema["type"] = self._infer_type(schema["enum"][0])
+
         # Convert type value to Gemini format
         if "type" in schema and schema["type"] != "null":
             json_type = schema["type"]
@@ -243,6 +244,18 @@ class _GeminiJsonSchema:
             self._object(schema, refs_stack)
         elif type_ == types.Type.ARRAY:
             self._array(schema, refs_stack)
+
+    def _infer_type(self, value: Any) -> str:
+        if isinstance(value, int):
+            return "integer"
+        elif isinstance(value, float):
+            return "number"
+        elif isinstance(value, str):
+            return "string"
+        elif isinstance(value, bool):
+            return "boolean"
+        else:
+            raise ValueError(f"Unsupported type in Schema: {type(value)}")
 
     def _map_field_names(self, schema: dict[str, Any]) -> None:
         """Map JSON Schema field names to Gemini Schema field names."""
