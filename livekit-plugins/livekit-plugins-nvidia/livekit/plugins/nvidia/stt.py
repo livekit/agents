@@ -50,6 +50,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                aligned_transcript=True,
             ),
         )
 

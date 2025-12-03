@@ -135,7 +135,9 @@ class STT(stt.STT):
             ValueError: If no API key is provided, found in environment variables, or if a parameter is invalid.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=False
+            ),
         )
         if sample_rate != 16000:
             raise ValueError("FireworksAI STT only supports a sample rate of 16000")

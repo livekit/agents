@@ -76,7 +76,11 @@ class STT(stt.STT):
         use_punctuation: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=True
+            )
+        )
 
         self._params = _STTOptions(
             model_name=model,
@@ -219,6 +223,10 @@ class SpeechStream(stt.SpeechStream):
                     logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
                     continue
 
+                # msec -> sec
+                start_time = data.get("start_at", 0) / 1000.0
+                duration = data.get("duration", 0) / 1000.0
+
                 # Expected schema from reference: {"alternatives":[{"text": "..."}], "final": bool}
                 if "alternatives" in data and data["alternatives"]:
                     text = data["alternatives"][0].get("text", "")
@@ -241,7 +249,12 @@ class SpeechStream(stt.SpeechStream):
                             stt.SpeechEvent(
                                 type=event_type,
                                 alternatives=[
-                                    stt.SpeechData(text=text, language=self._stt._params.language)
+                                    stt.SpeechData(
+                                        text=text,
+                                        language=self._stt._params.language,
+                                        start_time=start_time,
+                                        end_time=start_time + duration,
+                                    )
                                 ],
                             )
                         )
