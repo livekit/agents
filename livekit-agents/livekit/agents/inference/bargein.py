@@ -34,6 +34,18 @@ STEP_SIZE = int(0.1 * 16000)  # 0.1 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
+# WebSocket input message types
+MSG_INPUT_AUDIO = "input_audio"
+MSG_SESSION_CREATE = "session.create"
+MSG_SESSION_CLOSE = "session.close"
+
+# WebSocket output message types
+MSG_SESSION_CREATED = "session.created"
+MSG_SESSION_CLOSED = "session.closed"
+MSG_INFERENCE_DONE = "inference_done"
+MSG_BARGEIN_DETECTED = "bargein_detected"
+MSG_ERROR = "error"
+
 
 @unique
 class BargeinEventType(str, Enum):
@@ -623,12 +635,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 accumulated_samples += samples_written
                 if accumulated_samples >= self._model._opts.step_size and overlap_speech_started:
                     msg = {
-                        "type": "input_audio",
+                        "type": MSG_INPUT_AUDIO,
                         "audio": self._model.encode_waveform(inference_f32_data[:start_idx]),
-                        "sample_rate": self._model._opts.sample_rate,
-                        "num_channels": 1,
-                        "threshold": self._model._opts.threshold,
-                        "min_frames": self._model._opts.min_frames,
                         "created_at": perf_counter_ns(),
                     }
                     await ws.send_str(json.dumps(msg))
@@ -636,7 +644,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
             closing_ws = True
             finalize_msg = {
-                "type": "session.finalize",
+                "type": MSG_SESSION_CLOSE,
             }
             await ws.send_str(json.dumps(finalize_msg))
 
@@ -663,9 +671,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
                 created_at = data.get("created_at", 0.0)
-                if msg_type == "session.created":
+                if msg_type == MSG_SESSION_CREATED:
                     pass
-                elif msg_type == "inference_done":
+                elif msg_type == MSG_INFERENCE_DONE:
                     is_bargein_result = data.get("is_bargein", False)
                     inference_duration = (perf_counter_ns() - created_at) / 1e9
                     logger.debug(
@@ -685,7 +693,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                                 overlap_speech_started_at=self._overlap_speech_started_at,
                             )
                         )
-                elif msg_type == "bargein_detected":
+                elif msg_type == MSG_BARGEIN_DETECTED:
                     if overlap_speech_started:
                         logger.debug("bargein detected")
                         ev = BargeinEvent(
@@ -697,11 +705,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         self._bargein_detector.emit("bargein_detected", ev)
                         overlap_speech_started = False
 
-                elif msg_type == "session.finalized":
+                elif msg_type == MSG_SESSION_FINALIZED:
                     pass
-                elif msg_type == "session.closed":
+                elif msg_type == MSG_SESSION_CLOSED:
                     pass
-                elif msg_type == "error":
+                elif msg_type == MSG_ERROR:
                     raise APIError(f"LiveKit Bargein returned error: {msg.data}")
                 else:
                     logger.warning("received unexpected message from LiveKit Bargein: %s", data)
@@ -728,6 +736,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": self._opts.sample_rate,
+                "num_channels": 1,
+                "threshold": self._model._opts.threshold,
+                "min_frames": self._model._opts.min_frames,
             },
         }
 
@@ -742,7 +753,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 self._session.ws_connect(f"{base_url}/bargein", headers=headers),
                 self._conn_options.timeout,
             )
-            params["type"] = "session.create"
+            params["type"] = MSG_SESSION_CREATE
             await ws.send_str(json.dumps(params))
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
