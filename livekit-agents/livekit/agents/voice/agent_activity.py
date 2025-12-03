@@ -1312,9 +1312,6 @@ class AgentActivity(RecognitionHooks):
                 ev.overlap_speech_started_at or ev.timestamp
             )
 
-    def on_bargein_inference_done(self, ev: inference.BargeinEvent) -> None:
-        self._interruption_by_audio_activity_enabled = False
-
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model

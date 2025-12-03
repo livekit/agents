@@ -84,7 +84,6 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 class RecognitionHooks(Protocol):
     def on_bargein_detected(self, ev: inference.BargeinEvent) -> None: ...
-    def on_bargein_inference_done(self, ev: inference.BargeinEvent) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -282,10 +281,7 @@ class AudioRecognition:
                 self._ignore_until = NOT_GIVEN
                 return
 
-            if (
-                ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
-                < self._ignore_until
-            ):
+            if ev.alternatives[0].end_time + self._input_started_at < self._ignore_until:
                 emit_from_index = float("inf")
             else:
                 emit_from_index = min(emit_from_index, i)
@@ -335,8 +331,7 @@ class AudioRecognition:
             # 3. the event is for audio sent before the ignore_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
-            and ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
-            < self._ignore_until
+            and ev.alternatives[0].end_time + self._input_started_at < self._ignore_until
         ):
             return True
 
@@ -722,8 +717,6 @@ class AudioRecognition:
     async def _on_bargein_event(self, ev: inference.BargeinEvent) -> None:
         if ev.type == inference.BargeinEventType.BARGEIN:
             self._hooks.on_bargein_detected(ev)
-        elif ev.type == inference.BargeinEventType.INFERENCE_DONE:
-            self._hooks.on_bargein_inference_done(ev)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":

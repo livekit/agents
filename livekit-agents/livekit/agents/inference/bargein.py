@@ -42,14 +42,12 @@ MSG_SESSION_CLOSE = "session.close"
 # WebSocket output message types
 MSG_SESSION_CREATED = "session.created"
 MSG_SESSION_CLOSED = "session.closed"
-MSG_INFERENCE_DONE = "inference_done"
 MSG_BARGEIN_DETECTED = "bargein_detected"
 MSG_ERROR = "error"
 
 
 @unique
 class BargeinEventType(str, Enum):
-    INFERENCE_DONE = "inference_done"
     BARGEIN = "bargein"
 
 
@@ -66,7 +64,7 @@ class BargeinEvent:
     """Timestamp (in seconds) when the event was fired."""
 
     is_bargein: bool = False
-    """Whether bargein is detected (only for `INFERENCE_DONE` events)."""
+    """Whether bargein is detected."""
 
     inference_duration: float = 0.0
     """Time taken to perform the inference, in seconds."""
@@ -482,26 +480,17 @@ class BargeinHttpStream(BargeinStreamBase):
                 start_time = time.perf_counter()
                 is_bargein = await self.predict(data)
                 inference_duration = time.perf_counter() - start_time
-                if overlap_speech_started:
-                    self._event_ch.send_nowait(
-                        BargeinEvent(
-                            type=BargeinEventType.INFERENCE_DONE,
-                            timestamp=time.time(),
-                            is_bargein=is_bargein,
-                            inference_duration=inference_duration,
-                            overlap_speech_started_at=self._overlap_speech_started_at,
-                        )
+                if overlap_speech_started and is_bargein:
+                    ev = BargeinEvent(
+                        type=BargeinEventType.BARGEIN,
+                        timestamp=time.time(),
+                        overlap_speech_started_at=self._overlap_speech_started_at,
+                        inference_duration=inference_duration,
+                        is_bargein=is_bargein,
                     )
-
-                    if is_bargein:
-                        ev = BargeinEvent(
-                            type=BargeinEventType.BARGEIN,
-                            timestamp=time.time(),
-                            overlap_speech_started_at=self._overlap_speech_started_at,
-                        )
-                        self._event_ch.send_nowait(ev)
-                        self._bargein_detector.emit("bargein_detected", ev)
-                        overlap_speech_started = False
+                    self._event_ch.send_nowait(ev)
+                    self._bargein_detector.emit("bargein_detected", ev)
+                    overlap_speech_started = False
 
         tasks = [
             asyncio.create_task(_forward_data()),
@@ -673,38 +662,20 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 created_at = data.get("created_at", 0.0)
                 if msg_type == MSG_SESSION_CREATED:
                     pass
-                elif msg_type == MSG_INFERENCE_DONE:
-                    is_bargein_result = data.get("is_bargein", False)
-                    inference_duration = (perf_counter_ns() - created_at) / 1e9
-                    logger.debug(
-                        "inference done",
-                        extra={
-                            "is_bargein": is_bargein_result,
-                            "inference_duration": inference_duration,
-                        },
-                    )
-                    if overlap_speech_started:
-                        self._event_ch.send_nowait(
-                            BargeinEvent(
-                                type=BargeinEventType.INFERENCE_DONE,
-                                timestamp=time.time(),
-                                is_bargein=is_bargein_result,
-                                inference_duration=inference_duration,
-                                overlap_speech_started_at=self._overlap_speech_started_at,
-                            )
-                        )
                 elif msg_type == MSG_BARGEIN_DETECTED:
                     if overlap_speech_started:
                         logger.debug("bargein detected")
+                        inference_duration = (perf_counter_ns() - created_at) / 1e9
                         ev = BargeinEvent(
                             type=BargeinEventType.BARGEIN,
                             timestamp=time.time(),
+                            is_bargein=True,
+                            inference_duration=inference_duration,
                             overlap_speech_started_at=self._overlap_speech_started_at,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("bargein_detected", ev)
                         overlap_speech_started = False
-
                 elif msg_type == MSG_SESSION_CLOSED:
                     pass
                 elif msg_type == MSG_ERROR:
