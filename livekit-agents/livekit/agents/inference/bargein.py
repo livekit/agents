@@ -705,8 +705,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         self._bargein_detector.emit("bargein_detected", ev)
                         overlap_speech_started = False
 
-                elif msg_type == MSG_SESSION_FINALIZED:
-                    pass
                 elif msg_type == MSG_SESSION_CLOSED:
                     pass
                 elif msg_type == MSG_ERROR:
