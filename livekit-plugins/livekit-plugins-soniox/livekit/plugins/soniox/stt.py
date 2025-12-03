@@ -131,7 +131,11 @@ class STT(stt.STT):
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=False
+            )
+        )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
         self._base_url = base_url

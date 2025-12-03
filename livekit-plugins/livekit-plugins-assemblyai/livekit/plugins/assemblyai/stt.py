@@ -76,7 +76,9 @@ class STT(stt.STT):
         buffer_size_seconds: float = 0.05,
     ):
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=False),
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=False, aligned_transcript=True
+            ),
         )
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if assemblyai_api_key is None:
@@ -187,6 +189,7 @@ class SpeechStream(stt.SpeechStream):
         self._api_key = api_key
         self._session = http_session
         self._speech_duration: float = 0
+        self._last_preflight_start_time: int = 0
         self._reconnect_event = asyncio.Event()
 
     def update_options(
@@ -350,20 +353,47 @@ class SpeechStream(stt.SpeechStream):
             utterance = data.get("utterance", "")
             transcript = data.get("transcript", "")
 
+            # transcript (final) and words (interim) are cumulative
+            # utterance (preflight) is chunk based
+            start_time: int = 0
+            end_time: int = 0
+
             if words:
                 interim_text = " ".join(word.get("text", "") for word in words)
+                start_time = words[0].get("start", 0)
+                end_time = words[-1].get("end", 0)
+
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language="en", text=interim_text)],
+                    alternatives=[
+                        stt.SpeechData(
+                            language="en",
+                            text=interim_text,
+                            start_time=start_time,
+                            # end_time works as duration
+                            end_time=end_time - start_time,
+                        )
+                    ],
                 )
                 self._event_ch.send_nowait(interim_event)
 
             if utterance:
+                if self._last_preflight_start_time == 0:
+                    self._last_preflight_start_time = start_time
+
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language="en", text=utterance)],
+                    alternatives=[
+                        stt.SpeechData(
+                            language="en",
+                            text=utterance,
+                            start_time=self._last_preflight_start_time,
+                            end_time=end_time - self._last_preflight_start_time,
+                        )
+                    ],
                 )
                 self._event_ch.send_nowait(final_event)
+                self._last_preflight_start_time = end_time
 
             if end_of_turn and (
                 not (is_given(self._opts.format_turns) and self._opts.format_turns)
@@ -371,7 +401,11 @@ class SpeechStream(stt.SpeechStream):
             ):
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language="en", text=transcript)],
+                    alternatives=[
+                        stt.SpeechData(
+                            language="en", text=transcript, start_time=start_time, end_time=end_time
+                        )
+                    ],
                 )
                 self._event_ch.send_nowait(final_event)
 
@@ -387,3 +421,4 @@ class SpeechStream(stt.SpeechStream):
                     )
                     self._event_ch.send_nowait(usage_event)
                     self._speech_duration = 0
+                    self._last_preflight_start_time = 0

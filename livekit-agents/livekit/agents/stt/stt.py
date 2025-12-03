@@ -72,6 +72,8 @@ class STTCapabilities:
     streaming: bool
     interim_results: bool
     diarization: bool = False
+    aligned_transcript: bool = False
+    """Whether this STT supports aligned transcripts with word timestamps"""
 
 
 class STTError(BaseModel):

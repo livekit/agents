@@ -62,6 +62,7 @@ class STTOptions:
     base_url: str
     language_code: str | None
     tag_audio_events: bool
+    include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
 
@@ -77,6 +78,7 @@ class STT(stt.STT):
         use_realtime: bool = False,
         sample_rate: STTRealtimeSampleRates = 16000,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -94,7 +96,13 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
         """  # noqa: E501
 
-        super().__init__(capabilities=STTCapabilities(streaming=use_realtime, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=use_realtime,
+                interim_results=True,
+                aligned_transcript=include_timestamps and use_realtime,
+            )
+        )
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
@@ -112,6 +120,7 @@ class STT(stt.STT):
             tag_audio_events=tag_audio_events,
             sample_rate=sample_rate,
             server_vad=server_vad,
+            include_timestamps=include_timestamps,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -428,10 +437,12 @@ class SpeechStream(stt.SpeechStream):
         """Process incoming WebSocket messages from ElevenLabs"""
         message_type = data.get("message_type")
         text = data.get("text", "")
+        words = data.get("words", [])
+        start_time = words[0].get("start", 0) if words else 0
+        end_time = words[-1].get("end", 0) if words else 0
 
         speech_data = stt.SpeechData(
-            language=self._language or "en",
-            text=text,
+            language=self._language or "en", text=text, start_time=start_time, end_time=end_time
         )
 
         if message_type == "partial_transcript":

@@ -273,7 +273,9 @@ class STT(stt.STT):
             ValueError: If no API key is provided or found in environment variables.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=interim_results, aligned_transcript=True
+            )
         )
         self._base_url = base_url
 

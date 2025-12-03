@@ -131,7 +131,10 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=interim_results, diarization=enable_diarization
+                streaming=True,
+                interim_results=interim_results,
+                diarization=enable_diarization,
+                aligned_transcript=True,
             )
         )
 

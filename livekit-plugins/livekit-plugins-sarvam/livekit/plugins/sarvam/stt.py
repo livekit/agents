@@ -186,7 +186,11 @@ class STT(stt.STT):
         flush_signal: bool | None = None,
         input_audio_codec: str | None = None,
     ) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=True
+            )
+        )
 
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
@@ -923,6 +927,8 @@ class SpeechStream(stt.SpeechStream):
             speech_data = stt.SpeechData(
                 language=language,
                 text=transcript_text,
+                start_time=transcript_data.get("speech_start", 0.0),
+                end_time=transcript_data.get("speech_end", 0.0),
             )
 
             # Create final transcript event with request_id
