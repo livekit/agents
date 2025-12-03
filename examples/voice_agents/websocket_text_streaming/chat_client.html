@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Healthcare Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Söhne:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #212121;
+            --bg-secondary: #2f2f2f;
+            --bg-tertiary: #424242;
+            --text-primary: #ececec;
+            --text-secondary: #b4b4b4;
+            --accent: #10a37f;
+            --accent-hover: #1a7f64;
+            --user-bubble: #2f2f2f;
+            --assistant-bubble: transparent;
+            --border-color: #444444;
+            --input-bg: #2f2f2f;
+        }
+
+        body {
+            font-family: 'Söhne', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg-secondary);
+        }
+
+        .header-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent) 0%, #0d8a6a 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .header-icon svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+
+        .header-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .connection-status {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            transition: background 0.3s ease;
+        }
+
+        .status-dot.connected {
+            background: var(--accent);
+        }
+
+        /* Chat Container */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 0;
+        }
+
+        .chat-content {
+            max-width: 768px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Messages */
+        .message {
+            display: flex;
+            gap: 16px;
+            padding: 24px 0;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message + .message {
+            border-top: 1px solid var(--border-color);
+        }
+
+        .message-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .message-avatar.user {
+            background: linear-gradient(135deg, #5436DA 0%, #7C3AED 100%);
+            color: white;
+        }
+
+        .message-avatar.assistant {
+            background: linear-gradient(135deg, var(--accent) 0%, #0d8a6a 100%);
+        }
+
+        .message-avatar.assistant svg {
+            width: 18px;
+            height: 18px;
+            fill: white;
+        }
+
+        .message-content {
+            flex: 1;
+            line-height: 1.7;
+            font-size: 15px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .message-content p {
+            margin-bottom: 12px;
+        }
+
+        .message-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: inline-flex;
+            gap: 4px;
+            padding: 4px 0;
+        }
+
+        .typing-indicator span {
+            width: 6px;
+            height: 6px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-4px); opacity: 1; }
+        }
+
+        /* Cursor */
+        .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 18px;
+            background: var(--text-primary);
+            margin-left: 2px;
+            animation: blink 1s infinite;
+            vertical-align: text-bottom;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 16px 24px 24px;
+            background: var(--bg-primary);
+        }
+
+        .input-wrapper {
+            max-width: 768px;
+            margin: 0 auto;
+        }
+
+        .input-container {
+            display: flex;
+            align-items: flex-end;
+            gap: 12px;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 12px 16px;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .input-container:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.1);
+        }
+
+        .input-container textarea {
+            flex: 1;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 15px;
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+            max-height: 200px;
+            min-height: 24px;
+        }
+
+        .input-container textarea::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .send-button {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 8px;
+            background: var(--accent);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s ease, opacity 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .send-button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .send-button svg {
+            width: 16px;
+            height: 16px;
+            fill: white;
+        }
+
+        .disclaimer {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 12px;
+        }
+
+        /* Welcome Screen */
+        .welcome {
+            text-align: center;
+            padding: 60px 24px;
+        }
+
+        .welcome-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--accent) 0%, #0d8a6a 100%);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+        }
+
+        .welcome-icon svg {
+            width: 36px;
+            height: 36px;
+            fill: white;
+        }
+
+        .welcome h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .welcome p {
+            color: var(--text-secondary);
+            font-size: 15px;
+            max-width: 500px;
+            margin: 0 auto 32px;
+            line-height: 1.6;
+        }
+
+        .suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .suggestion {
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 14px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .suggestion:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--accent);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-icon">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M19.5 9.5c-.17 0-.34.01-.5.03V6c0-2.21-1.79-4-4-4h-6c-2.21 0-4 1.79-4 4v3.53c-.16-.02-.33-.03-.5-.03C2.57 9.5 1 11.07 1 12.5s1.57 3 3.5 3c.17 0 .34-.01.5-.03V18c0 2.21 1.79 4 4 4h6c2.21 0 4-1.79 4-4v-2.53c.16.02.33.03.5.03 1.93 0 3.5-1.57 3.5-3.5s-1.57-3-3.5-3zM9 13.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm6 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
+            </svg>
+        </div>
+        <div class="header-title">Healthcare Assistant</div>
+        <div class="connection-status">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+    </div>
+
+    <!-- Chat Container -->
+    <div class="chat-container" id="chatContainer">
+        <div class="chat-content" id="chatContent">
+            <!-- Welcome Screen -->
+            <div class="welcome" id="welcomeScreen">
+                <div class="welcome-icon">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M19.5 9.5c-.17 0-.34.01-.5.03V6c0-2.21-1.79-4-4-4h-6c-2.21 0-4 1.79-4 4v3.53c-.16-.02-.33-.03-.5-.03C2.57 9.5 1 11.07 1 12.5s1.57 3 3.5 3c.17 0 .34-.01.5-.03V18c0 2.21 1.79 4 4 4h6c2.21 0 4-1.79 4-4v-2.53c.16.02.33.03.5.03 1.93 0 3.5-1.57 3.5-3.5s-1.57-3-3.5-3zM9 13.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm6 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
+                    </svg>
+                </div>
+                <h1>How can I help you today?</h1>
+                <p>I'm a healthcare assistant here to provide general health information, explain medical terms, and guide you toward appropriate care. Remember, I'm not a replacement for professional medical advice.</p>
+                <div class="suggestions">
+                    <button class="suggestion" onclick="sendSuggestion('What are common symptoms of seasonal allergies?')">Allergy symptoms</button>
+                    <button class="suggestion" onclick="sendSuggestion('How can I improve my sleep quality?')">Sleep tips</button>
+                    <button class="suggestion" onclick="sendSuggestion('What should I know about staying hydrated?')">Hydration guide</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+        <div class="input-wrapper">
+            <div class="input-container">
+                <textarea 
+                    id="messageInput" 
+                    placeholder="Message Healthcare Assistant..." 
+                    rows="1"
+                    onkeydown="handleKeyDown(event)"
+                    oninput="autoResize(this)"
+                ></textarea>
+                <button class="send-button" id="sendButton" onclick="sendMessage()" disabled>
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="disclaimer">Healthcare Assistant provides general information only. Always consult a healthcare professional for medical advice.</div>
+        </div>
+    </div>
+
+    <script>
+        const WS_URL = 'ws://localhost:8765';
+        let ws = null;
+        let isConnected = false;
+        let isStreaming = false;
+        let currentAssistantMessage = null;
+
+        // DOM Elements
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const chatContainer = document.getElementById('chatContainer');
+        const chatContent = document.getElementById('chatContent');
+        const welcomeScreen = document.getElementById('welcomeScreen');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+
+        // Connect to WebSocket
+        function connect() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                isConnected = true;
+                updateConnectionStatus(true);
+                console.log('Connected to WebSocket server');
+            };
+
+            ws.onclose = () => {
+                isConnected = false;
+                updateConnectionStatus(false);
+                console.log('Disconnected from WebSocket server');
+                // Attempt to reconnect after 3 seconds
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleServerMessage(data);
+            };
+        }
+
+        // Update connection status UI
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connected';
+            } else {
+                statusDot.classList.remove('connected');
+                statusText.textContent = 'Disconnected';
+            }
+            updateSendButton();
+        }
+
+        // Handle messages from server
+        function handleServerMessage(data) {
+            switch (data.type) {
+                case 'delta':
+                    handleDelta(data.content);
+                    break;
+                case 'complete':
+                    handleComplete(data.content);
+                    break;
+                case 'error':
+                    handleError(data.message);
+                    break;
+            }
+        }
+
+        // Handle streaming delta
+        function handleDelta(content) {
+            if (!currentAssistantMessage) {
+                currentAssistantMessage = addMessage('assistant', '');
+            }
+            
+            const contentDiv = currentAssistantMessage.querySelector('.message-content');
+            // Remove cursor if exists
+            const cursor = contentDiv.querySelector('.cursor');
+            if (cursor) cursor.remove();
+            
+            // Add new content
+            contentDiv.textContent += content;
+            
+            // Add cursor back
+            const newCursor = document.createElement('span');
+            newCursor.className = 'cursor';
+            contentDiv.appendChild(newCursor);
+            
+            scrollToBottom();
+        }
+
+        // Handle stream complete
+        function handleComplete(content) {
+            if (currentAssistantMessage) {
+                const contentDiv = currentAssistantMessage.querySelector('.message-content');
+                // Remove cursor
+                const cursor = contentDiv.querySelector('.cursor');
+                if (cursor) cursor.remove();
+            }
+            
+            currentAssistantMessage = null;
+            isStreaming = false;
+            updateSendButton();
+        }
+
+        // Handle error
+        function handleError(message) {
+            if (currentAssistantMessage) {
+                const contentDiv = currentAssistantMessage.querySelector('.message-content');
+                contentDiv.innerHTML = `<span style="color: #ef4444;">Error: ${escapeHtml(message)}</span>`;
+            }
+            currentAssistantMessage = null;
+            isStreaming = false;
+            updateSendButton();
+        }
+
+        // Add message to chat
+        function addMessage(role, content) {
+            // Hide welcome screen on first message
+            if (welcomeScreen) {
+                welcomeScreen.style.display = 'none';
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
+
+            const avatarDiv = document.createElement('div');
+            avatarDiv.className = `message-avatar ${role}`;
+            
+            if (role === 'user') {
+                avatarDiv.textContent = 'Y';
+            } else {
+                avatarDiv.innerHTML = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M19.5 9.5c-.17 0-.34.01-.5.03V6c0-2.21-1.79-4-4-4h-6c-2.21 0-4 1.79-4 4v3.53c-.16-.02-.33-.03-.5-.03C2.57 9.5 1 11.07 1 12.5s1.57 3 3.5 3c.17 0 .34-.01.5-.03V18c0 2.21 1.79 4 4 4h6c2.21 0 4-1.79 4-4v-2.53c.16.02.33.03.5.03 1.93 0 3.5-1.57 3.5-3.5s-1.57-3-3.5-3zM9 13.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm6 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
+                </svg>`;
+            }
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+
+            messageDiv.appendChild(avatarDiv);
+            messageDiv.appendChild(contentDiv);
+            chatContent.appendChild(messageDiv);
+
+            scrollToBottom();
+            return messageDiv;
+        }
+
+        // Send message
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message || !isConnected || isStreaming) return;
+
+            // Add user message to chat
+            addMessage('user', message);
+
+            // Send to server
+            ws.send(JSON.stringify({
+                type: 'chat',
+                messages: [{ role: 'user', content: message }]
+            }));
+
+            // Clear input
+            messageInput.value = '';
+            autoResize(messageInput);
+            
+            // Set streaming state
+            isStreaming = true;
+            updateSendButton();
+        }
+
+        // Send suggestion
+        function sendSuggestion(text) {
+            messageInput.value = text;
+            sendMessage();
+        }
+
+        // Handle keyboard input
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // Auto-resize textarea
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+            updateSendButton();
+        }
+
+        // Update send button state
+        function updateSendButton() {
+            const hasText = messageInput.value.trim().length > 0;
+            sendButton.disabled = !hasText || !isConnected || isStreaming;
+        }
+
+        // Scroll to bottom
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        messageInput.addEventListener('input', () => updateSendButton());
+        connect();
+    </script>
+</body>
+</html>
+
