@@ -115,6 +115,7 @@ class STT(stt.STT):
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
                 language=self._opts.language if self._opts.language else None,
+                # TODO: add aligned transcript
             )
 
             return stt.SpeechEvent(

@@ -99,7 +99,11 @@ class STT(stt.STT):
                         default punctuation behavior.
         """
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=True
+            )
+        )
         if not language or not is_given(language):
             language = ["en-US"]
 
@@ -275,7 +279,13 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = self._opts.language[0]
 
-        final_data = stt.SpeechData(language=detected_lg, confidence=1.0, text=evt.result.text)
+        final_data = stt.SpeechData(
+            language=detected_lg,
+            confidence=1.0,
+            text=evt.result.text,
+            start_time=evt.result.offset / 10**7,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7,
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -294,7 +304,13 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = self._opts.language[0]
 
-        interim_data = stt.SpeechData(language=detected_lg, confidence=0.0, text=evt.result.text)
+        interim_data = stt.SpeechData(
+            language=detected_lg,
+            confidence=0.0,
+            text=evt.result.text,
+            start_time=evt.result.offset / 10**7,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7,
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(

@@ -101,7 +101,11 @@ class STT(stt.STT):
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
     ):
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=True
+            )
+        )
 
         if not _AWS_SDK_AVAILABLE:
             raise ImportError(
