@@ -1940,6 +1940,9 @@ gladia = [
 google = [
     { name = "livekit-plugins-google" },
 ]
+gradium = [
+    { name = "livekit-plugins-gradium" },
+]
 groq = [
     { name = "livekit-plugins-groq" },
 ]
@@ -2052,6 +2055,7 @@ requires-dist = [
     { name = "livekit-plugins-fishaudio", marker = "python_full_version >= '3.10' and extra == 'fishaudio'", editable = "livekit-plugins/livekit-plugins-fishaudio" },
     { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
+    { name = "livekit-plugins-gradium", marker = "extra == 'gradium'", editable = "livekit-plugins/livekit-plugins-gradium" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
     { name = "livekit-plugins-hedra", marker = "extra == 'hedra'", editable = "livekit-plugins/livekit-plugins-hedra" },
     { name = "livekit-plugins-hume", marker = "extra == 'hume'", editable = "livekit-plugins/livekit-plugins-hume" },
@@ -2083,9 +2087,9 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
     { name = "openai", specifier = ">=1.99.2" },
-    { name = "opentelemetry-api", specifier = "==1.39" },
-    { name = "opentelemetry-exporter-otlp", specifier = "==1.39" },
-    { name = "opentelemetry-sdk", specifier = "==1.39" },
+    { name = "opentelemetry-api", specifier = "~=1.39.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = "~=1.39.0" },
+    { name = "opentelemetry-sdk", specifier = "~=1.39.0" },
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
     { name = "prometheus-client", specifier = ">=0.22" },
     { name = "protobuf", specifier = ">=3" },
@@ -2098,7 +2102,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "openai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "openai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
 
 [[package]]
 name = "livekit-api"
