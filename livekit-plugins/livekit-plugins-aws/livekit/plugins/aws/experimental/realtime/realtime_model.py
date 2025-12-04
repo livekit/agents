@@ -448,16 +448,24 @@ class RealtimeSession(  # noqa: F811
             for name, f in self.tools.function_tools.items():
                 if llm.tool_context.is_function_tool(f):
                     description = llm.tool_context.get_function_info(f).description
-                    input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
-                        "parameters"
-                    ]
+                    # Nova Sonic tool schema fix: build_legacy_openai_schema() returns nested structure
+                    # {'type': 'function', 'function': {'name': '...', 'parameters': {...}}}
+                    # Must safely extract parameters from nested 'function' key
+                    schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)
+                    func_schema = schema.get("function", schema)
+                    input_schema = func_schema.get(
+                        "parameters", {"type": "object", "properties": {}}
+                    )
                 elif llm.tool_context.is_raw_function_tool(f):
                     description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
                         "description"
                     )
-                    input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
-                        "parameters"
-                    ]
+                    raw_schema = llm.tool_context.get_raw_function_info(f).raw_schema
+                    # Safely access parameters with fallback
+                    input_schema = raw_schema.get(
+                        "parameters",
+                        raw_schema.get("input_schema", {"type": "object", "properties": {}}),
+                    )
                 else:
                     continue
 
