@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import math
 import os
+import struct
 import time
 import weakref
 from abc import ABC, abstractmethod
@@ -27,8 +27,8 @@ from ..utils import aio, http_context, is_given, log_exceptions, shortuuid
 from ._utils import create_access_token
 
 SAMPLE_RATE = 16000
-THRESHOLD = 0.95
-MIN_BARGEIN_DURATION = 0.05  # 25ms per frame
+THRESHOLD = 0.65
+MIN_BARGEIN_DURATION = 0.025  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
 STEP_SIZE = int(0.1 * 16000)  # 0.1 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
@@ -188,10 +188,6 @@ class BargeinDetector(
                 recoverable=recoverable,
             ),
         )
-
-    @staticmethod
-    def encode_waveform(array: np.ndarray) -> str:
-        return base64.b64encode(array.tobytes()).decode("utf-8")
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -420,7 +416,7 @@ class BargeinHttpStream(BargeinStreamBase):
             nonlocal overlap_speech_started
 
             agent_speech_started: bool = False
-            inference_f32_data = np.zeros(self._model._opts.max_window_size, dtype=np.float32)
+            inference_s16_data = np.zeros(self._model._opts.max_window_size, dtype=np.int16)
             start_idx: int = 0
             accumulated_samples: int = 0
 
@@ -454,6 +450,8 @@ class BargeinHttpStream(BargeinStreamBase):
                     if overlap_speech_started:
                         logger.debug("overlap speech ended, stopping barge-in inference")
                     overlap_speech_started = False
+                    accumulated_samples = 0
+                    start_idx = 0
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
@@ -462,15 +460,15 @@ class BargeinHttpStream(BargeinStreamBase):
                 if not agent_speech_started or not isinstance(input_frame, rtc.AudioFrame):
                     continue
 
-                start_idx, samples_written = _write_to_inference_f32_data(
+                start_idx, samples_written = _write_to_inference_s16_data(
                     input_frame,
                     start_idx,
-                    inference_f32_data,
+                    inference_s16_data,
                     self._model._opts.max_window_size,
                 )
                 accumulated_samples += samples_written
                 if accumulated_samples >= self._model._opts.step_size and overlap_speech_started:
-                    data_chan.send_nowait(inference_f32_data[:start_idx])
+                    data_chan.send_nowait(inference_s16_data[:start_idx])
                     accumulated_samples = 0
 
         @log_exceptions(logger=logger)
@@ -503,18 +501,13 @@ class BargeinHttpStream(BargeinStreamBase):
 
     async def predict(self, waveform: np.ndarray) -> bool:
         created_at = perf_counter_ns()
-        request = {
-            "waveform": self._model.encode_waveform(waveform),
-            "threshold": self._opts.threshold,
-            "min_frames": self._opts.min_frames,
-            "created_at": created_at,
-        }
         async with http_context.http_session().post(
-            url=f"{self._opts.base_url}/bargein",
+            url=f"{self._opts.base_url}/bargein?threshold={self._opts.threshold}&min_frames={self._opts.min_frames}&created_at={created_at}",
             headers={
+                "Content-Type": "application/octet-stream",
                 "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
             },
-            json=request,
+            data=waveform.tobytes(),
             timeout=aiohttp.ClientTimeout(total=self._opts.inference_timeout),
         ) as resp:
             try:
@@ -547,6 +540,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         self._opts = bargein_detector._opts
         self._session = bargein_detector._ensure_session()
         self._request_id = str(shortuuid("bargein_request_"))
+        self._reconnect_event = asyncio.Event()
 
     def update_options(
         self,
@@ -558,6 +552,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
             self._opts.threshold = threshold
         if is_given(min_bargein_duration):
             self._opts.min_frames = math.ceil(min_bargein_duration * 40)
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         closing_ws = False
@@ -569,7 +564,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
             nonlocal overlap_speech_started
 
             agent_speech_started: bool = False
-            inference_f32_data = np.zeros(self._model._opts.max_window_size, dtype=np.float32)
+            inference_s16_data = np.zeros(self._model._opts.max_window_size, dtype=np.int16)
             start_idx: int = 0
             accumulated_samples: int = 0
 
@@ -603,6 +598,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     if overlap_speech_started:
                         logger.debug("overlap speech ended, stopping barge-in inference")
                     overlap_speech_started = False
+                    accumulated_samples = 0
+                    start_idx = 0
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
@@ -615,20 +612,16 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     f"sample rate mismatch: {input_frame.sample_rate} != {self._model._opts.sample_rate}"
                 )
 
-                start_idx, samples_written = _write_to_inference_f32_data(
+                start_idx, samples_written = _write_to_inference_s16_data(
                     input_frame,
                     start_idx,
-                    inference_f32_data,
+                    inference_s16_data,
                     self._model._opts.max_window_size,
                 )
                 accumulated_samples += samples_written
                 if accumulated_samples >= self._model._opts.step_size and overlap_speech_started:
-                    msg = {
-                        "type": MSG_INPUT_AUDIO,
-                        "audio": self._model.encode_waveform(inference_f32_data[:start_idx]),
-                        "created_at": perf_counter_ns(),
-                    }
-                    await ws.send_str(json.dumps(msg))
+                    header = struct.pack("<Q", perf_counter_ns())  # 8 bytes
+                    await ws.send_bytes(header + inference_s16_data[:start_idx].tobytes())
                     accumulated_samples = 0
 
             closing_ws = True
@@ -692,10 +685,30 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
+                tasks_group = asyncio.gather(*tasks)
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
                 try:
-                    await asyncio.gather(*tasks)
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
+                    if wait_reconnect_task not in done:
+                        break
+
+                    self._reconnect_event.clear()
                 finally:
-                    await aio.gracefully_cancel(*tasks)
+                    await aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    try:
+                        tasks_group.exception()
+                    except asyncio.CancelledError:
+                        pass
             finally:
                 if ws is not None:
                     await ws.close()
@@ -708,6 +721,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 "num_channels": 1,
                 "threshold": self._model._opts.threshold,
                 "min_frames": self._model._opts.min_frames,
+                "encoding": "s16le",
             },
         }
 
@@ -731,7 +745,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         return ws
 
 
-def _write_to_inference_f32_data(
+def _write_to_inference_s16_data(
     frame: rtc.AudioFrame, start_idx: int, out_data: np.ndarray, max_window_size: int
 ) -> tuple[int, int]:
     """Write the audio frame to the output data array and return the new start index and the number of samples written."""
@@ -744,12 +758,13 @@ def _write_to_inference_f32_data(
         out_data[: start_idx - shift] = out_data[shift:start_idx]
         start_idx -= shift
 
-    # convert data to f32
     slice_ = out_data[start_idx : start_idx + frame.samples_per_channel]
     if frame.num_channels > 1:
-        np.sum(frame.data, axis=1, dtype=np.float32, out=slice_)
+        arr_i16 = np.frombuffer(
+            frame.data, dtype=np.int16, count=frame.samples_per_channel * frame.num_channels
+        ).reshape(-1, frame.num_channels)
+        slice_[:] = (np.sum(arr_i16, axis=1, dtype=np.int32) // frame.num_channels).astype(np.int16)
     else:
         slice_[:] = frame.data
-    slice_ /= np.iinfo(np.int16).max * frame.num_channels
     start_idx += frame.samples_per_channel
     return start_idx, frame.samples_per_channel
