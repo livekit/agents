@@ -446,6 +446,11 @@ class RealtimeModel(llm.RealtimeModel):
         return self._supports_text_input
 
     @property
+    def supports_generate_reply(self) -> bool:
+        """Whether this model supports generate_reply() method."""
+        return self._supports_text_input
+
+    @property
     def provider(self) -> str:
         return "Amazon"
 
@@ -1756,12 +1761,38 @@ class RealtimeSession(  # noqa: F811
         """Generate a reply from the model.
 
         For Nova Sonic 2.0: Only sends if instructions are provided.
-        For Nova Sonic 1.0: Not supported.
+        For Nova Sonic 1.0: Not supported - logs warning and skips.
 
         Note: This sends text as a system prompt/command. For user messages, use send_interactive_text().
         """
+        # Check if generate_reply is supported
+        if not self._realtime_model.supports_generate_reply:
+            logger.warning(
+                "generate_reply() is not supported by this model (requires text input support). "
+                "Skipping generate_reply call. Use a model with text input support (e.g., Nova Sonic 2.0) "
+                "to enable this feature."
+            )
+            # Return a completed future with empty streams so the caller doesn't hang
+            async def _empty_message_stream():
+                return
+                yield  # Make it an async generator
+
+            async def _empty_function_stream():
+                return
+                yield  # Make it an async generator
+
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_result(
+                llm.GenerationCreatedEvent(
+                    message_stream=_empty_message_stream(),
+                    function_stream=_empty_function_stream(),
+                    user_initiated=True,
+                )
+            )
+            return fut
+
         # Nova 2.0: Only send if instructions provided
-        if self._realtime_model.supports_text_input and is_given(instructions):
+        if is_given(instructions):
             logger.info(f"generate_reply: sending instructions='{instructions}'")
 
             # Create future that will be resolved when generation starts
