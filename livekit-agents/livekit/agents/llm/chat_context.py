@@ -114,6 +114,8 @@ class ChatMessage(BaseModel):
     transcript_confidence: float | None = None
     hash: bytes | None = None
     created_at: float = Field(default_factory=time.time)
+    extra_content: dict[str, Any] | None = None
+    """Provider-specific extra content (e.g., Google thought signatures)."""
 
     @property
     def text_content(self) -> str | None:
@@ -138,6 +140,12 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    extra_content: dict[str, Any] | None = None
+    """Provider-specific extra content (e.g., Google thought signatures)."""
+    group_id: str | None = None
+    """Optional group ID for parallel function calls. When multiple function calls
+    should be grouped together (e.g., parallel tool calls from a single API response),
+    set this to a shared value. If not set, falls back to using id for grouping."""
 
 
 class FunctionCallOutput(BaseModel):
@@ -190,6 +198,7 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        extra_content: dict[str, Any] | None = None,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -198,6 +207,8 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if extra_content is not None:
+            kwargs["extra_content"] = extra_content
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
