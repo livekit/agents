@@ -77,7 +77,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import silero
 
 @function_tool
 async def lookup_weather(
