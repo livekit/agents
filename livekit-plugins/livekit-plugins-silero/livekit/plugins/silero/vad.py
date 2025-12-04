@@ -17,8 +17,8 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -66,6 +66,7 @@ class VAD(agents.vad.VAD):
         activation_threshold: float = 0.5,
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
+        onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
@@ -102,6 +103,7 @@ class VAD(agents.vad.VAD):
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+            onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -120,7 +122,7 @@ class VAD(agents.vad.VAD):
             )
             prefix_padding_duration = padding_duration
 
-        session = onnx_model.new_inference_session(force_cpu)
+        session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
@@ -214,9 +216,6 @@ class VADStream(agents.vad.VADStream):
         super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
-
-        self._executor = ThreadPoolExecutor(max_workers=1)
-        self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
         self._exp_filter = utils.ExpFilter(alpha=0.35)
 
         self._input_sample_rate = 0
@@ -359,9 +358,7 @@ class VADStream(agents.vad.VADStream):
                 )
 
                 # run the inference
-                p = await self._loop.run_in_executor(
-                    self._executor, self._model, inference_f32_data
-                )
+                p = await self._loop.run_in_executor(None, self._model, inference_f32_data)
                 p = self._exp_filter.apply(exp=1.0, sample=p)
 
                 window_duration = self._model.window_size_samples / self._opts.sample_rate
@@ -491,7 +488,6 @@ class VADStream(agents.vad.VADStream):
                         and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
-                        pub_speech_duration = 0.0
                         pub_silence_duration = silence_threshold_duration
 
                         self._event_ch.send_nowait(
@@ -505,6 +501,8 @@ class VADStream(agents.vad.VADStream):
                                 speaking=False,
                             )
                         )
+
+                        pub_speech_duration = 0.0
 
                         _reset_write_cursor()
 

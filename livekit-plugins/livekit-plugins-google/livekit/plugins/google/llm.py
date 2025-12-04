@@ -63,6 +63,7 @@ class _LLMOptions:
     gemini_tools: NotGivenOr[list[_LLMTool]]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
+    safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
 
 
 class LLM(llm.LLM):
@@ -88,6 +89,7 @@ class LLM(llm.LLM):
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
+        safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -116,6 +118,8 @@ class LLM(llm.LLM):
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
             gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
+            seed (int, optional): Random seed for reproducible generation. Defaults to None.
+            safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -179,6 +183,7 @@ class LLM(llm.LLM):
             gemini_tools=gemini_tools,
             http_options=http_options,
             seed=seed,
+            safety_settings=safety_settings,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -286,6 +291,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
 
+        if is_given(self._opts.safety_settings):
+            extra["safety_settings"] = self._opts.safety_settings
+
         gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
 
         return LLMStream(
@@ -334,7 +342,6 @@ class LLMStream(llm.LLMStream):
             )
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
-
             config = types.GenerateContentConfig(
                 system_instruction=(
                     [types.Part(text=content) for content in extra_data.system_messages]
@@ -347,7 +354,6 @@ class LLMStream(llm.LLMStream):
                 ),
                 **self._extra_kwargs,
             )
-
             stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),

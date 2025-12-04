@@ -34,6 +34,10 @@ The key for the timed transcripts in the audio frame userdata.
 _T = TypeVar("_T")
 
 
+class FlushSentinel:
+    pass
+
+
 class NotGiven:
     def __bool__(self) -> Literal[False]:
         return False

@@ -5,7 +5,7 @@ import random
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import AgentServer, JobContext, cli
 
 # Load environment variables
 load_dotenv()
@@ -13,7 +13,10 @@ load_dotenv()
 WIDTH = 640
 HEIGHT = 480
 
+server = AgentServer()
 
+
+@server.rtc_session()
 async def entrypoint(job: JobContext):
     await job.connect()
 
@@ -42,4 +45,4 @@ async def entrypoint(job: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

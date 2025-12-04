@@ -35,12 +35,9 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .constants import API_VERSION, REQUEST_ID_HEADER, USER_AGENT
 from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
-
-API_AUTH_HEADER = "X-API-Key"
-API_VERSION_HEADER = "Cartesia-Version"
-API_VERSION = "2025-04-16"
 
 
 @dataclass
@@ -333,8 +330,13 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(ws_url),
+                self._session.ws_connect(ws_url, headers={"User-Agent": USER_AGENT}),
                 self._conn_options.timeout,
+            )
+            c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
+            logger.debug(
+                "Established new Cartesia STT WebSocket connection",
+                extra={"cartesia_request_id": c_request_id},
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to cartesia") from e

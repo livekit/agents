@@ -5,23 +5,16 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    WorkerOptions,
     cli,
     mcp,
     metrics,
 )
-from livekit.plugins import (
-    cartesia,
-    deepgram,
-    groq,
-    noise_cancellation,
-    silero,
-)
+from livekit.plugins import cartesia, deepgram, groq, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv(dotenv_path=".env.local")
@@ -48,10 +41,17 @@ class Assistant(Agent):
         )
 
 
+server = AgentServer()
+
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+server.setup_fnc = prewarm
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -92,16 +92,8 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         room=ctx.room,
         agent=Assistant(),
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
-        ),
-    )
+    cli.run_app(server)

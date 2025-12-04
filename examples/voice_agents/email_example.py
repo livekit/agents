@@ -4,10 +4,10 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
-    WorkerOptions,
     beta,
     cli,
 )
@@ -47,6 +47,10 @@ class MyAgent(Agent):
         return "The user is confirmed for seat 23 in group LK1. "
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -60,4 +64,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

@@ -4,12 +4,12 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
-    RoomOutputOptions,
-    WorkerOptions,
     cli,
     function_tool,
+    room_io,
 )
 from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
@@ -42,17 +42,21 @@ class MyAgent(Agent):
         return f"The weather in {city} is sunny and 70 degrees"
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession()
 
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            transcription_speed_factor=1.5,
+        room_options=room_io.RoomOptions(
+            text_output=room_io.TextOutputOptions(transcription_speed_factor=1.5),
         ),
     )
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

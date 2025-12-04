@@ -16,9 +16,10 @@ from ..llm import (
     find_function_tools,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
+from ..llm.tool_context import is_function_tool, is_raw_function_tool
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -40,6 +41,7 @@ class Agent:
         self,
         *,
         instructions: str,
+        id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
@@ -55,6 +57,11 @@ class Agent:
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
+        if type(self) is Agent:
+            self._id = "default_agent"
+        else:
+            self._id = id or misc.camel_to_snake_case(type(self).__name__)
+
         self._instructions = instructions
         self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
@@ -86,12 +93,12 @@ class Agent:
         self._activity: AgentActivity | None = None
 
     @property
+    def id(self) -> str:
+        return self._id
+
+    @property
     def label(self) -> str:
-        """
-        Returns:
-            str: The label of the agent.
-        """
-        return f"{type(self).__module__}.{type(self).__name__}"
+        return self.id
 
     @property
     def instructions(self) -> str:
@@ -157,6 +164,13 @@ class Agent:
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
+        invalid = [t for t in tools if not (is_function_tool(t) or is_raw_function_tool(t))]
+        if invalid:
+            kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
+            raise TypeError(
+                f"Invalid tool type(s): {kinds}. Expected FunctionTool or RawFunctionTool."
+            )
+
         if self._activity is None:
             self._tools = list(set(tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
@@ -246,8 +260,8 @@ class Agent:
         tools: list[FunctionTool | RawFunctionTool],
         model_settings: ModelSettings,
     ) -> (
-        AsyncIterable[llm.ChatChunk | str]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel]]
         | Coroutine[Any, Any, str]
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
@@ -384,7 +398,7 @@ class Agent:
             chat_ctx: llm.ChatContext,
             tools: list[FunctionTool | RawFunctionTool],
             model_settings: ModelSettings,
-        ) -> AsyncGenerator[llm.ChatChunk | str, None]:
+        ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"

@@ -104,7 +104,7 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
         "type": "image",
         "source": {
             "type": "base64",
-            "data": f"data:{img.mime_type};base64,{b64_data}",
+            "data": b64_data,
             "media_type": img.mime_type,
         },
     }

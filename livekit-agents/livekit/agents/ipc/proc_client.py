@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import socket
 import sys
 from collections.abc import Coroutine
@@ -11,7 +10,6 @@ from typing import Callable
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
 from .channel import Message, arecv_message, asend_message, recv_message, send_message
-from .log_queue import LogQueueHandler
 from .proto import (
     IPC_MESSAGES,
     InitializeRequest,
@@ -30,22 +28,9 @@ class _ProcClient:
         main_task_fnc: Callable[[aio.ChanReceiver[Message]], Coroutine[None, None, None]],
     ) -> None:
         self._mp_cch = mp_cch
-        self._log_cch = log_cch
         self._initialize_fnc = initialize_fnc
         self._main_task_fnc = main_task_fnc
         self._initialized = False
-        self._log_handler: LogQueueHandler | None = None
-
-    def initialize_logger(self) -> None:
-        if self._log_cch is None:
-            raise RuntimeError("cannot initialize logger without log channel")
-
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.NOTSET)
-
-        log_cch = aio.duplex_unix._Duplex.open(self._log_cch)
-        self._log_handler = LogQueueHandler(log_cch)
-        root_logger.addHandler(self._log_handler)
 
     def initialize(self) -> None:
         try:
@@ -87,12 +72,10 @@ class _ProcClient:
                     # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process  # noqa: E501
                     # (See proto.ShutdownRequest)
                     pass
+
         except KeyboardInterrupt:
             pass
         finally:
-            if self._log_handler is not None:
-                self._log_handler.close()
-
             loop.run_until_complete(loop.shutdown_default_executor())
 
     async def send(self, msg: Message) -> None:
@@ -102,7 +85,7 @@ class _ProcClient:
         self._acch = await aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
         try:
             exit_flag = asyncio.Event()
-            ping_timeout = aio.sleep(self._init_req.ping_timeout)
+            ping_timeout = aio.sleep(self._init_req.ping_timeout + 10)
 
             ipc_ch = aio.Chan[Message]()
 
@@ -157,5 +140,6 @@ class _ProcClient:
             await aio.cancel_and_wait(read_task, main_task)
             if health_check_task is not None:
                 await aio.cancel_and_wait(health_check_task)
+
         finally:
             await self._acch.aclose()

@@ -6,11 +6,10 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
-    WorkerOptions,
-    WorkerType,
     cli,
 )
 from livekit.plugins import bithuman, openai
@@ -23,7 +22,10 @@ load_dotenv()
 bithuman_model_path = os.getenv("BITHUMAN_MODEL_PATH")
 bithuman_api_secret = os.getenv("BITHUMAN_API_SECRET")
 
+server = AgentServer(job_memory_warn_mb=1500, initialize_process_timeout=60, num_idle_processes=1)
 
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="ash"),
@@ -56,14 +58,8 @@ def prewarm(proc: JobProcess):
     proc.userdata["bithuman_runtime"] = runtime
 
 
+server.setup_fnc = prewarm
+
+
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            worker_type=WorkerType.ROOM,
-            job_memory_warn_mb=1500,
-            prewarm_fnc=prewarm,
-            initialize_process_timeout=60,
-            num_idle_processes=1,
-        )
-    )
+    cli.run_app(server)

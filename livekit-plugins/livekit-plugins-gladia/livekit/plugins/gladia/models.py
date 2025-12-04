@@ -1,6 +1,6 @@
 from typing import Literal
 
-GladiaModels = Literal["base"]
+GladiaModels = Literal["solaria-1"]
 
 GladiaLanguages = Literal[
     "af",

@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, Union
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
@@ -154,6 +154,8 @@ class TTS(
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
+    _tts_request_span_name: ClassVar[str] = "tts_request"
+
     def __init__(
         self,
         *,
@@ -172,7 +174,14 @@ class ChunkedStream(ABC):
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
-        self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
+
+        async def _traceable_main_task() -> None:
+            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
+                await self._main_task()
+
+        self._synthesize_task = asyncio.create_task(
+            _traceable_main_task(), name="TTS._synthesize_task"
+        )
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
         self._tts_request_span: trace.Span | None = None
@@ -238,7 +247,6 @@ class ChunkedStream(ABC):
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
-    @tracer.start_as_current_span("tts_request", end_on_exit=False)
     async def _main_task(self) -> None:
         self._tts_request_span = current_span = trace.get_current_span()
         current_span.set_attributes(
@@ -336,6 +344,8 @@ class ChunkedStream(ABC):
 
 
 class SynthesizeStream(ABC):
+    _tts_request_span_name: ClassVar[str] = "tts_request"
+
     class _FlushSentinel: ...
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
@@ -347,7 +357,11 @@ class SynthesizeStream(ABC):
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, self._monitor_aiter = self._tee
 
-        self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
+        async def _traceable_main_task() -> None:
+            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
+                await self._main_task()
+
+        self._task = asyncio.create_task(_traceable_main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task[None] | None = None  # started on first push
         self._current_attempt_has_error = False
@@ -364,7 +378,6 @@ class SynthesizeStream(ABC):
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
 
-    @tracer.start_as_current_span("tts_request", end_on_exit=False)
     async def _main_task(self) -> None:
         self._tts_request_span = current_span = trace.get_current_span()
         current_span.set_attributes(

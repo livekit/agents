@@ -8,7 +8,7 @@ from llama_index.core import (
     load_index_from_storage,
 )
 
-from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentServer, AgentSession, AutoSubscribe, JobContext, cli, llm
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -37,6 +37,10 @@ async def query_info(query: str) -> str:
     return str(res)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -60,4 +64,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

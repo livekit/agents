@@ -4,23 +4,31 @@ from ._output import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
-from .room_io import (
-    DEFAULT_ROOM_INPUT_OPTIONS,
-    DEFAULT_ROOM_OUTPUT_OPTIONS,
+from .room_io import RoomIO
+from .types import (
+    AudioInputOptions,
+    AudioOutputOptions,
     RoomInputOptions,
-    RoomIO,
+    RoomOptions,
     RoomOutputOptions,
     TextInputEvent,
+    TextInputOptions,
+    TextOutputOptions,
+    VideoInputOptions,
 )
 
 __all__ = [
     "RoomIO",
-    "DEFAULT_ROOM_INPUT_OPTIONS",
-    "DEFAULT_ROOM_OUTPUT_OPTIONS",
+    "RoomOptions",
     "RoomInputOptions",
     "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
     "TextInputEvent",
+    "TextInputOptions",
+    "AudioInputOptions",
+    "AudioOutputOptions",
+    "TextOutputOptions",
+    "VideoInputOptions",
     "_ParticipantTranscriptionOutput",
     "_ParticipantAudioOutput",
     "_ParticipantStreamTranscriptionOutput",

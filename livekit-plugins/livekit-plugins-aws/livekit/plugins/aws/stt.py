@@ -16,10 +16,11 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from amazon_transcribe.auth import AwsCrtCredentialResolver
+from amazon_transcribe.auth import AwsCrtCredentialResolver, CredentialResolver, Credentials
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.exceptions import BadRequestException
 from amazon_transcribe.model import Result, StartStreamTranscriptionEventStream, TranscriptEvent
+from awscrt.auth import AwsCredentialsProvider  # type: ignore[import-untyped]
 
 from livekit import rtc
 from livekit.agents import (
@@ -71,6 +72,7 @@ class STT(stt.STT):
         enable_partial_results_stabilization: NotGivenOr[bool] = NOT_GIVEN,
         partial_results_stability: NotGivenOr[str] = NOT_GIVEN,
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
+        credentials: NotGivenOr[Credentials] = NOT_GIVEN,
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
@@ -93,6 +95,8 @@ class STT(stt.STT):
             language_model_name=language_model_name,
             region=region,
         )
+
+        self._credentials = credentials if is_given(credentials) else None
 
     @property
     def model(self) -> str:
@@ -124,7 +128,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        return SpeechStream(stt=self, conn_options=conn_options, opts=self._config)
+        return SpeechStream(
+            stt=self, conn_options=conn_options, opts=self._config, credentials=self._credentials
+        )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -133,15 +139,37 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        credentials: Credentials | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
+        self._credentials = credentials
+
+    def _credential_resolver(self) -> CredentialResolver:
+        if self._credentials is None:
+            return AwsCrtCredentialResolver(None)  # type: ignore
+
+        credentials = self._credentials
+
+        class CustomAwsCrtCredentialResolver(CredentialResolver):
+            def __init__(self) -> None:
+                self._crt_resolver = AwsCredentialsProvider.new_static(
+                    credentials.access_key_id,
+                    credentials.secret_access_key,
+                    credentials.session_token,
+                )
+
+            async def get_credentials(self) -> Credentials | None:
+                credentials = await asyncio.wrap_future(self._crt_resolver.get_credentials())
+                return credentials  # type: ignore[no-any-return]
+
+        return CustomAwsCrtCredentialResolver()
 
     async def _run(self) -> None:
         while True:
             client = TranscribeStreamingClient(
                 region=self._opts.region,
-                credential_resolver=AwsCrtCredentialResolver(None),  # type: ignore
+                credential_resolver=self._credential_resolver(),
             )
 
             live_config = {
