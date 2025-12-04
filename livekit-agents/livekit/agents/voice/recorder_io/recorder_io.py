@@ -126,7 +126,7 @@ class RecorderIO:
         assert self._in_record is not None
         assert self._out_record is not None
 
-        # Forward the input audio to the encoder every 5s.
+        # Forward the input audio to the encoder every WRITE_INTERVAL seconds.
         while True:
             await asyncio.sleep(WRITE_INTERVAL)
             if self._out_record.has_pending_data:
