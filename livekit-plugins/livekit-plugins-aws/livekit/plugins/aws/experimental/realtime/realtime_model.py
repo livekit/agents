@@ -10,9 +10,9 @@ import os
 import time
 import uuid
 import weakref
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 import boto3
 from aws_sdk_bedrock_runtime.client import (
