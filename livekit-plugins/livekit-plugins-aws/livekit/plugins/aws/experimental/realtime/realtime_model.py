@@ -1585,7 +1585,9 @@ class RealtimeSession(  # noqa: F811
                 # Check if this is an audio message (already transcribed by Nova)
                 if item.id not in self._audio_message_ids:
                     if item.text_content:
-                        logger.debug(f"Sending user message as interactive text: {item.text_content}")
+                        logger.debug(
+                            f"Sending user message as interactive text: {item.text_content}"
+                        )
                         self._pending_generation_fut = self.send_interactive_text(item.text_content)
                     self._sent_message_ids.add(item.id)
                     self._chat_ctx.items.append(item)
@@ -1772,6 +1774,7 @@ class RealtimeSession(  # noqa: F811
                 "Skipping generate_reply call. Use a model with text input support (e.g., Nova Sonic 2.0) "
                 "to enable this feature."
             )
+
             # Return a completed future with empty streams so the caller doesn't hang
             async def _empty_message_stream():
                 return
