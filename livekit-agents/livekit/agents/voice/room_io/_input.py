@@ -52,7 +52,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._room.on("track_unpublished", self._on_track_unavailable)
         self._room.on("token_refreshed", self._on_token_refreshed)
 
-        self.processor = processor
+        self._processor = processor
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -127,8 +127,8 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.off("track_subscribed", self._on_track_available)
         self._data_ch.close()
-        if self.processor:
-            self.processor._close()
+        if self._processor:
+            self._processor._close()
 
     @log_exceptions(logger=logger)
     async def _forward_task(
@@ -151,8 +151,6 @@ class _ParticipantInputStream(Generic[T], ABC):
                 # drop frames if the stream is detached
                 continue
             frame = cast(T, event.frame)
-            if self.processor:
-                frame = self.processor._process(frame)
             await self._data_ch.send(frame)
 
         logger.debug("stream closed", extra=extra)
@@ -186,14 +184,14 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._publication = publication
-        if self.processor:
-            self.processor._update_stream_info(
+        if self._processor:
+            self._processor._update_stream_info(
                 room_name=self._room.name,
                 participant_identity=participant.identity,
                 publication_sid=publication.sid,
             )
             if self._room._token is not None and self._room._server_url is not None:
-                self.processor._update_credentials(
+                self._processor._update_credentials(
                     token=self._room._token, url=self._room._server_url
                 )
         self._forward_atask = asyncio.create_task(
@@ -222,11 +220,11 @@ class _ParticipantInputStream(Generic[T], ABC):
 
     def _on_token_refreshed(self) -> None:
         if (
-            self.processor is not None
+            self._processor is not None
             and self._room._token is not None
             and self._room._server_url is not None
         ):
-            self.processor._update_credentials(token=self._room._token, url=self._room._server_url)
+            self._processor._update_credentials(token=self._room._token, url=self._room._server_url)
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
@@ -358,8 +356,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
     def _apply_audio_processor(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         for frame in frames:
-            if self.processor is not None:
-                yield self.processor._process(frame)
+            if self._processor is not None:
+                yield self._processor._process(frame)
             else:
                 yield frame
 
