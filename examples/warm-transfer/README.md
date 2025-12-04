@@ -14,7 +14,20 @@ This example shows a warm transfer workflow for call centers when a customer req
 
 - The agent creates a new Room to reach the supervisor and places a SIP call with `CreateSIPParticipant`.
 - A separate `AgentSession` is used to share context with the supervisor.
-- When the supervisor agrees, `MoveParticipant` API moves the supervisor into the customer’s Room.
+- When the supervisor agrees, `MoveParticipant` API moves the supervisor into the customer's Room.
+
+**Using the WarmTransferTask**
+
+The `WarmTransferTask` from `livekit.agents.beta.workflows` simplifies the warm transfer flow. You don't need to implement the transfer logic yourself - just call the task with the target phone number and SIP trunk ID:
+
+```python
+result = await WarmTransferTask(
+    target_phone_number=SUPERVISOR_PHONE_NUMBER,
+    sip_trunk_id=SIP_TRUNK_ID,
+    chat_ctx=self.chat_ctx,  # Provides conversation history to the supervisor
+)
+```
+
 
 # Usage
 
