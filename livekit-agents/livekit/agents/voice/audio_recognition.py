@@ -470,9 +470,7 @@ class AudioRecognition:
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             with trace.use_span(
-                self._ensure_user_turn_span(
-                    start_time=int((time.time() - ev.speech_duration) * 1_000_000_000)
-                )
+                self._ensure_user_turn_span(start_time=time.time() - ev.speech_duration)
             ):
                 self._hooks.on_start_of_speech(ev)
 
@@ -694,11 +692,12 @@ class AudioRecognition:
             await stream.aclose()
 
     @utils.log_exceptions(logger=logger)
-    def _ensure_user_turn_span(self, start_time: int | None = None) -> trace.Span:
+    def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
             return self._user_turn_span
 
-        self._user_turn_span = tracer.start_span("user_turn", start_time=start_time)
+        start_time_ns = int(start_time * 1_000_000_000) if start_time else None
+        self._user_turn_span = tracer.start_span("user_turn", start_time=start_time_ns)
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
