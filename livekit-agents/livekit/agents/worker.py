@@ -1153,6 +1153,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
+            availability_resp.availability.terminate = True
             await self._queue_msg(availability_resp)
 
         async def _on_accept(args: JobAcceptArguments) -> None:
