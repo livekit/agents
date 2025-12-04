@@ -10,6 +10,7 @@ from ...log import logger
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
+ENDPOINTING_SENSITIVITY = Literal["HIGH", "MEDIUM", "LOW"]
 VOICE_ID = Literal[
     "matthew",
     "tiffany",
@@ -22,8 +23,81 @@ VOICE_ID = Literal[
     "lennart",
     "lupe",
     "carlos",
+    "camila",
+    "leo",
+    "aditi",
+    "rohan",
 ]
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
+
+
+class VoiceId:
+    """Available voice IDs for Nova Sonic across supported languages.
+
+    English (US):
+        MATTHEW - Masculine
+        TIFFANY - Feminine
+
+    English (GB):
+        AMY - Feminine
+
+    French:
+        AMBRE - Feminine
+        FLORIAN - Masculine
+
+    Italian:
+        BEATRICE - Feminine
+        LORENZO - Masculine
+
+    German:
+        GRETA - Feminine
+        LENNART - Masculine
+
+    Spanish:
+        LUPE - Feminine
+        CARLOS - Masculine
+
+    Portuguese:
+        CAMILA - Feminine
+        LEO - Masculine
+
+    Hindi:
+        ADITI - Feminine
+        ROHAN - Masculine
+    """
+
+    # English (US)
+    MATTHEW = "matthew"
+    TIFFANY = "tiffany"
+
+    # English (GB)
+    AMY = "amy"
+
+    # French
+    AMBRE = "ambre"
+    FLORIAN = "florian"
+
+    # Italian
+    BEATRICE = "beatrice"
+    LORENZO = "lorenzo"
+
+    # German
+    GRETA = "greta"
+    LENNART = "lennart"
+
+    # Spanish
+    LUPE = "lupe"
+    CARLOS = "carlos"
+
+    # Portuguese
+    CAMILA = "camila"
+    LEO = "leo"
+
+    # Hindi
+    ADITI = "aditi"
+    ROHAN = "rohan"
+
+
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
 STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
 SAMPLE_RATE_HERTZ = Literal[8_000, 16_000, 24_000]
@@ -109,6 +183,7 @@ class ToolConfiguration(BaseModel):
 
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
+    endpointingSensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM"
 
 
 class InputTextContentStart(BaseModel):
@@ -315,10 +390,13 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM",
     ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
-            self.create_session_start_event(max_tokens, top_p, temperature),
+            self.create_session_start_event(
+                max_tokens, top_p, temperature, endpointing_sensitivity
+            ),
             self.create_prompt_start_event(voice_id, sample_rate, tool_configuration),
             *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
         ]
@@ -349,6 +427,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM",
     ) -> str:
         event = Event(
             event=SessionStartEvent(
@@ -357,7 +436,8 @@ class SonicEventBuilder:
                         maxTokens=max_tokens,
                         topP=top_p,
                         temperature=temperature,
-                    )
+                    ),
+                    endpointingSensitivity=endpointing_sensitivity,
                 )
             )
         )
@@ -391,6 +471,25 @@ class SonicEventBuilder:
                     promptName=self.prompt_name,
                     contentName=content_name,
                     role=role,
+                    textInputConfiguration=TextInputConfiguration(),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True, by_alias=True)
+
+    def create_text_content_start_event_interactive(
+        self,
+        content_name: str,
+        role: ROLE,
+    ) -> str:
+        """Create text content start event with interactive=True for Nova Sonic 2.0."""
+        event = Event(
+            event=InputTextContentStartEvent(
+                contentStart=InputTextContentStart(
+                    promptName=self.prompt_name,
+                    contentName=content_name,
+                    role=role,
+                    interactive=True,
                     textInputConfiguration=TextInputConfiguration(),
                 )
             )
