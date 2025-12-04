@@ -73,17 +73,22 @@ DEFAULT_MAX_SESSION_RESTART_DELAY = 10
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 DEFAULT_SYSTEM_PROMPT = (
-    "Your name is Sonic. You are a friend and eagerly helpful assistant."
-    "The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."  # noqa: E501
-    "Keep your responses short and concise unless the user asks you to elaborate or you are explicitly asked to be verbose and chatty."  # noqa: E501
-    "Do not repeat yourself. Do not ask the user to repeat themselves."
-    "Do ask the user to confirm or clarify their response if you are not sure what they mean."
-    "If after asking the user for clarification you still do not understand, be honest and tell them that you do not understand."  # noqa: E501
-    "Do not make up information or make assumptions. If you do not know the answer, tell the user that you do not know the answer."  # noqa: E501
-    "If the user makes a request of you that you cannot fulfill, tell them why you cannot fulfill it."  # noqa: E501
-    "When making tool calls, inform the user that you are using a tool to generate the response."
-    "Avoid formatted lists or numbering and keep your output as a spoken transcript to be acted out."  # noqa: E501
-    "Be appropriately emotive when responding to the user. Use American English as the language for your responses."  # noqa: E501
+    "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. "
+    "You love helping people and having natural conversations. "
+    "Be warm, conversational, and engaging. "
+    "Keep your responses natural and concise for voice interaction. "
+    "Do not repeat yourself. "
+    "If you are not sure what the user means, ask them to confirm or clarify. "
+    "If after asking for clarification you still do not understand, be honest and tell them you do not understand. "
+    "Do not make up information or make assumptions. If you do not know the answer, say so. "
+    "When making tool calls, inform the user that you are using a tool to generate the response. "
+    "Avoid formatted lists or numbering and keep your output as a spoken transcript. "
+    "\n\n"
+    "CRITICAL LANGUAGE MIRRORING RULES:\n"
+    "- Always reply in the language the user speaks. DO NOT mix with English unless the user does.\n"
+    "- If the user talks in English, reply in English.\n"
+    "- Please respond in the language the user is talking to you in. If you have a question or suggestion, ask it in the language the user is talking in.\n"
+    "- Ensure that our communication remains in the same language as the user."
 )
 
 lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
@@ -114,6 +119,7 @@ class _RealtimeOptions:
         max_tokens (int): Maximum number of tokens the model may generate in a single response.
         tool_choice (llm.ToolChoice | None): Strategy that dictates how the model should invoke tools.
         region (str): AWS region hosting the Bedrock Sonic model endpoint.
+        endpointing_sensitivity (str): Turn-taking sensitivity - "HIGH", "MEDIUM" (default), or "LOW".
     """  # noqa: E501
 
     voice: VOICE_ID
@@ -122,6 +128,7 @@ class _RealtimeOptions:
     max_tokens: int
     tool_choice: llm.ToolChoice | None
     region: str
+    endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"]
 
 
 @dataclass
@@ -284,25 +291,39 @@ class RealtimeModel(llm.RealtimeModel):
     spawns a RealtimeSession when session() is invoked.
     """
 
+    class SupportedModels:
+        """Supported Nova Sonic realtime models."""
+
+        NOVA_SONIC_1 = "amazon.nova-sonic-v1:0"
+        NOVA_SONIC_2 = "amazon.nova-2-sonic-v1:0"
+
     def __init__(
         self,
         *,
+        model: str = SupportedModels.NOVA_SONIC_1,
+        supports_text_input: bool = False,
         voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         region: NotGivenOr[str] = NOT_GIVEN,
+        endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
     ):
         """Instantiate a new RealtimeModel.
 
         Args:
+            model (str): Bedrock model ID for realtime inference. Defaults to NOVA_SONIC_1.
+            supports_text_input (bool): Whether model supports text input. Defaults to False.
             voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
             tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
             region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
+            endpointing_sensitivity (Literal["HIGH", "MEDIUM", "LOW"]): Turn-taking sensitivity. HIGH detects pauses quickly, LOW waits longer. Defaults to MEDIUM.
+            generate_reply_timeout (float): Timeout in seconds for generate_reply() calls. Defaults to 10.0.
         """  # noqa: E501
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -314,7 +335,9 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
             )
         )
-        self.model_id = "amazon.nova-2-sonic-v1:0"
+        self._model = model
+        self._supports_text_input = supports_text_input
+        self._generate_reply_timeout = generate_reply_timeout
         # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic  # noqa: E501
         # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
         # top_p ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
@@ -327,12 +350,100 @@ class RealtimeModel(llm.RealtimeModel):
             max_tokens=max_tokens if is_given(max_tokens) else DEFAULT_MAX_TOKENS,
             tool_choice=tool_choice or None,
             region=region if is_given(region) else "us-east-1",
+            endpointing_sensitivity=endpointing_sensitivity,
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
+    @classmethod
+    def with_nova_sonic_1(
+        cls,
+        *,
+        voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
+    ) -> RealtimeModel:
+        """Create RealtimeModel with Nova Sonic 1.0.
+
+        Args:
+            voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
+            region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
+            endpointing_sensitivity (Literal["HIGH", "MEDIUM", "LOW"]): Turn-taking sensitivity. Defaults to MEDIUM.
+            generate_reply_timeout (float): Timeout in seconds for generate_reply() calls. Defaults to 10.0.
+
+        Returns:
+            RealtimeModel: Configured for Nova Sonic 1.0 (audio-only).
+        """  # noqa: E501
+        return cls(
+            model=cls.SupportedModels.NOVA_SONIC_1,
+            supports_text_input=False,
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            endpointing_sensitivity=endpointing_sensitivity,
+            generate_reply_timeout=generate_reply_timeout,
+        )
+
+    @classmethod
+    def with_nova_sonic_2(
+        cls,
+        *,
+        voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
+    ) -> RealtimeModel:
+        """Create RealtimeModel with Nova Sonic 2.0.
+
+        Args:
+            voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
+            region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
+            endpointing_sensitivity (Literal["HIGH", "MEDIUM", "LOW"]): Turn-taking sensitivity. Defaults to MEDIUM.
+            generate_reply_timeout (float): Timeout in seconds for generate_reply() calls. Defaults to 10.0.
+
+        Returns:
+            RealtimeModel: Configured for Nova Sonic 2.0 (supports text input).
+        """  # noqa: E501
+        return cls(
+            model=cls.SupportedModels.NOVA_SONIC_2,
+            supports_text_input=True,
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            endpointing_sensitivity=endpointing_sensitivity,
+            generate_reply_timeout=generate_reply_timeout,
+        )
+
     @property
     def model(self) -> str:
-        return self.model_id
+        return self._model
+
+    @property
+    def supports_text_input(self) -> bool:
+        """Whether this model supports text input."""
+        return self._supports_text_input
 
     @property
     def provider(self) -> str:
@@ -406,6 +517,9 @@ class RealtimeSession(  # noqa: F811
         self._session_recycle_task: asyncio.Task[None] | None = None
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
+        self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        self._sent_message_ids: set[str] = set()
+        self._audio_message_ids: set[str] = set()
 
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
@@ -736,7 +850,7 @@ class RealtimeSession(  # noqa: F811
             self._stream_response = (
                 await self._bedrock_client.invoke_model_with_bidirectional_stream(
                     InvokeModelWithBidirectionalStreamOperationInput(
-                        model_id=self._realtime_model.model_id
+                        model_id=self._realtime_model.model
                     )
                 )
             )
@@ -806,6 +920,7 @@ class RealtimeSession(  # noqa: F811
                 max_tokens=self._realtime_model._opts.max_tokens,
                 top_p=self._realtime_model._opts.top_p,
                 temperature=self._realtime_model._opts.temperature,
+                endpointing_sensitivity=self._realtime_model._opts.endpointing_sensitivity,
             )
 
             for event in init_events:
@@ -847,6 +962,11 @@ class RealtimeSession(  # noqa: F811
             response_id=self._current_generation.response_id,
         )
         self.emit("generation_created", generation_ev)
+
+        # Resolve pending generate_reply future if exists
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            self._pending_generation_fut.set_result(generation_ev)
+            self._pending_generation_fut = None
 
     @utils.log_exceptions(logger=logger)
     async def _handle_event(self, event_data: dict) -> None:
@@ -928,19 +1048,29 @@ class RealtimeSession(  # noqa: F811
         log_event_data(event_data)
 
         role = event_data["event"]["contentStart"]["role"]
+        completion_id = event_data["event"]["contentStart"].get("completionId")
 
-        # CRITICAL: Create NEW generation for each ASSISTANT SPECULATIVE response
-        # Nova Sonic sends ASSISTANT SPECULATIVE for each new assistant turn, including after tool calls.
-        # Without this, audio frames get routed to the wrong generation and don't play.
+        # CRITICAL: Only close generation when completionId changes
+        # Nova Sonic sends multiple SPECULATIVE text blocks within the same completion
+        # (e.g., joke setup, then punchline). Closing on each SPECULATIVE would close
+        # the audio channel prematurely, causing audio cutoff.
         if role == "ASSISTANT":
             additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
             if "SPECULATIVE" in additional_fields:
-                # This is a new assistant response - close previous and create new
-                logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
-                if self._current_generation is not None:
-                    logger.debug("Closing previous generation for new assistant response")
+                # Check if this is a different completion
+                if (
+                    self._current_generation is not None
+                    and self._current_generation.completion_id != completion_id
+                ):
+                    logger.debug(
+                        f"New completion detected (old={self._current_generation.completion_id}, new={completion_id})"
+                    )
                     self._close_current_generation()
-                self._create_response_generation()
+
+                # Create generation if needed
+                if self._current_generation is None:
+                    logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
+                    self._create_response_generation()
         else:
             # For USER and FINAL, just ensure generation exists
             self._create_response_generation()
@@ -1013,7 +1143,9 @@ class RealtimeSession(  # noqa: F811
         """
         logger.debug(f"Updating chat context with role: {role} and text_content: {text_content}")
         if len(self._chat_ctx.items) == 0:
-            self._chat_ctx.add_message(role=role, content=text_content)
+            msg = self._chat_ctx.add_message(role=role, content=text_content)
+            if role == "user":
+                self._audio_message_ids.add(msg.id)
         else:
             prev_utterance = self._chat_ctx.items[-1]
             if prev_utterance.type == "message" and prev_utterance.role == role:
@@ -1023,11 +1155,15 @@ class RealtimeSession(  # noqa: F811
                 ):
                     prev_utterance.content[0] = "\n".join([prev_content, text_content])
                 else:
-                    self._chat_ctx.add_message(role=role, content=text_content)
+                    msg = self._chat_ctx.add_message(role=role, content=text_content)
+                    if role == "user":
+                        self._audio_message_ids.add(msg.id)
                     if len(self._chat_ctx.items) > MAX_MESSAGES:
                         self._chat_ctx.truncate(max_items=MAX_MESSAGES)
             else:
-                self._chat_ctx.add_message(role=role, content=text_content)
+                msg = self._chat_ctx.add_message(role=role, content=text_content)
+                if role == "user":
+                    self._audio_message_ids.add(msg.id)
                 if len(self._chat_ctx.items) > MAX_MESSAGES:
                     self._chat_ctx.truncate(max_items=MAX_MESSAGES)
 
@@ -1405,43 +1541,54 @@ class RealtimeSession(  # noqa: F811
         logger.debug(f"Instructions updated: {instructions}")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        """Inject an initial chat history once during the very first session startup."""
-        # sometimes fires randomly
-        # add a guard here to only allow chat_ctx to be updated on
-        # the very first session initialization
+        """Inject chat history and handle incremental user messages."""
         if self._chat_ctx_ready is None:
             self._chat_ctx_ready = asyncio.get_running_loop().create_future()
 
+        # Initial context setup (once)
         if not self._chat_ctx_ready.done():
             self._chat_ctx = chat_ctx.copy()
             logger.debug(f"Chat context updated: {self._chat_ctx.items}")
             self._chat_ctx_ready.set_result(True)
 
-        # for each function tool, send the result to aws
-        logger.debug(
-            f"update_chat_ctx called with {len(chat_ctx.items)} items, pending_tools: {self._pending_tools}"
-        )
+        # Process items in context
         for item in chat_ctx.items:
-            if item.type != "function_call_output":
+            # Handle tool results
+            if item.type == "function_call_output":
+                if item.call_id not in self._pending_tools:
+                    continue
+
+                logger.debug(f"function call output: {item}")
+                self._pending_tools.discard(item.call_id)
+                self._tool_results_ch.send_nowait(
+                    {
+                        "tool_use_id": item.call_id,
+                        "tool_result": item.output
+                        if not item.is_error
+                        else f"{{'error': '{item.output}'}}",
+                    }
+                )
                 continue
 
-            logger.debug(
-                f"Found function_call_output: call_id={item.call_id}, in_pending={item.call_id in self._pending_tools}"
-            )
-
-            if item.call_id not in self._pending_tools:
-                continue
-
-            logger.debug(f"function call output: {item}")
-            self._pending_tools.discard(item.call_id)
-            self._tool_results_ch.send_nowait(
-                {
-                    "tool_use_id": item.call_id,
-                    "tool_result": item.output
-                    if not item.is_error
-                    else f"{{'error': '{item.output}'}}",
-                }
-            )
+            # Handle new user messages (Nova 2.0 text input)
+            # Only send if it's NOT an audio transcription (audio messages are tracked in _audio_message_ids)
+            if (
+                item.type == "message"
+                and item.role == "user"
+                and item.id not in self._sent_message_ids
+            ):
+                # Check if this is an audio message (already transcribed by Nova)
+                if item.id not in self._audio_message_ids:
+                    if item.text_content:
+                        logger.debug(f"Sending user message as interactive text: {item.text_content}")
+                        self._pending_generation_fut = self.send_interactive_text(item.text_content)
+                    self._sent_message_ids.add(item.id)
+                    self._chat_ctx.items.append(item)
+                else:
+                    logger.debug(
+                        f"Skipping user message (already in context from audio): {item.text_content}"
+                    )
+                    self._sent_message_ids.add(item.id)
 
     async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
         """Send tool_result back to Bedrock, grouped under tool_use_id."""
@@ -1606,12 +1753,147 @@ class RealtimeSession(  # noqa: F811
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        logger.warning("unprompted generation is not supported by Nova Sonic's Realtime API")
-        fut = asyncio.Future[llm.GenerationCreatedEvent]()
-        fut.set_exception(
-            llm.RealtimeError("unprompted generation is not supported by Nova Sonic's Realtime API")
+        """Generate a reply from the model.
+
+        For Nova Sonic 2.0: Only sends if instructions are provided.
+        For Nova Sonic 1.0: Not supported.
+
+        Note: This sends text as a system prompt/command. For user messages, use send_interactive_text().
+        """
+        # Nova 2.0: Only send if instructions provided
+        if self._realtime_model.supports_text_input and is_given(instructions):
+            logger.info(f"generate_reply: sending instructions='{instructions}'")
+
+            # Create future that will be resolved when generation starts
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            self._pending_generation_fut = fut
+
+            # Send text message asynchronously
+            async def _send_text() -> None:
+                try:
+                    await self._send_text_message(instructions, interactive=True)
+                except Exception as e:
+                    if not fut.done():
+                        fut.set_exception(e)
+                    if self._pending_generation_fut is fut:
+                        self._pending_generation_fut = None
+
+            asyncio.create_task(_send_text())
+
+            # Set timeout from model configuration
+            def _on_timeout() -> None:
+                if not fut.done():
+                    fut.set_exception(
+                        llm.RealtimeError("generate_reply timed out waiting for generation")
+                    )
+                    if self._pending_generation_fut is fut:
+                        self._pending_generation_fut = None
+
+            timeout_handle = asyncio.get_event_loop().call_later(
+                self._realtime_model._generate_reply_timeout, _on_timeout
+            )
+            fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+            return fut
+
+        # No instructions: Return pending generation if exists, otherwise create empty future that never resolves
+        # (Framework will timeout naturally if no generation happens)
+        if self._pending_generation_fut is not None:
+            logger.debug("generate_reply: no instructions, returning existing pending generation")
+            return self._pending_generation_fut
+
+        logger.debug(
+            "generate_reply: no instructions and no pending generation, returning empty future"
         )
+        return asyncio.Future[llm.GenerationCreatedEvent]()
+
+    def send_interactive_text(self, text: str) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Send user text as interactive content (triggers generation).
+
+        This is different from generate_reply(instructions=...) in that:
+        - The text is sent as USER role content
+        - It's added to Nova's conversation context
+        - It triggers a generation response
+
+        Use this for actual user messages.
+        Use generate_reply(instructions=...) for system prompts/commands.
+
+        Args:
+            text: The user's message text
+
+        Returns:
+            Future that resolves when generation starts
+        """
+        if not self._realtime_model.supports_text_input:
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(llm.RealtimeError("Text input not supported by this model"))
+            return fut
+
+        logger.info(
+            f"send_interactive_text: sending user message: '{text[:50]}{'...' if len(text) > 50 else ''}'"
+        )
+
+        # Create future for generation event
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generation_fut = fut
+
+        # Send text message with interactive=True
+        async def _send_text() -> None:
+            try:
+                await self._send_text_message(text, interactive=True)
+            except Exception as e:
+                if not fut.done():
+                    fut.set_exception(e)
+                if self._pending_generation_fut is fut:
+                    self._pending_generation_fut = None
+
+        asyncio.create_task(_send_text())
+
+        # Set timeout
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError("send_interactive_text timed out waiting for generation")
+                )
+                if self._pending_generation_fut is fut:
+                    self._pending_generation_fut = None
+
+        timeout_handle = asyncio.get_event_loop().call_later(
+            self._realtime_model._generate_reply_timeout, _on_timeout
+        )
+        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
         return fut
+
+    async def _send_text_message(self, text: str, interactive: bool = True) -> None:
+        """Internal method to send text message to Nova Sonic 2.0.
+
+        Args:
+            text (str): The text message to send to the model.
+            interactive (bool): If True, triggers generation. If False, adds to context only.
+        """
+        # Generate unique content_name for this message (required for multi-turn)
+        content_name = str(uuid.uuid4())
+
+        # Choose appropriate event builder based on interactive flag
+        if interactive:
+            event = self._event_builder.create_text_content_start_event_interactive(
+                content_name=content_name, role="USER"
+            )
+        else:
+            event = self._event_builder.create_text_content_start_event(
+                content_name=content_name, role="USER"
+            )
+
+        # Send event sequence: contentStart → textInput → contentEnd
+        await self._send_raw_event(event)
+        await self._send_raw_event(
+            self._event_builder.create_text_content_event(content_name, text)
+        )
+        await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
+        logger.info(
+            f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
+        )
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by Nova Sonic's Realtime API")
@@ -1659,6 +1941,13 @@ class RealtimeSession(  # noqa: F811
         if not self._is_sess_active.is_set():
             logger.info("agent session already inactive")
             return
+
+        # Cancel any pending generation futures
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            self._pending_generation_fut.set_exception(
+                llm.RealtimeError("Session closed while waiting for generation")
+            )
+            self._pending_generation_fut = None
 
         for event in self._event_builder.create_prompt_end_block():
             await self._send_raw_event(event)
