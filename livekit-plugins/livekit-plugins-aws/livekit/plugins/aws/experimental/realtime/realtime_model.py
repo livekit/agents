@@ -12,7 +12,7 @@ import uuid
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, cast
+from typing import Any, AsyncIterator, Callable, Literal, cast
 
 import boto3
 from aws_sdk_bedrock_runtime.client import (
@@ -1776,11 +1776,11 @@ class RealtimeSession(  # noqa: F811
             )
 
             # Return a completed future with empty streams so the caller doesn't hang
-            async def _empty_message_stream():
+            async def _empty_message_stream() -> AsyncIterator[llm.MessageGeneration]:
                 return
                 yield  # Make it an async generator
 
-            async def _empty_function_stream():
+            async def _empty_function_stream() -> AsyncIterator[llm.FunctionCall]:
                 return
                 yield  # Make it an async generator
 
