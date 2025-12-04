@@ -15,7 +15,7 @@
 """Valence AI Emotion-Aware STT Plugin for LiveKit Agents.
 
 This plugin wraps an underlying STT provider (e.g., Deepgram) and enriches
-transcriptions with emotion tags from Valence AI.
+transcriptions with emotion tags from Valence AI on a per-sentence basis.
 
 Output format:
     [Neutral] Hi there. [Angry] This is frustrating! [Sad] I'm so disappointed.
@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -47,13 +49,24 @@ from .log import logger
 
 EmotionModel = Literal["4emotions", "7emotions"]
 
+# Sentence boundary pattern - splits on . ! ? followed by space or end
+SENTENCE_PATTERN = re.compile(r'([.!?]+)(?:\s+|$)')
+
+
+@dataclass
+class TimestampedFrame:
+    """Audio frame with timestamp information."""
+    frame: rtc.AudioFrame
+    start_time_ms: float  # Start time in milliseconds
+    end_time_ms: float    # End time in milliseconds
+
 
 class STT(stt.STT):
     """Emotion-aware STT that combines an underlying STT with Valence AI emotion detection.
 
     This STT wrapper intercepts audio, sends it to both the underlying STT provider
     and the Valence AI emotion detection API, then enriches the transcriptions with
-    emotion tags in the format: [Emotion] transcribed text
+    emotion tags on a per-sentence basis.
 
     Args:
         underlying_stt: The base STT provider (e.g., Deepgram, AssemblyAI).
@@ -190,46 +203,111 @@ class STT(stt.STT):
             buffer, language=language, conn_options=conn_options
         )
 
-        # If we have audio and Valence is connected, detect emotion
+        # If we have audio and Valence is connected, detect emotion per sentence
         if self._valence_client and self._valence_connected:
             try:
                 # Convert buffer to numpy array for Valence
                 samples = np.frombuffer(buffer.data, dtype=np.int16)
-                emotions = await self._valence_client.process_audio(
-                    samples, sample_rate=buffer.sample_rate
-                )
 
-                # Enrich the transcription with emotion
+                # Enrich the transcription with emotions per sentence
                 if result.alternatives:
-                    emotion = emotions.get("dominant", "neutral")
-                    confidence = emotions.get("confidence", 0.0)
-
-                    if confidence >= self._min_confidence:
-                        emotion_tag = f"[{emotion.capitalize()}]"
-                        new_alternatives = []
-                        for alt in result.alternatives:
-                            new_alternatives.append(
-                                stt.SpeechData(
-                                    language=alt.language,
-                                    text=f"{emotion_tag} {alt.text}",
-                                    start_time=alt.start_time,
-                                    end_time=alt.end_time,
-                                    confidence=alt.confidence,
-                                    speaker_id=alt.speaker_id,
-                                    is_primary_speaker=alt.is_primary_speaker,
-                                )
-                            )
-                        result = stt.SpeechEvent(
-                            type=result.type,
-                            request_id=result.request_id,
-                            alternatives=new_alternatives,
-                            recognition_usage=result.recognition_usage,
+                    new_alternatives = []
+                    for alt in result.alternatives:
+                        enriched_text = await self._enrich_text_with_emotions(
+                            alt.text, samples, buffer.sample_rate
                         )
+                        new_alternatives.append(
+                            stt.SpeechData(
+                                language=alt.language,
+                                text=enriched_text,
+                                start_time=alt.start_time,
+                                end_time=alt.end_time,
+                                confidence=alt.confidence,
+                                speaker_id=alt.speaker_id,
+                                is_primary_speaker=alt.is_primary_speaker,
+                            )
+                        )
+                    result = stt.SpeechEvent(
+                        type=result.type,
+                        request_id=result.request_id,
+                        alternatives=new_alternatives,
+                        recognition_usage=result.recognition_usage,
+                    )
 
             except Exception as e:
                 logger.error(f"Error detecting emotion: {e}")
 
         return result
+
+    async def _enrich_text_with_emotions(
+        self,
+        text: str,
+        samples: np.ndarray,
+        sample_rate: int,
+    ) -> str:
+        """Enrich text with per-sentence emotion tags.
+
+        Args:
+            text: The transcribed text.
+            samples: Audio samples as numpy array.
+            sample_rate: Sample rate of the audio.
+
+        Returns:
+            Text with emotion tags for each sentence.
+        """
+        if not text.strip():
+            return text
+
+        sentences = split_into_sentences(text)
+        if not sentences:
+            return text
+
+        # If only one sentence, detect emotion for the whole audio
+        if len(sentences) == 1:
+            emotions = await self._valence_client.process_audio(samples, sample_rate)
+            emotion = emotions.get("dominant", "neutral")
+            confidence = emotions.get("confidence", 0.0)
+            if confidence >= self._min_confidence:
+                return f"[{emotion.capitalize()}] {sentences[0]}"
+            return sentences[0]
+
+        # Multiple sentences - divide audio proportionally by character count
+        total_chars = sum(len(s) for s in sentences)
+        total_samples = len(samples)
+
+        enriched_parts = []
+        sample_offset = 0
+
+        for sentence in sentences:
+            # Calculate audio segment for this sentence based on character proportion
+            char_ratio = len(sentence) / total_chars
+            segment_samples = int(total_samples * char_ratio)
+
+            # Extract audio segment
+            segment_end = min(sample_offset + segment_samples, total_samples)
+            audio_segment = samples[sample_offset:segment_end]
+            sample_offset = segment_end
+
+            # Detect emotion for this segment
+            if len(audio_segment) >= 1600:  # Minimum ~33ms at 48kHz
+                try:
+                    emotions = await self._valence_client.process_audio(
+                        audio_segment, sample_rate
+                    )
+                    emotion = emotions.get("dominant", "neutral")
+                    confidence = emotions.get("confidence", 0.0)
+
+                    if confidence >= self._min_confidence:
+                        enriched_parts.append(f"[{emotion.capitalize()}] {sentence}")
+                    else:
+                        enriched_parts.append(f"[Neutral] {sentence}")
+                except Exception as e:
+                    logger.error(f"Error detecting emotion for sentence: {e}")
+                    enriched_parts.append(f"[Neutral] {sentence}")
+            else:
+                enriched_parts.append(f"[Neutral] {sentence}")
+
+        return " ".join(enriched_parts)
 
     async def aclose(self) -> None:
         """Close the STT and cleanup resources."""
@@ -238,15 +316,52 @@ class STT(stt.STT):
         await self._underlying_stt.aclose()
 
 
+def split_into_sentences(text: str) -> list[str]:
+    """Split text into sentences.
+
+    Args:
+        text: The text to split.
+
+    Returns:
+        List of sentences.
+    """
+    if not text.strip():
+        return []
+
+    # Split on sentence boundaries
+    parts = SENTENCE_PATTERN.split(text)
+
+    sentences = []
+    current = ""
+
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+        # Check if this part is punctuation
+        if SENTENCE_PATTERN.match(part + " "):
+            current += part
+            if current.strip():
+                sentences.append(current.strip())
+            current = ""
+        else:
+            current += part
+
+    # Add any remaining text
+    if current.strip():
+        sentences.append(current.strip())
+
+    return sentences
+
+
 class EmotionAwareRecognizeStream(stt.RecognizeStream):
-    """Streaming recognition with emotion awareness.
+    """Streaming recognition with per-sentence emotion awareness.
 
     This stream wraps an underlying STT stream and enriches transcriptions
-    with emotion tags based on the audio being processed.
+    with emotion tags for each sentence based on the corresponding audio segment.
 
-    Architecture: Audio is buffered continuously. When a FINAL_TRANSCRIPT arrives,
-    emotion detection runs on the buffered audio BEFORE the transcript is forwarded.
-    This ensures the emotion tag accurately reflects the audio that produced the transcript.
+    Architecture: Audio is buffered with timestamps. When a FINAL_TRANSCRIPT arrives,
+    the text is split into sentences and emotion detection runs on each sentence's
+    corresponding audio segment.
     """
 
     def __init__(
@@ -265,16 +380,14 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         self._min_confidence = min_confidence
         self._language = language
 
-        # Current emotion state (updated when transcripts arrive)
-        self._current_emotion = "neutral"
-        self._current_confidence = 0.0
-
-        # Buffer for emotion detection - stores audio frames until transcript arrives
-        self._audio_buffer: list[rtc.AudioFrame] = []
+        # Buffer for emotion detection - stores audio frames with timestamps
+        self._audio_buffer: list[TimestampedFrame] = []
+        self._buffer_start_time_ms: float = 0.0
+        self._current_time_ms: float = 0.0
 
     async def _run(self) -> None:
         """Main processing loop."""
-        logger.debug("Starting emotion-aware streaming recognition")
+        logger.debug("Starting emotion-aware streaming recognition (per-sentence)")
 
         # Ensure Valence is connected
         valence_connected = await self._parent_stt._ensure_valence_connected()
@@ -302,30 +415,44 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                     # Forward to underlying STT immediately
                     underlying_stream.push_frame(frame)
 
-                    # Buffer audio for emotion detection when transcript arrives
-                    self._audio_buffer.append(frame)
+                    # Buffer audio with timestamp for emotion detection
+                    frame_duration_ms = (frame.samples_per_channel / frame.sample_rate) * 1000
+                    timestamped_frame = TimestampedFrame(
+                        frame=frame,
+                        start_time_ms=self._current_time_ms,
+                        end_time_ms=self._current_time_ms + frame_duration_ms,
+                    )
+                    self._audio_buffer.append(timestamped_frame)
+                    self._current_time_ms += frame_duration_ms
 
                     # Enforce buffer size limit to prevent memory leak
                     if len(self._audio_buffer) > STT.MAX_BUFFER_FRAMES:
                         excess = len(self._audio_buffer) - STT.MAX_BUFFER_FRAMES
                         self._audio_buffer = self._audio_buffer[excess:]
+                        if self._audio_buffer:
+                            self._buffer_start_time_ms = self._audio_buffer[0].start_time_ms
                         logger.debug(f"Buffer trimmed, removed {excess} old frames")
 
             logger.debug(f"Input ended. Total frames: {frame_count}")
             underlying_stream.end_input()
 
         async def receive_events() -> None:
-            """Receive events from underlying stream and enrich with emotions."""
+            """Receive events from underlying stream and enrich with per-sentence emotions."""
             async for event in underlying_stream:
-                # For FINAL transcripts, detect emotion FIRST (blocking), then enrich
                 if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                    await self._detect_emotion_from_buffer()
-                    # Clear buffer after final transcript - this audio segment is complete
+                    # Enrich final transcript with per-sentence emotions
+                    enriched_event = await self._enrich_final_transcript(event)
+                    self._event_ch.send_nowait(enriched_event)
+                    # Clear buffer after processing final transcript
                     self._audio_buffer.clear()
-
-                # Enrich transcriptions with emotion tags
-                enriched_event = self._enrich_with_emotion(event)
-                self._event_ch.send_nowait(enriched_event)
+                    self._buffer_start_time_ms = self._current_time_ms
+                elif event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+                    # For interim transcripts, just pass through without emotion
+                    # (we'll add emotions on the final)
+                    self._event_ch.send_nowait(event)
+                else:
+                    # Pass through other events unchanged
+                    self._event_ch.send_nowait(event)
 
         # Run both tasks concurrently
         forward_task = asyncio.create_task(forward_audio())
@@ -336,92 +463,53 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         finally:
             await underlying_stream.aclose()
 
-    async def _detect_emotion_from_buffer(self) -> None:
-        """Detect emotion from buffered audio frames (blocking call)."""
-        valence_client = self._parent_stt._valence_client
-        if not valence_client:
-            logger.debug("No Valence client available for emotion detection")
-            return
-
-        if not self._audio_buffer:
-            logger.debug("Audio buffer is empty, skipping emotion detection")
-            return
-
-        try:
-            # Combine buffered frames into a single audio chunk
-            all_samples: list[np.ndarray] = []
-            sample_rate = 48000
-
-            for frame in self._audio_buffer:
-                samples = np.frombuffer(frame.data, dtype=np.int16)
-                all_samples.append(samples)
-                sample_rate = frame.sample_rate
-
-            if not all_samples:
-                logger.debug("No samples extracted from buffer")
-                return
-
-            combined = np.concatenate(all_samples)
-
-            # Skip if too little audio (~33ms at 48kHz)
-            if len(combined) < 1600:
-                logger.debug(
-                    f"Audio too short: {len(combined)} samples "
-                    f"({len(combined) / sample_rate * 1000:.0f}ms)"
-                )
-                return
-
-            # Get emotion from Valence (this blocks until we get the response)
-            duration_ms = len(combined) / sample_rate * 1000
-            logger.debug(f"Detecting emotion from {len(combined)} samples ({duration_ms:.0f}ms)")
-
-            emotions = await valence_client.process_audio(combined, sample_rate)
-
-            new_emotion = emotions.get("dominant", "neutral")
-            new_confidence = emotions.get("confidence", 0.0)
-            all_emotions = emotions.get("all_emotions", {})
-
-            logger.debug(f"Emotion: {new_emotion} ({new_confidence:.1%}) | all: {all_emotions}")
-
-            if new_confidence >= self._min_confidence:
-                old_emotion = self._current_emotion
-                self._current_emotion = new_emotion
-                self._current_confidence = new_confidence
-                if old_emotion != new_emotion:
-                    logger.info(f"Emotion changed: {old_emotion} -> {new_emotion}")
-
-        except Exception as e:
-            logger.error(f"Error detecting emotion: {e}", exc_info=True)
-
-    def _enrich_with_emotion(self, event: stt.SpeechEvent) -> stt.SpeechEvent:
-        """Add emotion tags to speech event transcriptions.
+    async def _enrich_final_transcript(self, event: stt.SpeechEvent) -> stt.SpeechEvent:
+        """Enrich a final transcript with per-sentence emotion tags.
 
         Args:
-            event: The original speech event.
+            event: The final transcript event.
 
         Returns:
-            SpeechEvent: Event with emotion-enriched text.
+            Event with emotion-enriched text for each sentence.
         """
-        # Only enrich final and interim transcripts
-        if event.type not in (
-            stt.SpeechEventType.FINAL_TRANSCRIPT,
-            stt.SpeechEventType.INTERIM_TRANSCRIPT,
-        ):
+        valence_client = self._parent_stt._valence_client
+        if not valence_client or not self._audio_buffer:
             return event
 
-        # Create new alternatives with emotion tags
+        # Get combined audio from buffer
+        all_samples: list[np.ndarray] = []
+        sample_rate = 48000
+
+        for tf in self._audio_buffer:
+            samples = np.frombuffer(tf.frame.data, dtype=np.int16)
+            all_samples.append(samples)
+            sample_rate = tf.frame.sample_rate
+
+        if not all_samples:
+            return event
+
+        combined_samples = np.concatenate(all_samples)
+        total_duration_ms = self._current_time_ms - self._buffer_start_time_ms
+
+        logger.debug(
+            f"Processing final transcript with {len(combined_samples)} samples "
+            f"({total_duration_ms:.0f}ms)"
+        )
+
         new_alternatives = []
         for alt in event.alternatives:
             if alt.text.strip():
-                emotion_tag = f"[{self._current_emotion.capitalize()}]"
-                new_text = f"{emotion_tag} {alt.text}"
-                logger.debug(
-                    f"Enriching {event.type.name}: '{alt.text[:30]}' -> [{self._current_emotion}]"
+                enriched_text = await self._enrich_text_per_sentence(
+                    alt.text,
+                    combined_samples,
+                    sample_rate,
+                    valence_client,
                 )
+                logger.debug(f"Enriched: '{alt.text[:50]}...' -> '{enriched_text[:80]}...'")
                 new_alternatives.append(
                     stt.SpeechData(
                         language=alt.language,
-                        text=new_text,
+                        text=enriched_text,
                         start_time=alt.start_time,
                         end_time=alt.end_time,
                         confidence=alt.confidence,
@@ -438,3 +526,82 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
             alternatives=new_alternatives,
             recognition_usage=event.recognition_usage,
         )
+
+    async def _enrich_text_per_sentence(
+        self,
+        text: str,
+        samples: np.ndarray,
+        sample_rate: int,
+        valence_client: ValenceWebSocketClient,
+    ) -> str:
+        """Enrich text with emotion tags for each sentence.
+
+        Args:
+            text: The transcribed text.
+            samples: Audio samples as numpy array.
+            sample_rate: Sample rate of the audio.
+            valence_client: The Valence WebSocket client.
+
+        Returns:
+            Text with emotion tags for each sentence.
+        """
+        sentences = split_into_sentences(text)
+
+        if not sentences:
+            return text
+
+        logger.debug(f"Split into {len(sentences)} sentences: {sentences}")
+
+        # If only one sentence, detect emotion for the whole audio
+        if len(sentences) == 1:
+            if len(samples) >= 1600:
+                try:
+                    emotions = await valence_client.process_audio(samples, sample_rate)
+                    emotion = emotions.get("dominant", "neutral")
+                    confidence = emotions.get("confidence", 0.0)
+                    logger.debug(f"Single sentence emotion: {emotion} ({confidence:.1%})")
+                    if confidence >= self._min_confidence:
+                        return f"[{emotion.capitalize()}] {sentences[0]}"
+                except Exception as e:
+                    logger.error(f"Error detecting emotion: {e}")
+            return f"[Neutral] {sentences[0]}"
+
+        # Multiple sentences - divide audio proportionally by character count
+        total_chars = sum(len(s) for s in sentences)
+        total_samples = len(samples)
+
+        enriched_parts = []
+        sample_offset = 0
+
+        for i, sentence in enumerate(sentences):
+            # Calculate audio segment for this sentence based on character proportion
+            char_ratio = len(sentence) / total_chars
+            segment_samples = int(total_samples * char_ratio)
+
+            # For the last sentence, take all remaining samples
+            if i == len(sentences) - 1:
+                audio_segment = samples[sample_offset:]
+            else:
+                segment_end = min(sample_offset + segment_samples, total_samples)
+                audio_segment = samples[sample_offset:segment_end]
+                sample_offset = segment_end
+
+            # Detect emotion for this segment
+            emotion = "neutral"
+            if len(audio_segment) >= 1600:  # Minimum ~33ms at 48kHz
+                try:
+                    emotions = await valence_client.process_audio(audio_segment, sample_rate)
+                    detected_emotion = emotions.get("dominant", "neutral")
+                    confidence = emotions.get("confidence", 0.0)
+                    logger.debug(
+                        f"Sentence {i+1}/{len(sentences)} '{sentence[:30]}...' -> "
+                        f"{detected_emotion} ({confidence:.1%})"
+                    )
+                    if confidence >= self._min_confidence:
+                        emotion = detected_emotion
+                except Exception as e:
+                    logger.error(f"Error detecting emotion for sentence {i+1}: {e}")
+
+            enriched_parts.append(f"[{emotion.capitalize()}] {sentence}")
+
+        return " ".join(enriched_parts)
