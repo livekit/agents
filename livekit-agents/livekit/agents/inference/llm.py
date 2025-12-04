@@ -273,6 +273,7 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        self._tool_extra_content: dict[str, Any] | None = None
         self._tool_index: int | None = None
         retryable = True
 
@@ -375,17 +376,21 @@ class LLMStream(llm.LLMStream):
                                     arguments=self._fnc_raw_arguments or "",
                                     name=self._fnc_name or "",
                                     call_id=self._tool_call_id or "",
+                                    extra_content=self._tool_extra_content,
                                 )
                             ],
                         ),
                     )
                     self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+                    self._tool_extra_content = None
 
                 if tool.function.name:
                     self._tool_index = tool.index
                     self._tool_call_id = tool.id
                     self._fnc_name = tool.function.name
                     self._fnc_raw_arguments = tool.function.arguments or ""
+                    # Extract extra_content from tool call (e.g., Google thought signatures)
+                    self._tool_extra_content = getattr(tool, "extra_content", None)
                 elif tool.function.arguments:
                     self._fnc_raw_arguments += tool.function.arguments  # type: ignore
 
@@ -403,21 +408,30 @@ class LLMStream(llm.LLMStream):
                             arguments=self._fnc_raw_arguments or "",
                             name=self._fnc_name or "",
                             call_id=self._tool_call_id or "",
+                            extra_content=self._tool_extra_content,
                         )
                     ],
                 ),
             )
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+            self._tool_extra_content = None
             return call_chunk
 
         delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
 
-        if not delta.content:
+        # Extract extra_content from delta (e.g., Google thought signatures on text parts)
+        delta_extra_content = getattr(delta, "extra_content", None)
+
+        if not delta.content and not delta_extra_content:
             return None
 
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
+            delta=llm.ChoiceDelta(
+                content=delta.content,
+                role="assistant",
+                extra_content=delta_extra_content,
+            ),
         )
 
 
