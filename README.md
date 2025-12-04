@@ -179,7 +179,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         stt="deepgram/nova-3",
         llm="openai/gpt-4o",
-        tts="elevenlabs/eleven_turbo_v2_5:Xb7hH8MSUJpSbSDYk0k2",
+        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         userdata=userdata,
     )
 
