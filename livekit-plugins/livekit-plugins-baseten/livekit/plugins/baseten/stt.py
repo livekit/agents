@@ -37,6 +37,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEvent
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
@@ -83,7 +84,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,  # only final transcripts
-                aligned_transcript=True,
+                aligned_transcript="word",
             ),
         )
 
@@ -316,6 +317,16 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
+                                        words=[
+                                            TimedString(
+                                                text=segment.get("text", ""),
+                                                start_time=segment.get("start", 0.0),
+                                                end_time=segment.get("end", 0.0),
+                                            )
+                                            for segment in segments
+                                        ]
+                                        if segments
+                                        else None,
                                     )
                                 ],
                             )
@@ -337,6 +348,16 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
+                                        words=[
+                                            TimedString(
+                                                text=segment.get("text", ""),
+                                                start_time=segment.get("start", 0.0),
+                                                end_time=segment.get("end", 0.0),
+                                            )
+                                            for segment in segments
+                                        ]
+                                        if segments
+                                        else None,
                                     )
                                 ],
                             )
@@ -398,7 +419,7 @@ class SpeechStream(stt.SpeechStream):
                 "sample_rate": self._opts.sample_rate,
                 "enable_partial_transcripts": False,
             },
-            "whisper_params": {"audio_language": self._opts.language},
+            "whisper_params": {"audio_language": self._opts.language, "show_word_timestamps": True},
         }
 
         await ws.send_str(json.dumps(metadata))

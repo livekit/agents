@@ -16,6 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from . import auth
 
@@ -50,7 +51,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                aligned_transcript=True,
+                aligned_transcript="word",
             ),
         )
 
@@ -168,6 +169,7 @@ class SpeechStream(stt.SpeechStream):
                 enable_automatic_punctuation=self._stt._opts.punctuate,
                 sample_rate_hertz=self._stt._opts.sample_rate,
                 audio_channel_count=1,
+                enable_word_time_offsets=True,
             ),
             interim_results=True,
         )
@@ -282,4 +284,14 @@ class SpeechStream(stt.SpeechStream):
             end_time=end_time,
             confidence=confidence,
             text=transcript,
+            words=[
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start_time", 0),
+                    end_time=word.get("end_time", 0),
+                )
+                for word in words
+            ]
+            if words
+            else None,
         )
