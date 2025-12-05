@@ -17,10 +17,8 @@ import textwrap
 import threading
 import time
 import traceback
-from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from inspect import istraceback
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
 
@@ -47,6 +45,7 @@ from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..worker import AgentServer, WorkerOptions
 from . import proto
+from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
 
 # from .discover import get_import_data
 from .readchar import key, readkey
@@ -650,89 +649,6 @@ class FrequencyVisualizer:
         return table
 
 
-class JsonEncoder(json.JSONEncoder):
-    def default(self, o: Any) -> Any:
-        if isinstance(o, (datetime.date, datetime.datetime, datetime.time)):
-            return o.isoformat()
-        elif istraceback(o):
-            return "".join(traceback.format_tb(o)).strip()
-        elif type(o) is Exception or isinstance(o, Exception) or type(o) is type:
-            return str(o)
-
-        # extra values are formatted as str() if the encoder raises TypeError
-        try:
-            return super().default(o)
-        except TypeError:
-            try:
-                return str(o)
-            except Exception:
-                return None
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-
-    def format(self, record: logging.LogRecord) -> str:
-        """Formats a log record and serializes to json"""
-        message_dict: dict[str, Any] = {}
-        message_dict["level"] = record.levelname
-        message_dict["name"] = record.name
-        message_dict["message"] = record.getMessage()
-
-        if record.exc_info and not message_dict.get("exc_info"):
-            message_dict["exc_info"] = self.formatException(record.exc_info)
-        if not message_dict.get("exc_info") and record.exc_text:
-            message_dict["exc_info"] = record.exc_text
-        if record.stack_info and not message_dict.get("stack_info"):
-            message_dict["stack_info"] = self.formatStack(record.stack_info)
-
-        log_record: dict[str, Any] = OrderedDict()
-        log_record.update(message_dict)
-        _merge_record_extra(record, log_record)
-
-        log_record["timestamp"] = datetime.datetime.fromtimestamp(
-            record.created, tz=datetime.timezone.utc
-        )
-
-        return json.dumps(log_record, cls=JsonEncoder, ensure_ascii=False)
-
-
-# skip default LogRecord attributes
-# http://docs.python.org/library/logging.html#logrecord-attributes
-_RESERVED_ATTRS: tuple[str, ...] = (
-    "args",
-    "asctime",
-    "created",
-    "exc_info",
-    "exc_text",
-    "filename",
-    "funcName",
-    "levelname",
-    "levelno",
-    "lineno",
-    "module",
-    "msecs",
-    "message",
-    "msg",
-    "name",
-    "pathname",
-    "process",
-    "processName",
-    "relativeCreated",
-    "stack_info",
-    "thread",
-    "threadName",
-    "taskName",
-)
-
-
-def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]) -> None:
-    for k, v in record.__dict__.items():
-        if k not in _RESERVED_ATTRS and not (hasattr(k, "startswith") and k.startswith("_")):
-            target[k] = v
-
-
 class RichLoggingHandler(logging.Handler):
     def __init__(self, agents_console: AgentsConsole):
         super().__init__()
@@ -821,7 +737,7 @@ class RichLoggingHandler(logging.Handler):
         extra_str = ""
         extra_len = 0
         if extra:
-            extra_str = json.dumps(extra, cls=JsonEncoder, ensure_ascii=False)
+            extra_str = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=False)
             extra_text = Text(extra_str)
             extra_len = extra_text.cell_len
 
@@ -870,30 +786,6 @@ class RichLoggingHandler(logging.Handler):
 
         except Exception:
             self.handleError(record)
-
-
-# noisy loggers are set to warn by default
-NOISY_LOGGERS = [
-    "httpx",
-    "httpcore",
-    "openai",
-    "watchfiles",
-    "anthropic",
-    "websockets.client",
-    "aiohttp.access",
-    "livekit",
-    "botocore",
-    "aiobotocore",
-    "urllib3.connectionpool",
-    "mcp.client",
-]
-
-
-def _silence_noisy_loggers() -> None:
-    for noisy_logger in NOISY_LOGGERS:
-        logger = logging.getLogger(noisy_logger)
-        if logger.level == logging.NOTSET:
-            logger.setLevel(logging.WARN)
 
 
 def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
