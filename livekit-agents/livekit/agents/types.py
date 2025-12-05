@@ -89,3 +89,21 @@ class APIConnectOptions:
 
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()
+
+
+class TimedString(str):
+    """A string with optional start and end timestamps for word-level alignment."""
+
+    start_time: NotGivenOr[float]
+    end_time: NotGivenOr[float]
+
+    def __new__(
+        cls,
+        text: str,
+        start_time: NotGivenOr[float] = NOT_GIVEN,
+        end_time: NotGivenOr[float] = NOT_GIVEN,
+    ) -> "TimedString":
+        obj = super().__new__(cls, text)
+        obj.start_time = start_time
+        obj.end_time = end_time
+        return obj

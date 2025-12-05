@@ -13,12 +13,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
-from livekit.agents.voice.io import TimedString
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import STTMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
