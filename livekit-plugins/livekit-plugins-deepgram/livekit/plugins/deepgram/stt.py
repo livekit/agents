@@ -40,6 +40,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
@@ -134,7 +135,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=interim_results,
                 diarization=enable_diarization,
-                aligned_transcript=True,
+                aligned_transcript="word",
             )
         )
 
@@ -695,6 +696,16 @@ def live_transcription_to_speech_data(
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,
+            words=[
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
+                )
+                for word in alt["words"]
+            ]
+            if alt["words"]
+            else None,
         )
         if language == "multi" and "languages" in alt:
             sd.language = alt["languages"][0]  # TODO: handle multiple languages

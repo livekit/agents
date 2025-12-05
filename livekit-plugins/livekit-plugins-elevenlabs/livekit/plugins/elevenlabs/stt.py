@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import aiohttp
 
@@ -37,6 +37,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import STTRealtimeSampleRates
@@ -100,7 +101,7 @@ class STT(stt.STT):
             capabilities=STTCapabilities(
                 streaming=use_realtime,
                 interim_results=True,
-                aligned_transcript=include_timestamps and use_realtime,
+                aligned_transcript="word" if include_timestamps and use_realtime else False,
             )
         )
 
@@ -199,6 +200,7 @@ class STT(stt.STT):
             start_time=start_time,
             end_time=end_time,
             speaker_id=speaker_id,
+            words=words,
         )
 
     def _transcription_to_speech_event(
@@ -208,6 +210,7 @@ class STT(stt.STT):
         start_time: float,
         end_time: float,
         speaker_id: str | None,
+        words: list[dict[str, Any]] | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -218,6 +221,16 @@ class STT(stt.STT):
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
+                    words=[
+                        TimedString(
+                            text=word.get("text", ""),
+                            start_time=word.get("start", 0),
+                            end_time=word.get("end", 0),
+                        )
+                        for word in words
+                    ]
+                    if words
+                    else None,
                 )
             ],
         )
@@ -442,7 +455,18 @@ class SpeechStream(stt.SpeechStream):
         end_time = words[-1].get("end", 0) if words else 0
 
         speech_data = stt.SpeechData(
-            language=self._language or "en", text=text, start_time=start_time, end_time=end_time
+            language=self._language or "en",
+            text=text,
+            start_time=start_time,
+            end_time=end_time,
+            words=[
+                TimedString(
+                    text=word.get("text", ""),
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
+                )
+                for word in words
+            ],
         )
 
         if message_type == "partial_transcript":
@@ -463,7 +487,10 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(interim_event)
 
-        elif message_type == "committed_transcript":
+        elif message_type in {
+            "committed_transcript",
+            "committed_transcript_with_timestamps",
+        }:
             logger.debug("Received message type committed_transcript: %s", data)
 
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
@@ -495,9 +522,6 @@ class SpeechStream(stt.SpeechStream):
             # Session initialization message - informational only
             session_id = data.get("session_id", "unknown")
             logger.debug("Session started with ID: %s", session_id)
-
-        elif message_type == "committed_transcript_with_timestamps":
-            logger.debug("Received message type committed_transcript_with_timestamps: %s", data)
 
         # Error handling for known ElevenLabs error types
         elif message_type in (

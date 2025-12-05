@@ -37,6 +37,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
@@ -98,7 +99,7 @@ class STTv2(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=True
+                streaming=True, interim_results=True, aligned_transcript="word"
             )
         )
 
@@ -510,10 +511,18 @@ def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.Speech
 
     sd = stt.SpeechData(
         language=language,
-        start_time=data["audio_window_start"] if data["audio_window_start"] else 0,
-        end_time=data["audio_window_end"] if data["audio_window_end"] else 0,
+        start_time=data.get("audio_window_start", 0),
+        end_time=data.get("audio_window_end", 0),
         confidence=confidence,
         text=transcript or "",
+        words=[
+            TimedString(
+                text=word.get("word", ""),
+                start_time=word.get("start", 0),
+                end_time=word.get("end", 0),
+            )
+            for word in words
+        ],
     )
     return [sd]
 

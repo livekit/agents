@@ -184,7 +184,9 @@ class STT(stt.STT):
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript="chunk"
+            ),
         )
 
         lk_base_url = (
