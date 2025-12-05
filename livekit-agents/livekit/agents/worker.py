@@ -1226,7 +1226,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
                     extra={"job_request": job_req, "agent_name": self._agent_name},
                 )
-                await _on_reject(terminate=True)
+                await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._tasks.add(user_task)
