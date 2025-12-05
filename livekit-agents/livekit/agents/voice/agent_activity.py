@@ -117,6 +117,8 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        self._prestart_mode = False  # Indicates partial startup for audio capture during handover
+        self._pending_transcripts: list[_EndOfTurnInfo] = []  # Buffer transcripts during prestart
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -479,6 +481,116 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
+    async def prestart(self) -> None:
+        """Partially start the activity to accept audio frames during handover.
+
+        This method is called BEFORE the activity becomes the active one, eliminating
+        the audio gap during task handovers. It creates the audio_recognition instance
+        and sets _started=True so push_audio() accepts frames immediately.
+
+        Does NOT run on_enter() or resume scheduling - those happen in complete_start().
+        """
+        async with self._lock:
+            if self._started:
+                return
+
+            self._agent._activity = self
+
+            # Prewarm models for faster response
+            if isinstance(self.llm, llm.LLM):
+                self.llm.prewarm()
+            if isinstance(self.stt, stt.STT):
+                self.stt.prewarm()
+            if isinstance(self.tts, tts.TTS):
+                self.tts.prewarm()
+
+            # Create audio recognition to accept frames immediately
+            self._audio_recognition = AudioRecognition(
+                self._session,
+                hooks=self,
+                stt=self._agent.stt_node if self.stt else None,
+                vad=self.vad,
+                min_endpointing_delay=self.min_endpointing_delay,
+                max_endpointing_delay=self.max_endpointing_delay,
+                turn_detection=self._turn_detection,
+            )
+            self._audio_recognition.start()
+
+            # Mark as started so push_audio() accepts frames
+            self._started = True
+            self._prestart_mode = True
+
+            logger.debug(
+                "activity prestarted for handover",
+                extra={"agent_label": self._agent.label},
+            )
+
+    async def complete_start(self) -> None:
+        """Complete the startup sequence after prestart().
+
+        This method is called AFTER the activity swap and old activity pause.
+        It finishes the session setup, resumes scheduling, replays buffered
+        transcripts, and runs on_enter().
+        """
+        async with self._lock:
+            if not self._prestart_mode:
+                raise RuntimeError("complete_start called without prestart")
+
+            start_span = tracer.start_span(
+                "complete_start_agent_activity",
+                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
+            )
+            try:
+                self._prestart_mode = False
+
+                # Complete session setup (event handlers, MCP tools, RealtimeModel, etc.)
+                # This reuses _start_session but skips audio_recognition creation
+                await self._start_session()
+
+                # Replay any transcripts buffered during prestart
+                for info in self._pending_transcripts:
+                    self._handle_forwarded_transcript(info)
+                self._pending_transcripts.clear()
+
+                # Run on_enter (same pattern as start())
+                @tracer.start_as_current_span(
+                    "on_enter",
+                    context=trace.set_span_in_context(start_span),
+                    attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+                )
+                @utils.log_exceptions(logger=logger)
+                async def _traceable_on_enter() -> None:
+                    data = _OnEnterData(session=self._session, agent=self._agent)
+                    try:
+                        tk = _OnEnterContextVar.set(data)
+                        await self._agent.on_enter()
+                    finally:
+                        _OnEnterContextVar.reset(tk)
+
+                self._on_enter_task = task = self._create_speech_task(
+                    _traceable_on_enter(), name="AgentTask_on_enter"
+                )
+                _set_activity_task_info(task, inline_task=True)
+
+                logger.debug(
+                    "activity startup completed after prestart",
+                    extra={"agent_label": self._agent.label},
+                )
+            finally:
+                start_span.end()
+
+    def _handle_forwarded_transcript(self, info: _EndOfTurnInfo) -> None:
+        """Process a transcript forwarded from the prestart buffer."""
+        logger.debug(
+            "processing forwarded transcript from prestart buffer",
+            extra={"transcript": info.new_transcript},
+        )
+        old_task = self._user_turn_completed_atask
+        self._user_turn_completed_atask = self._create_speech_task(
+            self._user_turn_completed_task(old_task, info),
+            name="AgentActivity._user_turn_completed_task_forwarded",
+        )
+
     async def _start_session(self) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
@@ -577,16 +689,19 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the instructions")
 
         await self._resume_scheduling_task()
-        self._audio_recognition = AudioRecognition(
-            self._session,
-            hooks=self,
-            stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
-            min_endpointing_delay=self.min_endpointing_delay,
-            max_endpointing_delay=self.max_endpointing_delay,
-            turn_detection=self._turn_detection,
-        )
-        self._audio_recognition.start()
+
+        # Only create audio_recognition if not already created by prestart()
+        if self._audio_recognition is None:
+            self._audio_recognition = AudioRecognition(
+                self._session,
+                hooks=self,
+                stt=self._agent.stt_node if self.stt else None,
+                vad=self.vad,
+                min_endpointing_delay=self.min_endpointing_delay,
+                max_endpointing_delay=self.max_endpointing_delay,
+                turn_detection=self._turn_detection,
+            )
+            self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -646,12 +761,20 @@ class AgentActivity(RecognitionHooks):
         # `resume` must only be called by AgentSession
 
         async with self._lock:
+            logger.debug(
+                "resuming activity after AgentTask completion",
+                extra={"agent_label": self._agent.label},
+            )
             span = tracer.start_span(
                 "resume_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
                 await self._start_session()
+                logger.debug(
+                    "activity resumed, audio_recognition recreated",
+                    extra={"agent_label": self._agent.label},
+                )
             finally:
                 span.end()
 
@@ -667,6 +790,10 @@ class AgentActivity(RecognitionHooks):
 
         # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
+            logger.debug(
+                "pausing activity for AgentTask handover",
+                extra={"agent_label": self._agent.label},
+            )
             span = tracer.start_span(
                 "pause_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
@@ -674,6 +801,10 @@ class AgentActivity(RecognitionHooks):
             try:
                 await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
                 await self._close_session()
+                logger.debug(
+                    "activity paused, audio_recognition closed",
+                    extra={"agent_label": self._agent.label},
+                )
             finally:
                 span.end()
 
@@ -708,12 +839,18 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
+            # Set to None so resume() can recreate it via _start_session()
+            self._rt_session = None
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()
+            # Set to None so resume() can recreate it via _start_session()
+            self._realtime_spans = None
 
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
+            # Set to None so resume() can recreate it via _start_session()
+            self._audio_recognition = None
 
         await self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
         self._interrupt_paused_speech_task = None
@@ -1033,7 +1170,7 @@ class AgentActivity(RecognitionHooks):
                         # skip done speech (interrupted during delay)
                         self._current_speech = None
                         continue
-                speech._authorize_generation()
+                await speech._authorize_generation()
                 await speech._wait_for_generation()
                 self._current_speech = None
                 last_playout_ts = time.time()
@@ -1347,6 +1484,16 @@ class AgentActivity(RecognitionHooks):
 
         if self._scheduling_paused:
             self._cancel_preemptive_generation()
+
+            # During prestart mode, buffer transcripts for replay after complete_start()
+            if self._prestart_mode:
+                self._pending_transcripts.append(info)
+                logger.info(
+                    "buffering transcript during handover prestart",
+                    extra={"user_input": info.new_transcript},
+                )
+                return True
+
             logger.warning(
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
@@ -1612,10 +1759,13 @@ class AgentActivity(RecognitionHooks):
 
         wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
         await speech_handle.wait_if_not_interrupted([wait_for_authorization])
-        speech_handle._clear_authorization()
+        await speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            # Mark generation done to prevent scheduling task from waiting forever
+            if speech_handle._generations:
+                speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(wait_for_authorization)
             return
 
@@ -1707,7 +1857,11 @@ class AgentActivity(RecognitionHooks):
                 await audio_output.wait_for_playout()
 
         if tee is not None:
-            await tee.aclose()
+            try:
+                await tee.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
         # use synchronized transcript when available after interruption
         forwarded_text = text_out.text if text_out else ""
@@ -1866,20 +2020,34 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            # Mark generation done to prevent scheduling task from waiting forever
+            if speech_handle._generations:
+                speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
-            await text_tee.aclose()
+            try:
+                await text_tee.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
             return
 
         self._session._update_agent_state("thinking")
 
         wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
         await speech_handle.wait_if_not_interrupted([wait_for_authorization])
-        speech_handle._clear_authorization()
+        await speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            # Mark generation done to prevent scheduling task from waiting forever
+            if speech_handle._generations:
+                speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(*tasks, wait_for_authorization)
-            await text_tee.aclose()
+            try:
+                await text_tee.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
             return
 
         reply_started_at = time.time()
@@ -1981,7 +2149,11 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            await text_tee.aclose()
+            try:
+                await text_tee.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
             forwarded_text = text_out.text if text_out else ""
             if forwarded_text:
@@ -2044,7 +2216,11 @@ class AgentActivity(RecognitionHooks):
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
 
-        await text_tee.aclose()
+        try:
+            await text_tee.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise  # Re-raise unexpected RuntimeErrors
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         self._background_speeches.add(speech_handle)
@@ -2241,9 +2417,12 @@ class AgentActivity(RecognitionHooks):
 
         wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
         await speech_handle.wait_if_not_interrupted([wait_for_authorization])
-        speech_handle._clear_authorization()
+        await speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
+            # Mark generation done to prevent scheduling task from waiting forever
+            if speech_handle._generations:
+                speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(wait_for_authorization)
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history

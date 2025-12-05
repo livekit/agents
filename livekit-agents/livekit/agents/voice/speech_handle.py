@@ -26,6 +26,7 @@ class SpeechHandle:
         self._done_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
+        self._auth_lock = asyncio.Lock()  # Protects authorization operations
 
         self._generations: list[asyncio.Future[None]] = []
 
@@ -190,13 +191,15 @@ class SpeechHandle:
 
             self._chat_items.append(item)
 
-    def _authorize_generation(self) -> None:
-        fut = asyncio.Future[None]()
-        self._generations.append(fut)
-        self._authorize_event.set()
+    async def _authorize_generation(self) -> None:
+        async with self._auth_lock:
+            fut = asyncio.Future[None]()
+            self._generations.append(fut)
+            self._authorize_event.set()
 
-    def _clear_authorization(self) -> None:
-        self._authorize_event.clear()
+    async def _clear_authorization(self) -> None:
+        async with self._auth_lock:
+            self._authorize_event.clear()
 
     async def _wait_for_authorization(self) -> None:
         await self._authorize_event.wait()
@@ -218,11 +221,17 @@ class SpeechHandle:
             self._generations[-1].set_result(None)
 
     def _mark_done(self) -> None:
+        already_done = self._done_fut.done()
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
-            if self._generations:
-                self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
+
+        # Mark generation done only if this is the first call to _mark_done().
+        # If already_done=True (e.g., speech was interrupted), the early return paths
+        # in agent_activity.py already called _mark_generation_done(), so we skip here
+        # to avoid double-completion.
+        if self._generations and not already_done:
+            self._mark_generation_done()
 
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):

@@ -289,8 +289,16 @@ async def _tts_inference_task(
     finally:
         await aio.gracefully_cancel(_start_time_task)
         if input_segment is not None:
-            await input_segment.aclose()
-        await input_tee.aclose()
+            try:
+                await input_segment.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
+        try:
+            await input_tee.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise  # Re-raise unexpected RuntimeErrors
 
     return pushed_duration > 0
 
