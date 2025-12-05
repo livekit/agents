@@ -1,6 +1,6 @@
 # AWS Plugin for LiveKit Agents
 
-Complete AWS AI integration for LiveKit Agents, featuring Amazon Nova 2 Sonic - a state-of-the-art realtime speech-to-speech model with industry-leading price performance.
+Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe and realtime voice to voice support for Amazon Nova 2 Sonic
 
 **What's included:**
 - **RealtimeModel** - Amazon Nova Sonic 1.0 & 2.0 for speech-to-speech
@@ -307,13 +307,12 @@ session = AgentSession(
 
 ### Nova 2 Lite
 
-Amazon Nova 2 Lite is a multimodal understanding model optimized for voice agents:
+Amazon Nova 2 Lite is a fast, cost-effective reasoning model optimized for everyday AI workloads:
 
 - **Lightning-fast processing** - Very low latency for real-time conversations
 - **Cost-effective** - Industry-leading price-performance
-- **Multimodal inputs** - Text, images, video, and documents
-- **300K context window** - Handle long conversations and complex context
-- **200+ languages** - Optimized for 15 major languages
+- **Multimodal inputs** - Text and images ([source](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html))
+- **1 million token context window** - Handle long conversations and complex context ([source](https://aws.amazon.com/blogs/aws/introducing-amazon-nova-2-lite-a-fast-cost-effective-reasoning-model/))
 - **Agentic workflows** - RAG systems, function calling, tool use
 - **Fine-tuning support** - Customize for your specific use case
 
