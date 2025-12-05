@@ -455,9 +455,12 @@ class RealtimeSession(  # noqa: F811
                     description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
                         "description"
                     )
-                    input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
-                        "parameters"
-                    ]
+                    raw_schema = llm.tool_context.get_raw_function_info(f).raw_schema
+                    # Safely access parameters with fallback
+                    input_schema = raw_schema.get(
+                        "parameters",
+                        raw_schema.get("input_schema", {"type": "object", "properties": {}}),
+                    )
                 else:
                     continue
 
