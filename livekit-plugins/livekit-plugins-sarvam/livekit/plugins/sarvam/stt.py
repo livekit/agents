@@ -188,7 +188,7 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=True
+                streaming=True, interim_results=True, aligned_transcript="chunk"
             )
         )
 

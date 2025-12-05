@@ -243,7 +243,9 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript="chunk"
+            ),
         )
 
         lk_base_url = (

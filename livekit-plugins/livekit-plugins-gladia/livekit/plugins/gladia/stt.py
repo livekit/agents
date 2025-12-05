@@ -41,6 +41,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector
 from .log import logger
@@ -274,7 +275,7 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=interim_results, aligned_transcript=True
+                streaming=True, interim_results=interim_results, aligned_transcript="word"
             )
         )
         self._base_url = base_url
@@ -500,6 +501,7 @@ class STT(stt.STT):
         # Process each utterance into a SpeechData object
         for utterance in utterances:
             text = utterance.get("text", "").strip()
+            words = utterance.get("words", [])
             if text:
                 alternatives.append(
                     stt.SpeechData(
@@ -508,6 +510,16 @@ class STT(stt.STT):
                         end_time=utterance.get("end", 0),
                         confidence=utterance.get("confidence", 1.0),
                         text=text,
+                        words=[
+                            TimedString(
+                                text=word.get("word", ""),
+                                start_time=word.get("start", 0),
+                                end_time=word.get("end", 0),
+                            )
+                            for word in words
+                        ]
+                        if words
+                        else None,
                     )
                 )
 
@@ -519,6 +531,7 @@ class STT(stt.STT):
                     end_time=0,
                     confidence=1.0,
                     text="",
+                    words=[],
                 )
             )
 
@@ -1001,6 +1014,7 @@ class SpeechStream(stt.SpeechStream):
             is_final = data["data"]["is_final"]
             utterance = data["data"]["utterance"]
             text = utterance.get("text", "").strip()
+            words = utterance.get("words", [])
 
             if not self._speaking and text:
                 self._speaking = True
@@ -1024,6 +1038,16 @@ class SpeechStream(stt.SpeechStream):
                     end_time=utterance.get("end", 0),
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
+                    words=[
+                        TimedString(
+                            text=word.get("word", ""),
+                            start_time=word.get("start", 0),
+                            end_time=word.get("end", 0),
+                        )
+                        for word in words
+                    ]
+                    if words
+                    else None,
                 )
 
                 if is_final:
@@ -1077,6 +1101,7 @@ class SpeechStream(stt.SpeechStream):
 
                 # Get the translated text
                 translated_text = translated_utterance.get("text", "").strip()
+                words = translated_utterance.get("words", [])
 
                 if translated_text and language:
                     # Create speech data for the translation
@@ -1086,6 +1111,16 @@ class SpeechStream(stt.SpeechStream):
                         end_time=translated_utterance.get("end", 0),
                         confidence=translated_utterance.get("confidence", 1.0),
                         text=translated_text,  # Use the translated text
+                        words=[
+                            TimedString(
+                                text=word.get("word", ""),
+                                start_time=word.get("start", 0),
+                                end_time=word.get("end", 0),
+                            )
+                            for word in words
+                        ]
+                        if words
+                        else None,
                     )
 
                     # Emit FINAL_TRANSCRIPT containing the TRANSLATION

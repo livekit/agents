@@ -17,6 +17,7 @@ from livekit.agents import (
 )
 from livekit.agents.stt import stt
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.voice.io import TimedString
 from spitch import AsyncSpitch
 
 
@@ -29,7 +30,9 @@ class STT(stt.STT):
     def __init__(self, *, language: str = "en") -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=False, interim_results=False, aligned_transcript=language == "en"
+                streaming=False,
+                interim_results=False,
+                aligned_transcript="word" if language == "en" else False,
             )
         )
 
@@ -83,6 +86,16 @@ class STT(stt.STT):
                         end_time=resp.segments[-1].end
                         if resp.segments and resp.segments[-1]
                         else 0,
+                        words=[
+                            TimedString(
+                                text=segment.text,
+                                start_time=segment.start,
+                                end_time=segment.end,
+                            )
+                            for segment in resp.segments
+                        ]
+                        if resp.segments
+                        else None,
                     ),
                 ],
             )

@@ -34,6 +34,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .constants import API_VERSION, REQUEST_ID_HEADER, USER_AGENT
 from .log import logger
@@ -91,7 +92,7 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=False, aligned_transcript=True
+                streaming=True, interim_results=False, aligned_transcript="word"
             )
         )
 
@@ -382,6 +383,16 @@ class SpeechStream(stt.SpeechStream):
                 end_time=end_time,
                 confidence=data.get("probability", 1.0),
                 text=text,
+                words=[
+                    TimedString(
+                        text=word.get("word", ""),
+                        start_time=word.get("start", 0),
+                        end_time=word.get("end", 0),
+                    )
+                    for word in words
+                ]
+                if words
+                else None,
             )
 
             self._last_speech_start_time = end_time

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.voice.io import TimedString
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
@@ -52,6 +53,7 @@ class SpeechData:
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
+    words: list[TimedString] | None = None
 
 
 @dataclass
@@ -72,8 +74,7 @@ class STTCapabilities:
     streaming: bool
     interim_results: bool
     diarization: bool = False
-    aligned_transcript: bool = False
-    """Whether this STT supports aligned transcripts with word timestamps"""
+    aligned_transcript: Literal["word", "chunk", False] = False
 
 
 class STTError(BaseModel):

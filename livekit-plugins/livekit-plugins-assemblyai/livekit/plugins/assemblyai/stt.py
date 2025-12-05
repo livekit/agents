@@ -38,6 +38,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
@@ -77,7 +78,7 @@ class STT(stt.STT):
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=False, aligned_transcript=True
+                streaming=True, interim_results=False, aligned_transcript="word"
             ),
         )
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -370,8 +371,16 @@ class SpeechStream(stt.SpeechStream):
                             language="en",
                             text=interim_text,
                             start_time=start_time,
-                            # end_time works as duration
-                            end_time=end_time - start_time,
+                            end_time=end_time,
+                            words=[
+                                TimedString(
+                                    text=word.get("text", ""),
+                                    # ms -> s
+                                    start_time=word.get("start", 0) / 1000,
+                                    end_time=word.get("end", 0) / 1000,
+                                )
+                                for word in words
+                            ],
                         )
                     ],
                 )
@@ -388,7 +397,16 @@ class SpeechStream(stt.SpeechStream):
                             language="en",
                             text=utterance,
                             start_time=self._last_preflight_start_time,
-                            end_time=end_time - self._last_preflight_start_time,
+                            end_time=end_time,
+                            words=[
+                                TimedString(
+                                    text=word.get("text", ""),
+                                    # ms -> s
+                                    start_time=word.get("start", 0) / 1000,
+                                    end_time=word.get("end", 0) / 1000,
+                                )
+                                for word in words
+                            ],
                         )
                     ],
                 )
@@ -403,7 +421,19 @@ class SpeechStream(stt.SpeechStream):
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
-                            language="en", text=transcript, start_time=start_time, end_time=end_time
+                            language="en",
+                            text=transcript,
+                            start_time=start_time,
+                            end_time=end_time,
+                            words=[
+                                TimedString(
+                                    text=word.get("text", ""),
+                                    # ms -> s
+                                    start_time=word.get("start", 0) / 1000,
+                                    end_time=word.get("end", 0) / 1000,
+                                )
+                                for word in words
+                            ],
                         )
                     ],
                 )

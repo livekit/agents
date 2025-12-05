@@ -34,6 +34,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient, RTZRStatusError
@@ -78,7 +79,7 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=True
+                streaming=True, interim_results=True, aligned_transcript="word"
             )
         )
 
@@ -226,6 +227,7 @@ class SpeechStream(stt.SpeechStream):
                 # msec -> sec
                 start_time = data.get("start_at", 0) / 1000.0
                 duration = data.get("duration", 0) / 1000.0
+                words = data.get("words", [])
 
                 # Expected schema from reference: {"alternatives":[{"text": "..."}], "final": bool}
                 if "alternatives" in data and data["alternatives"]:
@@ -254,6 +256,20 @@ class SpeechStream(stt.SpeechStream):
                                         language=self._stt._params.language,
                                         start_time=start_time,
                                         end_time=start_time + duration,
+                                        words=[
+                                            TimedString(
+                                                text=word.get("text", ""),
+                                                start_time=word.get("start_at", 0) / 1000.0,
+                                                end_time=(
+                                                    word.get("start_at", 0)
+                                                    + word.get("duration", 0)
+                                                )
+                                                / 1000.0,
+                                            )
+                                            for word in words
+                                        ]
+                                        if words
+                                        else None,
                                     )
                                 ],
                             )
