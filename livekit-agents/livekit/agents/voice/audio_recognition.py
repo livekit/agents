@@ -281,7 +281,10 @@ class AudioRecognition:
                 self._ignore_until = NOT_GIVEN
                 return
 
-            if ev.alternatives[0].end_time + self._input_started_at < self._ignore_until:
+            if (
+                ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
+                < self._ignore_until
+            ):
                 emit_from_index = float("inf")
             else:
                 emit_from_index = min(emit_from_index, i)
@@ -331,7 +334,8 @@ class AudioRecognition:
             # 3. the event is for audio sent before the ignore_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
-            and ev.alternatives[0].end_time + self._input_started_at < self._ignore_until
+            and ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
+            < self._ignore_until
         ):
             return True
 
