@@ -139,6 +139,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
+        bargein_detector: NotGivenOr[inference.BargeinDetector] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
@@ -191,6 +192,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 automatically falls back if the necessary model is missing.
             stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
+            bargein_detector (inference.BargeinDetector, optional): Barge-in detector
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
@@ -305,6 +307,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._stt = stt or None
         self._vad = vad or None
+        self._bargein_detector = bargein_detector or None
         self._llm = llm or None
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
@@ -1257,6 +1260,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
+
+    @property
+    def bargein_detector(self) -> inference.BargeinDetector | None:
+        return self._bargein_detector
 
     # -- User changed input/output streams/sinks --
 
