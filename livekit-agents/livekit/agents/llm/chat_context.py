@@ -158,6 +158,8 @@ class ChatMessage(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
+    extra_content: dict[str, Any] | None = None
+    """Provider-specific extra content (e.g., Google thought signatures)."""
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
 
     @property
@@ -183,6 +185,12 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    extra_content: dict[str, Any] | None = None
+    """Provider-specific extra content (e.g., Google thought signatures)."""
+    group_id: str | None = None
+    """Optional group ID for parallel function calls. When multiple function calls
+    should be grouped together (e.g., parallel tool calls from a single API response),
+    set this to a shared value. If not set, falls back to using id for grouping."""
 
 
 class FunctionCallOutput(BaseModel):
@@ -232,6 +240,7 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        extra_content: dict[str, Any] | None = None,
         metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ChatMessage:
@@ -242,6 +251,8 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if extra_content is not None:
+            kwargs["extra_content"] = extra_content
         if is_given(metrics):
             kwargs["metrics"] = metrics
         if is_given(extra):

@@ -150,6 +150,7 @@ async def _llm_inference_task(
                             call_id=tool.call_id,
                             name=tool.name,
                             arguments=tool.arguments,
+                            extra_content=tool.extra_content,
                         )
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
