@@ -668,7 +668,9 @@ class RichLoggingHandler(logging.Handler):
             right = visible - left
             return s[:left] + "…" + s[-right:]
 
-        has_exc = bool(record.exc_info and record.exc_info != (None, None, None))
+        has_exc = bool(
+            (record.exc_info and record.exc_info != (None, None, None)) or record.exc_text
+        )
 
         if has_exc:
             exc_info, exc_text = record.exc_info, record.exc_text
