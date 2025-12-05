@@ -646,7 +646,8 @@ class _Connection:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._closed:
+                    if not self._closed and len(self._context_data) > 0:
+                        # websocket will be closed after all contexts are closed
                         logger.warning("websocket closed unexpectedly")
                     break
 
@@ -656,20 +657,23 @@ class _Connection:
 
                 data = json.loads(msg.data)
                 context_id = data.get("contextId")
-
-                if not context_id or context_id not in self._context_data:
-                    continue
-
-                ctx = self._context_data[context_id]
+                ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
                     logger.error(
                         "elevenlabs tts returned error",
-                        extra={"context_id": context_id, "error": error},
+                        extra={"context_id": context_id, "error": error, "data": data},
                     )
-                    if not ctx.waiter.done():
-                        ctx.waiter.set_exception(APIError(message=error))
-                    self._cleanup_context(context_id)
+                    if context_id is not None:
+                        if ctx and not ctx.waiter.done():
+                            ctx.waiter.set_exception(APIError(message=error))
+                        self._cleanup_context(context_id)
+                    continue
+
+                if ctx is None:
+                    logger.warning(
+                        "unexpected message received from elevenlabs tts", extra={"data": data}
+                    )
                     continue
 
                 emitter = ctx.emitter
