@@ -717,6 +717,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
+    def close_soon(self) -> None:
+        self._close_soon(reason=CloseReason.USER_INITIATED, drain=True)
+
     @property
     def room_io(self) -> room_io.RoomIO:
         if not self._room_io:
