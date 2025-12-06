@@ -449,6 +449,13 @@ class LLMStream(llm.LLMStream):
             )
             return chat_chunk
 
+        if part.thought:
+            content = f"<think>\n{part.text}\n</think>"
+            return llm.ChatChunk(
+                id=id,
+                delta=llm.ChoiceDelta(content=content, role="assistant"),
+            )
+
         return llm.ChatChunk(
             id=id,
             delta=llm.ChoiceDelta(content=part.text, role="assistant"),
