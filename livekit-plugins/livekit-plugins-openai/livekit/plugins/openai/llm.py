@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -33,7 +34,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
@@ -164,6 +165,7 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def model(self) -> str:
@@ -172,6 +174,29 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
+
+    def prewarm(self) -> None:
+        if self._prewarm_task and self._prewarm_task.done() is False:
+            self._prewarm_task.cancel()
+
+        async def _prewarm() -> None:
+            try:
+                stream = await self._client.chat.completions.create(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model=self._opts.model,
+                    stream=True,
+                    max_tokens=1,
+                )
+                async for _ in stream:
+                    pass
+            except Exception:
+                pass
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        if self._prewarm_task:
+            await aio.gracefully_cancel(self._prewarm_task)
 
     @staticmethod
     def with_azure(

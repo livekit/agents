@@ -14,6 +14,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, cast
@@ -35,7 +36,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 
 from .log import logger
 from .utils import to_fnc_ctx
@@ -120,6 +121,7 @@ class LLM(llm.LLM):
             cache_system=cache_system,
             cache_tools=cache_tools,
         )
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def model(self) -> str:
@@ -128,6 +130,29 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return "AWS Bedrock"
+
+    def prewarm(self) -> None:
+        if self._prewarm_task and self._prewarm_task.done() is False:
+            self._prewarm_task.cancel()
+
+        async def _prewarm() -> None:
+            try:
+                config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+                async with self._session.client("bedrock-runtime", config=config) as client:
+                    response = await client.converse_stream(
+                        modelId=self._opts.model,
+                        messages=[{"role": "user", "content": [{"text": "hi"}]}],
+                    )
+                    async for _ in response["stream"]:
+                        pass
+            except Exception:
+                pass
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        if self._prewarm_task:
+            await aio.gracefully_cancel(self._prewarm_task)
 
     def chat(
         self,
