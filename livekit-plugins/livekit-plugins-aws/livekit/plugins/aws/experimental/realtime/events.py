@@ -10,20 +10,108 @@ from ...log import logger
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
-VOICE_ID = Literal[
-    "matthew",
-    "tiffany",
-    "amy",
-    "ambre",
-    "florian",
-    "beatrice",
-    "lorenzo",
-    "greta",
-    "lennart",
-    "lupe",
-    "carlos",
-]
+ENDPOINTING_SENSITIVITY = Literal["HIGH", "MEDIUM", "LOW"]
+VOICE_ID = str  # Accept any voice ID string for flexibility
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
+
+
+class VoiceIdV1:
+    """Available voice IDs for Nova Sonic 1.0.
+
+    English:
+        MATTHEW, TIFFANY, AMY
+
+    Spanish:
+        LUPE, CARLOS
+
+    French:
+        AMBRE, FLORIAN
+
+    German:
+        GRETA, LENNART
+
+    Italian:
+        BEATRICE, LORENZO
+    """
+
+    # English
+    MATTHEW = "matthew"
+    TIFFANY = "tiffany"
+    AMY = "amy"
+
+    # Spanish
+    LUPE = "lupe"
+    CARLOS = "carlos"
+
+    # French
+    AMBRE = "ambre"
+    FLORIAN = "florian"
+
+    # German
+    GRETA = "greta"
+    LENNART = "lennart"
+
+    # Italian
+    BEATRICE = "beatrice"
+    LORENZO = "lorenzo"
+
+
+class VoiceIdV2:
+    """Available voice IDs for Nova Sonic 2.0.
+
+    English:
+        MATTHEW (polyglot), TIFFANY (polyglot), AMY, OLIVIA
+
+    Spanish:
+        LUPE, CARLOS
+
+    French:
+        AMBRE, FLORIAN
+
+    German:
+        TINA, LENNART
+
+    Italian:
+        BEATRICE, LORENZO
+
+    Portuguese:
+        CAROLINA, LEO
+
+    Hindi:
+        ARJUN, KIARA
+    """
+
+    # English
+    MATTHEW = "matthew"
+    TIFFANY = "tiffany"
+    AMY = "amy"
+    OLIVIA = "olivia"
+
+    # Spanish
+    LUPE = "lupe"
+    CARLOS = "carlos"
+
+    # French
+    AMBRE = "ambre"
+    FLORIAN = "florian"
+
+    # German
+    TINA = "tina"
+    LENNART = "lennart"
+
+    # Italian
+    BEATRICE = "beatrice"
+    LORENZO = "lorenzo"
+
+    # Portuguese
+    CAROLINA = "carolina"
+    LEO = "leo"
+
+    # Hindi
+    ARJUN = "arjun"
+    KIARA = "kiara"
+
+
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
 STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
 SAMPLE_RATE_HERTZ = Literal[8_000, 16_000, 24_000]
@@ -109,6 +197,7 @@ class ToolConfiguration(BaseModel):
 
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
+    endpointingSensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM"
 
 
 class InputTextContentStart(BaseModel):
@@ -315,10 +404,13 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM",
     ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
-            self.create_session_start_event(max_tokens, top_p, temperature),
+            self.create_session_start_event(
+                max_tokens, top_p, temperature, endpointing_sensitivity
+            ),
             self.create_prompt_start_event(voice_id, sample_rate, tool_configuration),
             *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
         ]
@@ -349,6 +441,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM",
     ) -> str:
         event = Event(
             event=SessionStartEvent(
@@ -357,7 +450,8 @@ class SonicEventBuilder:
                         maxTokens=max_tokens,
                         topP=top_p,
                         temperature=temperature,
-                    )
+                    ),
+                    endpointingSensitivity=endpointing_sensitivity,
                 )
             )
         )
@@ -391,6 +485,25 @@ class SonicEventBuilder:
                     promptName=self.prompt_name,
                     contentName=content_name,
                     role=role,
+                    textInputConfiguration=TextInputConfiguration(),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True, by_alias=True)
+
+    def create_text_content_start_event_interactive(
+        self,
+        content_name: str,
+        role: ROLE,
+    ) -> str:
+        """Create text content start event with interactive=True for Nova Sonic 2.0."""
+        event = Event(
+            event=InputTextContentStartEvent(
+                contentStart=InputTextContentStart(
+                    promptName=self.prompt_name,
+                    contentName=content_name,
+                    role=role,
+                    interactive=True,
                     textInputConfiguration=TextInputConfiguration(),
                 )
             )
