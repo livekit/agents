@@ -11,91 +11,105 @@ from ...log import logger
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
 ENDPOINTING_SENSITIVITY = Literal["HIGH", "MEDIUM", "LOW"]
-VOICE_ID = Literal[
-    "matthew",
-    "tiffany",
-    "amy",
-    "ambre",
-    "florian",
-    "beatrice",
-    "lorenzo",
-    "greta",
-    "lennart",
-    "lupe",
-    "carlos",
-    "camila",
-    "leo",
-    "aditi",
-    "rohan",
-]
+VOICE_ID = str  # Accept any voice ID string for flexibility
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
 
 
-class VoiceId:
-    """Available voice IDs for Nova Sonic across supported languages.
+class VoiceIdV1:
+    """Available voice IDs for Nova Sonic 1.0.
 
-    English (US):
-        MATTHEW - Masculine
-        TIFFANY - Feminine
-
-    English (GB):
-        AMY - Feminine
-
-    French:
-        AMBRE - Feminine
-        FLORIAN - Masculine
-
-    Italian:
-        BEATRICE - Feminine
-        LORENZO - Masculine
-
-    German:
-        GRETA - Feminine
-        LENNART - Masculine
+    English:
+        MATTHEW, TIFFANY, AMY
 
     Spanish:
-        LUPE - Feminine
-        CARLOS - Masculine
+        LUPE, CARLOS
 
-    Portuguese:
-        CAMILA - Feminine
-        LEO - Masculine
+    French:
+        AMBRE, FLORIAN
 
-    Hindi:
-        ADITI - Feminine
-        ROHAN - Masculine
+    German:
+        GRETA, LENNART
+
+    Italian:
+        BEATRICE, LORENZO
     """
 
-    # English (US)
+    # English
     MATTHEW = "matthew"
     TIFFANY = "tiffany"
-
-    # English (GB)
     AMY = "amy"
-
-    # French
-    AMBRE = "ambre"
-    FLORIAN = "florian"
-
-    # Italian
-    BEATRICE = "beatrice"
-    LORENZO = "lorenzo"
-
-    # German
-    GRETA = "greta"
-    LENNART = "lennart"
 
     # Spanish
     LUPE = "lupe"
     CARLOS = "carlos"
 
+    # French
+    AMBRE = "ambre"
+    FLORIAN = "florian"
+
+    # German
+    GRETA = "greta"
+    LENNART = "lennart"
+
+    # Italian
+    BEATRICE = "beatrice"
+    LORENZO = "lorenzo"
+
+
+class VoiceIdV2:
+    """Available voice IDs for Nova Sonic 2.0.
+
+    English:
+        MATTHEW (polyglot), TIFFANY (polyglot), AMY, OLIVIA
+
+    Spanish:
+        LUPE, CARLOS
+
+    French:
+        AMBRE, FLORIAN
+
+    German:
+        TINA, LENNART
+
+    Italian:
+        BEATRICE, LORENZO
+
+    Portuguese:
+        CAROLINA, LEO
+
+    Hindi:
+        ARJUN, KIARA
+    """
+
+    # English
+    MATTHEW = "matthew"
+    TIFFANY = "tiffany"
+    AMY = "amy"
+    OLIVIA = "olivia"
+
+    # Spanish
+    LUPE = "lupe"
+    CARLOS = "carlos"
+
+    # French
+    AMBRE = "ambre"
+    FLORIAN = "florian"
+
+    # German
+    TINA = "tina"
+    LENNART = "lennart"
+
+    # Italian
+    BEATRICE = "beatrice"
+    LORENZO = "lorenzo"
+
     # Portuguese
-    CAMILA = "camila"
+    CAROLINA = "carolina"
     LEO = "leo"
 
     # Hindi
-    ADITI = "aditi"
-    ROHAN = "rohan"
+    ARJUN = "arjun"
+    KIARA = "kiara"
 
 
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]

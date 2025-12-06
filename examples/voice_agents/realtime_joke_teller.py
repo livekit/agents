@@ -33,6 +33,7 @@ Try asking:
  - "Tell me a programming joke"
  - "Search for information about AWS"
 """
+from __future__ import annotations
 
 import asyncio
 import os
@@ -54,6 +55,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import aws, silero
+from livekit.plugins.aws.experimental.realtime.events import VoiceIdV1, VoiceIdV2
 
 load_dotenv()
 
@@ -61,7 +63,7 @@ g = DDGS()
 
 
 @function_tool
-async def get_weather(city: str, units: str = "fahrenheit") -> dict[str, Any]:
+async def get_weather(city: str, units: str = "fahrenheit") -> dict[str, int | str] | ToolError:
     """
     Retrieve the current weather for a city.
 
@@ -117,7 +119,7 @@ async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
 
 
 @function_tool
-async def tell_joke(category: str = "Any") -> dict[str, Any]:
+async def tell_joke(category: str = "Any") -> dict[str, Any] | ToolError:
     """
     Tell a joke that pertains to the category of the user's request. Just choose a Pun category if they don't specify
 
@@ -222,7 +224,7 @@ async def entrypoint(ctx: agents.JobContext):
                     llm=aws.realtime.RealtimeModel(
                         tool_choice="auto",
                         max_tokens=10_000,
-                    ).with_nova_sonic_2()
+                    ).with_nova_2_sonic(voice=VoiceIdV2.TIFFANY)
                 )
 
             await session.start(

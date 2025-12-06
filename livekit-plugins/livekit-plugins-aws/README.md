@@ -1,6 +1,6 @@
 # AWS Plugin for LiveKit Agents
 
-Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe and realtime voice to voice support for Amazon Nova 2 Sonic
+Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe, and realtime voice-to-voice support for Amazon Nova 2 Sonic
 
 **What's included:**
 - **RealtimeModel** - Amazon Nova Sonic 1.0 & 2.0 for speech-to-speech
@@ -150,9 +150,10 @@ Try asking:
 Amazon Nova 2 Sonic is a unified speech-to-speech foundation model that delivers:
 
 - **Realtime bidirectional streaming** - Low-latency, natural conversations
-- **Multilingual support** - English (US/UK), French, Italian, German, Spanish, Portuguese, Hindi
+- **Multilingual support** - English, French, Italian, German, Spanish, Portuguese, Hindi
 - **Automatic language mirroring** - Responds in the user's spoken language
-- **15 expressive voices** - Multiple voices per language with natural prosody
+- **Polyglot voices** - Matthew and Tiffany can seamlessly switch between languages within a single conversation, ideal for multilingual applications
+- **16 expressive voices** - Multiple voices per language with natural prosody
 - **Function calling** - Built-in tool use and agentic workflows
 - **Interruption handling** - Graceful handling without losing context
 - **Noise robustness** - Works in real-world environments
@@ -164,33 +165,43 @@ Amazon Nova 2 Sonic is a unified speech-to-speech foundation model that delivers
 from livekit.plugins import aws
 
 # Nova Sonic 1.0 (audio-only, original model)
-model = aws.realtime.RealtimeModel.with_nova_sonic_1()
+model = aws.realtime.RealtimeModel.with_nova_1_sonic()
 
 # Nova Sonic 2.0 (audio + text input, latest)
-model = aws.realtime.RealtimeModel.with_nova_sonic_2()
+model = aws.realtime.RealtimeModel.with_nova_2_sonic()
 ```
 
 ### Voice Selection
 
-Use the `VoiceId` enum for IDE autocomplete and type safety:
+Use the `VoiceIdV1` or `VoiceIdV2` enums for IDE autocomplete and type safety. Any voice ID string is accepted for flexibility with future voices.
 
 ```python
-from livekit.plugins.aws.experimental.realtime import VoiceId
+from livekit.plugins.aws.experimental.realtime import VoiceIdV2
 
-model = aws.realtime.RealtimeModel.with_nova_sonic_2(
-    voice=VoiceId.CAMILA  # Portuguese, feminine
+model = aws.realtime.RealtimeModel.with_nova_2_sonic(
+    voice=VoiceIdV2.CAROLINA  # Portuguese, feminine
 )
 ```
 
-Available voices:
-- **English (US)**: `TIFFANY`, `MATTHEW`
-- **English (UK)**: `AMY`
-- **French**: `AMBRE`, `FLORIAN`
-- **Italian**: `BEATRICE`, `LORENZO`
-- **German**: `GRETA`, `LENNART`
+#### Nova Sonic 1.0 Voices (11 voices)
+
+- **English**: `MATTHEW`, `TIFFANY`, `AMY`
 - **Spanish**: `LUPE`, `CARLOS`
-- **Portuguese**: `CAMILA`, `LEO`
-- **Hindi**: `ADITI`, `ROHAN`
+- **French**: `AMBRE`, `FLORIAN`
+- **German**: `GRETA`, `LENNART`
+- **Italian**: `BEATRICE`, `LORENZO`
+
+#### Nova Sonic 2.0 Voices (16 voices)
+
+- **English**: `MATTHEW` (polyglot), `TIFFANY` (polyglot), `AMY`, `OLIVIA`
+- **Spanish**: `LUPE`, `CARLOS`
+- **French**: `AMBRE`, `FLORIAN`
+- **German**: `TINA`, `LENNART`
+- **Italian**: `BEATRICE`, `LORENZO`
+- **Portuguese**: `CAROLINA`, `LEO`
+- **Hindi**: `ARJUN`, `KIARA`
+
+**Note**: Matthew and Tiffany in Nova 2.0 support polyglot mode, seamlessly switching between languages within a single conversation.
 
 ### Text Prompting with `generate_reply()`
 
@@ -242,7 +253,7 @@ await session.generate_reply(
 Control how quickly the agent responds to pauses:
 
 ```python
-model = aws.realtime.RealtimeModel.with_nova_sonic_2(
+model = aws.realtime.RealtimeModel.with_nova_2_sonic(
     endpointing_sensitivity="MEDIUM"  # HIGH, MEDIUM (default), LOW
 )
 ```
@@ -277,7 +288,7 @@ async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
     
     session = AgentSession(
-        llm=aws.realtime.RealtimeModel.with_nova_sonic_2(
+        llm=aws.realtime.RealtimeModel.with_nova_2_sonic(
             voice=VoiceId.MATTHEW,
             endpointing_sensitivity="MEDIUM",
             tool_choice="auto"
