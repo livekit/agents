@@ -53,6 +53,8 @@ from .events import (
     ToolConfiguration,
     ToolInputSchema,
     ToolSpec,
+    VoiceIdV1,
+    VoiceIdV2,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
 
@@ -355,10 +357,10 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
     @classmethod
-    def with_nova_sonic_1(
+    def with_nova_1_sonic(
         cls,
         *,
-        voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
+        voice: NotGivenOr[VoiceIdV1 | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
@@ -370,7 +372,7 @@ class RealtimeModel(llm.RealtimeModel):
         """Create RealtimeModel with Nova Sonic 1.0.
 
         Args:
-            voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            voice (VoiceIdV1 | str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
@@ -396,10 +398,10 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
     @classmethod
-    def with_nova_sonic_2(
+    def with_nova_2_sonic(
         cls,
         *,
-        voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
+        voice: NotGivenOr[VoiceIdV2 | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
@@ -411,7 +413,7 @@ class RealtimeModel(llm.RealtimeModel):
         """Create RealtimeModel with Nova Sonic 2.0.
 
         Args:
-            voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            voice (VoiceIdV2 | str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.

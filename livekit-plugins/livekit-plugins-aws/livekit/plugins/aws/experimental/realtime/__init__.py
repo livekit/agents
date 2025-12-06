@@ -1,10 +1,11 @@
-from .events import VoiceId
+from .events import VoiceIdV1, VoiceIdV2
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
     "RealtimeSession",
     "RealtimeModel",
-    "VoiceId",
+    "VoiceIdV1",
+    "VoiceIdV2",
 ]
 
 # Cleanup docs of unexported modules
