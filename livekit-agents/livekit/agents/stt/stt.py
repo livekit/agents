@@ -17,7 +17,13 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import STTMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
@@ -52,6 +58,7 @@ class SpeechData:
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
+    words: list[TimedString] | None = None
 
 
 @dataclass
@@ -72,6 +79,7 @@ class STTCapabilities:
     streaming: bool
     interim_results: bool
     diarization: bool = False
+    aligned_transcript: Literal["word", "chunk", False] = False
 
 
 class STTError(BaseModel):

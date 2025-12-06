@@ -45,6 +45,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import SpeechLanguages, SpeechModels
@@ -143,7 +144,11 @@ class STT(stt.STT):
         if not is_given(use_streaming):
             use_streaming = True
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=use_streaming, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=use_streaming,
+                interim_results=True,
+                aligned_transcript="word" if enable_word_time_offsets else False,
+            )
         )
 
         self._location = location
@@ -605,6 +610,16 @@ def _recognize_response_to_speech_event(
                 end_time=end_time,
                 confidence=confidence,
                 text=text,
+                words=[
+                    TimedString(
+                        text=word.word,
+                        start_time=_duration_to_seconds(word.start_offset),
+                        end_time=_duration_to_seconds(word.end_offset),
+                    )
+                    for word in resp.results[0].alternatives[0].words
+                ]
+                if resp.results[0].alternatives[0].words
+                else None,
             )
         ]
 
