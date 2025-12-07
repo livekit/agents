@@ -25,7 +25,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Literal, TypeVar, cast
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -42,6 +42,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils.misc import is_given
 
 from .log import logger
 
@@ -63,9 +64,6 @@ class ConnectionState(enum.Enum):
     CONNECTED = "connected"
     RECONNECTING = "reconnecting"
     FAILED = "failed"
-
-
-T = TypeVar("T")
 
 
 @dataclass
@@ -101,13 +99,6 @@ class SarvamSTTOptions:
                 self.streaming_url = streaming_url
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
-
-
-def _get_option_value(default_value: T, override_value: NotGivenOr[T]) -> T:
-    """Helper to get option value with NOT_GIVEN handling."""
-    if isinstance(override_value, type(NOT_GIVEN)):
-        return default_value
-    return cast(T, override_value)
 
 
 def _get_urls_for_model(model: str) -> tuple[str, str]:
@@ -151,7 +142,7 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     params = {
         "language-code": opts.language,
         "model": opts.model,
-        "vad_signals": "true",
+        "vad_signals": "false",
     }
 
     if opts.sample_rate:
@@ -361,8 +352,8 @@ class STT(stt.STT):
         input_audio_codec: NotGivenOr[str] = NOT_GIVEN,
     ) -> SpeechStream:
         """Create a streaming transcription session."""
-        opts_language = _get_option_value(self._opts.language, language)
-        opts_model = _get_option_value(self._opts.model, model)
+        opts_language = language if is_given(language) else self._opts.language
+        opts_model = model if is_given(model) else self._opts.model
 
         if not isinstance(opts_language, str):
             opts_language = self._opts.language
@@ -376,10 +367,12 @@ class STT(stt.STT):
         else:
             final_prompt = self._opts.prompt
 
-        opts_high_vad = _get_option_value(self._opts.high_vad_sensitivity, high_vad_sensitivity)
-        opts_sample_rate = _get_option_value(self._opts.sample_rate, sample_rate)
-        opts_flush_signal = _get_option_value(self._opts.flush_signal, flush_signal)
-        opts_input_codec = _get_option_value(self._opts.input_audio_codec, input_audio_codec)
+        opts_high_vad = (
+            high_vad_sensitivity if is_given(high_vad_sensitivity) else self._opts.high_vad_sensitivity
+        )
+        opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
+        opts_input_codec = input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
 
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
@@ -412,7 +405,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """Sarvam.ai streaming speech-to-text implementation."""
 
-    _CHUNK_DURATION_MS = 20
+    _CHUNK_DURATION_MS = 50
 
     def __init__(
         self,
