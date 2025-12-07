@@ -76,7 +76,7 @@ class RoomIO:
         self._room_connected_fut = asyncio.Future[None]()
 
         self._init_atask: asyncio.Task[None] | None = None
-        self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
+        self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
@@ -144,7 +144,10 @@ class RoomIO:
             self._user_tr_output = _ParticipantTranscriptionOutput(
                 room=self._room, is_delta_stream=False, participant=self._participant_identity
             )
-            self._user_transcript_atask = asyncio.create_task(self._forward_user_transcript())
+            self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
+            self._user_transcript_atask = asyncio.create_task(
+                self._forward_user_transcript(self._user_transcript_ch)
+            )
 
             # TODO(long): add next in the chain for session.output.transcription
             self._agent_tr_output = _ParticipantTranscriptionOutput(
@@ -206,7 +209,8 @@ class RoomIO:
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
 
-        self._user_transcript_ch.close()
+        if self._user_transcript_ch:
+            self._user_transcript_ch.close()
         if self._user_transcript_atask:
             await utils.aio.cancel_and_wait(self._user_transcript_atask)
 
@@ -325,8 +329,10 @@ class RoomIO:
             await self._audio_output.start()
 
     @utils.log_exceptions(logger=logger)
-    async def _forward_user_transcript(self) -> None:
-        async for ev in self._user_transcript_ch:
+    async def _forward_user_transcript(
+        self, event_ch: utils.aio.Chan[UserInputTranscribedEvent]
+    ) -> None:
+        async for ev in event_ch:
             if self._user_tr_output is None:
                 continue
 
@@ -374,6 +380,7 @@ class RoomIO:
                 "closing agent session due to participant disconnect "
                 "(disable via `RoomInputOptions.close_on_disconnect=False`)",
                 extra={
+                    "room": self._room.name,
                     "participant": participant.identity,
                     "reason": rtc.DisconnectReason.Name(
                         participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
@@ -383,7 +390,7 @@ class RoomIO:
             self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        if self._user_transcript_atask:
+        if self._user_transcript_ch:
             self._user_transcript_ch.send_nowait(ev)
 
     def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
@@ -433,7 +440,8 @@ class RoomIO:
         if self._options.delete_room_on_close and self._delete_room_task is None:
             job_ctx = get_job_context()
             logger.info(
-                "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)"
+                "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)",
+                extra={"room": self._room.name},
             )
-            self._delete_room_task = job_ctx.delete_room()
+            self._delete_room_task = job_ctx.delete_room(room_name=self._room.name)
             self._delete_room_task.add_done_callback(_on_delete_room_task_done)

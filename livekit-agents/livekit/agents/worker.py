@@ -190,7 +190,7 @@ class ServerOptions:
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
     """Maximum number of times to retry connecting to LiveKit."""
-    ws_url: str = "ws://localhost:7880"
+    ws_url: str | None = None
     """URL to connect to the LiveKit server.
 
     By default it uses ``LIVEKIT_URL`` from environment"""
@@ -281,11 +281,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,
+        prometheus_multiproc_dir: str | None = None,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
 
         self._host = host
@@ -301,6 +303,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._permissions = permissions
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
+        self._prometheus_multiproc_dir = prometheus_multiproc_dir
         self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
 
@@ -374,6 +377,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
+            ws_url=options.ws_url,
             api_key=options.api_key,
             api_secret=options.api_secret,
             host=options.host,
@@ -592,12 +596,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._http_server.app.add_routes([web.get("/", health_check)])
             self._http_server.app.add_routes([web.get("/worker", worker)])
 
-            self._prometheus_server: telemetry.http_server.HttpServer | None = None
-            if self._prometheus_port is not None:
-                self._prometheus_server = telemetry.http_server.HttpServer(
-                    self._host, self._prometheus_port, loop=self._loop
-                )
-
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
 
@@ -611,6 +609,37 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise ValueError(
                     "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
                 )
+
+            self._prometheus_server: telemetry.http_server.HttpServer | None = None
+            if self._prometheus_port is not None:
+                self._prometheus_server = telemetry.http_server.HttpServer(
+                    self._host, self._prometheus_port, loop=self._loop
+                )
+
+            if self._prometheus_multiproc_dir:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = self._prometheus_multiproc_dir
+            elif "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+                self._prometheus_multiproc_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
+
+            if self._prometheus_multiproc_dir:
+                os.makedirs(self._prometheus_multiproc_dir, exist_ok=True)
+
+            if self._prometheus_multiproc_dir and os.path.exists(self._prometheus_multiproc_dir):
+                logger.debug(
+                    "cleaning prometheus multiprocess directory",
+                    extra={"path": self._prometheus_multiproc_dir},
+                )
+                for filename in os.listdir(self._prometheus_multiproc_dir):
+                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                    except Exception as e:
+                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+
+            os.environ["LIVEKIT_URL"] = self._ws_url
+            os.environ["LIVEKIT_API_KEY"] = self._api_key
+            os.environ["LIVEKIT_API_SECRET"] = self._api_secret
 
             logger.info(
                 "starting worker",
@@ -635,9 +664,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 t.add_done_callback(self._tasks.discard)
 
             await self._http_server.start()
+            logger.info(
+                f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
+            )
 
             if self._prometheus_server:
                 await self._prometheus_server.start()
+                logger.info(
+                    "Prometheus metrics exposed at http://%s:%s/metrics",
+                    self._prometheus_server.host,
+                    self._prometheus_server.port,
+                )
 
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
@@ -672,6 +709,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
 
                     telemetry.metrics._update_worker_load(self._worker_load)
+                    telemetry.metrics._update_child_proc_count()
 
                     load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
                     default_num_idle_processes = ServerEnvOption.getvalue(
@@ -1108,13 +1146,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         answered = False
 
-        async def _on_reject() -> None:
+        async def _on_reject(terminate: bool) -> None:
             nonlocal answered
             answered = True
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
+            availability_resp.availability.terminate = terminate
             await self._queue_msg(availability_resp)
 
         async def _on_accept(args: JobAcceptArguments) -> None:
@@ -1187,7 +1226,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
                     extra={"job_request": job_req, "agent_name": self._agent_name},
                 )
-                await _on_reject()
+                await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._tasks.add(user_task)

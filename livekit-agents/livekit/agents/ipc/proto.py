@@ -192,6 +192,19 @@ class InferenceResponse:
         self.error = channel.read_string(b)
 
 
+@dataclass
+class DumpStackTraceRequest:
+    """sent by the main process to request a stack trace dump before killing"""
+
+    MSG_ID: ClassVar[int] = 9
+
+    def write(self, b: io.BytesIO) -> None:
+        pass
+
+    def read(self, b: io.BytesIO) -> None:
+        pass
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -202,4 +215,5 @@ IPC_MESSAGES = {
     Exiting.MSG_ID: Exiting,
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
+    DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
 }

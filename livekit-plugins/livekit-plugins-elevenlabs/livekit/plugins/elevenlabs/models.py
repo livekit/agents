@@ -20,3 +20,12 @@ TTSEncoding = Literal[
     "mp3_44100_128",
     "mp3_44100_192",
 ]
+
+STTRealtimeSampleRates = Literal[
+    8000,
+    16000,
+    22050,
+    24000,
+    44100,
+    48000,
+]

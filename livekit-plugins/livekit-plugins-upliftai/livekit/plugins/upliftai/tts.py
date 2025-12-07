@@ -119,7 +119,7 @@ class TTS(tts.TTS):
                 - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit
             sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
-            word_tokenizer: Tokenizer for processing text
+            word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(

@@ -23,6 +23,7 @@ from livekit.agents import (
     AgentSession,
     AgentTask,
     JobContext,
+    JobProcess,
     MetricsCollectedEvent,
     cli,
     metrics,
@@ -618,6 +619,13 @@ class RewardsTask(BaseBankTask):
 SubmenuTaskType = DepositAccountsTask | CreditCardsTask | LoansTask | RewardsTask
 
 
+def prewarm(proc: JobProcess) -> None:
+    proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
+
+
 @server.rtc_session(agent_name=BANK_IVR_DISPATCH_NAME)
 async def bank_ivr_session(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
@@ -626,7 +634,7 @@ async def bank_ivr_session(ctx: JobContext) -> None:
     state = SessionState()
 
     session: AgentSession[SessionState] = AgentSession(
-        vad=silero.VAD.load(),
+        vad=ctx.proc.userdata["vad"],
         llm=openai.LLM(model="gpt-4.1"),
         stt=deepgram.STT(model="nova-3"),
         tts=cartesia.TTS(),

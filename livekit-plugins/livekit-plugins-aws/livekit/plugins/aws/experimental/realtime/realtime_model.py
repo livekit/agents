@@ -165,6 +165,8 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
 
     def __init__(self) -> None:
         self.session = boto3.Session()  # type: ignore[attr-defined]
+        self._cached_identity: AWSCredentialsIdentity | None = None
+        self._cached_expiry: float | None = None
 
     async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
         """Asynchronously resolve AWS credentials.
@@ -180,6 +182,11 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
         Raises:
             ValueError: If no credentials could be found by boto3.
         """
+        # Return cached credentials if still valid
+        if self._cached_identity and self._cached_expiry:
+            if time.time() < self._cached_expiry:
+                return self._cached_identity
+
         try:
             logger.debug("Attempting to load AWS credentials")
             credentials = self.session.get_credentials()
@@ -192,12 +199,25 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
                 f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
             )
 
+            # Get expiration time if available (for temporary credentials)
+            expiry_time = getattr(credentials, "_expiry_time", None)
+
             identity = AWSCredentialsIdentity(
                 access_key_id=creds.access_key,
                 secret_access_key=creds.secret_key,
                 session_token=creds.token if creds.token else None,
-                expiration=None,
+                expiration=expiry_time,
             )
+
+            # Cache the identity and expiry
+            self._cached_identity = identity
+            if expiry_time:
+                # Refresh 5 minutes before expiration
+                self._cached_expiry = expiry_time.timestamp() - 300
+            else:
+                # Static credentials don't have an inherent expiration attribute, cache indefinitely
+                self._cached_expiry = None
+
             return identity
         except Exception as e:
             logger.error(f"Failed to load AWS credentials: {str(e)}")
@@ -361,8 +381,8 @@ class RealtimeSession(  # noqa: F811
             endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
             region=self._realtime_model._opts.region,
             aws_credentials_identity_resolver=Boto3CredentialsResolver(),
-            http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
+            auth_scheme_resolver=HTTPAuthSchemeResolver(),
+            auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
             user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
         )
         self._bedrock_client = BedrockRuntimeClient(config=config)
@@ -435,9 +455,12 @@ class RealtimeSession(  # noqa: F811
                     description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
                         "description"
                     )
-                    input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
-                        "parameters"
-                    ]
+                    raw_schema = llm.tool_context.get_raw_function_info(f).raw_schema
+                    # Safely access parameters with fallback
+                    input_schema = raw_schema.get(
+                        "parameters",
+                        raw_schema.get("input_schema", {"type": "object", "properties": {}}),
+                    )
                 else:
                     continue
 
@@ -1006,11 +1029,15 @@ class RealtimeSession(  # noqa: F811
                     ModelErrorException,
                     ModelStreamErrorException,
                 ) as re:
-                    logger.warning(f"Retryable error: {re}\nAttempting to recover...")
+                    logger.warning(
+                        f"Retryable error: {re}\nAttempting to recover...", exc_info=True
+                    )
                     await self._restart_session(re)
                     break
                 except ModelTimeoutException as mte:
-                    logger.warning(f"Model timeout error: {mte}\nAttempting to recover...")
+                    logger.warning(
+                        f"Model timeout error: {mte}\nAttempting to recover...", exc_info=True
+                    )
                     await self._restart_session(mte)
                     break
                 except ValueError as val_err:

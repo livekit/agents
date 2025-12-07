@@ -198,7 +198,7 @@ class FunctionCallOutput(BaseModel):
 class AgentHandoff(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
-    old_agent_id: str | None
+    old_agent_id: str | None = None
     new_agent_id: str
     created_at: float = Field(default_factory=time.time)
 
@@ -501,7 +501,7 @@ class ChatContext:
 
         return 0
 
-    async def summarize(
+    async def _summarize(
         self,
         llm_v: LLM,
         *,

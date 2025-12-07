@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, TurnDetectionMode
+    from .agent_session import AgentSession
+    from .audio_recognition import TurnDetectionMode
     from .io import TimedString
 
 
@@ -495,6 +496,13 @@ class Agent:
         """  # noqa: E501
         return self._turn_detection
 
+    @turn_detection.setter
+    def turn_detection(self, value: TurnDetectionMode | None) -> None:
+        self._turn_detection = value
+
+        if self._activity is not None:
+            self._activity.update_options(turn_detection=value)
+
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
         """
@@ -739,6 +747,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_agent = old_activity.agent
         session = old_activity.session
 
+        blocked_tasks = [current_task]
+        if (
+            old_activity._on_enter_task
+            and not old_activity._on_enter_task.done()
+            and current_task is not old_activity._on_enter_task
+        ):
+            blocked_tasks.append(old_activity._on_enter_task)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -750,9 +766,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-        await session._update_activity(
-            self, previous_activity="pause", blocked_tasks=[current_task]
-        )
+        await session._update_activity(self, previous_activity="pause", blocked_tasks=blocked_tasks)
 
         # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
         run_state = session._global_run_state

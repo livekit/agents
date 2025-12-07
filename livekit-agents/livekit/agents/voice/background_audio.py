@@ -27,9 +27,13 @@ atexit.register(_resource_stack.close)
 
 
 class BuiltinAudioClip(enum.Enum):
+    CITY_AMBIENCE = "city-ambience.ogg"
+    FOREST_AMBIENCE = "forest-ambience.ogg"
     OFFICE_AMBIENCE = "office-ambience.ogg"
+    CROWDED_ROOM = "crowded-room.ogg"
     KEYBOARD_TYPING = "keyboard-typing.ogg"
     KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
+    HOLD_MUSIC = "hold_music.ogg"
 
     def path(self) -> str:
         file_path = files("livekit.agents.resources") / self.value

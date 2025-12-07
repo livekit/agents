@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import datetime
 import enum
 import hashlib
@@ -16,10 +17,8 @@ import textwrap
 import threading
 import time
 import traceback
-from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from inspect import istraceback
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
 
@@ -46,6 +45,7 @@ from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..worker import AgentServer, WorkerOptions
 from . import proto
+from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
 
 # from .discover import get_import_data
 from .readchar import key, readkey
@@ -268,6 +268,7 @@ class AgentsConsole:
 
             self._io_acquired = True
             self._io_loop = loop
+            self._io_context = contextvars.copy_context()
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
             self._io_acquired_event.set()
@@ -315,6 +316,13 @@ class AgentsConsole:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_loop
+
+    @property
+    def io_context(self) -> contextvars.Context:
+        if not self._io_acquired:
+            raise RuntimeError("AgentsConsole is not acquired")
+
+        return self._io_context
 
     def wait_for_io_acquisition(self) -> None:
         self._io_acquired_event.wait()
@@ -641,89 +649,6 @@ class FrequencyVisualizer:
         return table
 
 
-class JsonEncoder(json.JSONEncoder):
-    def default(self, o: Any) -> Any:
-        if isinstance(o, (datetime.date, datetime.datetime, datetime.time)):
-            return o.isoformat()
-        elif istraceback(o):
-            return "".join(traceback.format_tb(o)).strip()
-        elif type(o) is Exception or isinstance(o, Exception) or type(o) is type:
-            return str(o)
-
-        # extra values are formatted as str() if the encoder raises TypeError
-        try:
-            return super().default(o)
-        except TypeError:
-            try:
-                return str(o)
-            except Exception:
-                return None
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-
-    def format(self, record: logging.LogRecord) -> str:
-        """Formats a log record and serializes to json"""
-        message_dict: dict[str, Any] = {}
-        message_dict["level"] = record.levelname
-        message_dict["name"] = record.name
-        message_dict["message"] = record.getMessage()
-
-        if record.exc_info and not message_dict.get("exc_info"):
-            message_dict["exc_info"] = self.formatException(record.exc_info)
-        if not message_dict.get("exc_info") and record.exc_text:
-            message_dict["exc_info"] = record.exc_text
-        if record.stack_info and not message_dict.get("stack_info"):
-            message_dict["stack_info"] = self.formatStack(record.stack_info)
-
-        log_record: dict[str, Any] = OrderedDict()
-        log_record.update(message_dict)
-        _merge_record_extra(record, log_record)
-
-        log_record["timestamp"] = datetime.datetime.fromtimestamp(
-            record.created, tz=datetime.timezone.utc
-        )
-
-        return json.dumps(log_record, cls=JsonEncoder, ensure_ascii=False)
-
-
-# skip default LogRecord attributes
-# http://docs.python.org/library/logging.html#logrecord-attributes
-_RESERVED_ATTRS: tuple[str, ...] = (
-    "args",
-    "asctime",
-    "created",
-    "exc_info",
-    "exc_text",
-    "filename",
-    "funcName",
-    "levelname",
-    "levelno",
-    "lineno",
-    "module",
-    "msecs",
-    "message",
-    "msg",
-    "name",
-    "pathname",
-    "process",
-    "processName",
-    "relativeCreated",
-    "stack_info",
-    "thread",
-    "threadName",
-    "taskName",
-)
-
-
-def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]) -> None:
-    for k, v in record.__dict__.items():
-        if k not in _RESERVED_ATTRS and not (hasattr(k, "startswith") and k.startswith("_")):
-            target[k] = v
-
-
 class RichLoggingHandler(logging.Handler):
     def __init__(self, agents_console: AgentsConsole):
         super().__init__()
@@ -733,99 +658,136 @@ class RichLoggingHandler(logging.Handler):
         self._last_time: Text | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
-        message = self.format(record)
-        # traceback = None
-        # if record.exc_info and record.exc_info != (None, None, None):
-        #     exc_type, exc_value, exc_traceback = record.exc_info
-        #     assert exc_type is not None
-        #     assert exc_value is not None
-        #     traceback = rich_traceback.Traceback.from_exception(
-        #         exc_type,
-        #         exc_value,
-        #         exc_traceback,
-        #         width=None,
-        #         code_width=88,
-        #         extra_lines=3,
-        #         theme=None,
-        #         word_wrap=True,
-        #         show_locals=False,
-        #         locals_max_length=10,
-        #         locals_max_string=80,
-        #         suppress=(),
-        #         max_frames=100,
-        #     )
-        #     message = record.getMessage()
-        #     if self.formatter:
-        #         record.message = record.getMessage()
-        #         formatter = self.formatter
-        #         if hasattr(formatter, "usesTime") and formatter.usesTime():
-        #             record.asctime = formatter.formatTime(record, formatter.datefmt)
-        #         message = formatter.formatMessage(record)
+        def middle_truncate(s: str, max_width: int) -> str:
+            if len(s) <= max_width:
+                return s
+            if max_width <= 1:
+                return "…"[:max_width]
+            visible = max_width - 1  # leave room for the ellipsis
+            left = visible // 2
+            right = visible - left
+            return s[:left] + "…" + s[-right:]
+
+        has_exc = bool(
+            (record.exc_info and record.exc_info != (None, None, None)) or record.exc_text
+        )
+
+        if has_exc:
+            exc_info, exc_text = record.exc_info, record.exc_text
+            record.exc_info = None  # temporarily strip for clean message
+            record.exc_text = None
+            try:
+                message = self.format(record)
+            finally:
+                record.exc_info, record.exc_text = exc_info, exc_text
+        else:
+            message = self.format(record)
+
+        MAX_NAME_WIDTH = 18
 
         output = Table.grid(padding=(0, 1))
         output.add_column(style="log.time")
-        output.add_column(style="log.level", width=6)
-        output.add_column(style="log.name", width=16)
-        output.add_column(ratio=1, style="log.message", overflow="fold")
-        output.add_column(style="log.extra")
+        output.add_column(style="log.level", width=6, no_wrap=True)
+        output.add_column(style="log.name", width=MAX_NAME_WIDTH, no_wrap=True, overflow="ellipsis")
+        output.add_column(ratio=1, style="log.message")
+        output.add_column(style="log.extra", no_wrap=True)
+
         row: list[RenderableType] = []
 
         time_format = None if self.formatter is None else self.formatter.datefmt
         log_time = datetime.datetime.fromtimestamp(record.created)
-
         log_time = log_time or self.c.console.get_datetime()
-        time_format = time_format or "%X"
-        log_time_display = Text(log_time.strftime(time_format))
+
+        log_time_display = (
+            Text(log_time.strftime(time_format))
+            if time_format
+            else Text(log_time.strftime("%H:%M:%S.%f")[:-3])
+        )
+
         if log_time_display == self._last_time:
-            row.append(Text(" " * len(log_time_display)))
+            time_str = log_time_display.plain
+            row.append(Text(" " * len(time_str)))
         else:
             row.append(log_time_display)
             self._last_time = log_time_display
 
-        row.append(
-            Text.styled(record.levelname.ljust(8), f"logging.level.{record.levelname.lower()}")
+        level_text = Text.styled(
+            record.levelname.ljust(8),
+            f"logging.level.{record.levelname.lower()}",
         )
-        row.append(Text(record.name))
+        row.append(level_text)
 
-        text_msg = Text(message)
-        # row.append(Renderables([text_msg] if not traceback else [text_msg, traceback]))
-        row.append(text_msg)
+        logger_name = middle_truncate(record.name, MAX_NAME_WIDTH)
+        name_text = Text(logger_name)
+        row.append(name_text)
+
+        msg_text = Text(message)
+        row.append(msg_text)
+
+        console_width = self.c.console.width
+        tag_width = 2  # matches self.c._render_tag(..., tag_width=2)
+        available_width = max(console_width - tag_width - 6, 20)
+
+        time_len = log_time_display.cell_len
+        level_len = 8
+        name_len = min(name_text.cell_len, 16)
+        msg_len = msg_text.cell_len
 
         extra: dict[Any, Any] = {}
         _merge_record_extra(record, extra)
-        row.append(json.dumps(extra, cls=JsonEncoder, ensure_ascii=False) if extra else " ")
+
+        extra_str = ""
+        extra_len = 0
+        if extra:
+            extra_str = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=False)
+            extra_text = Text(extra_str)
+            extra_len = extra_text.cell_len
+
+        spaces_between_columns = 4
+        total_len_with_extra = (
+            time_len + level_len + name_len + msg_len + extra_len + spaces_between_columns
+        )
+
+        inline_extra = bool(extra_str) and total_len_with_extra <= available_width
+
+        if inline_extra:
+            row.append(Text(extra_str, style="log.extra"))
+        else:
+            row.append(Text(" "))
 
         output.add_row(*row)
-        output = self.c._render_tag(output, tag_width=2)  # type: ignore
+        output = self.c._render_tag(output, tag_width=tag_width)  # type: ignore
 
         try:
             self.c.console.print(output)
+
+            if extra_str and not inline_extra:
+                indent_width = tag_width + time_len + 1 + level_len + 1 + name_len + 1
+
+                indent = " " * (indent_width + 2)
+                extra_line = Text(indent + extra_str, style="log.extra")
+                self.c.console.print(extra_line)
+
+            if has_exc:
+                self._print_plain_traceback(record)
+
         except Exception:
             self.handleError(record)
 
+    def _print_plain_traceback(self, record: logging.LogRecord) -> None:
+        try:
+            if record.exc_text:
+                tb_str = record.exc_text
+            else:
+                exc_type, exc_value, exc_tb = record.exc_info  # type: ignore[misc]
+                tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
-# noisy loggers are set to warn by default
-NOISY_LOGGERS = [
-    "httpx",
-    "httpcore",
-    "openai",
-    "watchfiles",
-    "anthropic",
-    "websockets.client",
-    "aiohttp.access",
-    "livekit",
-    "botocore",
-    "aiobotocore",
-    "urllib3.connectionpool",
-    "mcp.client",
-]
+            tb_text = Text(tb_str, style="red")
+            self.c.console.print(tb_text, end="")
+            self.c.console.print()
 
-
-def _silence_noisy_loggers() -> None:
-    for noisy_logger in NOISY_LOGGERS:
-        logger = logging.getLogger(noisy_logger)
-        if logger.level == logging.NOTSET:
-            logger.setLevel(logging.WARN)
+        except Exception:
+            self.handleError(record)
 
 
 def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
@@ -993,11 +955,24 @@ def _text_mode(c: AgentsConsole) -> None:
             c.console.bell()
             continue
 
-        async def _generate(text: str) -> list[RunEvent]:
-            sess = await c.io_session.run(user_input=text)  # type: ignore
-            return sess.events.copy()
+        def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
+            async def _generate(text: str) -> list[RunEvent]:
+                sess = await c.io_session.run(user_input=text)  # type: ignore
+                return sess.events.copy()
 
-        h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
+            def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
+                if exception := task.exception():
+                    result_fut.set_exception(exception)
+                else:
+                    result_fut.set_result(task.result())
+
+            task = asyncio.create_task(_generate(text))
+            task.add_done_callback(_done_callback)
+
+        h: asyncio.Future[list[RunEvent]] = asyncio.Future()
+        c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
+
+        # h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
         c.print(text, tag="You")
 
         with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
@@ -1397,7 +1372,16 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                 envvar="LIVEKIT_API_SECRET",
             ),
         ] = None,
+        drain_timeout: Annotated[
+            Optional[int],  # noqa: UP007
+            typer.Option(
+                help="Time in seconds to wait for jobs to finish before shutting down.",
+            ),
+        ] = None,
     ) -> None:
+        if drain_timeout is not None:
+            server.update_options(drain_timeout=drain_timeout)
+
         _run_worker(
             server=server,
             args=proto.CliArgs(
