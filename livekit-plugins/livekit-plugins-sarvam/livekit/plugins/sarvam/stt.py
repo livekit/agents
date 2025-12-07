@@ -368,11 +368,15 @@ class STT(stt.STT):
             final_prompt = self._opts.prompt
 
         opts_high_vad = (
-            high_vad_sensitivity if is_given(high_vad_sensitivity) else self._opts.high_vad_sensitivity
+            high_vad_sensitivity
+            if is_given(high_vad_sensitivity)
+            else self._opts.high_vad_sensitivity
         )
         opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
         opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
-        opts_input_codec = input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
+        opts_input_codec = (
+            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
+        )
 
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
