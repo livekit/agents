@@ -22,6 +22,7 @@ from .job_executor import JobStatus
 class _ProcOpts:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     initialize_timeout: float
     close_timeout: float
     ping_interval: float
@@ -35,6 +36,7 @@ class ThreadJobExecutor:
         *,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
+        session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
@@ -47,6 +49,7 @@ class ThreadJobExecutor:
         self._opts = _ProcOpts(
             initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
+            session_end_fnc=session_end_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             ping_interval=ping_interval,
@@ -120,6 +123,7 @@ class ThreadJobExecutor:
                 mp_cch=mp_cch,
                 initialize_process_fnc=self._opts.initialize_process_fnc,
                 job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
+                session_end_fnc=self._opts.session_end_fnc,
                 user_arguments=self._user_args,
                 join_fnc=_on_join,
             )
@@ -296,5 +300,6 @@ class ThreadJobExecutor:
         }
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
+            extra["room_id"] = self._running_job.job.room.sid
 
         return extra

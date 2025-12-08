@@ -254,6 +254,38 @@ class STT(stt.STT):
             use_realtime=False,
         )
 
+    @staticmethod
+    def with_ovhcloud(
+        *,
+        model: str = "whisper-large-v3-turbo",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: str = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+        client: openai.AsyncClient | None = None,
+        language: str = "en",
+        detect_language: bool = False,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+    ) -> STT:
+        """
+        Create a new instance of OVHcloud AI Endpoints STT.
+
+        ``api_key`` must be set to your OVHcloud AI Endpoints API key, either using the argument or by setting
+        the ``OVHCLOUD_API_KEY`` environmental variable.
+        """
+        ovhcloud_api_key = api_key if is_given(api_key) else os.environ.get("OVHCLOUD_API_KEY")
+        if not ovhcloud_api_key:
+            raise ValueError("OVHcloud AI Endpoints API key is required")
+
+        return STT(
+            model=model,
+            api_key=ovhcloud_api_key,
+            base_url=base_url,
+            client=client,
+            language=language,
+            detect_language=detect_language,
+            prompt=prompt,
+            use_realtime=False,
+        )
+
     def stream(
         self,
         *,

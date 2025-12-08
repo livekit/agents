@@ -116,13 +116,22 @@ class TTS(tts.TTS):
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        return await asyncio.wait_for(
+        ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
                 headers={"Authorization": f"Token {self._opts.api_key}"},
             ),
             timeout,
         )
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram TTS WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
+
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:

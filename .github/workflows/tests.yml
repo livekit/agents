@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -32,6 +36,9 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run tests
+
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
         run: uv run pytest tests/test_agent_session.py
           tests/test_tts_fallback.py

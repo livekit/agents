@@ -2,16 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    CloseEvent,
-    JobContext,
-    RoomInputOptions,
-    WorkerOptions,
-    cli,
-    llm,
-)
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli, llm
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -39,6 +30,10 @@ class MyAgent(Agent):
         self.session.shutdown()
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
@@ -50,13 +45,7 @@ async def entrypoint(ctx: JobContext):
     # session will be closed automatically when the linked participant disconnects
     # with reason CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED
     # or you can disable it by setting the RoomInputOptions.close_on_disconnect to False
-    await session.start(
-        agent=MyAgent(),
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            delete_room_on_close=True,  # Optionally, you can delete the room when the session is closed
-        ),
-    )
+    await session.start(agent=MyAgent(), room=ctx.room)
 
     @session.on("close")
     def on_close(ev: CloseEvent):
@@ -81,6 +70,10 @@ async def entrypoint(ctx: JobContext):
 
         print("=" * 20)
 
+        # Optionally, you can delete the room when the session is closed
+        # this will stop the worker immediately
+        # ctx.delete_room()
+
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)
