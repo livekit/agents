@@ -78,18 +78,6 @@ class MossClient:
         self._client = _InferEdgeMossClient(self._project_id, self._project_key)
 
     @property
-    def project_id(self) -> str:
-        """Return the Moss project identifier used by this client."""
-
-        return self._project_id
-
-    @property
-    def project_key(self) -> str:
-        """Return the secret project key used for authenticating requests."""
-
-        return self._project_key
-
-    @property
     def inner_client(self) -> Any:
         """Expose the underlying InferEdge client for advanced use cases."""
 
@@ -185,11 +173,10 @@ class MossClient:
         return result
 
     async def query(
-        self, index_name: str, query: str, top_k: int = 5, *, auto_load: bool = True
+        self, index_name: str, query: str, top_k: int = 5
     ) -> SearchResult:
         """Perform a semantic similarity search against the specified index."""
-        if auto_load:
-            await self.load_index(index_name)
+        await self.load_index(index_name)
         logger.debug("querying moss index", extra={"index": index_name, "top_k": top_k})
         result = await self._client.query(index_name, query, top_k)
         if not isinstance(result, SearchResult):
@@ -197,4 +184,4 @@ class MossClient:
         return result
 
     def __repr__(self) -> str:
-        return f"MossClient(project_id={self._project_id!r})"
+        return "MossClient(project_id=<redacted>)"
