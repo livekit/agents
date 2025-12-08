@@ -1653,6 +1653,11 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
@@ -1928,6 +1933,11 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
@@ -2283,6 +2293,11 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()

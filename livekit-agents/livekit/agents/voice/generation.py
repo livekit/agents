@@ -337,6 +337,7 @@ async def _text_forwarding_task(
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
     first_frame_fut: asyncio.Future[float]
+    """Future that will be set with the timestamp of the first frame's capture"""
 
 
 def perform_audio_forwarding(
