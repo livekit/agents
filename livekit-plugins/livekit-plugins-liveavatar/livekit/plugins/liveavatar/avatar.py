@@ -46,6 +46,8 @@ class AvatarSession:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._avatar_id = avatar_id or os.getenv("LIVEAVATAR_AVATAR_ID")
+        self._session_id: str | None = None
+        self._session_token: str | None = None
         self._api = LiveAvatarAPI(api_key=api_key, api_url=api_url, conn_options=conn_options)
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
@@ -231,5 +233,15 @@ class AvatarSession:
         finally:
             await utils.aio.cancel_and_wait(*io_tasks)
             await utils.aio.cancel_and_wait(*self._tasks)
+            try:
+                if self._session_id and self._session_token:
+                    data = await self._api.stop_streaming_session(
+                        self._session_id, self._session_token
+                    )
+                    if data["code"] <= 200:
+                        logger.info(f"LiveAvatar session stopped: {self._session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to stop LiveAvatar session: {e}", exc_info=True)
+
             await self._audio_buffer.aclose()
             await ws_conn.close()

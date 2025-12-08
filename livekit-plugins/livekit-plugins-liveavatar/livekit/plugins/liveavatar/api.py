@@ -83,6 +83,16 @@ class LiveAvatarAPI:
         response_data = await self._post(endpoint="/start", payload=payload, headers=headers)
         return response_data
 
+    async def stop_streaming_session(self, session_id: str, session_token: str) -> dict[str, Any]:
+        """Stop the streaming session"""
+        payload = {
+            "session_id": session_id,
+            "reason": "USER_DISCONNECTED",
+        }
+        headers = {"content-type": "application/json", "Authorization": f"Bearer {session_token}"}
+        response_data = await self._post(endpoint="/stop", payload=payload, headers=headers)
+        return response_data
+
     async def _post(
         self, *, endpoint: str, payload: dict[str, Any], headers: dict[str, Any]
     ) -> dict[str, Any]:
