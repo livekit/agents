@@ -76,10 +76,10 @@ class FallbackModel(TypedDict, total=False):
     Extra fields are passed through to the provider.
 
     Example:
-        >>> FallbackModel(name="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]})
+        >>> FallbackModel(model="deepgram/nova-3", extra_kwargs={"keywords": ["livekit"]})
     """
 
-    name: Required[str]
+    model: Required[str]
     """Model name (e.g. "deepgram/nova-3", "assemblyai/universal-streaming", "cartesia/ink-whisper")."""
 
     extra_kwargs: dict[str, Any]
@@ -103,7 +103,7 @@ def _normalize_fallback(
     def _make_fallback(model: FallbackModelType) -> FallbackModel:
         if isinstance(model, str):
             name, _ = _parse_model_string(model)
-            return FallbackModel(name=name)
+            return FallbackModel(model=name)
         return model
 
     if isinstance(fallback, list):
@@ -521,7 +521,8 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.fallback:
             models = [
-                {"name": m.get("name"), "extra": m.get("extra_kwargs")} for m in self._opts.fallback
+                {"model": m.get("model"), "extra": m.get("extra_kwargs")}
+                for m in self._opts.fallback
             ]
             params["fallback"] = {"models": models}
 

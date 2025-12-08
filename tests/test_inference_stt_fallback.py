@@ -83,63 +83,63 @@ class TestNormalizeFallback:
     def test_single_string_model(self):
         """Single string model becomes a list with one FallbackModel."""
         result = _normalize_fallback("deepgram/nova-3")
-        assert result == [{"name": "deepgram/nova-3"}]
+        assert result == [{"model": "deepgram/nova-3"}]
 
     def test_single_fallback_model_dict(self):
         """Single FallbackModel dict becomes a list with that dict."""
-        fallback = FallbackModel(name="deepgram/nova-3")
+        fallback = FallbackModel(model="deepgram/nova-3")
         result = _normalize_fallback(fallback)
-        assert result == [{"name": "deepgram/nova-3"}]
+        assert result == [{"model": "deepgram/nova-3"}]
 
     def test_list_of_string_models(self):
         """List of string models becomes list of FallbackModels."""
         result = _normalize_fallback(["deepgram/nova-3", "cartesia/ink-whisper"])
         assert result == [
-            {"name": "deepgram/nova-3"},
-            {"name": "cartesia/ink-whisper"},
+            {"model": "deepgram/nova-3"},
+            {"model": "cartesia/ink-whisper"},
         ]
 
     def test_list_of_fallback_model_dicts(self):
         """List of FallbackModel dicts is preserved."""
         fallbacks = [
-            FallbackModel(name="deepgram/nova-3"),
-            FallbackModel(name="assemblyai"),
+            FallbackModel(model="deepgram/nova-3"),
+            FallbackModel(model="assemblyai"),
         ]
         result = _normalize_fallback(fallbacks)
         assert result == [
-            {"name": "deepgram/nova-3"},
-            {"name": "assemblyai"},
+            {"model": "deepgram/nova-3"},
+            {"model": "assemblyai"},
         ]
 
     def test_mixed_list_strings_and_dicts(self):
         """Mixed list of strings and FallbackModel dicts."""
         fallbacks = [
             "deepgram/nova-3",
-            FallbackModel(name="cartesia/ink-whisper"),
+            FallbackModel(model="cartesia/ink-whisper"),
             "assemblyai",
         ]
         result = _normalize_fallback(fallbacks)
         assert result == [
-            {"name": "deepgram/nova-3"},
-            {"name": "cartesia/ink-whisper"},
-            {"name": "assemblyai"},
+            {"model": "deepgram/nova-3"},
+            {"model": "cartesia/ink-whisper"},
+            {"model": "assemblyai"},
         ]
 
     def test_string_with_language_suffix_discards_language(self):
         """Language suffix in string model is discarded."""
         result = _normalize_fallback("deepgram/nova-3:en")
-        assert result == [{"name": "deepgram/nova-3"}]
+        assert result == [{"model": "deepgram/nova-3"}]
 
     def test_fallback_model_with_extra_kwargs(self):
         """FallbackModel with extra_kwargs is preserved."""
         fallback = FallbackModel(
-            name="deepgram/nova-3",
+            model="deepgram/nova-3",
             extra_kwargs={"keywords": [("livekit", 1.5)], "punctuate": True},
         )
         result = _normalize_fallback(fallback)
         assert result == [
             {
-                "name": "deepgram/nova-3",
+                "model": "deepgram/nova-3",
                 "extra_kwargs": {"keywords": [("livekit", 1.5)], "punctuate": True},
             }
         ]
@@ -147,15 +147,15 @@ class TestNormalizeFallback:
     def test_list_with_extra_kwargs_preserved(self):
         """List with FallbackModels containing extra_kwargs."""
         fallbacks = [
-            FallbackModel(name="deepgram/nova-3", extra_kwargs={"punctuate": True}),
+            FallbackModel(model="deepgram/nova-3", extra_kwargs={"punctuate": True}),
             "cartesia/ink-whisper",
-            FallbackModel(name="assemblyai", extra_kwargs={"format_turns": True}),
+            FallbackModel(model="assemblyai", extra_kwargs={"format_turns": True}),
         ]
         result = _normalize_fallback(fallbacks)
         assert result == [
-            {"name": "deepgram/nova-3", "extra_kwargs": {"punctuate": True}},
-            {"name": "cartesia/ink-whisper"},
-            {"name": "assemblyai", "extra_kwargs": {"format_turns": True}},
+            {"model": "deepgram/nova-3", "extra_kwargs": {"punctuate": True}},
+            {"model": "cartesia/ink-whisper"},
+            {"model": "assemblyai", "extra_kwargs": {"format_turns": True}},
         ]
 
     def test_empty_list(self):
@@ -166,7 +166,7 @@ class TestNormalizeFallback:
     def test_multiple_colons_in_model_string(self):
         """Multiple colons in model string - splits on last, discards language."""
         result = _normalize_fallback("some:model:part:fr")
-        assert result == [{"name": "some:model:part"}]
+        assert result == [{"model": "some:model:part"}]
 
 
 class TestSTTConstructorFallbackAndConnectOptions:
@@ -180,32 +180,32 @@ class TestSTTConstructorFallbackAndConnectOptions:
     def test_fallback_single_string(self):
         """Single string fallback is normalized to list of FallbackModel."""
         stt = _make_stt(fallback="cartesia/ink-whisper")
-        assert stt._opts.fallback == [{"name": "cartesia/ink-whisper"}]
+        assert stt._opts.fallback == [{"model": "cartesia/ink-whisper"}]
 
     def test_fallback_list_of_strings(self):
         """List of string fallbacks is normalized."""
         stt = _make_stt(fallback=["deepgram/nova-3", "assemblyai"])
         assert stt._opts.fallback == [
-            {"name": "deepgram/nova-3"},
-            {"name": "assemblyai"},
+            {"model": "deepgram/nova-3"},
+            {"model": "assemblyai"},
         ]
 
     def test_fallback_single_fallback_model(self):
         """Single FallbackModel is normalized to list."""
-        stt = _make_stt(fallback=FallbackModel(name="deepgram/nova-3"))
-        assert stt._opts.fallback == [{"name": "deepgram/nova-3"}]
+        stt = _make_stt(fallback=FallbackModel(model="deepgram/nova-3"))
+        assert stt._opts.fallback == [{"model": "deepgram/nova-3"}]
 
     def test_fallback_with_extra_kwargs(self):
         """FallbackModel with extra_kwargs is preserved in _opts."""
         stt = _make_stt(
             fallback=FallbackModel(
-                name="deepgram/nova-3",
+                model="deepgram/nova-3",
                 extra_kwargs={"punctuate": True, "keywords": [("livekit", 1.5)]},
             )
         )
         assert stt._opts.fallback == [
             {
-                "name": "deepgram/nova-3",
+                "model": "deepgram/nova-3",
                 "extra_kwargs": {"punctuate": True, "keywords": [("livekit", 1.5)]},
             }
         ]
@@ -215,20 +215,20 @@ class TestSTTConstructorFallbackAndConnectOptions:
         stt = _make_stt(
             fallback=[
                 "deepgram/nova-3",
-                FallbackModel(name="cartesia", extra_kwargs={"min_volume": 0.5}),
+                FallbackModel(model="cartesia", extra_kwargs={"min_volume": 0.5}),
                 "assemblyai",
             ]
         )
         assert stt._opts.fallback == [
-            {"name": "deepgram/nova-3"},
-            {"name": "cartesia", "extra_kwargs": {"min_volume": 0.5}},
-            {"name": "assemblyai"},
+            {"model": "deepgram/nova-3"},
+            {"model": "cartesia", "extra_kwargs": {"min_volume": 0.5}},
+            {"model": "assemblyai"},
         ]
 
     def test_fallback_string_with_language_discarded(self):
         """Language suffix in fallback string is discarded."""
         stt = _make_stt(fallback="deepgram/nova-3:en")
-        assert stt._opts.fallback == [{"name": "deepgram/nova-3"}]
+        assert stt._opts.fallback == [{"model": "deepgram/nova-3"}]
 
     def test_connect_options_not_given_uses_default(self):
         """When connect_options is not provided, uses DEFAULT_API_CONNECT_OPTIONS."""

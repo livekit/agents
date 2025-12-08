@@ -382,7 +382,11 @@ class TTS(tts.TTS):
             params["language"] = self._opts.language
         if self._opts.fallback:
             models = [
-                {"model": m.get("model"), "voice": m.get("voice"), "extra": m.get("extra_kwargs", {})}
+                {
+                    "model": m.get("model"),
+                    "voice": m.get("voice"),
+                    "extra": m.get("extra_kwargs", {}),
+                }
                 for m in self._opts.fallback
             ]
             params["fallback"] = {"models": models}
