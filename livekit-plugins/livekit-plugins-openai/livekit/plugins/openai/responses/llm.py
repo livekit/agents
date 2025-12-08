@@ -8,7 +8,7 @@ from typing_extensions import Literal
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents.llm import ToolChoice, utils as llm_utils
+from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     FunctionTool,
@@ -25,9 +25,13 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from openai.types.responses import (
-    ResponseFormatTextConfigParam,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseErrorEvent,
     ResponseInputParam,
-    Tool,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+    ToolParam,
     response_create_params,
 )
 from openai.types.responses.response_stream_event import ResponseStreamEvent
@@ -102,13 +106,10 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[
-            ResponseFormatTextConfigParam | type[llm_utils.ResponseFormatT]
-        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -134,15 +135,12 @@ class LLM(llm.LLM):
             if isinstance(tool_choice, dict):
                 oai_tool_choice = {
                     "type": "function",
-                    "function": {"name": tool_choice["function"]["name"]},
+                    "name": tool_choice["function"]["name"],
                 }
                 extra["tool_choice"] = oai_tool_choice
             elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice
+                oai_tool_choice = tool_choice  # type: ignore
                 extra["tool_choice"] = oai_tool_choice
-
-        if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
 
         return LLMStream(
             self,
@@ -165,7 +163,7 @@ class LLMStream(llm.LLMStream):
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
@@ -188,11 +186,13 @@ class LLMStream(llm.LLMStream):
                 else openai.NOT_GIVEN
             )
 
-            stream: openai.AsyncStream[ResponseStreamEvent] = await self._client.responses.create(
+            self._oai_stream = stream = await self._client.responses.create(
                 model=self._model,
                 tools=fnc_ctx,
-                input=cast(list[ResponseInputParam], chat_ctx),
+                input=cast(str | ResponseInputParam | openai.NotGiven, chat_ctx),
                 stream=True,
+                timeout=httpx.Timeout(self._conn_options.timeout),
+                **self._extra_kwargs,
             )
 
             async with stream:
@@ -200,21 +200,19 @@ class LLMStream(llm.LLMStream):
                     retryable = False
                     chunk = None
 
-                    if event.type == "error":
-                        raise APIStatusError(
-                            event.message, status_code=event.code, retryable=retryable
-                        )
-                    if event.type == "response.created":
+                    if isinstance(event, ResponseErrorEvent):
+                        self._handle_error(event)
+
+                    if isinstance(event, ResponseCreatedEvent):
                         self._handle_response_created(event)
 
-                    if event.type == "response.output_item.done":
-                        if event.item.type == "function_call":
-                            chunk = self._handle_output_items_done(event)
+                    if isinstance(event, ResponseOutputItemDoneEvent):
+                        chunk = self._handle_output_items_done(event)
 
-                    if event.type == "response.output_text.delta":
+                    if isinstance(event, ResponseTextDeltaEvent):
                         chunk = self._handle_response_output_text_delta(event)
 
-                    if event.type == "response.completed":
+                    if isinstance(event, ResponseCompletedEvent):
                         chunk = self._handle_response_completed(event)
 
                     if chunk is not None:
@@ -233,40 +231,48 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _handle_response_created(self, event: dict) -> None:
+    def _handle_error(self, event: ResponseErrorEvent) -> None:
+        raise APIStatusError(event.message, status_code=-1, retryable=False)
+
+    def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         self._response_id = event.response.id
 
-    def _handle_response_completed(self, event: dict) -> llm.ChatChunk:
-        usage = event.response.usage
-        chunk = llm.ChatChunk(
-            id=self._response_id,
-            usage=llm.CompletionUsage(
-                completion_tokens=usage.output_tokens,
-                prompt_tokens=usage.input_tokens,
-                prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
-                total_tokens=usage.total_tokens,
-            ),
-        )
+    def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        chunk = None
+        if usage := event.response.usage:
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                usage=llm.CompletionUsage(
+                    completion_tokens=usage.output_tokens,
+                    prompt_tokens=usage.input_tokens,
+                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                    total_tokens=usage.total_tokens,
+                ),
+            )
         return chunk
 
-    def _handle_output_items_done(self, event: dict) -> llm.ChatChunk:
-        chunk = llm.ChatChunk(
-            id=self._response_id,
-            delta=llm.ChoiceDelta(
-                role="assistant",
-                content=None,
-                tool_calls=[
-                    llm.FunctionToolCall(
-                        arguments=event.item.arguments,
-                        name=event.item.name,
-                        call_id=event.item.id,
-                    )
-                ],
-            ),
-        )
+    def _handle_output_items_done(self, event: ResponseOutputItemDoneEvent) -> llm.ChatChunk | None:
+        chunk = None
+        if event.item.type == "function_call":
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        llm.FunctionToolCall(
+                            arguments=event.item.arguments,
+                            name=event.item.name,
+                            call_id=event.item.id,
+                        )
+                    ],
+                ),
+            )
         return chunk
 
-    def _handle_response_output_text_delta(self, event: dict) -> llm.ChatChunk:
+    def _handle_response_output_text_delta(
+        self, event: ResponseTextDeltaEvent
+    ) -> llm.ChatChunk | None:
         return llm.ChatChunk(
             id=self._response_id,
             delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
@@ -274,13 +280,13 @@ class LLMStream(llm.LLMStream):
 
     def to_fnc_ctx(
         self, fnc_ctx: list[FunctionTool | RawFunctionTool], *, strict: bool = True
-    ) -> list[Tool]:
-        tools: list[Tool] = []
+    ) -> list[ToolParam]:
+        tools: list[ToolParam] = []
         for fnc in fnc_ctx:
             if is_raw_function_tool(fnc):
                 info = get_raw_function_info(fnc)
-                tools.append(info)
+                tools.append(info)  # type: ignore
             elif is_function_tool(fnc):
                 schema = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
-                tools.append(schema)
+                tools.append(schema)  # type: ignore
         return tools
