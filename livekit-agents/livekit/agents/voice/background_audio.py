@@ -344,8 +344,13 @@ class BackgroundAudioPlayer:
             else:
                 sound = audio_frames_from_file(sound)
 
+        stopped = False
+
         async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
             async for frame in sound:
+                if stopped:
+                    break
+
                 if volume != 1.0:
                     data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
                     data *= 10 ** (np.log10(volume))
@@ -363,9 +368,8 @@ class BackgroundAudioPlayer:
             play_handle._mark_playout_done()
 
         gen = _gen_wrapper()
-        lock: asyncio.Lock | contextlib.nullcontext = contextlib.nullcontext()
         try:
-            lock = self._audio_mixer.add_stream(gen)
+            self._audio_mixer.add_stream(gen)
             await play_handle.wait_for_playout()  # wait for playout or interruption
         finally:
             self._audio_mixer.remove_stream(gen)
@@ -373,8 +377,9 @@ class BackgroundAudioPlayer:
 
             await asyncio.sleep(0)
             if play_handle._stop_fut.done():
-                async with lock:
+                with contextlib.suppress(RuntimeError):
                     await gen.aclose()
+                stopped = True
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:
