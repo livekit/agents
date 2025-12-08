@@ -2862,7 +2862,9 @@ class AgentActivity(RecognitionHooks):
             return
 
         if not self._paused_speech.interrupted and self._paused_speech.allow_interruptions:
-            await self._paused_speech.interrupt()  # ensure the speech is done
+            # Just interrupt without awaiting - awaiting would cause circular wait
+            # when called from within a function tool that owns this speech handle
+            self._paused_speech.interrupt()
         self._paused_speech = None
 
         if self._session.options.resume_false_interruption and self._session.output.audio:
