@@ -302,12 +302,19 @@ class SpeechStream(stt.SpeechStream):
                     segments = data.get("segments", [])
                     text = data.get("transcript", "")
                     confidence = data.get("confidence", 0.0)
+                    timed_words = [
+                        TimedString(
+                            text=segment.get("text", ""),
+                            start_time=segment.get("start", 0.0),
+                            end_time=segment.get("end", 0.0),
+                        )
+                        for segment in segments
+                    ]
+                    start_time = segments[0].get("start", 0.0) if segments else 0.0
+                    end_time = segments[-1].get("end", 0.0) if segments else 0.0
 
                     if not is_final:
                         if text:
-                            start_time = segments[0].get("start", 0.0) if segments else 0.0
-                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[
@@ -317,16 +324,7 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
-                                        words=[
-                                            TimedString(
-                                                text=segment.get("text", ""),
-                                                start_time=segment.get("start", 0.0),
-                                                end_time=segment.get("end", 0.0),
-                                            )
-                                            for segment in segments
-                                        ]
-                                        if segments
-                                        else None,
+                                        words=timed_words,
                                     )
                                 ],
                             )
@@ -336,9 +334,6 @@ class SpeechStream(stt.SpeechStream):
                         language = data.get("language_code", self._opts.language)
 
                         if text:
-                            start_time = segments[0].get("start", 0.0) if segments else 0.0
-                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 alternatives=[
@@ -348,16 +343,7 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
-                                        words=[
-                                            TimedString(
-                                                text=segment.get("text", ""),
-                                                start_time=segment.get("start", 0.0),
-                                                end_time=segment.get("end", 0.0),
-                                            )
-                                            for segment in segments
-                                        ]
-                                        if segments
-                                        else None,
+                                        words=timed_words,
                                     )
                                 ],
                             )

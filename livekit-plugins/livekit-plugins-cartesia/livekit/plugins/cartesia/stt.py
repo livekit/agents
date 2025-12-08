@@ -357,7 +357,6 @@ class SpeechStream(stt.SpeechStream):
             text = data.get("text", "")
             words = data.get("words", [])
             start_time = words[0].get("start", 0) if words else self._last_speech_start_time
-            # TODO: @chenghao, test this
             end_time = (
                 words[-1].get("end", 0)
                 if words
@@ -390,9 +389,7 @@ class SpeechStream(stt.SpeechStream):
                         end_time=word.get("end", 0),
                     )
                     for word in words
-                ]
-                if words
-                else None,
+                ],
             )
 
             self._last_speech_start_time = end_time

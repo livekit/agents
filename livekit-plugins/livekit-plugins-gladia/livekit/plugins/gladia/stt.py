@@ -517,9 +517,7 @@ class STT(stt.STT):
                                 end_time=word.get("end", 0),
                             )
                             for word in words
-                        ]
-                        if words
-                        else None,
+                        ],
                     )
                 )
 
@@ -1045,9 +1043,7 @@ class SpeechStream(stt.SpeechStream):
                             end_time=word.get("end", 0),
                         )
                         for word in words
-                    ]
-                    if words
-                    else None,
+                    ],
                 )
 
                 if is_final:
@@ -1118,9 +1114,7 @@ class SpeechStream(stt.SpeechStream):
                                 end_time=word.get("end", 0),
                             )
                             for word in words
-                        ]
-                        if words
-                        else None,
+                        ],
                     )
 
                     # Emit FINAL_TRANSCRIPT containing the TRANSLATION

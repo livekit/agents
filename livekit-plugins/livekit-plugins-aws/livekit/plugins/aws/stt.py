@@ -338,7 +338,5 @@ class SpeechStream(stt.SpeechStream):
                     end_time=item.end_time,
                 )
                 for item in resp.alternatives[0].items
-            ]
-            if resp.alternatives[0].items
-            else None,
+            ],
         )
