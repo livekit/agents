@@ -376,7 +376,8 @@ class RecorderAudioOutput(io.AudioOutput):
         interrupted: bool,
         synchronized_transcript: str | None = None,
     ) -> None:
-        finish_time = time.time()
+        finish_time = self.__current_pause_start or time.time()
+        trailing_silence_duration = max(0.0, time.time() - finish_time)
 
         if self._last_speech_start_time is None:
             logger.warning(
@@ -388,6 +389,14 @@ class RecorderAudioOutput(io.AudioOutput):
                 },
             )
             playback_position = 0.0
+
+        playback_position = max(
+            0.0,
+            min(
+                finish_time - (self._last_speech_start_time or 0.0),
+                playback_position,
+            ),
+        )
 
         super().on_playback_finished(
             playback_position=playback_position,
@@ -404,11 +413,12 @@ class RecorderAudioOutput(io.AudioOutput):
 
         if not self.__acc_frames:
             self._reset_pause_state()
-            self._last_speech_end_time = finish_time
+            self._last_speech_end_time = time.time()
             self._last_speech_start_time = None
             return
 
         pause_events: deque[tuple[float, float]] = deque()  # (position, duration)
+        playback_start_time = finish_time - playback_position
         if self.__pause_wall_times:
             total_pause_duration = sum(end - start for start, end in self.__pause_wall_times)
             playback_start_time = finish_time - playback_position - total_pause_duration
@@ -457,11 +467,15 @@ class RecorderAudioOutput(io.AudioOutput):
                 buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
 
         if buf:
+            if trailing_silence_duration > 0.0:
+                buf.append(
+                    _create_silence_frame(trailing_silence_duration, sample_rate, num_channels)
+                )
             self.__write(buf)
 
         self.__acc_frames = []
         self._reset_pause_state()
-        self._last_speech_end_time = finish_time
+        self._last_speech_end_time = time.time()
         self._last_speech_start_time = None
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
