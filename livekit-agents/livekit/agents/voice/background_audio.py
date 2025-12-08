@@ -369,7 +369,12 @@ class BackgroundAudioPlayer:
 
             await asyncio.sleep(0)
             if play_handle._stop_fut.done():
-                await gen.aclose()
+                try:
+                    await gen.aclose()
+                except RuntimeError as e:
+                    # Generator may already be running or closed
+                    if "already running" not in str(e) and "cannot reuse" not in str(e):
+                        raise
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:
