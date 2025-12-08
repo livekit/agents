@@ -363,8 +363,9 @@ class BackgroundAudioPlayer:
             play_handle._mark_playout_done()
 
         gen = _gen_wrapper()
+        lock: asyncio.Lock | contextlib.nullcontext = contextlib.nullcontext()
         try:
-            self._audio_mixer.add_stream(gen)
+            lock = self._audio_mixer.add_stream(gen)
             await play_handle.wait_for_playout()  # wait for playout or interruption
         finally:
             self._audio_mixer.remove_stream(gen)
@@ -372,7 +373,8 @@ class BackgroundAudioPlayer:
 
             await asyncio.sleep(0)
             if play_handle._stop_fut.done():
-                await gen.aclose()
+                async with lock:
+                    await gen.aclose()
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:

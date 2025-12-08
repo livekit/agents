@@ -192,3 +192,4 @@ async def audio_frames_from_file(
 
     finally:
         await cancel_and_wait(reader_task)
+        await decoder.aclose()
