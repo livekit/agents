@@ -74,6 +74,7 @@ DEFAULT_MAX_SESSION_RESTART_DELAY = 10
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
+BARGE_IN_SIGNAL = '{ "interrupted" : true }\n'  # Nova Sonic's barge-in detection signal
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. "
     "You love helping people and having natural conversations. "
@@ -356,87 +357,53 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
-    @classmethod
     def with_nova_1_sonic(
-        cls,
+        self,
         *,
         voice: NotGivenOr[VoiceIdV1 | str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        top_p: NotGivenOr[float] = NOT_GIVEN,
-        max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        region: NotGivenOr[str] = NOT_GIVEN,
-        endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM",
-        generate_reply_timeout: float = 10.0,
     ) -> RealtimeModel:
-        """Create RealtimeModel with Nova Sonic 1.0.
+        """Configure this instance for Nova Sonic 1.0.
+
+        Sets the model ID and disables text input support. Optionally overrides the voice.
 
         Args:
-            voice (VoiceIdV1 | str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
-            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
-            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
-            max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
-            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
-            region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
-            endpointing_sensitivity (Literal["HIGH", "MEDIUM", "LOW"]): Turn-taking sensitivity. Defaults to MEDIUM.
-            generate_reply_timeout (float): Timeout in seconds for generate_reply() calls. Defaults to 10.0.
+            voice (VoiceIdV1 | str | NotGiven): Preferred voice id for Sonic TTS output.
 
         Returns:
-            RealtimeModel: Configured for Nova Sonic 1.0 (audio-only).
-        """  # noqa: E501
-        return cls(
-            model=cls.SupportedModels.NOVA_SONIC_1,
-            supports_generate_reply=False,
-            voice=str(voice) if is_given(voice) else NOT_GIVEN,
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            tool_choice=tool_choice,
-            region=region,
-            endpointing_sensitivity=endpointing_sensitivity,
-            generate_reply_timeout=generate_reply_timeout,
-        )
+            RealtimeModel: This instance (for method chaining).
 
-    @classmethod
+        Example:
+            model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice=VoiceIdV1.MATTHEW)
+        """
+        self._model = self.SupportedModels.NOVA_SONIC_1
+        self._supports_generate_reply = False
+        if is_given(voice):
+            self._opts.voice = str(voice)
+        return self
+
     def with_nova_2_sonic(
-        cls,
+        self,
         *,
         voice: NotGivenOr[VoiceIdV2 | str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        top_p: NotGivenOr[float] = NOT_GIVEN,
-        max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        region: NotGivenOr[str] = NOT_GIVEN,
-        endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM",
-        generate_reply_timeout: float = 10.0,
     ) -> RealtimeModel:
-        """Create RealtimeModel with Nova Sonic 2.0.
+        """Configure this instance for Nova Sonic 2.0.
+
+        Sets the model ID and enables text input support. Optionally overrides the voice.
 
         Args:
-            voice (VoiceIdV2 | str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
-            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
-            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
-            max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
-            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
-            region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
-            endpointing_sensitivity (Literal["HIGH", "MEDIUM", "LOW"]): Turn-taking sensitivity. Defaults to MEDIUM.
-            generate_reply_timeout (float): Timeout in seconds for generate_reply() calls. Defaults to 10.0.
+            voice (VoiceIdV2 | str | NotGiven): Preferred voice id for Sonic TTS output.
 
         Returns:
-            RealtimeModel: Configured for Nova Sonic 2.0 (supports text input).
-        """  # noqa: E501
-        return cls(
-            model=cls.SupportedModels.NOVA_SONIC_2,
-            supports_generate_reply=True,
-            voice=str(voice) if is_given(voice) else NOT_GIVEN,
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            tool_choice=tool_choice,
-            region=region,
-            endpointing_sensitivity=endpointing_sensitivity,
-            generate_reply_timeout=generate_reply_timeout,
-        )
+            RealtimeModel: This instance (for method chaining).
+
+        Example:
+            model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice=VoiceIdV2.TIFFANY)
+        """
+        self._model = self.SupportedModels.NOVA_SONIC_2
+        self._supports_generate_reply = True
+        if is_given(voice):
+            self._opts.voice = str(voice)
+        return self
 
     @property
     def model(self) -> str:
@@ -1108,7 +1075,7 @@ class RealtimeSession(  # noqa: F811
         text_content = f"{event_data['event']['textOutput']['content']}\n"
 
         # Nova Sonic's automatic barge-in detection
-        if text_content == '{ "interrupted" : true }\n':
+        if text_content == BARGE_IN_SIGNAL:
             idx = self._chat_ctx.find_insertion_index(created_at=time.time()) - 1
             if idx >= 0 and (item := self._chat_ctx.items[idx]).type == "message":
                 item.interrupted = True

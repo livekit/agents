@@ -10,6 +10,9 @@ from livekit.agents import llm
 
 from ...log import logger
 
+# Nova Sonic's barge-in detection signal (raw content without newline)
+BARGE_IN_CONTENT = '{ "interrupted" : true }'
+
 
 class _Phase(enum.Enum):
     IDLE = 0  # waiting for the USER to begin speaking
@@ -152,7 +155,7 @@ def _classify(ev: dict) -> str:
         if "SPECULATIVE" in add:
             return "ASSISTANT_SPEC_START"
 
-    if "textOutput" in e and e["textOutput"]["content"] == '{ "interrupted" : true }':
+    if "textOutput" in e and e["textOutput"]["content"] == BARGE_IN_CONTENT:
         return "BARGE_IN"
 
     # note: there cannot be any audio events for the user in the output event loop
