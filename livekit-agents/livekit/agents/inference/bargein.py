@@ -444,6 +444,8 @@ class BargeinHttpStream(BargeinStreamBase):
                 ):
                     logger.debug("overlap speech started, starting barge-in inference")
                     overlap_speech_started = True
+                    accumulated_samples = 0
+                    start_idx = 0
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
@@ -592,6 +594,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 ):
                     logger.debug("overlap speech started, starting barge-in inference")
                     overlap_speech_started = True
+                    accumulated_samples = 0
+                    start_idx = 0
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
