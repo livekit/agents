@@ -244,7 +244,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 diarization=enable_diarization,
-                aligned_transcript="word",
+                aligned_transcript="chunk",
             ),
         )
 
