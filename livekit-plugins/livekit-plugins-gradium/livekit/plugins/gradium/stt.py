@@ -85,7 +85,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,  # only final transcripts
-                aligned_transcript=False,
+                aligned_transcript=False,  # only chunk start times are available
             ),
         )
 

@@ -736,6 +736,14 @@ def prerecorded_transcription_to_speech_event(
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],
                 text=alt["transcript"],
+                words=[
+                    TimedString(
+                        text=word.get("word", ""),
+                        start_time=word.get("start", 0),
+                        end_time=word.get("end", 0),
+                    )
+                    for word in alt["words"]
+                ],
             )
             for alt in dg_alts
         ],

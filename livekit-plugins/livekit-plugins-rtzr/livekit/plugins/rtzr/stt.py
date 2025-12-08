@@ -79,7 +79,10 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="word"
+                streaming=True,
+                interim_results=True,
+                # word timestamps don't seem to work despite the docs saying they do
+                aligned_transcript="chunk",
             )
         )
 

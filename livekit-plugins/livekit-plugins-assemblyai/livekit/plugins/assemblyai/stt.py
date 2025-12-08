@@ -25,6 +25,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
+import numpy as np
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -190,7 +191,7 @@ class SpeechStream(stt.SpeechStream):
         self._api_key = api_key
         self._session = http_session
         self._speech_duration: float = 0
-        self._last_preflight_start_time: int = 0
+        self._last_preflight_start_time: float = 0
         self._reconnect_event = asyncio.Event()
 
     def update_options(
@@ -356,13 +357,25 @@ class SpeechStream(stt.SpeechStream):
 
             # transcript (final) and words (interim) are cumulative
             # utterance (preflight) is chunk based
-            start_time: int = 0
-            end_time: int = 0
+            start_time: float = 0
+            end_time: float = 0
+            confidence: float = 0
+            timed_words: list[TimedString] = []
 
+            # words are cumulative
             if words:
                 interim_text = " ".join(word.get("text", "") for word in words)
-                start_time = words[0].get("start", 0)
-                end_time = words[-1].get("end", 0)
+                start_time = words[0].get("start", 0) / 1000
+                end_time = words[-1].get("end", 0) / 1000
+                confidence = np.mean([word.get("confidence", 0) for word in words]).item()
+                timed_words = [
+                    TimedString(
+                        text=word.get("text", ""),
+                        start_time=word.get("start", 0) / 1000,
+                        end_time=word.get("end", 0) / 1000,
+                    )
+                    for word in words
+                ]
 
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -372,23 +385,36 @@ class SpeechStream(stt.SpeechStream):
                             text=interim_text,
                             start_time=start_time,
                             end_time=end_time,
-                            words=[
-                                TimedString(
-                                    text=word.get("text", ""),
-                                    # ms -> s
-                                    start_time=word.get("start", 0) / 1000,
-                                    end_time=word.get("end", 0) / 1000,
-                                )
-                                for word in words
-                            ],
+                            words=timed_words,
+                            confidence=confidence,
                         )
                     ],
                 )
                 self._event_ch.send_nowait(interim_event)
 
             if utterance:
-                if self._last_preflight_start_time == 0:
+                if self._last_preflight_start_time == 0.0:
                     self._last_preflight_start_time = start_time
+
+                # utterance is chunk based so we need to filter the words to
+                # only include the ones that are part of the current utterance
+                utterance_words = [
+                    word
+                    for word in timed_words
+                    if is_given(word.start_time)
+                    and word.start_time >= self._last_preflight_start_time
+                ]
+                utterance_confidence = (
+                    np.mean(
+                        [
+                            word.get("confidence", 0)
+                            for word in words
+                            if word.get("start", 0) / 1000 >= self._last_preflight_start_time
+                        ]
+                    ).item()
+                    if utterance_words
+                    else 0
+                )
 
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
@@ -398,15 +424,8 @@ class SpeechStream(stt.SpeechStream):
                             text=utterance,
                             start_time=self._last_preflight_start_time,
                             end_time=end_time,
-                            words=[
-                                TimedString(
-                                    text=word.get("text", ""),
-                                    # ms -> s
-                                    start_time=word.get("start", 0) / 1000,
-                                    end_time=word.get("end", 0) / 1000,
-                                )
-                                for word in words
-                            ],
+                            words=utterance_words,
+                            confidence=utterance_confidence,
                         )
                     ],
                 )
@@ -425,15 +444,8 @@ class SpeechStream(stt.SpeechStream):
                             text=transcript,
                             start_time=start_time,
                             end_time=end_time,
-                            words=[
-                                TimedString(
-                                    text=word.get("text", ""),
-                                    # ms -> s
-                                    start_time=word.get("start", 0) / 1000,
-                                    end_time=word.get("end", 0) / 1000,
-                                )
-                                for word in words
-                            ],
+                            words=timed_words,
+                            confidence=confidence,
                         )
                     ],
                 )
@@ -451,4 +463,4 @@ class SpeechStream(stt.SpeechStream):
                     )
                     self._event_ch.send_nowait(usage_event)
                     self._speech_duration = 0
-                    self._last_preflight_start_time = 0
+                    self._last_preflight_start_time = 0.0

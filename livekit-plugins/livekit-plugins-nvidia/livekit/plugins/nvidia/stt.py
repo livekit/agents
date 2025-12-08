@@ -58,7 +58,7 @@ class STT(stt.STT):
         if is_given(api_key):
             self.nvidia_api_key = api_key
         else:
-            self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+            self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
             if use_ssl and not self.nvidia_api_key:
                 raise ValueError(
                     "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable "

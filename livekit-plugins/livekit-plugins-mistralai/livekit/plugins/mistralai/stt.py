@@ -64,7 +64,10 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=False, interim_results=False, aligned_transcript="word"
+                streaming=False,
+                interim_results=False,
+                # timestamp granularity doesn't seem to work
+                aligned_transcript=False,
             )
         )
         self._opts = _STTOptions(
@@ -120,6 +123,7 @@ class STT(stt.STT):
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
                 language=self._opts.language if self._opts.language else None,
+                # for some reason, it doesn't return any segments even if we ask for them
                 timestamp_granularities=["segment"],
             )
 

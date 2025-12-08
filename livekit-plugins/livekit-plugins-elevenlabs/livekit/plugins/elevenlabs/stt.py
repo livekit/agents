@@ -212,6 +212,8 @@ class STT(stt.STT):
         speaker_id: str | None,
         words: list[dict[str, Any]] | None = None,
     ) -> stt.SpeechEvent:
+        # TODO: @chenghao, the start time and end time are relative
+        # only to the speech span, not the entire stream
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
@@ -410,6 +412,7 @@ class SpeechStream(stt.SpeechStream):
             "model_id=scribe_v2_realtime",
             f"encoding=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
+            "include_timestamps=true",
         ]
 
         if server_vad := self._opts.server_vad:
@@ -454,6 +457,7 @@ class SpeechStream(stt.SpeechStream):
         start_time = words[0].get("start", 0) if words else 0
         end_time = words[-1].get("end", 0) if words else 0
 
+        # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
             language=self._language or "en",
             text=text,

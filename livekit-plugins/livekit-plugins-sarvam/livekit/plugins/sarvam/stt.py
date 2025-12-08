@@ -188,7 +188,10 @@ class STT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="chunk"
+                streaming=True,
+                interim_results=True,
+                # chunk timestamps don't seem to work despite the docs saying they do
+                aligned_transcript=False,
             )
         )
 
@@ -898,6 +901,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_transcript_data(self, data: dict) -> None:
         """Handle transcription result messages."""
+        logger.debug(f"Received transcript data: {data}")
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
         language = transcript_data.get("language_code", "")
