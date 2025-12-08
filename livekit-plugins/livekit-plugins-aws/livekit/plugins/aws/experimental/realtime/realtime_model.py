@@ -279,7 +279,7 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         model: str = SupportedModels.NOVA_SONIC_1,
-        supports_text_input: bool = False,
+        supports_generate_reply: bool = False,
         voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -293,7 +293,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             model (str): Bedrock model ID for realtime inference. Defaults to NOVA_SONIC_1.
-            supports_text_input (bool): Whether model supports text input. Defaults to False.
+            supports_generate_reply (bool): Whether model supports generate_reply() method. Defaults to False.
             voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
@@ -314,7 +314,7 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
         self._model = model
-        self._supports_text_input = supports_text_input
+        self._supports_generate_reply = supports_generate_reply
         self._generate_reply_timeout = generate_reply_timeout
         # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic  # noqa: E501
         # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
@@ -362,7 +362,7 @@ class RealtimeModel(llm.RealtimeModel):
         """  # noqa: E501
         return cls(
             model=cls.SupportedModels.NOVA_SONIC_1,
-            supports_text_input=False,
+            supports_generate_reply=False,
             voice=str(voice) if is_given(voice) else NOT_GIVEN,
             temperature=temperature,
             top_p=top_p,
@@ -403,7 +403,7 @@ class RealtimeModel(llm.RealtimeModel):
         """  # noqa: E501
         return cls(
             model=cls.SupportedModels.NOVA_SONIC_2,
-            supports_text_input=True,
+            supports_generate_reply=True,
             voice=str(voice) if is_given(voice) else NOT_GIVEN,
             temperature=temperature,
             top_p=top_p,
@@ -419,14 +419,9 @@ class RealtimeModel(llm.RealtimeModel):
         return self._model
 
     @property
-    def supports_text_input(self) -> bool:
-        """Whether this model supports text input."""
-        return self._supports_text_input
-
-    @property
     def supports_generate_reply(self) -> bool:
         """Whether this model supports generate_reply() method."""
-        return self._supports_text_input
+        return self._supports_generate_reply
 
     @property
     def provider(self) -> str:
@@ -1627,7 +1622,7 @@ class RealtimeSession(  # noqa: F811
         Returns:
             Future that resolves when generation starts
         """
-        if not self._realtime_model.supports_text_input:
+        if not self._realtime_model.supports_generate_reply:
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(llm.RealtimeError("Text input not supported by this model"))
             return fut
