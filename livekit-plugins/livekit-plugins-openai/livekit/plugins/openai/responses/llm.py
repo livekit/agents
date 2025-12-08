@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Union, cast
 
 import httpx
 from typing_extensions import Literal
@@ -189,7 +189,7 @@ class LLMStream(llm.LLMStream):
             self._oai_stream = stream = await self._client.responses.create(
                 model=self._model,
                 tools=fnc_ctx,
-                input=cast(str | ResponseInputParam | openai.NotGiven, chat_ctx),
+                input=cast(Union[str, ResponseInputParam, openai.NotGiven], chat_ctx),
                 stream=True,
                 timeout=httpx.Timeout(self._conn_options.timeout),
                 **self._extra_kwargs,
