@@ -1571,7 +1571,9 @@ class AgentActivity(RecognitionHooks):
             await self._interrupt_paused_speech(self._interrupt_paused_speech_task)
 
             if self._current_speech:
-                await self._current_speech.interrupt()
+                # Don't await - just interrupt. Awaiting would trigger wait_for_playout()
+                # which raises RuntimeError if called from a function tool context
+                self._current_speech.interrupt()
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
@@ -1683,8 +1685,9 @@ class AgentActivity(RecognitionHooks):
             # If a new user turn has already started, interrupt this one since it's now outdated
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
-            # await the interrupt to make sure user message is added to the chat context before the new task starts
-            await speech_handle.interrupt()
+            # Don't await - just interrupt. Awaiting would trigger wait_for_playout()
+            # which raises RuntimeError if called from a function tool context
+            speech_handle.interrupt()
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):
