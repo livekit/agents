@@ -10,7 +10,13 @@ import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool
+from livekit.agents.llm.tool_context import (
+    FunctionTool,
+    RawFunctionTool,
+    get_raw_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -20,7 +26,8 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from openai.types.responses import (
     ResponseFormatTextConfigParam,
-    ResponseInputItemParam,
+    ResponseInputParam,
+    Tool,
     response_create_params,
 )
 from openai.types.responses.response_stream_event import ResponseStreamEvent
@@ -140,6 +147,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
+            strict_tool_schema=True,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -154,6 +162,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | ResponsesModel,
+        strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
@@ -162,49 +171,54 @@ class LLMStream(llm.LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
+        self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
         self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
-        retryable = False
-
+        retryable = True
         try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai")
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
+
+            fnc_ctx = (
+                self.to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
+                if self._tools
+                else openai.NOT_GIVEN
+            )
 
             stream: openai.AsyncStream[ResponseStreamEvent] = await self._client.responses.create(
                 model=self._model,
-                input=cast(list[ResponseInputItemParam], chat_ctx),
+                tools=fnc_ctx,
+                input=cast(list[ResponseInputParam], chat_ctx),
                 stream=True,
             )
 
             async with stream:
                 async for event in stream:
-                    self._llm.emit("openai_server_event_received", event)
+                    retryable = False
+                    chunk = None
 
-                    if event.type in [
-                        "response.created",
-                        "response.in_progress",
-                        "response.completed",
-                        "response.output_item.added",
-                        "response.content_part.added",
-                        "response.output_text.done",
-                        "response.content_part.done",
-                        "response.function_call_arguments.delta",
-                        "response.function_call_arguments.done",
-                    ]:
-                        retryable = False
-
-                    if event.type == "response.output_text.delta":
-                        self._llm.emit("text_chunk_received", event.delta)
-                        chunk = self._handle_response_output_text_delta(event)
-                        self._event_ch.send_nowait(chunk)
+                    if event.type == "error":
+                        raise APIStatusError(
+                            event.message, status_code=event.code, retryable=retryable
+                        )
+                    if event.type == "response.created":
+                        self._handle_response_created(event)
 
                     if event.type == "response.output_item.done":
-                        if event.item.type == "function_call" and event.item.status == "completed":
-                            chunk = self._handle_completed_function_call(event)
-                            self._event_ch.send_nowait(chunk)
+                        if event.item.type == "function_call":
+                            chunk = self._handle_output_items_done(event)
+
+                    if event.type == "response.output_text.delta":
+                        chunk = self._handle_response_output_text_delta(event)
+
+                    if event.type == "response.completed":
+                        chunk = self._handle_response_completed(event)
+
+                    if chunk is not None:
+                        self._event_ch.send_nowait(chunk)
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable)  # noqa: B904
@@ -219,9 +233,25 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _handle_completed_function_call(self, event: dict):
+    def _handle_response_created(self, event: dict) -> None:
+        self._response_id = event.response.id
+
+    def _handle_response_completed(self, event: dict) -> llm.ChatChunk:
+        usage = event.response.usage
         chunk = llm.ChatChunk(
-            id=event.item.id,
+            id=self._response_id,
+            usage=llm.CompletionUsage(
+                completion_tokens=usage.output_tokens,
+                prompt_tokens=usage.input_tokens,
+                prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                total_tokens=usage.total_tokens,
+            ),
+        )
+        return chunk
+
+    def _handle_output_items_done(self, event: dict) -> llm.ChatChunk:
+        chunk = llm.ChatChunk(
+            id=self._response_id,
             delta=llm.ChoiceDelta(
                 role="assistant",
                 content=None,
@@ -229,15 +259,28 @@ class LLMStream(llm.LLMStream):
                     llm.FunctionToolCall(
                         arguments=event.item.arguments,
                         name=event.item.name,
-                        call_id=event.item.call_id,
+                        call_id=event.item.id,
                     )
                 ],
             ),
         )
         return chunk
 
-    def _handle_response_output_text_delta(self, event: dict):
+    def _handle_response_output_text_delta(self, event: dict) -> llm.ChatChunk:
         return llm.ChatChunk(
-            id=event.item_id,
+            id=self._response_id,
             delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
         )
+
+    def to_fnc_ctx(
+        self, fnc_ctx: list[FunctionTool | RawFunctionTool], *, strict: bool = True
+    ) -> list[Tool]:
+        tools: list[Tool] = []
+        for fnc in fnc_ctx:
+            if is_raw_function_tool(fnc):
+                info = get_raw_function_info(fnc)
+                tools.append(info)
+            elif is_function_tool(fnc):
+                schema = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
+                tools.append(schema)
+        return tools
