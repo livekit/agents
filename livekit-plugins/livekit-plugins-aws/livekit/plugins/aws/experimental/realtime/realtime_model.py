@@ -1820,7 +1820,7 @@ class RealtimeSession(  # noqa: F811
                     if self._pending_generation_fut is fut:
                         self._pending_generation_fut = None
 
-            timeout_handle = asyncio.get_event_loop().call_later(
+            timeout_handle = asyncio.get_running_loop().call_later(
                 self._realtime_model._generate_reply_timeout, _on_timeout
             )
             fut.add_done_callback(lambda _: timeout_handle.cancel())
@@ -1889,7 +1889,7 @@ class RealtimeSession(  # noqa: F811
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
 
-        timeout_handle = asyncio.get_event_loop().call_later(
+        timeout_handle = asyncio.get_running_loop().call_later(
             self._realtime_model._generate_reply_timeout, _on_timeout
         )
         fut.add_done_callback(lambda _: timeout_handle.cancel())
