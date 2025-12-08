@@ -46,10 +46,10 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-See ``examples/dev/MossLifecycle.py`` for a full lifecycle demonstration.
+See ``examples/MossLifecycle.py`` for a full lifecycle demonstration.
 
 ```bash
-# change into the examples/dev folder and run the demo
-cd examples/dev
+# change into the examples folder and run the demo
+cd examples
 python MossLifecycle.py
 ```
