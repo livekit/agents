@@ -33,6 +33,7 @@ Try asking:
  - "Tell me a programming joke"
  - "Search for information about AWS"
 """
+
 from __future__ import annotations
 
 import asyncio
