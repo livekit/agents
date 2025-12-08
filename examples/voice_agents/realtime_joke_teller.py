@@ -55,7 +55,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import aws, silero
-from livekit.plugins.aws.experimental.realtime.events import VoiceIdV1, VoiceIdV2
+from livekit.plugins.aws.experimental.realtime.events import VoiceIdV2
 
 load_dotenv()
 

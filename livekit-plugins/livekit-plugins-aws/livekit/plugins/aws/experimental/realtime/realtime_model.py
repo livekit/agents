@@ -346,7 +346,7 @@ class RealtimeModel(llm.RealtimeModel):
         self.temperature = temperature
         self.top_p = top_p
         self._opts = _RealtimeOptions(
-            voice=cast(VOICE_ID, voice) if is_given(voice) else "tiffany",
+            voice=voice if is_given(voice) else "tiffany",
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             top_p=top_p if is_given(top_p) else DEFAULT_TOP_P,
             max_tokens=max_tokens if is_given(max_tokens) else DEFAULT_MAX_TOKENS,
@@ -387,7 +387,7 @@ class RealtimeModel(llm.RealtimeModel):
         return cls(
             model=cls.SupportedModels.NOVA_SONIC_1,
             supports_text_input=False,
-            voice=voice,
+            voice=str(voice) if is_given(voice) else NOT_GIVEN,
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
@@ -428,7 +428,7 @@ class RealtimeModel(llm.RealtimeModel):
         return cls(
             model=cls.SupportedModels.NOVA_SONIC_2,
             supports_text_input=True,
-            voice=voice,
+            voice=str(voice) if is_given(voice) else NOT_GIVEN,
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
