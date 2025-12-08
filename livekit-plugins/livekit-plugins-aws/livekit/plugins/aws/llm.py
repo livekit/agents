@@ -82,7 +82,7 @@ class LLM(llm.LLM):
 
         Args:
             model (str, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html).
-                Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
+                Defaults to 'amazon.nova-2-lite-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
