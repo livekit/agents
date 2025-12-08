@@ -231,5 +231,15 @@ class AvatarSession:
         finally:
             await utils.aio.cancel_and_wait(*io_tasks)
             await utils.aio.cancel_and_wait(*self._tasks)
+            try:
+                if hasattr(self, "_session_id") and hasattr(self, "_session_token"):
+                    data = await self._api.stop_streaming_session(
+                        self._session_id, self._session_token
+                    )
+                    if data["code"] <= 200:
+                        logger.info(f"LiveAvatar session stopped: {self._session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to stop LiveAvatar session: {e}", exc_info=True)
+
             await self._audio_buffer.aclose()
             await ws_conn.close()
