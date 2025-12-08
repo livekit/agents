@@ -1469,6 +1469,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             loop.run_until_complete(_run_loop())
         except _ExitCli:
             raise typer.Exit() from None
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
+            os._exit(1)
 
     @app.command()
     def download_files() -> None:
