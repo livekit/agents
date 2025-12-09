@@ -378,8 +378,16 @@ class _SegmentSynchronizerImpl:
         self._close_future.set_result(None)
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
         self._output_enabled_ev.set()
-        await self._text_data.word_stream.aclose()
-        await self._audio_data.sr_stream.aclose()
+        try:
+            await self._text_data.word_stream.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise
+        try:
+            await self._audio_data.sr_stream.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise
         await self._capture_atask
         await self._speaking_rate_atask
 
@@ -439,7 +447,11 @@ class TranscriptSynchronizer:
     async def aclose(self) -> None:
         self._closed = True
         await self.barrier()
-        await self._impl.aclose()
+        try:
+            await self._impl.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise
 
     def set_enabled(self, enabled: bool) -> None:
         if self._enabled == enabled:
@@ -469,7 +481,11 @@ class TranscriptSynchronizer:
         if old_task:
             await old_task
 
-        await self._impl.aclose()
+        try:
+            await self._impl.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise
         self._impl = _SegmentSynchronizerImpl(
             options=self._opts, next_in_chain=self._text_output._next_in_chain
         )

@@ -1035,6 +1035,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     raise RuntimeError("cannot start agent: an activity is already running")
 
                 self._next_activity = AgentActivity(agent, self)
+
+                # ATOMIC HANDOVER: Prestart the new activity BEFORE pausing the old one
+                # This creates audio_recognition and sets _started=True immediately,
+                # eliminating the gap where audio frames would be dropped during handover.
+                await self._next_activity.prestart()
+
             elif new_activity == "resume":
                 if agent._activity is None:
                     raise RuntimeError("cannot resume agent: no existing active activity to resume")
@@ -1046,16 +1052,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
+            # REORDERED: Swap activity pointer BEFORE pausing old activity
+            # Since new activity is prestarted, audio frames immediately work
             previous_activity_v = self._activity
-            if self._activity is not None:
-                if previous_activity == "close":
-                    await self._activity.drain()
-                    await self._activity.aclose()
-                elif previous_activity == "pause":
-                    await self._activity.pause(blocked_tasks=blocked_tasks or [])
-
             self._activity = self._next_activity
             self._next_activity = None
+
+            # NOW pause/close old activity (audio already flows to new activity)
+            if previous_activity_v is not None:
+                if previous_activity == "close":
+                    await previous_activity_v.drain()
+                    await previous_activity_v.aclose()
+                elif previous_activity == "pause":
+                    await previous_activity_v.pause(blocked_tasks=blocked_tasks or [])
 
             run_state = self._global_run_state
             handoff_item = AgentHandoff(
@@ -1070,8 +1079,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
             self._chat_ctx.insert(handoff_item)
 
+            # Complete startup for new activity
             if new_activity == "start":
-                await self._activity.start()
+                await self._activity.complete_start()
             elif new_activity == "resume":
                 await self._activity.resume()
 

@@ -166,7 +166,11 @@ async def _llm_inference_task(
                 )
     finally:
         if isinstance(llm_node, _ACloseable):
-            await llm_node.aclose()
+            try:
+                await llm_node.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
@@ -289,8 +293,16 @@ async def _tts_inference_task(
     finally:
         await aio.gracefully_cancel(_start_time_task)
         if input_segment is not None:
-            await input_segment.aclose()
-        await input_tee.aclose()
+            try:
+                await input_segment.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
+        try:
+            await input_tee.aclose()
+        except RuntimeError as e:
+            if "already running" not in str(e):
+                raise  # Re-raise unexpected RuntimeErrors
 
     return pushed_duration > 0
 
@@ -325,7 +337,11 @@ async def _text_forwarding_task(
                 out.first_text_fut.set_result(None)
     finally:
         if isinstance(source, _ACloseable):
-            await source.aclose()
+            try:
+                await source.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
         if text_output is not None:
             text_output.flush()
@@ -402,6 +418,15 @@ class _ToolOutput:
     first_tool_started_fut: asyncio.Future[None]
 
 
+# Workflow tools that should be mutually exclusive - only one can run per turn
+# These tools spawn sub-agents that take over the conversation temporarily
+WORKFLOW_TOOLS: set[str] = {
+    "store_customer_phone",
+    "store_customer_email",
+    "booking_manager",
+}
+
+
 def perform_tool_executions(
     *,
     session: AgentSession,
@@ -451,6 +476,10 @@ async def _execute_tools_task(
         tool_output.output.append(out)
 
     tasks: list[asyncio.Task[Any]] = []
+    # Track which workflow tool has been executed in this turn to prevent race conditions
+    # Only one workflow tool can run per turn - subsequent ones are silently ignored
+    executed_workflow_tool: str | None = None
+
     try:
         async for fnc_call in function_stream:
             if tool_choice == "none":
@@ -462,6 +491,24 @@ async def _execute_tools_task(
                     },
                 )
                 continue
+
+            # Check if this is a workflow tool and if one has already been executed this turn
+            # Workflow tools spawn sub-agents and cannot run in parallel safely
+            if fnc_call.name in WORKFLOW_TOOLS:
+                if executed_workflow_tool is not None:
+                    logger.warning(
+                        f"ignoring duplicate workflow tool `{fnc_call.name}` - "
+                        f"`{executed_workflow_tool}` already executing this turn",
+                        extra={
+                            "function": fnc_call.name,
+                            "blocked_by": executed_workflow_tool,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+                    # Skip without adding to context - as if it was never called
+                    continue
+                # Mark this workflow tool as the one executing this turn
+                executed_workflow_tool = fnc_call.name
 
             # TODO(theomonnom): assert other tool_choice values
 
