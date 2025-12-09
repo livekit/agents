@@ -357,55 +357,93 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
-    def with_nova_1_sonic(
-        self,
+    @classmethod
+    def with_nova_sonic_1(
+        cls,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: TURN_DETECTION = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
     ) -> RealtimeModel:
-        """Configure this instance for Nova Sonic 1.0.
-
-        Sets the model ID and modalities to audio-only. Optionally overrides the voice.
+        """Create a RealtimeModel configured for Nova Sonic 1.0 (audio-only).
 
         Args:
-            voice (str | NotGiven): Preferred voice id for Sonic TTS output.
-                Use SONIC1_VOICES literal values (e.g., "matthew", "tiffany").
+            voice (str | NotGiven): Voice id for TTS output. Use SONIC1_VOICES values. Defaults to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation.
+            region (str | NotGiven): AWS region. Defaults to "us-east-1".
+            turn_detection (TURN_DETECTION): Turn-taking sensitivity. Defaults to "MEDIUM".
+            generate_reply_timeout (float): Timeout for generate_reply() calls. Defaults to 10.0.
 
         Returns:
-            RealtimeModel: This instance (for method chaining).
+            RealtimeModel: Configured for Nova Sonic 1.0 with audio-only modalities.
 
         Example:
-            model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice="matthew")
+            model = RealtimeModel.with_nova_sonic_1(voice="matthew", tool_choice="auto")
         """
-        self._model = self.SupportedModels.NOVA_SONIC_1
-        self._opts.modalities = "audio"
-        if is_given(voice):
-            self._opts.voice = voice
-        return self
+        return cls(
+            model=cls.SupportedModels.NOVA_SONIC_1,
+            modalities="audio",
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            turn_detection=turn_detection,
+            generate_reply_timeout=generate_reply_timeout,
+        )
 
-    def with_nova_2_sonic(
-        self,
+    @classmethod
+    def with_nova_sonic_2(
+        cls,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: TURN_DETECTION = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
     ) -> RealtimeModel:
-        """Configure this instance for Nova Sonic 2.0.
-
-        Sets the model ID and modalities to mixed (audio + text input). Optionally overrides the voice.
+        """Create a RealtimeModel configured for Nova Sonic 2.0 (audio + text input).
 
         Args:
-            voice (str | NotGiven): Preferred voice id for Sonic TTS output.
-                Use SONIC2_VOICES literal values (e.g., "matthew", "tiffany", "olivia").
+            voice (str | NotGiven): Voice id for TTS output. Use SONIC2_VOICES values. Defaults to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation.
+            region (str | NotGiven): AWS region. Defaults to "us-east-1".
+            turn_detection (TURN_DETECTION): Turn-taking sensitivity. Defaults to "MEDIUM".
+            generate_reply_timeout (float): Timeout for generate_reply() calls. Defaults to 10.0.
 
         Returns:
-            RealtimeModel: This instance (for method chaining).
+            RealtimeModel: Configured for Nova Sonic 2.0 with mixed modalities (audio + text input).
 
         Example:
-            model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice="tiffany")
+            model = RealtimeModel.with_nova_sonic_2(voice="tiffany", max_tokens=10_000)
         """
-        self._model = self.SupportedModels.NOVA_SONIC_2
-        self._opts.modalities = "mixed"
-        if is_given(voice):
-            self._opts.voice = voice
-        return self
+        return cls(
+            model=cls.SupportedModels.NOVA_SONIC_2,
+            modalities="mixed",
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            turn_detection=turn_detection,
+            generate_reply_timeout=generate_reply_timeout,
+        )
 
     @property
     def model(self) -> str:
@@ -1862,7 +1900,9 @@ class RealtimeSession(  # noqa: F811
         """
         if self._realtime_model.modalities != "mixed":
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.set_exception(llm.RealtimeError("Text input not supported (requires mixed modalities)"))
+            fut.set_exception(
+                llm.RealtimeError("Text input not supported (requires mixed modalities)")
+            )
             return fut
 
         logger.info(
