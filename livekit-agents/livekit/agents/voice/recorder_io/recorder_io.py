@@ -423,6 +423,9 @@ class RecorderAudioOutput(io.AudioOutput):
         self._reset_pause_state()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        if self.next_in_chain:
+            await self.next_in_chain.capture_frame(frame)
+
         await super().capture_frame(frame)
 
         if self.__recording_io.recording:
@@ -430,9 +433,6 @@ class RecorderAudioOutput(io.AudioOutput):
                 self.__started_time = time.time()
 
             self.__acc_frames.append(frame)
-
-        if self.next_in_chain:
-            await self.next_in_chain.capture_frame(frame)
 
     def flush(self) -> None:
         super().flush()
