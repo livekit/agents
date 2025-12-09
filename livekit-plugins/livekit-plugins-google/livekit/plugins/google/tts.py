@@ -92,7 +92,7 @@ class TTS(tts.TTS):
         Args:
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
-            voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice_name (str, optional): Specific voice name. Default is an empty string. See https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options for supported voice in Gemini TTS models.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             model_name (str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts"). Enables Gemini TTS models with streaming support.
             prompt (str, optional): Style prompt for Gemini TTS models. Controls tone, style, and speaking characteristics. Only applied to first input chunk in streaming mode.
@@ -164,6 +164,16 @@ class TTS(tts.TTS):
             prompt=prompt if is_given(prompt) else None,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+        if is_given(prompt) and use_markup:
+            logger.warning(
+                "Gemini TTS: prompt are ignored when use_markup is enabled"
+            )
+
+        if is_given(prompt) and not is_given(model_name):
+            logger.warning(
+                "Prompt is only supported by Gemini TTS models"
+            )
 
     @property
     def model(self) -> str:
@@ -285,6 +295,11 @@ class ChunkedStream(tts.ChunkedStream):
                     text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
                 )
 
+            # prompt is ignored when use_markup is enabled
+            # because markup is for HD voices only which do not support prompt
+            if self._opts.model_name is not None and self._opts.prompt is not None and not self._opts.use_markup:
+                tts_input.prompt = self._opts.prompt
+
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
                 input=tts_input,
                 voice=self._opts.voice,
@@ -393,10 +408,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 async for input in input_stream:
                     self._mark_started()
                     # prompt is only supported in the first input chunk (for Gemini TTS)
+                    # and ignored when use_markup is enabled
                     synthesis_input = texttospeech.StreamingSynthesisInput(
                         markup=input.token if self._opts.use_markup else None,
                         text=None if self._opts.use_markup else input.token,
-                        prompt=self._opts.prompt if is_first_input else None,
+                        prompt=self._opts.prompt
+                        if is_first_input and self._opts.model_name is not None
+                            and not self._opts.use_markup
+                        else None,
                     )
                     is_first_input = False
                     yield texttospeech.StreamingSynthesizeRequest(input=synthesis_input)
