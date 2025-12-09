@@ -47,14 +47,11 @@ from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
 from ...log import logger
 from .events import (
-    VOICE_ID,
     SonicEventBuilder as seb,
     Tool,
     ToolConfiguration,
     ToolInputSchema,
     ToolSpec,
-    VoiceIdV1,
-    VoiceIdV2,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
 
@@ -116,7 +113,7 @@ class _RealtimeOptions:
     """Configuration container for a Sonic realtime session.
 
     Attributes:
-        voice (VOICE_ID): Voice identifier used for TTS output.
+        voice (str): Voice identifier used for TTS output.
         temperature (float): Sampling temperature controlling randomness; 1.0 is most deterministic.
         top_p (float): Nucleus sampling parameter; 0.0 considers all tokens.
         max_tokens (int): Maximum number of tokens the model may generate in a single response.
@@ -125,7 +122,7 @@ class _RealtimeOptions:
         endpointing_sensitivity (str): Turn-taking sensitivity - "HIGH", "MEDIUM" (default), or "LOW".
     """  # noqa: E501
 
-    voice: VOICE_ID
+    voice: str
     temperature: float
     top_p: float
     max_tokens: int
@@ -305,7 +302,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = SupportedModels.NOVA_SONIC_1,
         supports_generate_reply: bool = False,
-        voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
@@ -319,7 +316,7 @@ class RealtimeModel(llm.RealtimeModel):
         Args:
             model (str): Bedrock model ID for realtime inference. Defaults to NOVA_SONIC_1.
             supports_generate_reply (bool): Whether model supports generate_reply() method. Defaults to False.
-            voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            voice (str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
@@ -360,49 +357,51 @@ class RealtimeModel(llm.RealtimeModel):
     def with_nova_1_sonic(
         self,
         *,
-        voice: NotGivenOr[VoiceIdV1 | str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
     ) -> RealtimeModel:
         """Configure this instance for Nova Sonic 1.0.
 
         Sets the model ID and disables text input support. Optionally overrides the voice.
 
         Args:
-            voice (VoiceIdV1 | str | NotGiven): Preferred voice id for Sonic TTS output.
+            voice (str | NotGiven): Preferred voice id for Sonic TTS output.
+                Use Sonic1Voices.MATTHEW, Sonic1Voices.TIFFANY, etc. for IDE autocomplete.
 
         Returns:
             RealtimeModel: This instance (for method chaining).
 
         Example:
-            model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice=VoiceIdV1.MATTHEW)
+            model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice=Sonic1Voices.MATTHEW)
         """
         self._model = self.SupportedModels.NOVA_SONIC_1
         self._supports_generate_reply = False
         if is_given(voice):
-            self._opts.voice = str(voice)
+            self._opts.voice = voice
         return self
 
     def with_nova_2_sonic(
         self,
         *,
-        voice: NotGivenOr[VoiceIdV2 | str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
     ) -> RealtimeModel:
         """Configure this instance for Nova Sonic 2.0.
 
         Sets the model ID and enables text input support. Optionally overrides the voice.
 
         Args:
-            voice (VoiceIdV2 | str | NotGiven): Preferred voice id for Sonic TTS output.
+            voice (str | NotGiven): Preferred voice id for Sonic TTS output.
+                Use Sonic2Voices.MATTHEW, Sonic2Voices.TIFFANY, etc. for IDE autocomplete.
 
         Returns:
             RealtimeModel: This instance (for method chaining).
 
         Example:
-            model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice=VoiceIdV2.TIFFANY)
+            model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice=Sonic2Voices.TIFFANY)
         """
         self._model = self.SupportedModels.NOVA_SONIC_2
         self._supports_generate_reply = True
         if is_given(voice):
-            self._opts.voice = str(voice)
+            self._opts.voice = voice
         return self
 
     @property

@@ -15,7 +15,7 @@ VOICE_ID = str  # Accept any voice ID string for flexibility
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
 
 
-class VoiceIdV1:
+class Sonic1Voices:
     """Available voice IDs for Nova Sonic 1.0.
 
     English:
@@ -35,28 +35,28 @@ class VoiceIdV1:
     """
 
     # English
-    MATTHEW = "matthew"
-    TIFFANY = "tiffany"
-    AMY = "amy"
+    MATTHEW: str = "matthew"  # English (US) - Masculine
+    TIFFANY: str = "tiffany"  # English (US) - Feminine
+    AMY: str = "amy"  # English (GB) - Feminine
 
     # Spanish
-    LUPE = "lupe"
-    CARLOS = "carlos"
+    LUPE: str = "lupe"  # Spanish - Feminine
+    CARLOS: str = "carlos"  # Spanish - Masculine
 
     # French
-    AMBRE = "ambre"
-    FLORIAN = "florian"
+    AMBRE: str = "ambre"  # French - Feminine
+    FLORIAN: str = "florian"  # French - Masculine
 
     # German
-    GRETA = "greta"
-    LENNART = "lennart"
+    GRETA: str = "greta"  # German - Feminine
+    LENNART: str = "lennart"  # German - Masculine
 
     # Italian
-    BEATRICE = "beatrice"
-    LORENZO = "lorenzo"
+    BEATRICE: str = "beatrice"  # Italian - Feminine
+    LORENZO: str = "lorenzo"  # Italian - Masculine
 
 
-class VoiceIdV2:
+class Sonic2Voices:
     """Available voice IDs for Nova Sonic 2.0.
 
     English:
@@ -82,34 +82,34 @@ class VoiceIdV2:
     """
 
     # English
-    MATTHEW = "matthew"
-    TIFFANY = "tiffany"
-    AMY = "amy"
-    OLIVIA = "olivia"
+    MATTHEW: str = "matthew"  # English (US) - Masculine - Polyglot
+    TIFFANY: str = "tiffany"  # English (US) - Feminine - Polyglot
+    AMY: str = "amy"  # English (GB) - Feminine
+    OLIVIA: str = "olivia"  # English (US) - Feminine
 
     # Spanish
-    LUPE = "lupe"
-    CARLOS = "carlos"
+    LUPE: str = "lupe"  # Spanish - Feminine
+    CARLOS: str = "carlos"  # Spanish - Masculine
 
     # French
-    AMBRE = "ambre"
-    FLORIAN = "florian"
+    AMBRE: str = "ambre"  # French - Feminine
+    FLORIAN: str = "florian"  # French - Masculine
 
     # German
-    TINA = "tina"
-    LENNART = "lennart"
+    TINA: str = "tina"  # German - Feminine
+    LENNART: str = "lennart"  # German - Masculine
 
     # Italian
-    BEATRICE = "beatrice"
-    LORENZO = "lorenzo"
+    BEATRICE: str = "beatrice"  # Italian - Feminine
+    LORENZO: str = "lorenzo"  # Italian - Masculine
 
     # Portuguese
-    CAROLINA = "carolina"
-    LEO = "leo"
+    CAROLINA: str = "carolina"  # Portuguese (Brazilian) - Feminine
+    LEO: str = "leo"  # Portuguese (Brazilian) - Masculine
 
     # Hindi
-    ARJUN = "arjun"
-    KIARA = "kiara"
+    ARJUN: str = "arjun"  # Hindi - Masculine
+    KIARA: str = "kiara"  # Hindi - Feminine
 
 
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
@@ -144,7 +144,7 @@ class AudioOutputConfiguration(BaseModel):
     sampleRateHertz: SAMPLE_RATE_HERTZ = Field(default=24_000)
     sampleSizeBits: SAMPLE_SIZE_BITS = 16
     channelCount: CHANNEL_COUNT = 1
-    voiceId: VOICE_ID = Field(...)
+    voiceId: str = Field(...)
     encoding: AUDIO_ENCODING = "base64"
     audioType: str = "SPEECH"
 
@@ -396,7 +396,7 @@ class SonicEventBuilder:
 
     def create_prompt_start_block(
         self,
-        voice_id: VOICE_ID,
+        voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
         system_content: str,
         chat_ctx: llm.ChatContext,
@@ -612,7 +612,7 @@ class SonicEventBuilder:
 
     def create_prompt_start_event(
         self,
-        voice_id: VOICE_ID,
+        voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
         tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
     ) -> str:
