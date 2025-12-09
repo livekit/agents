@@ -823,7 +823,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
         headers = {
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
         }
-        print(self._opts.api_key, self._opts.api_secret)
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(f"{base_url}/bargein", headers=headers),
