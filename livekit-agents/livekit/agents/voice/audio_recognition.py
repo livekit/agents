@@ -687,7 +687,11 @@ class AudioRecognition:
                 await self._on_vad_event(ev)
         finally:
             await aio.cancel_and_wait(forward_task)
-            await stream.aclose()
+            try:
+                await stream.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise
 
     def _ensure_user_turn_span(self) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
