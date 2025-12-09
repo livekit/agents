@@ -54,7 +54,7 @@ from .events import (
     ToolSpec,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
-from .types import ENDPOINTING_SENSITIVITY
+from .types import MODALITIES, TURN_DETECTION
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
 DEFAULT_OUTPUT_SAMPLE_RATE = 24000
@@ -120,7 +120,8 @@ class _RealtimeOptions:
         max_tokens (int): Maximum number of tokens the model may generate in a single response.
         tool_choice (llm.ToolChoice | None): Strategy that dictates how the model should invoke tools.
         region (str): AWS region hosting the Bedrock Sonic model endpoint.
-        endpointing_sensitivity (str): Turn-taking sensitivity - "HIGH", "MEDIUM" (default), or "LOW".
+        turn_detection (TURN_DETECTION): Turn-taking sensitivity - "HIGH", "MEDIUM" (default), or "LOW".
+        modalities (MODALITIES): Input/output mode - "audio" for audio-only, "mixed" for audio + text input.
     """  # noqa: E501
 
     voice: str
@@ -129,7 +130,8 @@ class _RealtimeOptions:
     max_tokens: int
     tool_choice: llm.ToolChoice | None
     region: str
-    endpointing_sensitivity: ENDPOINTING_SENSITIVITY
+    turn_detection: TURN_DETECTION
+    modalities: MODALITIES
 
 
 @dataclass
@@ -302,28 +304,28 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         model: str = SupportedModels.NOVA_SONIC_1,
-        supports_generate_reply: bool = False,
+        modalities: MODALITIES = "audio",
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         region: NotGivenOr[str] = NOT_GIVEN,
-        endpointing_sensitivity: ENDPOINTING_SENSITIVITY = "MEDIUM",
+        turn_detection: TURN_DETECTION = "MEDIUM",
         generate_reply_timeout: float = 10.0,
     ):
         """Instantiate a new RealtimeModel.
 
         Args:
             model (str): Bedrock model ID for realtime inference. Defaults to NOVA_SONIC_1.
-            supports_generate_reply (bool): Whether model supports generate_reply() method. Defaults to False.
+            modalities (MODALITIES): Input/output mode. "audio" for audio-only (Sonic 1.0), "mixed" for audio + text input (Sonic 2.0). Defaults to "audio".
             voice (str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
             tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
             region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
-            endpointing_sensitivity (Literal["HIGH", "MEDIUM", "LOW"]): Turn-taking sensitivity. HIGH detects pauses quickly, LOW waits longer. Defaults to MEDIUM.
+            turn_detection (TURN_DETECTION): Turn-taking sensitivity. HIGH detects pauses quickly, LOW waits longer. Defaults to MEDIUM.
             generate_reply_timeout (float): Timeout in seconds for generate_reply() calls. Defaults to 10.0.
         """  # noqa: E501
         super().__init__(
@@ -337,7 +339,6 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
         self._model = model
-        self._supports_generate_reply = supports_generate_reply
         self._generate_reply_timeout = generate_reply_timeout
         # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic  # noqa: E501
         # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
@@ -351,7 +352,8 @@ class RealtimeModel(llm.RealtimeModel):
             max_tokens=max_tokens if is_given(max_tokens) else DEFAULT_MAX_TOKENS,
             tool_choice=tool_choice or None,
             region=region if is_given(region) else "us-east-1",
-            endpointing_sensitivity=endpointing_sensitivity,
+            turn_detection=turn_detection,
+            modalities=modalities,
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
@@ -362,7 +364,7 @@ class RealtimeModel(llm.RealtimeModel):
     ) -> RealtimeModel:
         """Configure this instance for Nova Sonic 1.0.
 
-        Sets the model ID and disables text input support. Optionally overrides the voice.
+        Sets the model ID and modalities to audio-only. Optionally overrides the voice.
 
         Args:
             voice (str | NotGiven): Preferred voice id for Sonic TTS output.
@@ -375,7 +377,7 @@ class RealtimeModel(llm.RealtimeModel):
             model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice="matthew")
         """
         self._model = self.SupportedModels.NOVA_SONIC_1
-        self._supports_generate_reply = False
+        self._opts.modalities = "audio"
         if is_given(voice):
             self._opts.voice = voice
         return self
@@ -387,7 +389,7 @@ class RealtimeModel(llm.RealtimeModel):
     ) -> RealtimeModel:
         """Configure this instance for Nova Sonic 2.0.
 
-        Sets the model ID and enables text input support. Optionally overrides the voice.
+        Sets the model ID and modalities to mixed (audio + text input). Optionally overrides the voice.
 
         Args:
             voice (str | NotGiven): Preferred voice id for Sonic TTS output.
@@ -400,7 +402,7 @@ class RealtimeModel(llm.RealtimeModel):
             model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice="tiffany")
         """
         self._model = self.SupportedModels.NOVA_SONIC_2
-        self._supports_generate_reply = True
+        self._opts.modalities = "mixed"
         if is_given(voice):
             self._opts.voice = voice
         return self
@@ -410,9 +412,9 @@ class RealtimeModel(llm.RealtimeModel):
         return self._model
 
     @property
-    def supports_generate_reply(self) -> bool:
-        """Whether this model supports generate_reply() method."""
-        return self._supports_generate_reply
+    def modalities(self) -> MODALITIES:
+        """Input/output mode: "audio" for audio-only, "mixed" for audio + text input."""
+        return self._opts.modalities
 
     @property
     def provider(self) -> str:
@@ -889,7 +891,7 @@ class RealtimeSession(  # noqa: F811
                 max_tokens=self._realtime_model._opts.max_tokens,
                 top_p=self._realtime_model._opts.top_p,
                 temperature=self._realtime_model._opts.temperature,
-                endpointing_sensitivity=self._realtime_model._opts.endpointing_sensitivity,
+                endpointing_sensitivity=self._realtime_model._opts.turn_detection,
             )
 
             for event in init_events:
@@ -1767,11 +1769,11 @@ class RealtimeSession(  # noqa: F811
             update_chat_ctx() → send_interactive_text().
             This method is for fullfilling AgentSession.generate_reply() instructions/prompts.
         """
-        # Check if generate_reply is supported
-        if not self._realtime_model.supports_generate_reply:
+        # Check if generate_reply is supported (requires mixed modalities)
+        if self._realtime_model.modalities != "mixed":
             logger.warning(
-                "generate_reply() is not supported by this model (requires text input support). "
-                "Skipping generate_reply call. Use a model with text input support (e.g., Nova Sonic 2.0) "
+                "generate_reply() is not supported by this model (requires mixed modalities). "
+                "Skipping generate_reply call. Use modalities='mixed' or Nova Sonic 2.0 "
                 "to enable this feature."
             )
 
@@ -1858,9 +1860,9 @@ class RealtimeSession(  # noqa: F811
         Returns:
             Future that resolves when generation starts
         """
-        if not self._realtime_model.supports_generate_reply:
+        if self._realtime_model.modalities != "mixed":
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.set_exception(llm.RealtimeError("Text input not supported by this model"))
+            fut.set_exception(llm.RealtimeError("Text input not supported (requires mixed modalities)"))
             return fut
 
         logger.info(

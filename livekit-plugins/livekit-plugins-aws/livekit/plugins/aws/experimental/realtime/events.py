@@ -7,6 +7,7 @@ from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 from livekit.agents import llm
 
 from ...log import logger
+from .types import TURN_DETECTION
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
@@ -96,7 +97,7 @@ class ToolConfiguration(BaseModel):
 
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
-    endpointingSensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM"
+    endpointingSensitivity: Optional[TURN_DETECTION] = "MEDIUM"
 
 
 class InputTextContentStart(BaseModel):
@@ -303,7 +304,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM",
+        endpointing_sensitivity: Optional[TURN_DETECTION] = "MEDIUM",
     ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
@@ -340,7 +341,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: Optional[ENDPOINTING_SENSITIVITY] = "MEDIUM",
+        endpointing_sensitivity: Optional[TURN_DETECTION] = "MEDIUM",
     ) -> str:
         event = Event(
             event=SessionStartEvent(

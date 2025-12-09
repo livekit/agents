@@ -1,6 +1,7 @@
 from typing import Literal
 
-ENDPOINTING_SENSITIVITY = Literal["HIGH", "MEDIUM", "LOW"]
+TURN_DETECTION = Literal["HIGH", "MEDIUM", "LOW"]
+MODALITIES = Literal["audio", "mixed"]
 
 SONIC1_VOICES = Literal[
     "matthew",  # English (US) - Masculine
