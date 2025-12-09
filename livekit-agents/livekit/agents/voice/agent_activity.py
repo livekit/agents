@@ -2701,7 +2701,11 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(exe_task)
 
             for tee in tees:
-                await tee.aclose()
+                try:
+                    await tee.aclose()
+                except RuntimeError as e:
+                    if "already running" not in str(e):
+                        raise  # Re-raise unexpected RuntimeErrors
             return
 
         if len(message_outputs) > 0:
@@ -2725,7 +2729,11 @@ class AgentActivity(RecognitionHooks):
                 )
 
         for tee in tees:
-            await tee.aclose()
+            try:
+                await tee.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         tool_output.first_tool_started_fut.add_done_callback(
