@@ -16,7 +16,13 @@ from livekit import rtc
 from .. import stt, utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given
 from ._utils import create_access_token
 
@@ -244,7 +250,7 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="chunk"
+                streaming=True, interim_results=True, aligned_transcript="word"
             ),
         )
 
@@ -561,6 +567,7 @@ class SpeechStream(stt.SpeechStream):
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
         language = data.get("language", self._opts.language or "en")
+        words = data.get("words", []) or []
 
         if not text and not is_final:
             return
@@ -573,9 +580,17 @@ class SpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=language,
             start_time=data.get("start", 0),
-            end_time=data.get("duration", 0),  # This is the duration transcribed so far
+            end_time=data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=text,
+            words=[
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
+                )
+                for word in words
+            ],
         )
 
         if is_final:
