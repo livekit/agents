@@ -127,8 +127,6 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.off("track_subscribed", self._on_track_available)
         self._data_ch.close()
-        if self._processor:
-            self._processor._close()
 
     @log_exceptions(logger=logger)
     async def _forward_task(
@@ -166,6 +164,8 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._tasks.add(task)
             self._stream = None
             self._publication = None
+        if self._processor:
+            self._processor._close()
 
     def _on_track_available(
         self,
