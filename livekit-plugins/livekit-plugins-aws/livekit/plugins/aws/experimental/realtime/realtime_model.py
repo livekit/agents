@@ -1725,10 +1725,38 @@ class RealtimeSession(  # noqa: F811
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the model.
 
-        For Nova Sonic 2.0: Only sends if instructions are provided.
-        For Nova Sonic 1.0: Not supported - logs warning and skips.
+        This method is called by the LiveKit framework's AgentSession.generate_reply() and
+        AgentActivity._realtime_reply_task(). The framework handles user_input by adding it
+        to the chat context via update_chat_ctx() before calling this method.
 
-        Note: This sends text as a system prompt/command. For user messages, use send_interactive_text().
+        Flow:
+            1. Framework receives user_input parameter
+            2. Framework adds user message to chat context
+            3. Framework calls update_chat_ctx() (which sends the message to Nova Sonic)
+            4. Framework calls this method with instructions parameter
+            5. This method sends instructions to trigger Nova Sonic's response
+
+        For Nova Sonic 2.0:
+            - Sends instructions as interactive text if provided
+            - Triggers model response generation
+            
+        For Nova Sonic 1.0:
+            - Not supported (no text input capability)
+            - Logs warning and returns empty future
+
+        Args:
+            instructions (NotGivenOr[str]): Additional instructions to guide the response.
+                These are sent as system-level prompts to influence how the model responds.
+                User input should be added via update_chat_ctx(), not passed here.
+
+        Returns:
+            asyncio.Future[llm.GenerationCreatedEvent]: Future that resolves when generation starts.
+                Raises RealtimeError on timeout (default: 10s).
+
+        Note:
+            User messages flow through AgentSession.generate_reply(user_input=...) →
+            update_chat_ctx() → send_interactive_text().
+            This method is for instructions/prompts only.
         """
         # Check if generate_reply is supported
         if not self._realtime_model.supports_generate_reply:
