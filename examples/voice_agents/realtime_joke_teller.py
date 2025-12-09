@@ -56,7 +56,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import aws, silero
-from livekit.plugins.aws.experimental.realtime.events import VoiceIdV2
+from livekit.plugins.aws.experimental.realtime.events import Sonic2Voices
 
 load_dotenv()
 
@@ -225,7 +225,7 @@ async def entrypoint(ctx: agents.JobContext):
                     llm=aws.realtime.RealtimeModel(
                         tool_choice="auto",
                         max_tokens=10_000,
-                    ).with_nova_2_sonic(voice=VoiceIdV2.TIFFANY)
+                    ).with_nova_2_sonic(voice=Sonic2Voices.TIFFANY)
                 )
 
             await session.start(
