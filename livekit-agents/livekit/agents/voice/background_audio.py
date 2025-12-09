@@ -377,9 +377,10 @@ class BackgroundAudioPlayer:
 
             await asyncio.sleep(0)
             if play_handle._stop_fut.done():
-                with contextlib.suppress(RuntimeError):
-                    await gen.aclose()
                 stopped = True
+                with contextlib.suppress(RuntimeError):
+                    # ignore error caused by race condition between aclose() and gen.__anext__()
+                    await gen.aclose()
 
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:
