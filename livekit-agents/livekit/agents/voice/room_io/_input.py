@@ -356,7 +356,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     def _apply_audio_processor(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         for frame in frames:
             if self._processor is not None:
-                yield self._processor._process(frame)
+                try:
+                    yield self._processor._process(frame)
+                except Exception as e:
+                    logger.warning(
+                        "error pre-processing audio frame",
+                        exc_info=e,
+                    )
+                    yield frame
             else:
                 yield frame
 
