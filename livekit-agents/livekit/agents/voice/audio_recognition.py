@@ -217,13 +217,13 @@ class AudioRecognition:
         self._agent_speaking = True
         self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechStartedSentinel())
 
-    def start_barge_in_inference(self) -> None:
+    def start_barge_in_inference(self, speech_duration: float | None = None) -> None:
         """Start barge-in inference when agent is speaking and overlap speech starts."""
         if not self._barge_in_enabled or not self._bargein_ch:
             return
         if self._agent_speaking:
             self._bargein_ch.send_nowait(
-                inference.BargeinStreamBase._OverlapSpeechStartedSentinel()
+                inference.BargeinStreamBase._OverlapSpeechStartedSentinel(speech_duration)
             )
 
     def end_barge_in_inference(self) -> None:

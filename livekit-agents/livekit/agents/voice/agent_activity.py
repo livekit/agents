@@ -1144,7 +1144,7 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.start_barge_in_inference()
+                self._audio_recognition.start_barge_in_inference(speech_duration=0)
 
         # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
@@ -1259,7 +1259,7 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
         if self.bargein_enabled and self._audio_recognition:
-            self._audio_recognition.start_barge_in_inference()
+            self._audio_recognition.start_barge_in_inference(speech_duration=ev.speech_duration)
         self._user_silence_event.clear()
 
         if self._false_interruption_timer:
@@ -1309,6 +1309,7 @@ class AgentActivity(RecognitionHooks):
             extra={
                 "timestamp": ev.timestamp,
                 "overlap_speech_started_at": ev.overlap_speech_started_at,
+                "inference_duration": ev.inference_duration,
             },
         )
         # restore interruption by audio activity
