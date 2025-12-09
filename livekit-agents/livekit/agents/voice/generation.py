@@ -166,7 +166,11 @@ async def _llm_inference_task(
                 )
     finally:
         if isinstance(llm_node, _ACloseable):
-            await llm_node.aclose()
+            try:
+                await llm_node.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
@@ -333,7 +337,11 @@ async def _text_forwarding_task(
                 out.first_text_fut.set_result(None)
     finally:
         if isinstance(source, _ACloseable):
-            await source.aclose()
+            try:
+                await source.aclose()
+            except RuntimeError as e:
+                if "already running" not in str(e):
+                    raise  # Re-raise unexpected RuntimeErrors
 
         if text_output is not None:
             text_output.flush()
