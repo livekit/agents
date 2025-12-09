@@ -109,6 +109,7 @@ class TTS(tts.TTS):
         ws_url: str = DEFAULT_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        retain_format: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Inworld TTS.
@@ -142,6 +143,8 @@ class TTS(tts.TTS):
             http_session (aiohttp.ClientSession, optional): The HTTP session to use.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use for streaming.
                 Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+            retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
+                Defaults to True.
         """
         if not is_given(sample_rate):
             sample_rate = DEFAULT_SAMPLE_RATE
@@ -190,7 +193,11 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            tokenizer
+            if is_given(tokenizer)
+            else tokenize.blingfire.SentenceTokenizer(
+                retain_format=retain_format if is_given(retain_format) else True
+            )
         )
 
     @property
