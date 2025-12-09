@@ -1212,7 +1212,10 @@ class AgentActivity(RecognitionHooks):
     # region recognition hooks
 
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
-        self._session._update_user_state("speaking")
+        speech_start_time = time.time()
+        if ev:
+            speech_start_time = speech_start_time - ev.speech_duration
+        self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1638,10 +1641,19 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            try:
+                started_speaking_at = fut.result() or time.time()
+            except BaseException:
+                started_speaking_at = time.time()
+
+            self._session._update_agent_state("speaking", start_time=started_speaking_at)
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1905,10 +1917,18 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            try:
+                started_speaking_at = fut.result() or time.time()
+            except BaseException:
+                started_speaking_at = time.time()
+            self._session._update_agent_state("speaking", start_time=started_speaking_at)
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2251,10 +2271,18 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            try:
+                started_speaking_at = fut.result() or time.time()
+            except BaseException:
+                started_speaking_at = time.time()
+            self._session._update_agent_state("speaking", start_time=started_speaking_at)
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -2654,7 +2682,8 @@ class AgentActivity(RecognitionHooks):
                 and not self._paused_speech.done()
             ):
                 self._session._update_agent_state(
-                    "speaking", otel_context=self._paused_speech._agent_turn_context
+                    "speaking",
+                    otel_context=self._paused_speech._agent_turn_context,
                 )
                 audio_output.resume()
                 resumed = True
