@@ -1729,17 +1729,25 @@ class RealtimeSession(  # noqa: F811
         AgentActivity._realtime_reply_task(). The framework handles user_input by adding it
         to the chat context via update_chat_ctx() before calling this method.
 
-        Flow:
-            1. Framework receives user_input parameter
+        Flow for user_input:
+            1. Framework receives generate_reply with user_input parameter
             2. Framework adds user message to chat context
             3. Framework calls update_chat_ctx() (which sends the message to Nova Sonic)
-            4. Framework calls this method with instructions parameter
-            5. This method sends instructions to trigger Nova Sonic's response
+            4. Framework calls this method no parameters
+            5. This method trigger Nova Sonic's response based on the last context message add
 
-        For Nova Sonic 2.0:
+        Flow for instructions:
+            1. Framework receives generate_reply with instructions parameter
+            2. Framework calls this method instructions parameter
+            3. This method sends instructions as a prompt to Nova Sonic and triggers a response.
+
+        If both parameters are sent, the same flow will strip the user_input out of the initial call
+        and send the instructions on to this method.
+
+        For Nova Sonic 2.0 and any supporting model:
             - Sends instructions as interactive text if provided
             - Triggers model response generation
-            
+
         For Nova Sonic 1.0:
             - Not supported (no text input capability)
             - Logs warning and returns empty future
@@ -1756,7 +1764,7 @@ class RealtimeSession(  # noqa: F811
         Note:
             User messages flow through AgentSession.generate_reply(user_input=...) →
             update_chat_ctx() → send_interactive_text().
-            This method is for instructions/prompts only.
+            This method is for fullfilling AgentSession.generate_reply() instructions/prompts.
         """
         # Check if generate_reply is supported
         if not self._realtime_model.supports_generate_reply:
