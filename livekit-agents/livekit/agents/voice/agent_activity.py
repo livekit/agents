@@ -128,6 +128,11 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
 
+        # Grace period after activity resume to ignore stale interruptions
+        # This prevents old STT transcripts from immediately cancelling new speech
+        self._resume_timestamp: float | None = None
+        self._resume_grace_period_sec: float = 0.3  # 300ms grace period
+
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
         self._q_updated = asyncio.Event()
@@ -770,6 +775,8 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
+                # Set resume timestamp to enable grace period for ignoring stale interrupts
+                self._resume_timestamp = time.time()
                 await self._start_session()
                 logger.debug(
                     "activity resumed, audio_recognition recreated",
@@ -1310,6 +1317,22 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
+
+        # Ignore interruptions during grace period after activity resume
+        # This prevents stale STT transcripts from immediately cancelling new speech
+        if self._resume_timestamp is not None:
+            elapsed = time.time() - self._resume_timestamp
+            if elapsed < self._resume_grace_period_sec:
+                logger.debug(
+                    "ignoring audio interrupt during resume grace period",
+                    extra={
+                        "elapsed_ms": elapsed * 1000,
+                        "grace_period_ms": self._resume_grace_period_sec * 1000,
+                    },
+                )
+                return
+            # Clear timestamp after grace period expires
+            self._resume_timestamp = None
 
         if (
             self.stt is not None
