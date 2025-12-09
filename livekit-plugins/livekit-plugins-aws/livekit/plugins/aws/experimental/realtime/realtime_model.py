@@ -54,6 +54,7 @@ from .events import (
     ToolSpec,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
+from .types import ENDPOINTING_SENSITIVITY
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
 DEFAULT_OUTPUT_SAMPLE_RATE = 24000
@@ -128,7 +129,7 @@ class _RealtimeOptions:
     max_tokens: int
     tool_choice: llm.ToolChoice | None
     region: str
-    endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"]
+    endpointing_sensitivity: ENDPOINTING_SENSITIVITY
 
 
 @dataclass
@@ -308,7 +309,7 @@ class RealtimeModel(llm.RealtimeModel):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         region: NotGivenOr[str] = NOT_GIVEN,
-        endpointing_sensitivity: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM",
+        endpointing_sensitivity: ENDPOINTING_SENSITIVITY = "MEDIUM",
         generate_reply_timeout: float = 10.0,
     ):
         """Instantiate a new RealtimeModel.
@@ -365,13 +366,13 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             voice (str | NotGiven): Preferred voice id for Sonic TTS output.
-                Use Sonic1Voices.MATTHEW, Sonic1Voices.TIFFANY, etc. for IDE autocomplete.
+                Use SONIC1_VOICES literal values (e.g., "matthew", "tiffany").
 
         Returns:
             RealtimeModel: This instance (for method chaining).
 
         Example:
-            model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice=Sonic1Voices.MATTHEW)
+            model = RealtimeModel(tool_choice="auto").with_nova_1_sonic(voice="matthew")
         """
         self._model = self.SupportedModels.NOVA_SONIC_1
         self._supports_generate_reply = False
@@ -390,13 +391,13 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             voice (str | NotGiven): Preferred voice id for Sonic TTS output.
-                Use Sonic2Voices.MATTHEW, Sonic2Voices.TIFFANY, etc. for IDE autocomplete.
+                Use SONIC2_VOICES literal values (e.g., "matthew", "tiffany", "olivia").
 
         Returns:
             RealtimeModel: This instance (for method chaining).
 
         Example:
-            model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice=Sonic2Voices.TIFFANY)
+            model = RealtimeModel(tool_choice="auto", max_tokens=10_000).with_nova_2_sonic(voice="tiffany")
         """
         self._model = self.SupportedModels.NOVA_SONIC_2
         self._supports_generate_reply = True
