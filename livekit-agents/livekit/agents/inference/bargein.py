@@ -501,6 +501,8 @@ class BargeinHttpStream(BargeinStreamBase):
                         )
                         _, last_request = cache.pop()
                         last_request = last_request or {}
+                        if last_request:
+                            logger.info("no request made for overlap speech")
                         probas = last_request.get("probabilities", [])
                         logger.info(
                             "overlap speech ended, sending event",
@@ -597,6 +599,7 @@ class BargeinHttpStream(BargeinStreamBase):
             try:
                 resp.raise_for_status()
                 data = await resp.json()
+                logger.info("bargein prediction response", extra={"response": data})
                 # {
                 #     "created_at": int,
                 #     "is_bargein": bool,
