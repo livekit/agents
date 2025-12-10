@@ -1060,20 +1060,26 @@ class RealtimeSession(  # noqa: F811
         if role == "ASSISTANT":
             additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
             if "SPECULATIVE" in additional_fields:
-                # Check if this is a different completion
+                # Check if this is a different completion (but not unknown -> real transition)
                 if (
                     self._current_generation is not None
                     and self._current_generation.completion_id != completion_id
+                    and self._current_generation.completion_id != "unknown"
                 ):
                     logger.debug(
                         f"New completion detected (old={self._current_generation.completion_id}, new={completion_id})"
                     )
                     self._close_current_generation()
 
-                # Create generation if needed
-                if self._current_generation is None:
+                # Create generation if needed (but not if we just closed one above)
+                elif self._current_generation is None:
                     logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
                     self._create_response_generation()
+                
+                # Update completion_id from "unknown" to real ID
+                elif self._current_generation.completion_id == "unknown":
+                    self._current_generation.completion_id = completion_id
+                    logger.debug(f"Updated completion_id from unknown to {completion_id}")
         else:
             # For USER and FINAL, just ensure generation exists
             self._create_response_generation()
