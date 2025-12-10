@@ -126,6 +126,10 @@ class AvatarSession:
             if ev.new_state == "idle":
                 self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
+        @self._agent_session.on("close")
+        def on_agent_session_close(ev):
+            self._msg_ch.close()
+
         self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE)
         await self._audio_buffer.start()
         self._audio_buffer.on("clear_buffer", self._on_clear_buffer)
