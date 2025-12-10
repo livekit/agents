@@ -8,12 +8,12 @@ import struct
 import time
 import weakref
 from abc import ABC, abstractmethod
-from collections import deque
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum, unique
 from time import perf_counter_ns
-from typing import Any, Literal, Union
+from typing import Any, Generic, Literal, TypeVar, Union
 
 import aiohttp
 import numpy as np
@@ -37,12 +37,9 @@ PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
-# WebSocket input message types
 MSG_INPUT_AUDIO = "input_audio"
 MSG_SESSION_CREATE = "session.create"
 MSG_SESSION_CLOSE = "session.close"
-
-# WebSocket output message types
 MSG_SESSION_CREATED = "session.created"
 MSG_SESSION_CLOSED = "session.closed"
 MSG_BARGEIN_DETECTED = "bargein_detected"
@@ -444,15 +441,15 @@ class BargeinHttpStream(BargeinStreamBase):
     async def _run(self) -> None:
         data_chan = aio.Chan[npt.NDArray[np.int16]]()
         overlap_speech_started: bool = False
-        # store the last request and response for the overlap speech ended event or bargein detected event
-        # useful for debugging and analytics
-        last_resp: dict[str, Any] | None = None
-        last_request: npt.NDArray[np.int16] | None = None
+        cache: _LRUCache[int, dict[str, Any]] = _LRUCache(
+            max_len=5, default_key=0, default_value={}
+        )
 
         @log_exceptions(logger=logger)
         async def _forward_data() -> None:
             nonlocal data_chan
             nonlocal overlap_speech_started
+            nonlocal cache
 
             agent_speech_started: bool = False
             inference_s16_data = np.zeros(self._model._opts.max_window_size, dtype=np.int16)
@@ -474,6 +471,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
+                    cache.clear()
                     continue
 
                 # start inferencing against the overlap speech
@@ -497,25 +495,24 @@ class BargeinHttpStream(BargeinStreamBase):
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
+                        _, last_request = cache.pop()
+                        last_request = last_request or {}
+                        probas = last_request.get("probabilities", [])
+                        inference_duration = last_request.get("inference_duration", 0)
                         ev = BargeinEvent(
                             type=BargeinEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
                             overlap_speech_started_at=self._overlap_speech_started_at,
-                            speech_input=last_request,
-                            probabilities=np.array(
-                                last_resp.get("probabilities", []), dtype=np.float32
-                            )
-                            if last_resp and last_resp.get("probabilities", [])
-                            else None,
-                            inference_duration=last_resp.get("inference_duration", 0)
-                            if last_resp
-                            else 0,
+                            speech_input=last_request.get("speech_input", None),
+                            probabilities=np.array(probas, dtype=np.float32) if probas else None,
+                            inference_duration=inference_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
+                    cache.clear()
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
@@ -532,21 +529,21 @@ class BargeinHttpStream(BargeinStreamBase):
                 )
                 accumulated_samples += samples_written
                 if accumulated_samples >= self._model._opts.step_size and overlap_speech_started:
-                    data_chan.send_nowait(inference_s16_data[:start_idx])
+                    data_chan.send_nowait(inference_s16_data[:start_idx].copy())
                     accumulated_samples = 0
 
         @log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal overlap_speech_started
-            nonlocal last_resp
-            nonlocal last_request
+            nonlocal cache
             async for data in data_chan:
-                start_time = time.perf_counter()
-                last_request = data
-                last_resp = resp = await self.predict(data)
-                is_bargein = resp.get("is_bargein", False)
-                inference_duration = time.perf_counter() - start_time
-                last_resp["inference_duration"] = inference_duration
+                resp = await self.predict(data)
+                is_bargein = resp["is_bargein"]
+                inference_duration = (time.perf_counter_ns() - resp["created_at"]) / 1e9
+                cache[resp["created_at"]] = {
+                    "inference_duration": inference_duration,
+                    "speech_input": data,
+                } | resp
                 if overlap_speech_started and is_bargein:
                     ev = BargeinEvent(
                         type=BargeinEventType.BARGEIN,
@@ -555,7 +552,9 @@ class BargeinHttpStream(BargeinStreamBase):
                         inference_duration=inference_duration,
                         is_bargein=is_bargein,
                         speech_input=data,
-                        probabilities=np.array(resp.get("probabilities", []), dtype=np.float32),
+                        probabilities=np.array(resp.get("probabilities", []), dtype=np.float32)
+                        if resp.get("probabilities", [])
+                        else None,
                     )
                     self._event_ch.send_nowait(ev)
                     self._bargein_detector.emit("bargein_detected", ev)
@@ -584,22 +583,16 @@ class BargeinHttpStream(BargeinStreamBase):
             try:
                 resp.raise_for_status()
                 data = await resp.json()
-                is_bargein: bool | None = data.get("is_bargein")
-                inference_duration = (perf_counter_ns() - created_at) / 1e9
-                if isinstance(is_bargein, bool):
-                    logger.debug(
-                        "bargein prediction",
-                        extra={
-                            "is_bargein": is_bargein,
-                            "duration": inference_duration,
-                        },
-                    )
-                    return data
+                # {
+                #     "created_at": int,
+                #     "is_bargein": bool,
+                #     "probabilities": list[float], optional
+                # }
+                return data
             except Exception as e:
                 msg = await resp.text()
                 logger.error("error during bargein prediction", extra={"response": msg})
                 raise APIError(f"error during bargein prediction: {e}", body=msg) from e
-            return {}
 
 
 class BargeinWebSocketStream(BargeinStreamBase):
@@ -628,15 +621,15 @@ class BargeinWebSocketStream(BargeinStreamBase):
     async def _run(self) -> None:
         closing_ws = False
         overlap_speech_started: bool = False
-        last_resp: dict[str, Any] | None = None
-        # store the recent requests instead of the last one for end of inference events
-        recent_requests: deque[npt.NDArray[np.int16]] = deque(maxlen=5)
+        cache: _LRUCache[int, dict[str, Any]] = _LRUCache(
+            max_len=5, default_key=0, default_value={}
+        )
 
         @log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             nonlocal overlap_speech_started
-            nonlocal recent_requests
+            nonlocal cache
 
             agent_speech_started: bool = False
             inference_s16_data = np.zeros(self._model._opts.max_window_size, dtype=np.int16)
@@ -682,23 +675,25 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
                         logger.debug("overlap speech ended, stopping barge-in inference")
+                        _, last_request = cache.pop()
+                        last_request = last_request or {}
+                        inference_duration = last_request.get("inference_duration", 0)
+                        speech_input = last_request.get("speech_input", None)
+                        probas = last_request.get("probabilities", [])
                         ev = BargeinEvent(
                             type=BargeinEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
                             overlap_speech_started_at=self._overlap_speech_started_at,
-                            speech_input=recent_requests[-1][1] if recent_requests else None,
-                            probabilities=np.array(
-                                last_resp.get("probabilities", []), dtype=np.float32
-                            )
-                            if last_resp and last_resp.get("probabilities", [])
-                            else None,
-                            inference_duration=last_resp.get("inference_duration", 0),
+                            speech_input=speech_input,
+                            probabilities=np.array(probas, dtype=np.float32) if probas else None,
+                            inference_duration=inference_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
+                    cache.clear()
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
@@ -722,7 +717,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     created_at = perf_counter_ns()
                     header = struct.pack("<Q", created_at)  # 8 bytes
                     await ws.send_bytes(header + inference_s16_data[:start_idx].tobytes())
-                    recent_requests.append((created_at, inference_s16_data[:start_idx]))
+                    cache[created_at] = {
+                        "speech_input": inference_s16_data[:start_idx].copy(),
+                    }
                     accumulated_samples = 0
 
             closing_ws = True
@@ -735,8 +732,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             nonlocal overlap_speech_started
-            nonlocal recent_requests
-            nonlocal last_resp
+            nonlocal cache
 
             while True:
                 msg = await ws.receive()
@@ -754,12 +750,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     continue
 
                 data = json.loads(msg.data)
-                last_resp = data
                 msg_type = data.get("type")
                 created_at = data.get("created_at", 0)
-                input_array: npt.NDArray[np.int16] | None = next(
-                    (req[1] for req in recent_requests if req[0] == created_at), None
-                )
 
                 if msg_type == MSG_SESSION_CREATED:
                     pass
@@ -767,17 +759,22 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     if overlap_speech_started:
                         logger.debug("bargein detected")
                         inference_duration = (perf_counter_ns() - created_at) / 1e9
-                        last_resp["inference_duration"] = inference_duration
+                        probas = data.get("probabilities", [])
+                        cache[created_at] = (
+                            {
+                                "inference_duration": inference_duration,
+                            }
+                            | cache.get(created_at, {})
+                            | data
+                        )
                         ev = BargeinEvent(
                             type=BargeinEventType.BARGEIN,
                             timestamp=time.time(),
                             is_bargein=True,
                             inference_duration=inference_duration,
                             overlap_speech_started_at=self._overlap_speech_started_at,
-                            speech_input=input_array,
-                            probabilities=np.array(data.get("probabilities", []), dtype=np.float32)
-                            if data.get("probabilities", [])
-                            else None,
+                            speech_input=cache[created_at].get("speech_input", None),
+                            probabilities=np.array(probas, dtype=np.float32) if probas else None,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("bargein_detected", ev)
@@ -881,3 +878,36 @@ def _write_to_inference_s16_data(
         slice_[:] = frame.data
     start_idx += frame.samples_per_channel
     return start_idx, frame.samples_per_channel
+
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+class _LRUCache(Generic[_K, _V]):
+    def __init__(
+        self, max_len: int = 5, default_key: _K | None = None, default_value: _V | None = None
+    ) -> None:
+        self._cache: OrderedDict[_K, _V] = OrderedDict()
+        self._max_len = max_len
+        self._default_key = default_key
+        self._default_value = default_value
+
+    def __setitem__(self, key: _K, value: _V) -> None:
+        self._cache[key] = value
+        if len(self._cache) > self._max_len:
+            self._cache.popitem(last=False)
+
+    def __getitem__(self, key: _K) -> _V:
+        return self._cache[key]
+
+    def get(self, key: _K, default: _V | None = None) -> _V | None:
+        return self._cache.get(key, default)
+
+    def pop(self) -> tuple[_K | None, _V | None]:
+        if not self._cache:
+            return self._default_key, self._default_value
+        return self._cache.popitem(last=True)
+
+    def clear(self) -> None:
+        self._cache.clear()
