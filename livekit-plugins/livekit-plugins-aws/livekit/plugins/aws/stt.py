@@ -101,7 +101,15 @@ class STT(stt.STT):
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
     ):
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        # Enable diarization capability if show_speaker_label is enabled
+        diarization_enabled = is_given(show_speaker_label) and show_speaker_label
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                diarization=diarization_enabled,
+            )
+        )
 
         if not _AWS_SDK_AVAILABLE:
             raise ImportError(
@@ -317,8 +325,14 @@ class SpeechStream(stt.SpeechStream):
 
     def _streaming_recognize_response_to_speech_data(self, resp: Result) -> stt.SpeechData:
         confidence = 0.0
+        speaker_id = None
+
         if resp.alternatives and (items := resp.alternatives[0].items):
             confidence = items[0].confidence or 0.0
+            # Extract speaker_id from the first item if available
+            # AWS Transcribe returns speaker labels like "spk_0", "spk_1", etc.
+            if items[0].speaker:
+                speaker_id = items[0].speaker
 
         return stt.SpeechData(
             language=resp.language_code or self._opts.language,
@@ -326,4 +340,5 @@ class SpeechStream(stt.SpeechStream):
             end_time=resp.end_time if resp.end_time is not None else 0.0,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
+            speaker_id=speaker_id,
         )
