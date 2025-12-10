@@ -66,10 +66,10 @@ class FallbackModel(TypedDict):
     Extra fields are passed through to the provider.
 
     Example:
-        >>> FallbackModel(name="cartesia/sonic", voice="")
+        >>> FallbackModel(model="cartesia/sonic", voice="")
     """
 
-    name: str
+    model: str
     """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
 
     voice: str
@@ -87,8 +87,8 @@ def _normalize_fallback(
 ) -> list[FallbackModel]:
     def _make_fallback(model: FallbackModelType) -> FallbackModel:
         if isinstance(model, str):
-            name, voice = _parse_model_string(model)
-            return FallbackModel(name=name, voice=voice if voice else "")
+            model_name, voice = _parse_model_string(model)
+            return FallbackModel(model=model_name, voice=voice if voice else "")
         return model
 
     if isinstance(fallback, list):
@@ -382,7 +382,11 @@ class TTS(tts.TTS):
             params["language"] = self._opts.language
         if self._opts.fallback:
             models = [
-                {"name": m.get("name"), "voice": m.get("voice"), "extra": m.get("extra_kwargs", {})}
+                {
+                    "model": m.get("model"),
+                    "voice": m.get("voice"),
+                    "extra": m.get("extra_kwargs", {}),
+                }
                 for m in self._opts.fallback
             ]
             params["fallback"] = {"models": models}

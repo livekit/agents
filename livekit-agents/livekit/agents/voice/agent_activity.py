@@ -1017,6 +1017,8 @@ class AgentActivity(RecognitionHooks):
         last_playout_ts = 0.0
         while True:
             await self._q_updated.wait()
+            self._q_updated.clear()
+
             while self._speech_q:
                 _, _, speech = heapq.heappop(self._speech_q)
                 if speech.done():
@@ -1066,8 +1068,6 @@ class AgentActivity(RecognitionHooks):
 
             if self._scheduling_paused and len(to_wait) == 0:
                 break
-
-            self._q_updated.clear()
 
     # -- Realtime Session events --
 
