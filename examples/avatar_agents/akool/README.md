@@ -2,6 +2,8 @@
 
 This example demonstrates how to create a animated avatar using [Akool](https://akool.com/).
 
+create your avatar [here](https://akool.com/apps/upload/avatar?from=%2Fapps%2Fstreaming-avatar%2Fedit)
+
 ## Usage
 
 * Update the environment:

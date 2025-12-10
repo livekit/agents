@@ -1,21 +1,20 @@
+import asyncio
 import logging
 import os
-import asyncio
 
 from dotenv import load_dotenv
 from openai.types.beta.realtime.session import TurnDetection
 
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
-    RoomInputOptions,
     WorkerOptions,
     WorkerType,
     cli,
 )
-from livekit.plugins import openai, akool
-from livekit import rtc
+from livekit.plugins import akool, openai
 
 logger = logging.getLogger("akool-avatar-example")
 logger.setLevel(logging.INFO)
