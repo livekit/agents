@@ -2,6 +2,7 @@ from typing import Literal
 
 TURN_DETECTION = Literal["HIGH", "MEDIUM", "LOW"]
 MODALITIES = Literal["audio", "mixed"]
+REALTIME_MODELS = Literal["amazon.nova-sonic-v1:0", "amazon.nova-2-sonic-v1:0"]
 
 SONIC1_VOICES = Literal[
     "matthew",  # English (US) - Masculine

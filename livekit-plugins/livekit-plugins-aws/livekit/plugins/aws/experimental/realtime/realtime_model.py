@@ -54,7 +54,7 @@ from .events import (
     ToolSpec,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
-from .types import MODALITIES, SONIC1_VOICES, SONIC2_VOICES, TURN_DETECTION
+from .types import MODALITIES, REALTIME_MODELS, SONIC1_VOICES, SONIC2_VOICES, TURN_DETECTION
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
 DEFAULT_OUTPUT_SAMPLE_RATE = 24000
@@ -294,16 +294,10 @@ class RealtimeModel(llm.RealtimeModel):
     spawns a RealtimeSession when session() is invoked.
     """
 
-    class SupportedModels:
-        """Supported Nova Sonic realtime models."""
-
-        NOVA_SONIC_1 = "amazon.nova-sonic-v1:0"
-        NOVA_SONIC_2 = "amazon.nova-2-sonic-v1:0"
-
     def __init__(
         self,
         *,
-        model: str = SupportedModels.NOVA_SONIC_1,
+        model: REALTIME_MODELS | str = "amazon.nova-sonic-v1:0",
         modalities: MODALITIES = "audio",
         voice: NotGivenOr[SONIC1_VOICES | SONIC2_VOICES | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -317,9 +311,9 @@ class RealtimeModel(llm.RealtimeModel):
         """Instantiate a new RealtimeModel.
 
         Args:
-            model (str): Bedrock model ID for realtime inference. Defaults to NOVA_SONIC_1.
+            model (REALTIME_MODELS | str): Bedrock model ID for realtime inference. Defaults to "amazon.nova-sonic-v1:0".
             modalities (MODALITIES): Input/output mode. "audio" for audio-only (Sonic 1.0), "mixed" for audio + text input (Sonic 2.0). Defaults to "audio".
-            voice (SONIC1_VOICES | SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC1_VOICES or SONIC2_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
+            voice (SONIC1_VOICES | SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Defaults to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
@@ -389,7 +383,7 @@ class RealtimeModel(llm.RealtimeModel):
             model = RealtimeModel.with_nova_sonic_1(voice="matthew", tool_choice="auto")
         """
         return cls(
-            model=cls.SupportedModels.NOVA_SONIC_1,
+            model="amazon.nova-sonic-v1:0",
             modalities="audio",
             voice=voice,
             temperature=temperature,
@@ -433,7 +427,7 @@ class RealtimeModel(llm.RealtimeModel):
             model = RealtimeModel.with_nova_sonic_2(voice="tiffany", max_tokens=10_000)
         """
         return cls(
-            model=cls.SupportedModels.NOVA_SONIC_2,
+            model="amazon.nova-2-sonic-v1:0",
             modalities="mixed",
             voice=voice,
             temperature=temperature,
