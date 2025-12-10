@@ -5,8 +5,9 @@ import time
 from typing import Any
 
 import aiohttp
+
 from livekit.agents import llm
-from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .llm_stream import LLMStream
 
