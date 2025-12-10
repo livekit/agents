@@ -99,7 +99,7 @@ class BargeinOptions:
     threshold: float
     """The threshold for the bargein detection, defaults to 0.65"""
     min_frames: int
-    """The minimum number of frames to detect a bargein, defaults to 25ms/1 frame"""
+    """The minimum number of frames to detect a bargein, defaults to 50ms/2 frames"""
     max_window_size: int
     """The maximum window size for the bargein detection, defaults to 3s at 16000Hz = 48000 samples"""
     prefix_size: int
@@ -181,6 +181,20 @@ class BargeinDetector(
         self._sample_rate = sample_rate
         self._session = http_session
         self._streams = weakref.WeakSet[Union[BargeinHttpStream, BargeinWebSocketStream]]()
+
+        logger.info(
+            "bargein detector initialized",
+            extra={
+                "base_url": self._opts.base_url,
+                "step_size": self._opts.step_size,
+                "prefix_size": self._opts.prefix_size,
+                "max_window_size": self._opts.max_window_size,
+                "min_frames": self._opts.min_frames,
+                "threshold": self._opts.threshold,
+                "inference_timeout": self._opts.inference_timeout,
+                "use_proxy": self._opts.use_proxy,
+            },
+        )
 
     @property
     def model(self) -> str:
@@ -493,7 +507,9 @@ class BargeinHttpStream(BargeinStreamBase):
                             )
                             if last_resp and last_resp.get("probabilities", [])
                             else None,
-                            inference_duration=last_resp.get("inference_duration", 0),
+                            inference_duration=last_resp.get("inference_duration", 0)
+                            if last_resp
+                            else 0,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
@@ -557,7 +573,7 @@ class BargeinHttpStream(BargeinStreamBase):
     async def predict(self, waveform: np.ndarray) -> dict[str, Any]:
         created_at = perf_counter_ns()
         async with http_context.http_session().post(
-            url=f"{self._opts.base_url}/bargein?threshold={self._opts.threshold}&min_frames={self._opts.min_frames}&created_at={created_at}",
+            url=f"{self._opts.base_url}/bargein?threshold={self._opts.threshold}&min_frames={int(self._opts.min_frames)}&created_at={int(created_at)}",
             headers={
                 "Content-Type": "application/octet-stream",
                 "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
