@@ -99,7 +99,9 @@ class AvatarSession:
                 raise AkoolException("failed to get local participant identity") from e
             local_participant_identity = room.local_participant.identity
 
-        logger.info(f"Starting avatar session for participant {local_participant_identity} in room {room.name}")
+        logger.info(
+            f"Starting avatar session for participant {local_participant_identity} in room {room.name}"
+        )
 
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)

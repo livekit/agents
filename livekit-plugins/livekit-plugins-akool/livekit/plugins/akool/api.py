@@ -25,7 +25,6 @@ DEFAULT_API_URL = "https://openapi.akool.com/api/open"
 
 
 class AkoolAPI:
-
     def __init__(
         self,
         avatar_config: AvatarConfig,
@@ -118,7 +117,9 @@ class AkoolAPI:
                 ) as response:
                     if not response.ok:
                         text = await response.text()
-                        raise APIStatusError("Server returned an error", status_code=response.status, body=text)
+                        raise APIStatusError(
+                            "Server returned an error", status_code=response.status, body=text
+                        )
                     return await response.json()  # type: ignore
             except Exception as e:
                 if isinstance(e, APIConnectionError):

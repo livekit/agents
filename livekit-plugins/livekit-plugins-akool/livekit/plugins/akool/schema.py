@@ -20,7 +20,9 @@ class Credentials(BaseModel):
 
 class VoiceSettings(BaseModel):
     speed: Optional[float] = Field(default=None, description="Speed of the voice")
-    pron_map: Optional[dict[str, str]] = Field(default=None, description="Pronunciation map for the voice")
+    pron_map: Optional[dict[str, str]] = Field(
+        default=None, description="Pronunciation map for the voice"
+    )
 
 
 class AvatarConfig(BaseModel):
