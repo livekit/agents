@@ -441,7 +441,7 @@ class BargeinHttpStream(BargeinStreamBase):
     async def _run(self) -> None:
         data_chan = aio.Chan[npt.NDArray[np.int16]]()
         overlap_speech_started: bool = False
-        cache: _LRUCache[int, dict[str, Any]] = _LRUCache(
+        cache: _BoundedCache[int, dict[str, Any]] = _BoundedCache(
             max_len=5, default_key=0, default_value={}
         )
 
@@ -621,7 +621,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
     async def _run(self) -> None:
         closing_ws = False
         overlap_speech_started: bool = False
-        cache: _LRUCache[int, dict[str, Any]] = _LRUCache(
+        cache: _BoundedCache[int, dict[str, Any]] = _BoundedCache(
             max_len=5, default_key=0, default_value={}
         )
 
@@ -651,6 +651,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
+                    cache.clear()
                     continue
 
                 # start inferencing against the overlap speech
@@ -884,7 +885,7 @@ _K = TypeVar("_K")
 _V = TypeVar("_V")
 
 
-class _LRUCache(Generic[_K, _V]):
+class _BoundedCache(Generic[_K, _V]):
     def __init__(
         self, max_len: int = 5, default_key: _K | None = None, default_value: _V | None = None
     ) -> None:
