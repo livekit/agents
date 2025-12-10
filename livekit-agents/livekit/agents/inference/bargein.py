@@ -495,9 +495,23 @@ class BargeinHttpStream(BargeinStreamBase):
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
+                        logger.info(
+                            "overlap speech ended, popping last request",
+                            extra={"cache": len(cache)},
+                        )
                         _, last_request = cache.pop()
                         last_request = last_request or {}
                         probas = last_request.get("probabilities", [])
+                        logger.info(
+                            "overlap speech ended, sending event",
+                            extra={
+                                "last_request": last_request is not None,
+                                "probas": len(probas) if probas else 0,
+                                "inference_duration": last_request.get("inference_duration", 0)
+                                if last_request is not None
+                                else 0,
+                            },
+                        )
                         inference_duration = last_request.get("inference_duration", 0)
                         ev = BargeinEvent(
                             type=BargeinEventType.OVERLAP_SPEECH_ENDED,
@@ -912,3 +926,6 @@ class _BoundedCache(Generic[_K, _V]):
 
     def clear(self) -> None:
         self._cache.clear()
+
+    def __len__(self) -> int:
+        return len(self._cache)
