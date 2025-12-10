@@ -1411,7 +1411,36 @@ class RealtimeSession(  # noqa: F811
                     ):
                         logger.warning(f"Validation error: {ve}\nAttempting to recover...")
                         await self._restart_session(ve)
-
+                    elif "Tool Response parsing error" in ve.message:
+                        # Tool parsing errors are recoverable - log and continue
+                        logger.warning(f"Tool response parsing error (recoverable): {ve}")
+                        
+                        # Close current generation to unblock the model
+                        if self._current_generation:
+                            logger.debug("Closing generation due to tool parsing error")
+                            self._close_current_generation()
+                        
+                        # Clear pending tools since they failed
+                        if self._pending_tools:
+                            logger.debug(f"Clearing {len(self._pending_tools)} pending tools")
+                            self._pending_tools.clear()
+                        
+                        self.emit(
+                            "error",
+                            llm.RealtimeModelError(
+                                timestamp=time.monotonic(),
+                                label=self._realtime_model._label,
+                                error=APIStatusError(
+                                    message=ve.message,
+                                    status_code=400,
+                                    request_id="",
+                                    body=ve,
+                                    retryable=False,
+                                ),
+                                recoverable=True,
+                            ),
+                        )
+                        # Don't raise - continue processing
                     else:
                         logger.error(f"Validation error: {ve}")
                         self.emit(
@@ -1569,12 +1598,17 @@ class RealtimeSession(  # noqa: F811
 
                 logger.debug(f"function call output: {item}")
                 self._pending_tools.discard(item.call_id)
+                
+                # Format tool result as proper JSON
+                if item.is_error:
+                    tool_result = json.dumps({"error": str(item.output)})
+                else:
+                    tool_result = item.output
+                
                 self._tool_results_ch.send_nowait(
                     {
                         "tool_use_id": item.call_id,
-                        "tool_result": item.output
-                        if not item.is_error
-                        else f"{{'error': '{item.output}'}}",
+                        "tool_result": tool_result,
                     }
                 )
                 continue
