@@ -99,7 +99,9 @@ class LLMStream(llm.LLMStream):
                     else:
                         # Log warning but continue (session might be managed externally)
                         error_text = await resp.text()
-                        logger.warning(f"[ADK] Could not create session (status {resp.status}): {error_text}")
+                        logger.warning(
+                            f"[ADK] Could not create session (status {resp.status}): {error_text}"
+                        )
 
         # Get the last user message from chat context
         # ChatContext uses .items, not .messages
@@ -141,10 +143,7 @@ class LLMStream(llm.LLMStream):
             "app_name": self._app_name,
             "user_id": self._user_id,
             "session_id": self._session_id,
-            "new_message": {
-                "role": "user",
-                "parts": [{"text": text_content}]
-            },
+            "new_message": {"role": "user", "parts": [{"text": text_content}]},
             "streaming": True,
         }
 
@@ -174,9 +173,7 @@ class LLMStream(llm.LLMStream):
                 if resp.status != 200:
                     error_text = await resp.text()
                     logger.error(f"[ADK] Request failed: {resp.status} - {error_text}")
-                    raise RuntimeError(
-                        f"ADK request failed (status {resp.status}): {error_text}"
-                    )
+                    raise RuntimeError(f"ADK request failed (status {resp.status}): {error_text}")
 
                 logger.info(f"[ADK] Streaming response started (status {resp.status})")
 
@@ -195,7 +192,7 @@ class LLMStream(llm.LLMStream):
 
                     # Parse data lines
                     if line.startswith("data:"):
-                        data_str = line[len("data:"):].strip()
+                        data_str = line[len("data:") :].strip()
                         if not data_str:
                             continue
 

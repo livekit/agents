@@ -91,7 +91,9 @@ class LLM(llm.LLM):
         """Get the provider name."""
         return "google-adk"
 
-    def set_livekit_context(self, *, room_name: str | None = None, participant_identity: str | None = None) -> None:
+    def set_livekit_context(
+        self, *, room_name: str | None = None, participant_identity: str | None = None
+    ) -> None:
         """
         Set LiveKit context for session ID generation.
 
@@ -147,9 +149,7 @@ class LLM(llm.LLM):
         """Ensure session exists, creating if necessary."""
         if self._session_id is None:
             if not self._auto_create_session:
-                raise RuntimeError(
-                    "No session_id provided and auto_create_session is False"
-                )
+                raise RuntimeError("No session_id provided and auto_create_session is False")
             self._session_id = await self._create_session()
         return self._session_id
 
@@ -177,13 +177,12 @@ class LLM(llm.LLM):
         # Check if first message has extra data with room/participant info
         if chat_ctx.items and not self._session_id:
             first_item = chat_ctx.items[0]
-            if hasattr(first_item, 'extra') and first_item.extra:
-                room_name = first_item.extra.get('room_name')
-                participant_identity = first_item.extra.get('participant_identity')
+            if hasattr(first_item, "extra") and first_item.extra:
+                room_name = first_item.extra.get("room_name")
+                participant_identity = first_item.extra.get("participant_identity")
                 if room_name or participant_identity:
                     self.set_livekit_context(
-                        room_name=room_name,
-                        participant_identity=participant_identity
+                        room_name=room_name, participant_identity=participant_identity
                     )
 
         # Get or create session ID
