@@ -305,7 +305,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = SupportedModels.NOVA_SONIC_1,
         modalities: MODALITIES = "audio",
-        voice: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[SONIC1_VOICES | SONIC2_VOICES | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
