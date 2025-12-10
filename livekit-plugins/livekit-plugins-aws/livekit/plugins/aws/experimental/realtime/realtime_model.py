@@ -361,7 +361,7 @@ class RealtimeModel(llm.RealtimeModel):
     def with_nova_sonic_1(
         cls,
         *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[SONIC1_VOICES | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
