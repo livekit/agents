@@ -1,7 +1,8 @@
 """Tests for Google ADK LLM plugin."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from livekit.agents import llm
 from livekit.plugins.google_adk import LLM as GoogleADK
