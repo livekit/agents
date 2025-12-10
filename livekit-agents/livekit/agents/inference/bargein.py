@@ -30,9 +30,9 @@ from ._utils import create_access_token
 
 SAMPLE_RATE = 16000
 THRESHOLD = 0.65
-MIN_BARGEIN_DURATION = 0.025  # 25ms per frame
+MIN_BARGEIN_DURATION = 0.025 * 2  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.1 * 16000)  # 0.1 second at 16000 Hz
+STEP_SIZE = int(0.2 * 16000)  # 0.1 second at 16000 Hz
 PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -493,6 +493,7 @@ class BargeinHttpStream(BargeinStreamBase):
                             )
                             if last_resp and last_resp.get("probabilities", [])
                             else None,
+                            inference_duration=last_resp.get("inference_duration", 0),
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
@@ -529,6 +530,7 @@ class BargeinHttpStream(BargeinStreamBase):
                 last_resp = resp = await self.predict(data)
                 is_bargein = resp.get("is_bargein", False)
                 inference_duration = time.perf_counter() - start_time
+                last_resp["inference_duration"] = inference_duration
                 if overlap_speech_started and is_bargein:
                     ev = BargeinEvent(
                         type=BargeinEventType.BARGEIN,
@@ -674,6 +676,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             )
                             if last_resp and last_resp.get("probabilities", [])
                             else None,
+                            inference_duration=last_resp.get("inference_duration", 0),
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
@@ -741,12 +744,14 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 input_array: npt.NDArray[np.int16] | None = next(
                     (req[1] for req in recent_requests if req[0] == created_at), None
                 )
+
                 if msg_type == MSG_SESSION_CREATED:
                     pass
                 elif msg_type == MSG_BARGEIN_DETECTED:
                     if overlap_speech_started:
                         logger.debug("bargein detected")
                         inference_duration = (perf_counter_ns() - created_at) / 1e9
+                        last_resp["inference_duration"] = inference_duration
                         ev = BargeinEvent(
                             type=BargeinEventType.BARGEIN,
                             timestamp=time.time(),
