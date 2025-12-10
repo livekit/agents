@@ -54,7 +54,7 @@ from .events import (
     ToolSpec,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
-from .types import MODALITIES, TURN_DETECTION
+from .types import MODALITIES, SONIC1_VOICES, SONIC2_VOICES, TURN_DETECTION
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
 DEFAULT_OUTPUT_SAMPLE_RATE = 24000
@@ -319,7 +319,7 @@ class RealtimeModel(llm.RealtimeModel):
         Args:
             model (str): Bedrock model ID for realtime inference. Defaults to NOVA_SONIC_1.
             modalities (MODALITIES): Input/output mode. "audio" for audio-only (Sonic 1.0), "mixed" for audio + text input (Sonic 2.0). Defaults to "audio".
-            voice (str | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            voice (SONIC1_VOICES | SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC1_VOICES or SONIC2_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
@@ -373,7 +373,7 @@ class RealtimeModel(llm.RealtimeModel):
         """Create a RealtimeModel configured for Nova Sonic 1.0 (audio-only).
 
         Args:
-            voice (str | NotGiven): Voice id for TTS output. Use SONIC1_VOICES values. Defaults to "tiffany".
+            voice (SONIC1_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC1_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
@@ -417,7 +417,7 @@ class RealtimeModel(llm.RealtimeModel):
         """Create a RealtimeModel configured for Nova Sonic 2.0 (audio + text input).
 
         Args:
-            voice (str | NotGiven): Voice id for TTS output. Use SONIC2_VOICES values. Defaults to "tiffany".
+            voice (SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC2_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
             max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
