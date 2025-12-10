@@ -507,7 +507,6 @@ class _SyncedAudioOutput(io.AudioOutput):
         )
         self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
-        self._capturing = False
         self._pushed_duration: float = 0.0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -515,9 +514,8 @@ class _SyncedAudioOutput(io.AudioOutput):
         # capture_frame isn't completed
         await self._synchronizer.barrier()
 
-        self._capturing = True
-        await super().capture_frame(frame)
         await self._next_in_chain.capture_frame(frame)  # passthrough audio
+        await super().capture_frame(frame)
         self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
@@ -545,12 +543,10 @@ class _SyncedAudioOutput(io.AudioOutput):
             self._synchronizer.rotate_segment()
             return
 
-        self._capturing = False
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
         self._next_in_chain.clear_buffer()
-        self._capturing = False
 
     # this is going to be automatically called by the next_in_chain
     def on_playback_finished(
