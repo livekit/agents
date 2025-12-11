@@ -1789,9 +1789,13 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            # Mark generation done to prevent scheduling task from waiting forever
-            if speech_handle._generations:
-                speech_handle._mark_generation_done()
+            # FIX: Always ensure a generation Future exists and is marked done
+            # This prevents race condition where scheduling task authorizes after we exit
+            if not speech_handle._generations:
+                fut = asyncio.Future[None]()
+                fut.set_result(None)
+                speech_handle._generations.append(fut)
+            speech_handle._mark_generation_done()
             await utils.aio.cancel_and_wait(wait_for_authorization)
             return
 
