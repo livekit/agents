@@ -87,6 +87,7 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
+    "function_tools_executing",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -152,6 +153,19 @@ class _TypeDiscriminator(BaseModel):
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
     item: ChatMessage | _TypeDiscriminator
+    created_at: float = Field(default_factory=time.time)
+
+
+class FunctionToolsExecutingEvent(BaseModel):
+    """Event emitted when a function tool starts executing.
+
+    This event is fired before the tool execution begins, allowing listeners
+    to react immediately (e.g., play a different sound during tool execution).
+    """
+
+    type: Literal["function_tools_executing"] = "function_tools_executing"
+    function_call: FunctionCall
+    """The function call that is about to be executed."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -233,6 +247,7 @@ AgentEvent = Annotated[
         AgentFalseInterruptionEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
+        FunctionToolsExecutingEvent,
         FunctionToolsExecutedEvent,
         SpeechCreatedEvent,
         ErrorEvent,
