@@ -362,9 +362,7 @@ class STT(stt.STT):
         }
 
         if self._opts.noise_reduction_type:
-            input_config["noise_reduction"] = {
-                "type": self._opts.noise_reduction_type
-            }
+            input_config["noise_reduction"] = {"type": self._opts.noise_reduction_type}
 
         realtime_config: dict[str, Any] = {
             "type": "session.update",
@@ -539,13 +537,13 @@ class SpeechStream(stt.SpeechStream):
                         item_id = data.get("item_id", "")
                         audio_start_ms = data.get("audio_start_ms", 0)
                         item_audio_timing[item_id] = {"start_ms": audio_start_ms}
-                    
+
                     elif msg_type == "input_audio_buffer.speech_stopped":
                         item_id = data.get("item_id", "")
                         audio_end_ms = data.get("audio_end_ms", 0)
                         if item_id in item_audio_timing:
                             item_audio_timing[item_id]["end_ms"] = audio_end_ms
-                    
+
                     elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
                         if delta:
@@ -563,12 +561,12 @@ class SpeechStream(stt.SpeechStream):
                                     )
                                 )
                                 last_interim_at = time.time()
-                    
+
                     elif msg_type == "conversation.item.input_audio_transcription.completed":
                         current_text = ""
                         transcript = data.get("transcript", "")
                         item_id = data.get("item_id", "")
-                        
+
                         if transcript:
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
@@ -581,7 +579,7 @@ class SpeechStream(stt.SpeechStream):
                                     ],
                                 )
                             )
-                        
+
                         audio_duration = 0.0
                         if item_id in item_audio_timing:
                             timing = item_audio_timing[item_id]
@@ -590,7 +588,7 @@ class SpeechStream(stt.SpeechStream):
                             if end_ms > start_ms:
                                 audio_duration = (end_ms - start_ms) / 1000.0
                             del item_audio_timing[item_id]
-                        
+
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.RECOGNITION_USAGE,
@@ -600,7 +598,7 @@ class SpeechStream(stt.SpeechStream):
                                 ),
                             )
                         )
-                        
+
                         # restart session if needed
                         if time.time() - connected_at > _max_session_duration:
                             logger.info("resetting Realtime STT session due to timeout")
