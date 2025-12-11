@@ -126,6 +126,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             await aio.cancel_and_wait(self._forward_atask)
 
         self._room.off("track_subscribed", self._on_track_available)
+        self._room.off("token_refreshed", self._on_token_refreshed)
         self._data_ch.close()
 
     @log_exceptions(logger=logger)
