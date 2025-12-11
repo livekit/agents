@@ -65,7 +65,12 @@ class AudioInputOptions:
     num_channels: int = 1
     frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None = None
+    noise_cancellation: (
+        rtc.NoiseCancellationOptions
+        | NoiseCancellationSelector
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None
+    ) = None
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
