@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+try:
+    from inferedge_moss import (
+        AddDocumentsOptions,
+        DocumentInfo,
+        GetDocumentsOptions,
+        IndexInfo,
+        MossClient as _InferEdgeMossClient,
+        SearchResult,
+    )
+except ImportError:
+    _InferEdgeMossClient = None
+
+    class _MissingDependency:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            raise RuntimeError(
+                "inferedge-moss is required to use moss integrations. Install it via `pip install inferedge-moss`."
+            )
+
+    class DocumentInfo(_MissingDependency):
+        pass
+
+    class IndexInfo(_MissingDependency):
+        pass
+
+    class SearchResult(_MissingDependency):
+        pass
+
+    class AddDocumentsOptions(_MissingDependency):
+        pass
+
+    class GetDocumentsOptions(_MissingDependency):
+        pass
+
+
+from .log import logger
+
+__all__ = [
+    "AddDocumentsOptions",
+    "DocumentInfo",
+    "GetDocumentsOptions",
+    "IndexInfo",
+    "MossClient",
+    "SearchResult",
+]
+
+
+class MossClient:
+    """Async helper around :mod:`inferedge_moss` tailored for LiveKit agents."""
+
+    def __init__(
+        self,
+        project_id: str | None = None,
+        project_key: str | None = None,
+    ) -> None:
+        if _InferEdgeMossClient is None:
+            raise RuntimeError(
+                "inferedge-moss is required to use MossClient. Install it via `pip install inferedge-moss`."
+            )
+
+        self._project_id = project_id or os.environ.get("MOSS_PROJECT_ID")
+        self._project_key = project_key or os.environ.get("MOSS_PROJECT_KEY")
+
+        if not self._project_id:
+            raise ValueError(
+                "project_id must be provided or set through the MOSS_PROJECT_ID environment variable"
+            )
+
+        if not self._project_key:
+            raise ValueError(
+                "project_key must be provided or set through the MOSS_PROJECT_KEY environment variable"
+            )
+
+        self._client = _InferEdgeMossClient(self._project_id, self._project_key)
+
+    @property
+    def project_id(self) -> str:
+        """Return the Moss project identifier used by this client."""
+
+        return self._project_id
+
+    @property
+    def project_key(self) -> str:
+        """Return the secret project key used for authenticating requests."""
+
+        return self._project_key
+
+    @property
+    def inner_client(self) -> Any:
+        """Expose the underlying InferEdge client for advanced use cases."""
+
+        return self._client
+
+    # ---------- Index lifecycle ----------
+
+    async def create_index(
+        self, index_name: str, documents: list[DocumentInfo], model_id: str
+    ) -> bool:
+        """Create a new index and populate it with documents."""
+
+        logger.debug("creating moss index", extra={"index": index_name, "model": model_id})
+        result = await self._client.create_index(index_name, documents, model_id)
+        if not isinstance(result, bool):
+            raise TypeError("inferedge_moss.create_index returned an unexpected type")
+        return result
+
+    async def get_index(self, index_name: str) -> IndexInfo:
+        """Get information about a specific index."""
+
+        logger.debug("getting moss index", extra={"index": index_name})
+        index_info = await self._client.get_index(index_name)
+        if not isinstance(index_info, IndexInfo):
+            raise TypeError("inferedge_moss.get_index returned an unexpected type")
+        return index_info
+
+    async def list_indexes(self) -> list[IndexInfo]:
+        """List all indexes with their information."""
+
+        logger.debug("listing moss indexes")
+        indexes = await self._client.list_indexes()
+        if not isinstance(indexes, list):
+            raise TypeError("inferedge_moss.list_indexes returned an unexpected type")
+        return indexes
+
+    async def delete_index(self, index_name: str) -> bool:
+        """Delete an index and all its data."""
+
+        logger.debug("deleting moss index", extra={"index": index_name})
+        deleted = await self._client.delete_index(index_name)
+        if not isinstance(deleted, bool):
+            raise TypeError("inferedge_moss.delete_index returned an unexpected type")
+        return bool(deleted)
+
+    # ---------- Document mutations ----------
+    async def add_documents(
+        self, index_name: str, docs: list[DocumentInfo], options: AddDocumentsOptions | None
+    ) -> dict[str, int]:
+        """Add or update documents in an index."""
+
+        logger.debug(
+            "adding documents to moss index", extra={"index": index_name, "count": len(docs)}
+        )
+        mapping = await self._client.add_docs(index_name, docs, options)
+        if not isinstance(mapping, dict):
+            raise TypeError("inferedge_moss.add_docs returned an unexpected type")
+        return mapping
+
+    async def delete_docs(self, index_name: str, doc_ids: list[str]) -> dict[str, int]:
+        """Delete documents from an index by their IDs."""
+
+        logger.debug(
+            "deleting documents from moss index", extra={"index": index_name, "count": len(doc_ids)}
+        )
+        mapping = await self._client.delete_docs(index_name, doc_ids)
+        if not isinstance(mapping, dict):
+            raise TypeError("inferedge_moss.delete_docs returned an unexpected type")
+        return mapping
+
+    # ---------- View existing documents ----------
+
+    async def get_docs(
+        self, index_name: str, options: GetDocumentsOptions | None
+    ) -> list[DocumentInfo]:
+        """Retrieve documents from an index."""
+
+        logger.debug("retrieving documents from moss index", extra={"index": index_name})
+        documents = await self._client.get_docs(index_name, options)
+        if not isinstance(documents, list):
+            raise TypeError("inferedge_moss.get_docs returned an unexpected type")
+        return documents
+
+    # ---------- Index loading & querying ----------
+
+    async def load_index(self, index_name: str) -> str:
+        """Load an index from a local .moss file into memory."""
+
+        logger.debug("loading moss index", extra={"index": index_name})
+        result = await self._client.load_index(index_name)
+        if not isinstance(result, str):
+            logger.debug("unexpected load_index return type", extra={"type": type(result).__name__})
+        return result
+
+    async def query(
+        self, index_name: str, query: str, top_k: int = 5, *, auto_load: bool = True
+    ) -> SearchResult:
+        """Perform a semantic similarity search against the specified index."""
+        if auto_load:
+            await self.load_index(index_name)
+        logger.debug("querying moss index", extra={"index": index_name, "top_k": top_k})
+        result = await self._client.query(index_name, query, top_k)
+        if not isinstance(result, SearchResult):
+            logger.debug("unexpected query return type", extra={"type": type(result).__name__})
+        return result
+
+    def __repr__(self) -> str:
+        return f"MossClient(project_id={self._project_id!r})"
