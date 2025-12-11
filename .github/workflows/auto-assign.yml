@@ -2,7 +2,7 @@
 name: Auto-assign reviewers
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened]
 
 jobs:
   assign:
@@ -15,7 +15,21 @@ jobs:
         with:
           script: |
             const author = context.payload.pull_request.user.login;
-            const targetAuthors = ['chenghao-mou'];
+            const targetAuthors = [
+              'longcw',
+              'theomonnom',
+              'davidzhao',
+              'tinalenguyen',
+              'chenghao-mou',
+              'toubatbrian',
+              'bcherry',
+              'adrian-cowham',
+              'paulwe',
+              'russellmartin-livekit',
+              'lukasIO',
+              'jeradf',
+              'Shubhrakanti'
+            ];
             
             if (targetAuthors.includes(author)) {
               await github.rest.pulls.requestReviewers({
