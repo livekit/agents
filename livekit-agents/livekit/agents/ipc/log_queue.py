@@ -6,10 +6,32 @@ import pickle
 import queue
 import sys
 import threading
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .. import utils
 from ..utils.aio import duplex_unix
+
+
+def _safe_to_log(obj: Any) -> Any:
+    """Safely convert an object to a pickleable format.
+    
+    Handles RpcError and other objects that may not be directly pickleable
+    by converting them to a dictionary representation.
+    """
+    try:
+        # Try to identify RpcError-like objects
+        if hasattr(obj, "__class__") and "RpcError" in obj.__class__.__name__:
+            # Convert RpcError to a safe dict representation
+            return {
+                "_type": "RpcError",
+                "message": str(obj) if hasattr(obj, "__str__") else repr(obj),
+                "code": getattr(obj, "code", None),
+                "msg": getattr(obj, "msg", None),
+            }
+        return obj
+    except Exception:
+        # If anything goes wrong, return a safe string representation
+        return str(obj) if obj is not None else None
 
 
 class LogQueueListener:
@@ -102,6 +124,44 @@ class LogQueueHandler(logging.Handler):
             # webosckets library add "websocket" attribute to log records, which is not pickleable
             if hasattr(record, "websocket"):
                 record.websocket = None
+
+            # Safely handle RpcError and other non-pickleable objects
+            # RpcError objects might be in extra dict fields added via logger calls
+            # We need to sanitize these before pickling
+            try:
+                # Get all non-standard attributes (those added via extra= in logging calls)
+                # Standard LogRecord attributes are safe, we only need to check custom ones
+                standard_attrs = {
+                    "name", "msg", "args", "created", "filename", "funcName",
+                    "levelname", "levelno", "lineno", "module", "msecs",
+                    "message", "pathname", "process", "processName", "relativeCreated",
+                    "thread", "threadName", "exc_info", "exc_text", "stack_info",
+                    "getMessage", "websocket"
+                }
+                
+                # Check custom attributes that might contain RpcError
+                for attr_name in dir(record):
+                    if attr_name.startswith("_") or attr_name in standard_attrs:
+                        continue
+                    try:
+                        attr_value = getattr(record, attr_name, None)
+                        if attr_value is not None:
+                            # Recursively sanitize dict values (common for extra= parameters)
+                            if isinstance(attr_value, dict):
+                                safe_dict = {}
+                                for key, value in attr_value.items():
+                                    safe_dict[key] = _safe_to_log(value)
+                                setattr(record, attr_name, safe_dict)
+                            else:
+                                safe_value = _safe_to_log(attr_value)
+                                if safe_value is not attr_value:
+                                    setattr(record, attr_name, safe_value)
+                    except (AttributeError, TypeError):
+                        # Skip attributes that can't be accessed or modified
+                        pass
+            except Exception:
+                # If sanitization fails, continue anyway - the original exception handler will catch pickle errors
+                pass
 
             self._send_q.put_nowait(pickle.dumps(record))
 
