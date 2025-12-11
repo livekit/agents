@@ -63,7 +63,6 @@ type-check: ## Run mypy type checker
 		-p livekit.plugins.bithuman \
 		-p livekit.plugins.cartesia \
 		-p livekit.plugins.clova \
-		-p livekit.plugins.cohere \
 		-p livekit.plugins.deepgram \
 		-p livekit.plugins.elevenlabs \
 		-p livekit.plugins.fal \
