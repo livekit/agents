@@ -1257,7 +1257,9 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
         if self.bargein_enabled and self._audio_recognition:
-            self._audio_recognition.start_barge_in_inference(speech_duration=ev.speech_duration)
+            self._audio_recognition.start_barge_in_inference(
+                speech_duration=ev.speech_duration if ev else None
+            )
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
