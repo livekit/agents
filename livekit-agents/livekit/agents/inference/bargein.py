@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum, unique
 from time import perf_counter_ns
-from typing import Any, Generic, Literal, TypeVar, Union
+from typing import Any, Callable, Generic, Literal, TypeVar, Union
 
 import aiohttp
 import numpy as np
@@ -43,6 +43,7 @@ MSG_SESSION_CLOSE = "session.close"
 MSG_SESSION_CREATED = "session.created"
 MSG_SESSION_CLOSED = "session.closed"
 MSG_BARGEIN_DETECTED = "bargein_detected"
+MSG_INFERENCE_DONE = "inference_done"
 MSG_ERROR = "error"
 
 
@@ -495,26 +496,12 @@ class BargeinHttpStream(BargeinStreamBase):
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
-                        logger.info(
-                            "overlap speech ended, popping last request",
-                            extra={"cache": len(cache)},
-                        )
-                        _, last_request = cache.pop()
+                        _, last_request = cache.pop(lambda x: x.get("inference_duration", 0) > 0)
                         last_request = last_request or {}
-                        if last_request:
-                            logger.info("no request made for overlap speech")
+                        if not last_request:
+                            logger.debug("no request made for overlap speech")
                         probas = last_request.get("probabilities", [])
-                        logger.info(
-                            "overlap speech ended, sending event",
-                            extra={
-                                "last_request": last_request is not None,
-                                "probas": len(probas) if probas else 0,
-                                "inference_duration": last_request.get("inference_duration", 0)
-                                if last_request is not None
-                                else 0,
-                            },
-                        )
-                        inference_duration = last_request.get("inference_duration", 0)
+                        inference_duration = last_request["inference_duration"]
                         ev = BargeinEvent(
                             type=BargeinEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
@@ -599,7 +586,6 @@ class BargeinHttpStream(BargeinStreamBase):
             try:
                 resp.raise_for_status()
                 data = await resp.json()
-                logger.info("bargein prediction response", extra={"response": data})
                 # {
                 #     "created_at": int,
                 #     "is_bargein": bool,
@@ -693,9 +679,12 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
                         logger.debug("overlap speech ended, stopping barge-in inference")
-                        _, last_request = cache.pop()
+                        # only pop the last complete request
+                        _, last_request = cache.pop(lambda x: x.get("inference_duration", 0) > 0)
                         last_request = last_request or {}
-                        inference_duration = last_request.get("inference_duration", 0)
+                        if not last_request:
+                            logger.debug("no request made for overlap speech")
+                        inference_duration = last_request["inference_duration"]
                         speech_input = last_request.get("speech_input", None)
                         probas = last_request.get("probabilities", [])
                         ev = BargeinEvent(
@@ -768,22 +757,28 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     continue
 
                 data = json.loads(msg.data)
-                msg_type = data.get("type")
-                created_at = data.get("created_at", 0)
+                msg_type = data["type"]
 
                 if msg_type == MSG_SESSION_CREATED:
                     pass
                 elif msg_type == MSG_BARGEIN_DETECTED:
+                    created_at = int(data["created_at"])
                     if overlap_speech_started:
-                        logger.debug("bargein detected")
                         inference_duration = (perf_counter_ns() - created_at) / 1e9
                         probas = data.get("probabilities", [])
-                        cache[created_at] = (
-                            {
+                        cache[created_at] = {
+                            "inference_duration": inference_duration,
+                            "speech_input": data.get("speech_input", None),
+                            "probabilities": data.get("probabilities", []),
+                            "is_bargein": True,
+                            "created_at": created_at,
+                        }
+                        logger.debug(
+                            "bargein detected",
+                            extra={
+                                "created_at": created_at,
                                 "inference_duration": inference_duration,
-                            }
-                            | cache.get(created_at, {})
-                            | data
+                            },
                         )
                         ev = BargeinEvent(
                             type=BargeinEventType.BARGEIN,
@@ -797,6 +792,24 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("bargein_detected", ev)
                         overlap_speech_started = False
+                elif msg_type == MSG_INFERENCE_DONE:
+                    created_at = int(data["created_at"])
+                    inference_duration = (perf_counter_ns() - created_at) / 1e9
+                    logger.debug(
+                        "inference done",
+                        extra={
+                            "created_at": created_at,
+                            "inference_duration": inference_duration,
+                            "data": data,
+                        },
+                    )
+                    cache[created_at] = {
+                        "inference_duration": inference_duration,
+                        "speech_input": cache.get(created_at, {}).get("speech_input", None),
+                        "probabilities": data.get("probabilities", []),
+                        "is_bargein": data.get("is_bargein", False),
+                        "created_at": created_at,
+                    }
                 elif msg_type == MSG_SESSION_CLOSED:
                     pass
                 elif msg_type == MSG_ERROR:
@@ -922,13 +935,19 @@ class _BoundedCache(Generic[_K, _V]):
     def get(self, key: _K, default: _V | None = None) -> _V | None:
         return self._cache.get(key, default)
 
-    def pop(self) -> tuple[_K | None, _V | None]:
-        if not self._cache:
-            return self._default_key, self._default_value
-        return self._cache.popitem(last=True)
+    def pop(self, predicate: Callable[[_V], bool] | None = None) -> tuple[_K | None, _V | None]:
+        while self._cache:
+            key, value = self._cache.popitem(last=True)
+            if predicate is None or predicate(value):
+                return key, value
+        return self._default_key, self._default_value
 
     def clear(self) -> None:
+        logger.debug("clearing cache", extra={"cache": len(self._cache)})
         self._cache.clear()
 
     def __len__(self) -> int:
         return len(self._cache)
+
+    def keys(self) -> list[_K]:
+        return list(self._cache.keys())
