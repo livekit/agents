@@ -14,7 +14,7 @@ from ..utils.aio import duplex_unix
 
 def _safe_to_log(obj: Any) -> Any:
     """Safely convert an object to a pickleable format.
-    
+
     Handles RpcError and other objects that may not be directly pickleable
     by converting them to a dictionary representation.
     """
@@ -138,7 +138,7 @@ class LogQueueHandler(logging.Handler):
                     "thread", "threadName", "exc_info", "exc_text", "stack_info",
                     "getMessage", "websocket"
                 }
-                
+
                 # Check custom attributes that might contain RpcError
                 for attr_name in dir(record):
                     if attr_name.startswith("_") or attr_name in standard_attrs:

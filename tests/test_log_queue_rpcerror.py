@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-import pickle
 import socket
-import threading
 import time
 
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener

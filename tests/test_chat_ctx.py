@@ -62,8 +62,48 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     assert chat_ctx.is_equivalent(ChatContext.from_dict(chat_ctx.to_dict()))
 
 
-async def test_summarize():
+async def test_summarize(monkeypatch):
     from livekit.agents import ChatContext
+    import openai as openai_package
+
+    # Stub out openai.AsyncClient to prevent real API calls
+    # The plugin's LLM class uses openai.AsyncClient internally
+    class _DummyStream:
+        def __init__(self, chunks=None):
+            self._chunks = chunks or []
+            self._iter = iter(self._chunks)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._iter)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class _DummyCompletions:
+        async def create(self, *args, **kwargs):
+            # Return an empty stream for testing
+            return _DummyStream(chunks=[])
+
+    class _DummyChat:
+        def __init__(self):
+            self.completions = _DummyCompletions()
+
+    class _DummyAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = _DummyChat()
+            self.api_key = None
+
+    # Replace openai.AsyncClient in the openai package to prevent real API calls
+    monkeypatch.setattr(openai_package, "AsyncClient", _DummyAsyncClient)
 
     chat_ctx = ChatContext()
     chat_ctx.add_message(
