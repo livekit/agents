@@ -286,6 +286,12 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
+        self._start_wall_time: float = time.time()
+
+    @property
+    def start_wall_time(self) -> float:
+        return self._start_wall_time
+
     @abstractmethod
     async def _run(self) -> None: ...
 
@@ -294,6 +300,9 @@ class RecognizeStream(ABC):
 
         while self._num_retries <= max_retries:
             try:
+                # reset the start wall time so that returned transcripts
+                # can have a consistent timestamps
+                self._start_wall_time = time.time()
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:

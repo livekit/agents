@@ -636,7 +636,10 @@ class SpeechStream(stt.SpeechStream):
             self._request_id = request_id
 
             alts = live_transcription_to_speech_data(
-                self._opts.language, data, is_final=is_final_transcript
+                self._opts.language,
+                data,
+                is_final=is_final_transcript,
+                start_wall_time=self.start_wall_time,
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
@@ -676,7 +679,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def live_transcription_to_speech_data(
-    language: str, data: dict, *, is_final: bool
+    language: str, data: dict, *, is_final: bool, start_wall_time: float
 ) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
@@ -691,16 +694,17 @@ def live_transcription_to_speech_data(
 
         sd = stt.SpeechData(
             language=language,
-            start_time=alt["words"][0]["start"] if alt["words"] else 0,
-            end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+            start_time=alt["words"][0]["start"] if alt["words"] else 0 + start_wall_time,
+            end_time=alt["words"][-1]["end"] if alt["words"] else 0 + start_wall_time,
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=word.get("start", 0),
-                    end_time=word.get("end", 0),
+                    start_time=word.get("start", 0) + start_wall_time,
+                    end_time=word.get("end", 0) + start_wall_time,
+                    start_wall_time=start_wall_time,
                 )
                 for word in alt["words"]
             ]

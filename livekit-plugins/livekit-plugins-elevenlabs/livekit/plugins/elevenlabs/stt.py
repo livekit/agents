@@ -212,8 +212,6 @@ class STT(stt.STT):
         speaker_id: str | None,
         words: list[dict[str, Any]] | None = None,
     ) -> stt.SpeechEvent:
-        # TODO: @chenghao, the start time and end time are relative
-        # only to the speech span, not the entire stream
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
@@ -461,13 +459,14 @@ class SpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=self._language or "en",
             text=text,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_time + self.start_wall_time,
+            end_time=end_time + self.start_wall_time,
             words=[
                 TimedString(
                     text=word.get("text", ""),
-                    start_time=word.get("start", 0),
-                    end_time=word.get("end", 0),
+                    start_time=word.get("start", 0) + self.start_wall_time,
+                    end_time=word.get("end", 0) + self.start_wall_time,
+                    start_wall_time=self.start_wall_time,
                 )
                 for word in words
             ],

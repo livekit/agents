@@ -378,15 +378,16 @@ class SpeechStream(stt.SpeechStream):
 
             speech_data = stt.SpeechData(
                 language=language,
-                start_time=start_time,
-                end_time=end_time,
+                start_time=start_time + self.start_wall_time,
+                end_time=end_time + self.start_wall_time,
                 confidence=data.get("probability", 1.0),
                 text=text,
                 words=[
                     TimedString(
                         text=word.get("word", ""),
-                        start_time=word.get("start", 0),
-                        end_time=word.get("end", 0),
+                        start_time=word.get("start", 0) + self.start_wall_time,
+                        end_time=word.get("end", 0) + self.start_wall_time,
+                        start_wall_time=self.start_wall_time,
                     )
                     for word in words
                 ],

@@ -626,8 +626,8 @@ class SpeechStream(stt.RecognizeStream):
             alt = result.get("alternatives", [{}])[0]
             if alt.get("content", None):
                 fragment = SpeechFragment(
-                    start_time=result.get("start_time", 0),
-                    end_time=result.get("end_time", 0),
+                    start_time=result.get("start_time", 0) + self.start_wall_time,
+                    end_time=result.get("end_time", 0) + self.start_wall_time,
                     language=alt.get("language", "en"),
                     is_eos=alt.get("is_eos", False),
                     is_final=is_final,

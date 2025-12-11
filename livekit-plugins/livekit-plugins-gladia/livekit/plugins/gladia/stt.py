@@ -1032,15 +1032,16 @@ class SpeechStream(stt.SpeechStream):
 
                 speech_data = stt.SpeechData(
                     language=language,
-                    start_time=utterance.get("start", 0),
-                    end_time=utterance.get("end", 0),
+                    start_time=utterance.get("start", 0) + self.start_wall_time,
+                    end_time=utterance.get("end", 0) + self.start_wall_time,
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
                     words=[
                         TimedString(
                             text=word.get("word", ""),
-                            start_time=word.get("start", 0),
-                            end_time=word.get("end", 0),
+                            start_time=word.get("start", 0) + self.start_wall_time,
+                            end_time=word.get("end", 0) + self.start_wall_time,
+                            start_wall_time=self.start_wall_time,
                         )
                         for word in words
                     ],
@@ -1103,15 +1104,16 @@ class SpeechStream(stt.SpeechStream):
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
                         language=language,  # Use the target language
-                        start_time=translated_utterance.get("start", 0),
-                        end_time=translated_utterance.get("end", 0),
+                        start_time=translated_utterance.get("start", 0) + self.start_wall_time,
+                        end_time=translated_utterance.get("end", 0) + self.start_wall_time,
                         confidence=translated_utterance.get("confidence", 1.0),
                         text=translated_text,  # Use the translated text
                         words=[
                             TimedString(
                                 text=word.get("word", ""),
-                                start_time=word.get("start", 0),
-                                end_time=word.get("end", 0),
+                                start_time=word.get("start", 0) + self.start_wall_time,
+                                end_time=word.get("end", 0) + self.start_wall_time,
+                                start_wall_time=self.start_wall_time,
                             )
                             for word in words
                         ],
