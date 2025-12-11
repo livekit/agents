@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livekit-plugins-fonadalabs"
+version = "1.0.0"
+description = "FonadaLabs TTS plugin for LiveKit agents"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "livekit>=0.11.0",
+    "livekit-agents>=0.11.0",
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+scipy = ["scipy>=1.9.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["livekit.plugins.*"]
+
+
+
+
