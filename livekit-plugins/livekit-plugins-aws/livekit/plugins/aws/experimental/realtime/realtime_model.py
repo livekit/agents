@@ -1051,35 +1051,19 @@ class RealtimeSession(  # noqa: F811
         log_event_data(event_data)
 
         role = event_data["event"]["contentStart"]["role"]
-        completion_id = event_data["event"]["contentStart"].get("completionId")
 
-        # CRITICAL: Only close generation when completionId changes
-        # Nova Sonic sends multiple SPECULATIVE text blocks within the same completion
-        # (e.g., joke setup, then punchline). Closing on each SPECULATIVE would close
-        # the audio channel prematurely, causing audio cutoff.
+        # CRITICAL: Create NEW generation for each ASSISTANT SPECULATIVE response
+        # Nova Sonic sends ASSISTANT SPECULATIVE for each new assistant turn, including after tool calls.
+        # Without this, audio frames get routed to the wrong generation and don't play.
         if role == "ASSISTANT":
             additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
             if "SPECULATIVE" in additional_fields:
-                # Check if this is a different completion (but not unknown -> real transition)
-                if (
-                    self._current_generation is not None
-                    and self._current_generation.completion_id != completion_id
-                    and self._current_generation.completion_id != "unknown"
-                ):
-                    logger.debug(
-                        f"New completion detected (old={self._current_generation.completion_id}, new={completion_id})"
-                    )
+                # This is a new assistant response - close previous and create new
+                logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
+                if self._current_generation is not None:
+                    logger.debug("Closing previous generation for new assistant response")
                     self._close_current_generation()
-
-                # Create generation if needed (but not if we just closed one above)
-                elif self._current_generation is None:
-                    logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
-                    self._create_response_generation()
-
-                # Update completion_id from "unknown" to real ID
-                elif self._current_generation.completion_id == "unknown":
-                    self._current_generation.completion_id = completion_id
-                    logger.debug(f"Updated completion_id from unknown to {completion_id}")
+                self._create_response_generation()
         else:
             # For USER and FINAL, just ensure generation exists
             self._create_response_generation()
