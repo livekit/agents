@@ -45,7 +45,8 @@ class NoiseCancellationParams:
 
 
 NoiseCancellationSelector = Callable[
-    [NoiseCancellationParams], Optional[rtc.NoiseCancellationOptions]
+    [NoiseCancellationParams],
+    Optional[rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame]],
 ]
 
 
