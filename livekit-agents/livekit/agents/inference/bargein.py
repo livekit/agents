@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum, unique
 from time import perf_counter_ns
-from typing import Any, Callable, Generic, Literal, TypeVar, Union
+from typing import Any, Callable, Generic, Literal, TypeVar, Union, overload
 
 import aiohttp
 import numpy as np
@@ -74,10 +74,10 @@ class BargeinEvent:
     overlap_speech_started_at: float | None = None
     """Timestamp (in seconds) when the overlap speech started. Useful for emitting held transcripts."""
 
-    speech_input: np.NDArray[np.int16] | None = None
+    speech_input: npt.NDArray[np.int16] | None = None
     """The audio input that was used for the inference."""
 
-    probabilities: np.NDArray[np.float32] | None = None
+    probabilities: npt.NDArray[np.float32] | None = None
     """The probabilities for the bargein detection."""
 
 
@@ -585,7 +585,7 @@ class BargeinHttpStream(BargeinStreamBase):
         ) as resp:
             try:
                 resp.raise_for_status()
-                data = await resp.json()
+                data: dict[str, Any] = await resp.json()
                 # {
                 #     "created_at": int,
                 #     "is_bargein": bool,
@@ -930,6 +930,12 @@ class _BoundedCache(Generic[_K, _V]):
 
     def __getitem__(self, key: _K) -> _V:
         return self._cache[key]
+
+    @overload
+    def get(self, key: _K) -> _V | None: ...
+
+    @overload
+    def get(self, key: _K, default: _V) -> _V: ...
 
     def get(self, key: _K, default: _V | None = None) -> _V | None:
         return self._cache.get(key, default)
