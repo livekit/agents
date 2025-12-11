@@ -208,7 +208,7 @@ class AvatarSession:
                         "type": "session.keep_alive",
                         "event_id": str(uuid.uuid4()),
                     }
-                    self.send_event(msg=msg)
+                    self.send_event(msg)
             except asyncio.CancelledError:
                 return
 
@@ -219,6 +219,7 @@ class AvatarSession:
             async for msg in self._msg_ch:
                 try:
                     await ws_conn.send_json(data=msg)
+                    ping_interval.reset()
                 except Exception:
                     break
             closing = True
