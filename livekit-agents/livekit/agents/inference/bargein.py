@@ -800,7 +800,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         extra={
                             "created_at": created_at,
                             "inference_duration": inference_duration,
-                            "data": data,
                         },
                     )
                     cache[created_at] = {
@@ -943,7 +942,6 @@ class _BoundedCache(Generic[_K, _V]):
         return self._default_key, self._default_value
 
     def clear(self) -> None:
-        logger.debug("clearing cache", extra={"cache": len(self._cache)})
         self._cache.clear()
 
     def __len__(self) -> int:
