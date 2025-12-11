@@ -96,14 +96,17 @@ class TimedString(str):
 
     start_time: NotGivenOr[float]
     end_time: NotGivenOr[float]
+    start_wall_time: NotGivenOr[float]
 
     def __new__(
         cls,
         text: str,
         start_time: NotGivenOr[float] = NOT_GIVEN,
         end_time: NotGivenOr[float] = NOT_GIVEN,
+        start_wall_time: NotGivenOr[float] = NOT_GIVEN,
     ) -> "TimedString":
         obj = super().__new__(cls, text)
         obj.start_time = start_time
         obj.end_time = end_time
+        obj.start_wall_time = start_wall_time
         return obj

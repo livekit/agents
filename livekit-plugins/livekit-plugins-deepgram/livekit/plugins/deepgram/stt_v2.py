@@ -437,7 +437,7 @@ class SpeechStreamv2(stt.SpeechStream):
         self._event_ch.send_nowait(usage_event)
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
-        alts = _parse_transcription(self._opts.language, data)
+        alts = _parse_transcription(self._opts.language, data, self.start_wall_time)
         if alts:
             event = stt.SpeechEvent(
                 type=event_type,
@@ -502,7 +502,9 @@ class SpeechStreamv2(stt.SpeechStream):
             raise APIStatusError(message=desc, status_code=code)
 
 
-def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:
+def _parse_transcription(
+    language: str, data: dict[str, Any], start_wall_time: float
+) -> list[stt.SpeechData]:
     transcript = data.get("transcript")
     words = data.get("words")
     if not words:
@@ -511,15 +513,16 @@ def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.Speech
 
     sd = stt.SpeechData(
         language=language,
-        start_time=data.get("audio_window_start", 0),
-        end_time=data.get("audio_window_end", 0),
+        start_time=data.get("audio_window_start", 0) + start_wall_time,
+        end_time=data.get("audio_window_end", 0) + start_wall_time,
         confidence=confidence,
         text=transcript or "",
         words=[
             TimedString(
                 text=word.get("word", ""),
-                start_time=word.get("start", 0),
-                end_time=word.get("end", 0),
+                start_time=word.get("start", 0) + start_wall_time,
+                end_time=word.get("end", 0) + start_wall_time,
+                start_wall_time=start_wall_time,
             )
             for word in words
         ],

@@ -147,7 +147,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=use_streaming,
                 interim_results=True,
-                aligned_transcript="word" if enable_word_time_offsets else False,
+                aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
             )
         )
 
@@ -462,6 +462,7 @@ class SpeechStream(stt.SpeechStream):
                     speech_data = _streaming_recognize_response_to_speech_data(
                         resp,
                         min_confidence_threshold=self._config.min_confidence_threshold,
+                        start_wall_time=self.start_wall_time,
                     )
                     if speech_data is None:
                         continue
@@ -630,10 +631,12 @@ def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech.StreamingRecognizeResponse,
     *,
     min_confidence_threshold: float,
+    start_wall_time: float,
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
     final_result = None
+    words: list[cloud_speech.WordInfo] = []
     for result in resp.results:
         if len(result.alternatives) == 0:
             continue
@@ -644,10 +647,12 @@ def _streaming_recognize_response_to_speech_data(
             else:
                 text += result.alternatives[0].transcript
                 confidence += result.alternatives[0].confidence
+                words.extend(result.alternatives[0].words)
 
     if final_result is not None:
         text = final_result.alternatives[0].transcript
         confidence = final_result.alternatives[0].confidence
+        words = list(final_result.alternatives[0].words)
         lg = final_result.language_code
     else:
         confidence /= len(resp.results)
@@ -658,6 +663,20 @@ def _streaming_recognize_response_to_speech_data(
     if text == "":
         return None
 
-    data = stt.SpeechData(language=lg, start_time=0, end_time=0, confidence=confidence, text=text)
+    data = stt.SpeechData(
+        language=lg,
+        start_time=_duration_to_seconds(words[0].start_offset) + start_wall_time,
+        end_time=_duration_to_seconds(words[-1].end_offset) + start_wall_time,
+        confidence=confidence,
+        text=text,
+        words=[
+            TimedString(
+                text=word.word,
+                start_time=_duration_to_seconds(word.start_offset) + start_wall_time,
+                end_time=_duration_to_seconds(word.end_offset) + start_wall_time,
+            )
+            for word in words
+        ],
+    )
 
     return data

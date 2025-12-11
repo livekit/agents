@@ -275,8 +275,8 @@ class SpeechStream(stt.SpeechStream):
         start_time = 0.0
         end_time = 0.0
         if words:
-            start_time = getattr(words[0], "start_time", 0) / 1000.0
-            end_time = getattr(words[-1], "end_time", 0) / 1000.0
+            start_time = getattr(words[0], "start_time", 0) / 1000.0 + self.start_wall_time
+            end_time = getattr(words[-1], "end_time", 0) / 1000.0 + self.start_wall_time
 
         return stt.SpeechData(
             language=self._language,
@@ -287,8 +287,8 @@ class SpeechStream(stt.SpeechStream):
             words=[
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=word.get("start_time", 0),
-                    end_time=word.get("end_time", 0),
+                    start_time=word.get("start_time", 0) + self.start_wall_time,
+                    end_time=word.get("end_time", 0) + self.start_wall_time,
                 )
                 for word in words
             ]

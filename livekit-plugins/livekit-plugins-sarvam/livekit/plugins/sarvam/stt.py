@@ -901,7 +901,6 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_transcript_data(self, data: dict) -> None:
         """Handle transcription result messages."""
-        logger.debug(f"Received transcript data: {data}")
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
         language = transcript_data.get("language_code", "")
