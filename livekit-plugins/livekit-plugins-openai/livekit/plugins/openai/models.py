@@ -288,6 +288,16 @@ XAIChatModels = Literal[
     "grok-2-1212",
 ]
 
+CohereChatModels = Literal[
+    "command-r-plus-08-2024",
+    "command-r-08-2024",
+    "command-r",
+    "command",
+    "command-nightly",
+    "command-light",
+    "command-light-nightly",
+]
+
 
 def _supports_reasoning_effort(model: Union[ChatModels, str]) -> bool:
     return model in [
