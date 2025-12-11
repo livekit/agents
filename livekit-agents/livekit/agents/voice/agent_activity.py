@@ -1247,7 +1247,11 @@ class AgentActivity(RecognitionHooks):
         if ev.speech_duration >= self._session.options.min_interruption_duration:
             self._interrupt_by_audio_activity()
 
-        if ev.speaking and ev.raw_accumulated_silence <= 0:
+        if (
+            ev.speaking
+            # allow some silence between utterances during active speech
+            and ev.raw_accumulated_silence <= self._session.options.min_endpointing_delay / 2
+        ):
             self._user_silence_event.clear()
         else:
             self._user_silence_event.set()
