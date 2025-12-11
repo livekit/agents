@@ -1,0 +1,24 @@
+# .github/workflows/assign-reviewers.yml
+name: Auto-assign reviewers
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const author = context.payload.pull_request.user.login;
+            const targetAuthors = ['chenghao-mou'];
+            
+            if (targetAuthors.includes(author)) {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                team_reviewers: ['agent-devs']
+              });
+            }
