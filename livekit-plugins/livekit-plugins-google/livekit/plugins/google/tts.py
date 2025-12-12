@@ -92,7 +92,7 @@ class TTS(tts.TTS):
         Args:
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
-            voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice_name (str, optional): Specific voice name. Default is an empty string. See https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options for supported voice in Gemini TTS models.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             model_name (str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts"). Enables Gemini TTS models with streaming support.
             prompt (str, optional): Style prompt for Gemini TTS models. Controls tone, style, and speaking characteristics. Only applied to first input chunk in streaming mode.
@@ -284,6 +284,9 @@ class ChunkedStream(tts.ChunkedStream):
                 tts_input = texttospeech.SynthesisInput(
                     text=self._input_text, custom_pronunciations=self._opts.custom_pronunciations
                 )
+
+            if self._opts.prompt is not None:
+                tts_input.prompt = self._opts.prompt
 
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
                 input=tts_input,
