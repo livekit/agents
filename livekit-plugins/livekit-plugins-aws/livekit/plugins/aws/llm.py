@@ -40,7 +40,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .utils import to_fnc_ctx
 
-DEFAULT_TEXT_MODEL = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
 
 @dataclass
@@ -82,7 +82,7 @@ class LLM(llm.LLM):
 
         Args:
             model (str, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html).
-                Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
+                Defaults to 'amazon.nova-2-lite-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
@@ -256,10 +256,12 @@ class LLMStream(llm.LLMStream):
 
     def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
-            tool_use = chunk["contentBlockStart"]["start"]["toolUse"]
-            self._tool_call_id = tool_use["toolUseId"]
-            self._fnc_name = tool_use["name"]
-            self._fnc_raw_arguments = ""
+            start = chunk["contentBlockStart"]["start"]
+            if "toolUse" in start:
+                tool_use = start["toolUse"]
+                self._tool_call_id = tool_use["toolUseId"]
+                self._fnc_name = tool_use["name"]
+                self._fnc_raw_arguments = ""
 
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]
