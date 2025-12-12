@@ -138,8 +138,11 @@ class _TurnTracker:
     def _maybe_emit_generation_created(self, turn: _Turn) -> None:
         if not turn.ev_generation_sent:
             turn.ev_generation_sent = True
+            logger.debug(f"[GEN] TurnTracker calling emit_generation_fn() for turn_id={turn.turn_id}")
             self._emit_generation_fn()
             turn.phase = _Phase.ASSISTANT_RESPONDING
+        else:
+            logger.debug(f"[GEN] TurnTracker SKIPPED - already sent for turn_id={turn.turn_id}")
 
 
 def _classify(ev: dict) -> str:

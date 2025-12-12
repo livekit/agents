@@ -181,6 +181,7 @@ class _ResponseGeneration:
     _completed_timestamp: float | None = None
     _restart_attempts: int = 0
     _done_fut: asyncio.Future[None] | None = None  # Resolved when generation completes
+    _emitted: bool = False  # Track if generation_created event was emitted
 
 
 class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
@@ -750,6 +751,10 @@ class RealtimeSession(  # noqa: F811
             logger.warning("stream not initialized; dropping event (this should never occur)")
             return
 
+        # Log the full JSON being sent (skip audio events to avoid log spam)
+        if '"audioInput"' not in event_json:
+            logger.debug(f"[SEND] {event_json}")
+
         event = InvokeModelWithBidirectionalStreamInputChunk(
             value=BidirectionalInputPayloadPart(bytes_=event_json.encode("utf-8"))
         )
@@ -952,12 +957,26 @@ class RealtimeSession(  # noqa: F811
 
     @utils.log_exceptions(logger=logger)
     def emit_generation_event(self) -> None:
-        """Publish a llm.GenerationCreatedEvent to external subscribers."""
+        """Publish a llm.GenerationCreatedEvent to external subscribers.
+
+        This can be called multiple times for the same generation:
+        - Once from _create_response_generation() when a NEW generation is created
+        - Once from TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives
+
+        The TurnTracker emission is critical for tool calls - it happens at the right moment
+        for the framework to start listening before the tool call is emitted.
+        """
         if self._current_generation is None:
-            logger.debug("emit_generation_event called but no generation exists - ignoring")
+            logger.debug("[GEN] emit_generation_event called but no generation exists - ignoring")
             return
 
-        logger.debug("Emitting generation event")
+        # Log whether this is first or duplicate emission
+        if self._current_generation._emitted:
+            logger.debug(f"[GEN] EMITTING (duplicate) generation_created for response_id={self._current_generation.response_id}")
+        else:
+            logger.debug(f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}")
+
+        self._current_generation._emitted = True
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -998,7 +1017,7 @@ class RealtimeSession(  # noqa: F811
             completion_id = "unknown"  # Will be set from events
             response_id = str(uuid.uuid4())
 
-            logger.debug(f"Creating new generation, response_id={response_id}")
+            logger.debug(f"[GEN] Creating NEW generation, response_id={response_id}")
             self._current_generation = _ResponseGeneration(
                 completion_id=completion_id,
                 message_ch=utils.aio.Chan(),
@@ -1009,13 +1028,13 @@ class RealtimeSession(  # noqa: F811
             generation_created = True
         else:
             logger.debug(
-                f"Generation already exists: response_id={self._current_generation.response_id}"
+                f"[GEN] Generation already exists: response_id={self._current_generation.response_id}, emitted={self._current_generation._emitted}"
             )
 
         # Always ensure message structure exists (even if generation already exists)
         if self._current_generation.message_gen is None:
             logger.debug(
-                f"Creating message structure for response_id={self._current_generation.response_id}"
+                f"[GEN] Creating message structure for response_id={self._current_generation.response_id}"
             )
             msg_gen = _MessageGeneration(
                 message_id=self._current_generation.response_id,
@@ -1038,11 +1057,12 @@ class RealtimeSession(  # noqa: F811
             )
         else:
             logger.debug(
-                f"Message structure already exists for response_id={self._current_generation.response_id}"
+                f"[GEN] Message structure already exists for response_id={self._current_generation.response_id}"
             )
 
         # Only emit generation event if we created a new generation
         if generation_created:
+            logger.debug("[GEN] New generation created - calling emit_generation_event()")
             self.emit_generation_event()
 
     # will be completely ignoring post-ASR text events
@@ -1059,9 +1079,9 @@ class RealtimeSession(  # noqa: F811
             additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
             if "SPECULATIVE" in additional_fields:
                 # This is a new assistant response - close previous and create new
-                logger.debug("ASSISTANT SPECULATIVE text - creating new generation")
+                logger.debug("[GEN] ASSISTANT SPECULATIVE text received")
                 if self._current_generation is not None:
-                    logger.debug("Closing previous generation for new assistant response")
+                    logger.debug(f"[GEN] Closing previous generation (response_id={self._current_generation.response_id}) for new SPECULATIVE")
                     self._close_current_generation()
                 self._create_response_generation()
         else:
@@ -1256,6 +1276,9 @@ class RealtimeSession(  # noqa: F811
         if self._current_generation is None:
             return
 
+        response_id = self._current_generation.response_id
+        was_emitted = self._current_generation._emitted
+
         # Set completed timestamp
         if self._current_generation._completed_timestamp is None:
             self._current_generation._completed_timestamp = time.time()
@@ -1278,7 +1301,7 @@ class RealtimeSession(  # noqa: F811
             self._current_generation._done_fut.set_result(None)
 
         logger.debug(
-            f"Closed generation for completion_id={self._current_generation.completion_id}"
+            f"[GEN] CLOSED generation response_id={response_id}, was_emitted={was_emitted}"
         )
         self._current_generation = None
 
