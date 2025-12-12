@@ -185,13 +185,13 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track, participant)
         self._publication = publication
         if self._processor:
-            self._processor._update_stream_info(
+            self._processor._on_stream_info_updated(
                 room_name=self._room.name,
                 participant_identity=participant.identity,
                 publication_sid=publication.sid,
             )
             if self._room._token is not None and self._room._server_url is not None:
-                self._processor._update_credentials(
+                self._processor._on_credentials_updated(
                     token=self._room._token, url=self._room._server_url
                 )
         self._forward_atask = asyncio.create_task(
@@ -224,7 +224,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             and self._room._token is not None
             and self._room._server_url is not None
         ):
-            self._processor._update_credentials(token=self._room._token, url=self._room._server_url)
+            self._processor._on_credentials_updated(token=self._room._token, url=self._room._server_url)
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
