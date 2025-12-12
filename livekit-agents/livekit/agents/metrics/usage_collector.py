@@ -1,7 +1,14 @@
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .base import AgentMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
+from .base import (
+    AgentMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+    VideoAvatarMetrics,
+)
 
 
 @dataclass
@@ -21,6 +28,9 @@ class UsageSummary:
     tts_characters_count: int = 0
     tts_audio_duration: float = 0.0
     stt_audio_duration: float = 0.0
+    full_latency: float = 0.0
+    server_latency: float = 0.0
+    video_pipeline_latency: float = 0.0
 
     # properties for naming consistency: prompt = input, completion = output
     @property
@@ -48,6 +58,7 @@ class UsageCollector:
         self.collect(metrics)
 
     def collect(self, metrics: AgentMetrics) -> None:
+        print(type(metrics))
         if isinstance(metrics, LLMMetrics):
             self._summary.llm_prompt_tokens += metrics.prompt_tokens
             self._summary.llm_prompt_cached_tokens += metrics.prompt_cached_tokens
@@ -87,6 +98,10 @@ class UsageCollector:
 
         elif isinstance(metrics, STTMetrics):
             self._summary.stt_audio_duration += metrics.audio_duration
+        elif isinstance(metrics, VideoAvatarMetrics):
+            self._summary.full_latency += metrics.full_latency or 0
+            self._summary.server_latency += metrics.server_latency or 0
+            self._summary.video_pipeline_latency += metrics.video_pipeline_latency or 0
 
     def get_summary(self) -> UsageSummary:
         return deepcopy(self._summary)

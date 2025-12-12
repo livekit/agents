@@ -6,6 +6,7 @@ from .base import (
     STTMetrics,
     TTSMetrics,
     VADMetrics,
+    VideoAvatarMetrics,
 )
 from .usage_collector import UsageCollector, UsageSummary
 from .utils import log_metrics
@@ -21,6 +22,7 @@ __all__ = [
     "UsageSummary",
     "UsageCollector",
     "log_metrics",
+    "VideoAvatarMetrics",
 ]
 
 # Cleanup docs of unexported modules
