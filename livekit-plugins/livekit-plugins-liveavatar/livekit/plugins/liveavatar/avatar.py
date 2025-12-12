@@ -4,9 +4,11 @@ import asyncio
 import base64
 import contextlib
 import os
+import time
 import uuid
+from abc import ABC
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal, TypeVar, Union
 
 import aiohttp
 
@@ -21,18 +23,21 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.metrics import UsageCollector, VideoAvatarMetrics, log_metrics
 from livekit.agents.voice.avatar import QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
 from .log import logger
 
+TEvent = TypeVar("TEvent")
+
 SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
 _AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(ABC, rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]]):
     """A LiveAvatar avatar session"""
 
     def __init__(
@@ -45,6 +50,7 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._avatar_id = avatar_id or os.getenv("LIVEAVATAR_AVATAR_ID")
         self._session_id: str | None = None
         self._session_token: str | None = None
@@ -59,6 +65,54 @@ class AvatarSession:
         self._msg_ch = utils.aio.Chan[dict]()
         self._audio_playing = False
         self._playback_position = 0.0
+        self._pending = {}
+        self._latency_pending = {}
+        self._last_latency = None
+        self._usage_collector = UsageCollector()
+
+        self.on("metrics_collected", self._on_metrics_collected)
+
+    def _on_metrics_collected(self, ev: VideoAvatarMetrics):
+        m = ev
+        log_metrics(m)
+        self._usage_collector.collect(m)
+
+    async def _video_frame_loop(self, video_stream: rtc.VideoStream):
+        try:
+            async for frame_event in video_stream:
+                self._on_video_frame(frame_event.frame)
+        except Exception as e:
+            logger.warning(f"video frame loop ended: {e}")
+
+    def _on_video_frame(self, frame, event_id=None):
+        now = time.perf_counter()
+
+        for eid, item in list(self._latency_pending.items()):
+            if item.get("ws_received") and "video_received" not in item:
+                item["video_received"] = now
+
+                audio_sent = item["audio_sent"]
+                ws_received = item["ws_received"]
+                video_received = item["video_received"]
+
+                full_latency = video_received - audio_sent
+                server_latency = ws_received - audio_sent
+                video_pipeline_latency = video_received - ws_received
+
+                metrics = VideoAvatarMetrics(
+                    event_id=eid,
+                    timestamp=time.time(),
+                    audio_sent_ts=audio_sent,
+                    ws_received_ts=ws_received,
+                    video_received_ts=video_received,
+                    full_latency=full_latency,
+                    server_latency=server_latency,
+                    video_pipeline_latency=video_pipeline_latency,
+                )
+
+                self.emit("metrics_collected", metrics)
+                self._latency_pending.pop(eid, None)
+                break
 
     async def start(
         self,
@@ -117,6 +171,12 @@ class AvatarSession:
         )
         self._ws_url = session_start_data["data"]["ws_url"]
         logger.info("LiveAvatar streaming session started")
+
+        @room.on("track_subscribed")
+        def on_track_subscribed(track, publication, participant):
+            if track.kind == rtc.TrackKind.KIND_VIDEO:
+                video_stream = rtc.VideoStream(track)
+                asyncio.create_task(self._video_frame_loop(video_stream))
 
         @self._agent_session.on("agent_state_changed")
         def on_agent_state_changed(ev):
@@ -196,6 +256,14 @@ class AvatarSession:
                             "event_id": str(uuid.uuid4()),
                             "audio": encoded_audio,
                         }
+                        send_ts = time.perf_counter()
+                        msg_id = msg["event_id"]
+                        # store structured entry so recv_task and video handler can share data
+                        self._latency_pending[msg_id] = {
+                            "audio_sent": send_ts,
+                            "ws_received": None,
+                            "created_at": time.perf_counter(),
+                        }
 
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
@@ -224,6 +292,39 @@ class AvatarSession:
                     if closing:
                         return
                     raise APIConnectionError(message="LiveAvatar connection closed unexpectedly.")
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = msg.json()
+
+                        recv_ts = time.perf_counter()
+                        event_id = data.get("event_id")
+
+                        if event_id in self._latency_pending:
+                            entry = self._latency_pending[event_id]
+                            entry["ws_received"] = recv_ts
+
+                            metrics = VideoAvatarMetrics(
+                                event_id=event_id,
+                                timestamp=time.time(),
+                                audio_sent_ts=entry["audio_sent"],
+                                ws_received_ts=recv_ts,
+                                full_latency=-1,
+                                server_latency=recv_ts - entry["audio_sent"],
+                                video_pipeline_latency=-1,
+                            )
+
+                            self.emit("metrics_collected", metrics)
+
+                        # fallback: if server didn't echo event_id, measure first pending entry
+                        elif self._latency_pending:
+                            # find earliest entry without ws_received
+                            for _first_id, entry in list(self._latency_pending.items()):
+                                if isinstance(entry, dict) and entry.get("ws_received") is None:
+                                    entry["ws_received"] = recv_ts
+                                    break
+
+                    except Exception:
+                        pass
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
