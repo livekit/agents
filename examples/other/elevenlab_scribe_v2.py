@@ -33,7 +33,7 @@ async def entrypoint(ctx: JobContext):
         agent=Agent(instructions="You are a somewhat helpful assistant."), room=ctx.room
     )
 
-    await session.say("Hello, how can I help you?")
+    await session.say("Hello, how can I help you?", allow_interruptions=False)
 
 
 def prewarm(proc: JobProcess):
