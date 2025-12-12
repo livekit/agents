@@ -6,13 +6,14 @@ from typing import Literal, Union
 from google.genai import types
 
 LiveAPIModels = Literal[
+    # VertexAI models
     "gemini-2.0-flash-exp",
-    # models supported on Gemini API
+    "gemini-live-2.5-flash-preview-native-audio",
+    "gemini-live-2.5-flash-preview-native-audio-09-2025",
+    # Gemini API models
     "gemini-2.0-flash-live-001",
     "gemini-live-2.5-flash-preview",
     "gemini-2.5-flash-native-audio-preview-09-2025",
-    "gemini-2.5-flash-preview-native-audio-dialog",
-    "gemini-2.5-flash-exp-native-audio-thinking-dialog",
 ]
 
 Voice = Literal[

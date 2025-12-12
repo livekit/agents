@@ -51,7 +51,6 @@ def to_fnc_ctx(
 
             if is_given(tool_behavior):
                 fnc_kwargs["behavior"] = tool_behavior
-
             tools.append(types.FunctionDeclaration(**fnc_kwargs))
 
         elif is_function_tool(fnc):
@@ -108,10 +107,11 @@ def get_tool_results_for_realtime(
             res = types.FunctionResponse(
                 name=msg.name,
                 response={"output": msg.output},
-                scheduling=tool_response_scheduling
-                if is_given(tool_response_scheduling)
-                else types.FunctionResponseScheduling.WHEN_IDLE,
             )
+            if is_given(tool_response_scheduling):
+                # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle
+                # it's the user's responsibility to avoid this parameter when using vertexai
+                res.scheduling = tool_response_scheduling
             if not vertexai:
                 # vertexai does not support id in FunctionResponse
                 # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
@@ -137,7 +137,6 @@ def _build_gemini_fnc(
     }
     if is_given(tool_behavior):
         kwargs["behavior"] = tool_behavior
-
     return types.FunctionDeclaration(**kwargs)
 
 
@@ -202,6 +201,9 @@ class _GeminiJsonSchema:
             schema.update(schema_def)
             return
 
+        if "enum" in schema and "type" not in schema:
+            schema["type"] = self._infer_type(schema["enum"][0])
+
         # Convert type value to Gemini format
         if "type" in schema and schema["type"] != "null":
             json_type = schema["type"]
@@ -242,6 +244,18 @@ class _GeminiJsonSchema:
             self._object(schema, refs_stack)
         elif type_ == types.Type.ARRAY:
             self._array(schema, refs_stack)
+
+    def _infer_type(self, value: Any) -> str:
+        if isinstance(value, int):
+            return "integer"
+        elif isinstance(value, float):
+            return "number"
+        elif isinstance(value, str):
+            return "string"
+        elif isinstance(value, bool):
+            return "boolean"
+        else:
+            raise ValueError(f"Unsupported type in Schema: {type(value)}")
 
     def _map_field_names(self, schema: dict[str, Any]) -> None:
         """Map JSON Schema field names to Gemini Schema field names."""

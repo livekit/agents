@@ -9,6 +9,10 @@ ChatModels = Literal[
     "ministral-3b-2410",
     "ministral-8b-2410",
     "mistral-large-2411",
+    "mistral-large-2512",
+    "ministral-14b-2512",
+    "ministral-8b-2512",
+    "ministral-3b-2512",
     "mistral-small-2407",
 ]
 

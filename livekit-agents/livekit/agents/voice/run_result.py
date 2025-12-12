@@ -20,8 +20,11 @@ from typing import (
     overload,
 )
 
+from opentelemetry import trace
+
 from .. import llm
 from ..llm import function_tool, utils as llm_utils
+from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .speech_handle import SpeechHandle
@@ -55,6 +58,7 @@ class FunctionCallOutputEvent:
 
 @dataclass
 class AgentHandoffEvent:
+    item: llm.AgentHandoff
     old_agent: Agent | None
     new_agent: Agent
     type: Literal["agent_handoff"] = "agent_handoff"
@@ -130,19 +134,28 @@ class RunResult(Generic[Run_T]):
 
         return _await_impl().__await__()
 
-    def _agent_handoff(self, *, old_agent: Agent | None, new_agent: Agent) -> None:
-        self._recorded_items.append(AgentHandoffEvent(old_agent=old_agent, new_agent=new_agent))
+    def _agent_handoff(
+        self, *, item: llm.AgentHandoff, old_agent: Agent | None, new_agent: Agent
+    ) -> None:
+        event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
+        index = self._find_insertion_index(created_at=event.item.created_at)
+        self._recorded_items.insert(index, event)
 
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
             return
 
+        event: RunEvent | None = None
         if item.type == "message":
-            self._recorded_items.append(ChatMessageEvent(item=item))
+            event = ChatMessageEvent(item=item)
         elif item.type == "function_call":
-            self._recorded_items.append(FunctionCallEvent(item=item))
+            event = FunctionCallEvent(item=item)
         elif item.type == "function_call_output":
-            self._recorded_items.append(FunctionCallOutputEvent(item=item))
+            event = FunctionCallOutputEvent(item=item)
+
+        if event is not None:
+            index = self._find_insertion_index(created_at=event.item.created_at)
+            self._recorded_items.insert(index, event)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
         self._handles.add(handle)
@@ -186,6 +199,19 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_result(None)
             else:
                 self._done_fut.set_exception(final_output)
+
+    def _find_insertion_index(self, *, created_at: float) -> int:
+        """
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at <=` the given timestamp.
+        """
+        for i in reversed(range(len(self._recorded_items))):
+            if self._recorded_items[i].item.created_at <= created_at:
+                return i + 1
+
+        return 0
 
 
 class RunAssert:
@@ -823,6 +849,7 @@ class ChatMessageAssert:
     def event(self) -> ChatMessageEvent:
         return self._event
 
+    @tracer.start_as_current_span("judge_evaluation")
     async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
         """
         Evaluate whether the message fulfills the given intent.
@@ -839,7 +866,16 @@ class ChatMessageAssert:
         """
         __tracebackhide__ = True
 
+        current_span = trace.get_current_span()
         msg_content = self._event.item.text_content
+
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_OPERATION_NAME, "judge")
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, llm_v.model)
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, "judge_evaluation")
+        current_span.set_attribute(
+            trace_types.ATTR_FUNCTION_TOOL_ARGS,
+            json.dumps({"intent": intent, "message": msg_content}),
+        )
 
         if not msg_content:
             self._raise("The chat message is empty.")
@@ -880,6 +916,8 @@ class ChatMessageAssert:
         )
 
         arguments: str | None = None
+        usage: llm.CompletionUsage | None = None
+
         extra_kwargs = {}
         excluded_models_temperature = ["gpt-5"]  # Add model names here to exclude temperature
 
@@ -893,6 +931,9 @@ class ChatMessageAssert:
             tool_choice={"type": "function", "function": {"name": "check_intent"}},
             extra_kwargs=extra_kwargs,
         ):
+            if chunk.usage is not None:
+                usage = chunk.usage
+
             if not chunk.delta:
                 continue
 
@@ -910,6 +951,20 @@ class ChatMessageAssert:
         )
 
         success, reason = await check_intent(*fnc_args, **fnc_kwargs)
+
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, not success)
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_OUTPUT, reason)
+
+        if usage:
+            current_span.set_attributes(
+                {
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.prompt_cached_tokens,
+                }
+            )
 
         if not success:
             self._raise(f"Judgement failed: {reason}")

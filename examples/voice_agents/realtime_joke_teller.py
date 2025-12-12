@@ -29,15 +29,13 @@ from jokeapi import Jokes
 from livekit import agents, rtc
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
-    RoomInputOptions,
-    RoomOutputOptions,
     RunContext,
     ToolError,
-    WorkerOptions,
-    cli,
     llm,
+    room_io,
 )
 from livekit.agents.llm import function_tool
 from livekit.agents.llm.chat_context import ChatContext
@@ -183,6 +181,10 @@ class Assistant(Agent):
         return {"user_name": context.userdata.user_name, "age": context.userdata.age}
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: agents.JobContext):
     session: AgentSession | None = None
     try:
@@ -223,12 +225,12 @@ async def entrypoint(ctx: agents.JobContext):
             await session.start(
                 room=ctx.room,
                 agent=Assistant(tools=[get_weather, get_median_home_price, search_web, tell_joke]),
-                room_input_options=RoomInputOptions(close_on_disconnect=False),
-                room_output_options=RoomOutputOptions(
-                    audio_enabled=True,
-                    audio_sample_rate=24000,
-                    audio_num_channels=1,
-                    transcription_enabled=True,
+                room_options=room_io.RoomOptions(
+                    audio_input=room_io.AudioInputOptions(
+                        sample_rate=24000,
+                        num_channels=1,
+                    ),
+                    close_on_disconnect=False,
                 ),
             )
 
@@ -262,4 +264,4 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(server)

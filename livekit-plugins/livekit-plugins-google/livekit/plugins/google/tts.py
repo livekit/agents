@@ -53,6 +53,8 @@ class _TTSOptions:
     custom_pronunciations: CustomPronunciations | None
     enable_ssml: bool
     use_markup: bool
+    model_name: str | None
+    prompt: str | None
 
 
 class TTS(tts.TTS):
@@ -63,6 +65,8 @@ class TTS(tts.TTS):
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         voice_cloning_key: NotGivenOr[str] = NOT_GIVEN,
+        model_name: NotGivenOr[str] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
@@ -90,6 +94,8 @@ class TTS(tts.TTS):
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
+            model_name (str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts"). Enables Gemini TTS models with streaming support.
+            prompt (str, optional): Style prompt for Gemini TTS models. Controls tone, style, and speaking characteristics. Only applied to first input chunk in streaming mode.
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
@@ -98,7 +104,7 @@ class TTS(tts.TTS):
             volume_gain_db (float, optional): Volume gain in decibels. Default is 0.0. In the range [-96.0, 16.0]. Strongly recommended not to exceed +10 (dB).
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
-            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
+            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
             enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
@@ -128,6 +134,8 @@ class TTS(tts.TTS):
             language_code=lang,
             ssml_gender=ssml_gender,
         )
+        if is_given(model_name):
+            voice_params.model_name = model_name
         if is_given(voice_cloning_key):
             voice_params.voice_clone = texttospeech.VoiceCloneParams(
                 voice_cloning_key=voice_cloning_key,
@@ -152,12 +160,14 @@ class TTS(tts.TTS):
             custom_pronunciations=pronunciations,
             enable_ssml=enable_ssml,
             use_markup=use_markup,
+            model_name=model_name if is_given(model_name) else None,
+            prompt=prompt if is_given(prompt) else None,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
     def model(self) -> str:
-        return "Chirp3"
+        return self._opts.model_name or "Chirp3"
 
     @property
     def provider(self) -> str:
@@ -169,6 +179,8 @@ class TTS(tts.TTS):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
+        model_name: NotGivenOr[str] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         volume_gain_db: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
@@ -179,6 +191,8 @@ class TTS(tts.TTS):
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US").
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral").
             voice_name (str, optional): Specific voice name.
+            model_name (str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts").
+            prompt (str, optional): Style prompt for Gemini TTS models.
             speaking_rate (float, optional): Speed of speech.
             volume_gain_db (float, optional): Volume gain in decibels.
         """
@@ -189,6 +203,9 @@ class TTS(tts.TTS):
             params["ssml_gender"] = _gender_from_str(str(gender))
         if is_given(voice_name):
             params["name"] = voice_name
+        if is_given(model_name):
+            params["model_name"] = model_name
+            self._opts.model_name = model_name
 
         if params:
             self._opts.voice = texttospeech.VoiceSelectionParams(**params)
@@ -197,6 +214,8 @@ class TTS(tts.TTS):
             self._opts.speaking_rate = speaking_rate
         if is_given(volume_gain_db):
             self._opts.volume_gain_db = volume_gain_db
+        if is_given(prompt):
+            self._opts.prompt = prompt
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         api_endpoint = "texttospeech.googleapis.com"
@@ -370,15 +389,17 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 
+                is_first_input = True
                 async for input in input_stream:
                     self._mark_started()
-                    yield (
-                        texttospeech.StreamingSynthesizeRequest(
-                            input=texttospeech.StreamingSynthesisInput(markup=input.token)
-                            if self._opts.use_markup
-                            else texttospeech.StreamingSynthesisInput(text=input.token)
-                        )
+                    # prompt is only supported in the first input chunk (for Gemini TTS)
+                    synthesis_input = texttospeech.StreamingSynthesisInput(
+                        markup=input.token if self._opts.use_markup else None,
+                        text=None if self._opts.use_markup else input.token,
+                        prompt=self._opts.prompt if is_first_input else None,
                     )
+                    is_first_input = False
+                    yield texttospeech.StreamingSynthesizeRequest(input=synthesis_input)
 
             except Exception:
                 logger.exception("an error occurred while streaming input to google TTS")

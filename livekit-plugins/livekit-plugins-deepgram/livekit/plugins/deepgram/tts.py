@@ -116,13 +116,22 @@ class TTS(tts.TTS):
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        return await asyncio.wait_for(
+        ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
                 headers={"Authorization": f"Token {self._opts.api_key}"},
             ),
             timeout,
         )
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram TTS WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
+
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
@@ -296,18 +305,22 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
+        input_sent_event = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for word in word_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
                 self._mark_started()
                 await ws.send_str(json.dumps(speak_msg))
+                input_sent_event.set()
 
-            # Always flush after a segment
+            # always flush after a segment
             flush_msg = {"type": "Flush"}
             await ws.send_str(json.dumps(flush_msg))
+            input_sent_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            await input_sent_event.wait()
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -341,4 +354,5 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
+                input_sent_event.set()
                 await utils.aio.gracefully_cancel(*tasks)

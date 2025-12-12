@@ -422,7 +422,7 @@ class TranscriptSynchronizer:
 
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
-        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task(None))
+        self._rotate_segment_atask: asyncio.Task[None] | None = None
 
     @property
     def audio_output(self) -> _SyncedAudioOutput:
@@ -446,7 +446,7 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
-        if enabled or not self._rotate_segment_atask or self._rotate_segment_atask.done():
+        if not self._rotate_segment_atask or self._rotate_segment_atask.done():
             # avoid calling rotate_segment twice when closing the session during agent speaking
             # first time when speech interrupted, second time here when output detached
             self.rotate_segment()
@@ -478,7 +478,7 @@ class TranscriptSynchronizer:
         if self._closed:
             return
 
-        if not self._rotate_segment_atask.done():
+        if self._rotate_segment_atask and not self._rotate_segment_atask.done():
             logger.warning("rotate_segment called while previous segment is still being rotated")
 
         self._rotate_segment_atask = asyncio.create_task(
@@ -507,7 +507,6 @@ class _SyncedAudioOutput(io.AudioOutput):
         )
         self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
-        self._capturing = False
         self._pushed_duration: float = 0.0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -515,9 +514,8 @@ class _SyncedAudioOutput(io.AudioOutput):
         # capture_frame isn't completed
         await self._synchronizer.barrier()
 
-        self._capturing = True
-        await super().capture_frame(frame)
         await self._next_in_chain.capture_frame(frame)  # passthrough audio
+        await super().capture_frame(frame)
         self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
@@ -545,12 +543,10 @@ class _SyncedAudioOutput(io.AudioOutput):
             self._synchronizer.rotate_segment()
             return
 
-        self._capturing = False
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
         self._next_in_chain.clear_buffer()
-        self._capturing = False
 
     # this is going to be automatically called by the next_in_chain
     def on_playback_finished(

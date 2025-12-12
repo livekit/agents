@@ -195,6 +195,10 @@ class AvatarSession:
 
         if self._runtime:
             runtime = self._runtime
+            logger.debug("previous transaction id: %s", runtime.transaction_id)
+            runtime._regenerate_transaction_id()
+            logger.debug("new transaction id: %s", runtime.transaction_id)
+            await runtime._initialize_token()
         else:
             kwargs = {
                 "model_path": self._model_path,
@@ -260,9 +264,12 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
+        job_ctx = get_job_context()
+        local_participant_identity = job_ctx.local_participant_identity
+
         # Prepare attributes for JWT token
         attributes: dict[str, str] = {
-            ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
+            ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity,
         }
 
         # Only add api_secret if it's not None

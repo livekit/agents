@@ -9,11 +9,10 @@ from langgraph.graph.message import add_messages
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
-    RoomInputOptions,
-    WorkerOptions,
     cli,
 )
 from livekit.plugins import deepgram, langchain, silero
@@ -32,9 +31,14 @@ load_dotenv()
 # - langgraph
 # - livekit-agents[openai,silero,langchain,deepgram,turn_detector]
 
+server = AgentServer()
+
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+
+
+server.setup_fnc = prewarm
 
 
 class State(TypedDict):
@@ -56,6 +60,7 @@ def create_graph() -> StateGraph:
     return builder.compile()
 
 
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     graph = create_graph()
 
@@ -76,14 +81,9 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # to use Krisp background voice cancellation, install livekit-plugins-noise-cancellation
-            # and `from livekit.plugins import noise_cancellation`
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
     )
     await session.generate_reply(instructions="ask the user how they are doing?")
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

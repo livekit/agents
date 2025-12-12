@@ -202,6 +202,7 @@ class STT(stt.STT):
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
             "numerals": config.numerals,
+            "mip_opt_out": config.mip_opt_out,
         }
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
@@ -596,6 +597,13 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            ws_headers = {
+                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+            }
+            logger.debug(
+                "Established new Deepgram STT WebSocket connection:",
+                extra={"headers": ws_headers},
+            )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to deepgram") from e
         return ws
@@ -778,14 +786,8 @@ def _validate_keyterms(
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterms) and (
-        (
-            model.startswith("nova-3")
-            and language not in ("en-US", "en", "de", "nl", "sv", "sv-SE", "da", "da-DK")
-        )
-        or not model.startswith("nova-3")
-    ):
+    if is_given(keyterms) and (not model.startswith("nova-3")):
         raise ValueError(
-            "Keyterm Prompting is only available for English transcription using the Nova-3 Model. "
+            "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
         )

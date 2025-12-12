@@ -142,6 +142,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     await self._playback_enabled.wait()
 
                 await self._audio_source.wait_for_playout()
+                # avoid deadlock when clear_buffer called before capture_frame
+                await asyncio.sleep(0)
 
         wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         await asyncio.wait(
@@ -297,7 +299,8 @@ class _ParticipantLegacyTranscriptionOutput:
             if self._room.isconnected():
                 await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
-            logger.warning("failed to publish transcription", exc_info=e)
+            if self._room.isconnected():
+                logger.warning("failed to publish transcription", exc_info=e)
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
