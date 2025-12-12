@@ -15,27 +15,23 @@ jobs:
         with:
           script: |
             const author = context.payload.pull_request.user.login;
-            const targetAuthors = [
-              'longcw',
-              'theomonnom',
-              'davidzhao',
-              'tinalenguyen',
-              'chenghao-mou',
-              'toubatbrian',
-              'bcherry',
-              'adrian-cowham',
-              'paulwe',
-              'russellmartin-livekit',
-              'lukasIO',
-              'jeradf',
-              'Shubhrakanti'
-            ];
+            const org = 'livekit';
             
-            if (targetAuthors.includes(author)) {
+            try {
+              // Check if author is a member of the org
+              await github.rest.orgs.checkMembershipForUser({
+                org: org,
+                username: author
+              });
+              
+              // If we get here, user is a member (204 response)
               await github.rest.pulls.requestReviewers({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: context.payload.pull_request.number,
                 team_reviewers: ['agent-devs']
               });
+            } catch (error) {
+              // 404 means user is not a member
+              console.log(`Author ${author} is not an org member: ${error.status}`);
             }
