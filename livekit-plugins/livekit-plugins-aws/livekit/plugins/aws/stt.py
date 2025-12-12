@@ -327,18 +327,17 @@ class SpeechStream(stt.SpeechStream):
 
         return stt.SpeechData(
             language=resp.language_code or self._opts.language,
-            start_time=resp.start_time
-            if resp.start_time is not None
-            else 0.0 + self.start_wall_time,
-            end_time=resp.end_time if resp.end_time is not None else 0.0 + self.start_wall_time,
+            start_time=(resp.start_time or 0.0) + self.start_time_offset,
+            end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
             words=[
                 TimedString(
                     text=item.content,
-                    start_time=item.start_time + self.start_wall_time,
-                    end_time=item.end_time + self.start_wall_time,
-                    start_wall_time=self.start_wall_time,
+                    start_time=item.start_time + self.start_time_offset,
+                    end_time=item.end_time + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=item.confidence or 0.0,
                 )
                 for item in resp.alternatives[0].items
             ]

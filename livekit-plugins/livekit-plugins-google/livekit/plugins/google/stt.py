@@ -462,7 +462,7 @@ class SpeechStream(stt.SpeechStream):
                     speech_data = _streaming_recognize_response_to_speech_data(
                         resp,
                         min_confidence_threshold=self._config.min_confidence_threshold,
-                        start_wall_time=self.start_wall_time,
+                        start_time_offset=self.start_time_offset,
                     )
                     if speech_data is None:
                         continue
@@ -631,7 +631,7 @@ def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech.StreamingRecognizeResponse,
     *,
     min_confidence_threshold: float,
-    start_wall_time: float,
+    start_time_offset: float,
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
@@ -660,20 +660,22 @@ def _streaming_recognize_response_to_speech_data(
             return None
         lg = resp.results[0].language_code
 
-    if text == "":
+    if text == "" or not words:
         return None
 
     data = stt.SpeechData(
         language=lg,
-        start_time=_duration_to_seconds(words[0].start_offset) + start_wall_time,
-        end_time=_duration_to_seconds(words[-1].end_offset) + start_wall_time,
+        start_time=_duration_to_seconds(words[0].start_offset) + start_time_offset,
+        end_time=_duration_to_seconds(words[-1].end_offset) + start_time_offset,
         confidence=confidence,
         text=text,
         words=[
             TimedString(
                 text=word.word,
-                start_time=_duration_to_seconds(word.start_offset) + start_wall_time,
-                end_time=_duration_to_seconds(word.end_offset) + start_wall_time,
+                start_time=_duration_to_seconds(word.start_offset) + start_time_offset,
+                end_time=_duration_to_seconds(word.end_offset) + start_time_offset,
+                start_time_offset=start_time_offset,
+                confidence=word.confidence,
             )
             for word in words
         ],

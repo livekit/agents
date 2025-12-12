@@ -410,7 +410,6 @@ class SpeechStream(stt.SpeechStream):
             "model_id=scribe_v2_realtime",
             f"encoding=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
-            "include_timestamps=true",
         ]
 
         if server_vad := self._opts.server_vad:
@@ -427,6 +426,9 @@ class SpeechStream(stt.SpeechStream):
 
         if self._language:
             params.append(f"language_code={self._language}")
+
+        if self._opts.include_timestamps:
+            params.append("include_timestamps=true")
 
         query_string = "&".join(params)
 
@@ -459,14 +461,14 @@ class SpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=self._language or "en",
             text=text,
-            start_time=start_time + self.start_wall_time,
-            end_time=end_time + self.start_wall_time,
+            start_time=start_time + self.start_time_offset,
+            end_time=end_time + self.start_time_offset,
             words=[
                 TimedString(
                     text=word.get("text", ""),
-                    start_time=word.get("start", 0) + self.start_wall_time,
-                    end_time=word.get("end", 0) + self.start_wall_time,
-                    start_wall_time=self.start_wall_time,
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
                 )
                 for word in words
             ],
@@ -490,15 +492,13 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(interim_event)
 
+        # 11labs sends both when include_timestamps is True
         elif message_type in {
             "committed_transcript",
             "committed_transcript_with_timestamps",
         }:
-            logger.debug("Received message type committed_transcript: %s", data)
-
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
-
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:

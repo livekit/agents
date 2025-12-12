@@ -286,23 +286,31 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
-        self._start_wall_time: float = time.time()
+        self._start_time_offset: float = 0.0
 
     @property
-    def start_wall_time(self) -> float:
-        return self._start_wall_time
+    def start_time_offset(self) -> float:
+        return self._start_time_offset
+
+    @start_time_offset.setter
+    def start_time_offset(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("start_time_offset must be non-negative")
+        self._start_time_offset = value
 
     @abstractmethod
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
         max_retries = self._conn_options.max_retry
+        # we need to record last start time for each run/connection
+        # so that returned transcripts can have linear timestamps
+        last_start_time = time.time()
 
         while self._num_retries <= max_retries:
             try:
-                # reset the start wall time so that returned transcripts
-                # can have a consistent timestamps
-                self._start_wall_time = time.time()
+                self._start_time_offset += time.time() - last_start_time
+                last_start_time = time.time()
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:

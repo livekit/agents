@@ -310,7 +310,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_wall_time,
+                                    start_time=data["start_s"] + self.start_time_offset,
                                 )
                             ],
                         )

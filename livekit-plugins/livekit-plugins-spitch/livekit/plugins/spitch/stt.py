@@ -48,7 +48,7 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Spitch"
 
-    def update_options(self, language: str):
+    def update_options(self, language: str) -> None:
         self._opts.language = language or self._opts.language
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:

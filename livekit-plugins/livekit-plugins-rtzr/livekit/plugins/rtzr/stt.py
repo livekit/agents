@@ -257,19 +257,19 @@ class SpeechStream(stt.SpeechStream):
                                     stt.SpeechData(
                                         text=text,
                                         language=self._stt._params.language,
-                                        start_time=start_time + self.start_wall_time,
-                                        end_time=start_time + duration + self.start_wall_time,
+                                        start_time=start_time + self.start_time_offset,
+                                        end_time=start_time + duration + self.start_time_offset,
                                         words=[
                                             TimedString(
                                                 text=word.get("text", ""),
                                                 start_time=word.get("start_at", 0) / 1000.0
-                                                + self.start_wall_time,
+                                                + self.start_time_offset,
                                                 end_time=(
                                                     word.get("start_at", 0)
                                                     + word.get("duration", 0)
                                                 )
                                                 / 1000.0
-                                                + self.start_wall_time,
+                                                + self.start_time_offset,
                                             )
                                             for word in words
                                         ]

@@ -356,23 +356,24 @@ class SpeechStream(stt.SpeechStream):
 
             # transcript (final) and words (interim) are cumulative
             # utterance (preflight) is chunk based
-            start_wall_time: float = 0
-            end_wall_time: float = 0
+            start_time: float = 0
+            end_time: float = 0
             confidence: float = 0
             timed_words: list[TimedString] = []
 
             # words are cumulative
             if words:
                 interim_text = " ".join(word.get("text", "") for word in words)
-                start_wall_time = words[0].get("start", 0) / 1000 + self.start_wall_time
-                end_wall_time = words[-1].get("end", 0) / 1000 + self.start_wall_time
+                start_time = words[0].get("start", 0) / 1000 + self.start_time_offset
+                end_time = words[-1].get("end", 0) / 1000 + self.start_time_offset
                 confidence = sum([word.get("confidence", 0) for word in words]) / max(len(words), 1)
                 timed_words = [
                     TimedString(
                         text=word.get("text", ""),
-                        start_time=word.get("start", 0) / 1000 + self.start_wall_time,
-                        end_time=word.get("end", 0) / 1000 + self.start_wall_time,
-                        start_wall_time=self.start_wall_time,
+                        start_time=word.get("start", 0) / 1000 + self.start_time_offset,
+                        end_time=word.get("end", 0) / 1000 + self.start_time_offset,
+                        start_time_offset=self.start_time_offset,
+                        confidence=word.get("confidence", 0),
                     )
                     for word in words
                 ]
@@ -383,8 +384,8 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechData(
                             language="en",
                             text=interim_text,
-                            start_time=start_wall_time,
-                            end_time=end_wall_time,
+                            start_time=start_time,
+                            end_time=end_time,
                             words=timed_words,
                             confidence=confidence,
                         )
@@ -394,7 +395,7 @@ class SpeechStream(stt.SpeechStream):
 
             if utterance:
                 if self._last_preflight_start_time == 0.0:
-                    self._last_preflight_start_time = start_wall_time
+                    self._last_preflight_start_time = start_time
 
                 # utterance is chunk based so we need to filter the words to
                 # only include the ones that are part of the current utterance
@@ -405,14 +406,7 @@ class SpeechStream(stt.SpeechStream):
                     and word.start_time >= self._last_preflight_start_time
                 ]
                 utterance_confidence = (
-                    sum(
-                        [
-                            word.get("confidence", 0)
-                            for word in words
-                            if word.get("start", 0) / 1000 + self.start_wall_time
-                            >= self._last_preflight_start_time
-                        ]
-                    )
+                    sum(word.confidence or 0.0 for word in utterance_words)
                     / max(len(utterance_words), 1)
                     if utterance_words
                     else 0
@@ -425,14 +419,14 @@ class SpeechStream(stt.SpeechStream):
                             language="en",
                             text=utterance,
                             start_time=self._last_preflight_start_time,
-                            end_time=end_wall_time,
+                            end_time=end_time,
                             words=utterance_words,
                             confidence=utterance_confidence,
                         )
                     ],
                 )
                 self._event_ch.send_nowait(final_event)
-                self._last_preflight_start_time = end_wall_time
+                self._last_preflight_start_time = end_time
 
             if end_of_turn and (
                 not (is_given(self._opts.format_turns) and self._opts.format_turns)
@@ -444,8 +438,8 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechData(
                             language="en",
                             text=transcript,
-                            start_time=start_wall_time,
-                            end_time=end_wall_time,
+                            start_time=start_time,
+                            end_time=end_time,
                             words=timed_words,
                             confidence=confidence,
                         )
