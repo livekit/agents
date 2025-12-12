@@ -1068,7 +1068,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     old_agent=previous_activity_v.agent if previous_activity_v else None,
                     new_agent=self._activity.agent,
                 )
-            self._chat_ctx.insert(handoff_item)
+            if handoff_item.persist_to_session_history:
+                self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()
@@ -1235,11 +1236,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("user_input_transcribed", ev)
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
-        self._chat_ctx.insert(message)
+        if message.persist_to_session_history:
+            self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
-        self._chat_ctx.insert(items)
+        persistent_items = [item for item in items if item.persist_to_session_history]
+        if persistent_items:
+            self._chat_ctx.insert(persistent_items)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
