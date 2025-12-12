@@ -7,12 +7,10 @@ on:
 jobs:
   assign:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      organization: read
     steps:
       - uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.REVIEW_TOKEN }}
           script: |
             const author = context.payload.pull_request.user.login;
             const org = 'livekit';
@@ -33,7 +31,6 @@ jobs:
               });
             } catch (error) {
               // 404 means user is not a public member
-              console.log(`Author ${author} is not an org member: ${error.status}`);
               console.log(`Error message: ${error.message}`);
               console.log(`Full error: ${JSON.stringify(error)}`);
             }
