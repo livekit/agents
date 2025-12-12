@@ -121,7 +121,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model == "gpt-5.1":
+            if model in ["gpt-5.1", "gpt-5.2"]:
                 reasoning_effort = "none"  # type: ignore[assignment]
             else:
                 reasoning_effort = "minimal"
