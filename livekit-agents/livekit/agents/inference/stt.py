@@ -580,16 +580,17 @@ class SpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=language,
             # TODO: update gateway to return wall times since we do retry/reconnects internally @chenghao-mou
-            start_time=self.start_wall_time + data.get("start", 0),
-            end_time=self.start_wall_time + data.get("start", 0) + data.get("duration", 0),
+            start_time=self.start_time_offset + data.get("start", 0),
+            end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=text,
             words=[
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_wall_time,
-                    end_time=word.get("end", 0) + self.start_wall_time,
-                    start_wall_time=self.start_wall_time,
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=word.get("confidence", 0.0),
                 )
                 for word in words
             ],

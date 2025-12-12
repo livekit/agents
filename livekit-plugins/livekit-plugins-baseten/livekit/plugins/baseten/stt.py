@@ -305,17 +305,17 @@ class SpeechStream(stt.SpeechStream):
                     timed_words = [
                         TimedString(
                             text=segment.get("text", ""),
-                            start_time=segment.get("start", 0.0) + self.start_wall_time,
-                            end_time=segment.get("end", 0.0) + self.start_wall_time,
-                            start_wall_time=self.start_wall_time,
+                            start_time=segment.get("start", 0.0) + self.start_time_offset,
+                            end_time=segment.get("end", 0.0) + self.start_time_offset,
+                            start_time_offset=self.start_time_offset,
                         )
                         for segment in segments
                     ]
                     start_time = (
-                        segments[0].get("start", 0.0) if segments else 0.0 + self.start_wall_time
+                        next((s.get("start", 0.0) for s in segments), 0.0) + self.start_time_offset
                     )
                     end_time = (
-                        segments[-1].get("end", 0.0) if segments else 0.0 + self.start_wall_time
+                        next((s.get("end", 0.0) for s in segments), 0.0) + self.start_time_offset
                     )
 
                     if not is_final:

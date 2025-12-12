@@ -283,8 +283,8 @@ class SpeechStream(stt.SpeechStream):
             language=detected_lg,
             confidence=1.0,
             text=evt.result.text,
-            start_time=evt.result.offset / 10**7 + self.start_wall_time,
-            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_wall_time,
+            start_time=evt.result.offset / 10**7 + self.start_time_offset,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
         )
 
         with contextlib.suppress(RuntimeError):
@@ -308,8 +308,8 @@ class SpeechStream(stt.SpeechStream):
             language=detected_lg,
             confidence=0.0,
             text=evt.result.text,
-            start_time=evt.result.offset / 10**7 + self.start_wall_time,
-            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_wall_time,
+            start_time=evt.result.offset / 10**7 + self.start_time_offset,
+            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
         )
 
         with contextlib.suppress(RuntimeError):
