@@ -1630,7 +1630,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(wait_for_authorization)
+            await utils.aio.cancel_and_wait(wait_for_authorization, wait_for_user_silence)
             return
 
         text_source: AsyncIterable[str] | None = None
@@ -1893,7 +1893,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, wait_for_authorization)
+            await utils.aio.cancel_and_wait(*tasks, wait_for_authorization, wait_for_user_silence)
             await text_tee.aclose()
             return
 
@@ -2166,7 +2166,7 @@ class AgentActivity(RecognitionHooks):
         wait_for_user_silence = asyncio.ensure_future(self._user_silence_event.wait())
         await speech_handle.wait_if_not_interrupted([wait_for_authorization, wait_for_user_silence])
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(wait_for_authorization)
+            await utils.aio.cancel_and_wait(wait_for_authorization, wait_for_user_silence)
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -2261,7 +2261,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(wait_for_authorization)
+            await utils.aio.cancel_and_wait(wait_for_authorization, wait_for_user_silence)
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history
 
