@@ -583,8 +583,8 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(instructions):
             turns = []
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -748,7 +748,7 @@ class RealtimeSession(llm.RealtimeSession):
                 if isinstance(msg, types.LiveClientContent):
                     await session.send_client_content(
                         turns=msg.turns,  # type: ignore
-                        turn_complete=msg.turn_complete or True,
+                        turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
