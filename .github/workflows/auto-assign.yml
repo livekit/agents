@@ -17,11 +17,11 @@ jobs:
           github-token: ${{ secrets.REVIEW_TOKEN }}
           script: |
             const author = context.payload.pull_request.user.login;
-            const org = 'livekit';
+            const org = context.repo.owner;
             
             try {
-              // Check if author is a public member of the org
-              await github.rest.orgs.checkPublicMembershipForUser({
+              // Check if author is a member of the org
+              await github.rest.orgs.checkMembershipForUser({
                 org: org,
                 username: author
               });
