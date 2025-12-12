@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given, shortuuid
+from livekit.agents.utils import aio, is_given, shortuuid
 from livekit.plugins.openai.utils import to_fnc_ctx
 from mistralai import (
     ChatCompletionStreamRequestMessagesTypedDict,
@@ -58,6 +59,7 @@ class LLM(llm.LLM):
             max_completion_tokens=max_completion_tokens,
         )
         self._client = Mistral(api_key=api_key or os.environ.get("MISTRAL_API_KEY"))
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def model(self) -> str:
@@ -66,6 +68,32 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def prewarm(self) -> None:
+        if self._prewarm_task and self._prewarm_task.done() is False:
+            self._prewarm_task.cancel()
+
+        async def _prewarm() -> None:
+            try:
+                chat_ctx = llm.ChatContext()
+                chat_ctx.add_message(role="user", content=["hi"])
+                messages, _ = chat_ctx.to_provider_format(format="mistralai")
+
+                async_response = await self._client.chat.stream_async(
+                    messages=cast(list[ChatCompletionStreamRequestMessagesTypedDict], messages),
+                    model=self._opts.model,
+                    max_tokens=1,
+                )
+                async for _ in async_response:
+                    pass
+            except Exception:
+                pass
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        if self._prewarm_task:
+            await aio.gracefully_cancel(self._prewarm_task)
 
     def chat(
         self,
