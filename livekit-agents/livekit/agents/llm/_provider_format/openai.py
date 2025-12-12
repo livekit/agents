@@ -104,3 +104,76 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
             "detail": img.inference_detail,
         },
     }
+
+
+def to_responses_chat_ctx(
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+) -> tuple[list[dict], Literal[None]]:
+    item_groups = group_tool_calls(chat_ctx)
+    items = []
+    for group in item_groups:
+        if not group.message and not group.tool_calls and not group.tool_outputs:
+            continue
+
+        if group.message:
+            msg = _to_responses_chat_item(group.message)
+            items.append(msg)
+
+        for tool_call in group.tool_calls:
+            call = {
+                "call_id": tool_call.call_id,
+                "type": "function_call",
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+            }
+            items.append(call)
+
+        for tool_output in group.tool_outputs:
+            items.append(_to_responses_chat_item(tool_output))
+
+    return items, None
+
+
+def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
+    if msg.type == "message":
+        list_content: list[dict[str, Any]] = []
+        text_content = ""
+        for content in msg.content:
+            if isinstance(content, str):
+                if text_content:
+                    text_content += "\n"
+                text_content += content
+            elif isinstance(content, llm.ImageContent):
+                list_content.append(_to_image_content(content))
+
+        if not list_content:
+            return {"role": msg.role, "content": text_content}
+
+        if text_content:
+            list_content.append({"type": "text", "text": text_content})
+
+        return {"role": msg.role, "content": list_content}
+
+    elif msg.type == "function_call":
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": msg.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": msg.name,
+                        "arguments": msg.arguments,
+                    },
+                }
+            ],
+        }
+
+    elif msg.type == "function_call_output":
+        return {
+            "type": "function_call_output",
+            "call_id": msg.call_id,
+            "output": msg.output,
+        }
+
+    raise ValueError(f"unsupported message type: {msg.type}")
