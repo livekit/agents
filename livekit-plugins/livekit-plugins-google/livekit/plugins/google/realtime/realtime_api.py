@@ -415,11 +415,23 @@ class RealtimeSession(llm.RealtimeSession):
                 finally:
                     self._active_session = None
 
-    def _mark_restart_needed(self) -> None:
+    def _mark_restart_needed(self, on_error: bool = False) -> None:
         if not self._session_should_close.is_set():
             self._session_should_close.set()
+
             # reset the msg_ch, do not send messages from previous session
-            self._msg_ch = utils.aio.Chan[ClientEvents]()
+            new_ch = utils.aio.Chan[ClientEvents]()
+            if not on_error:
+                while not self._msg_ch.empty():
+                    msg = self._msg_ch.recv_nowait()
+                    if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
+                        logger.warning(
+                            "discarding client content for turn completion, may cause generate_reply timeout",
+                            extra={"content": str(msg)},
+                        )
+                        # new_ch.send_nowait(msg)
+
+            self._msg_ch = new_ch
 
     def update_options(
         self,
@@ -766,7 +778,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
-                self._mark_restart_needed()
+                self._mark_restart_needed(on_error=True)
         finally:
             logger.debug("send task finished.")
 
@@ -818,7 +830,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in receive task: {e}", exc_info=e)
-                self._mark_restart_needed()
+                self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
 
