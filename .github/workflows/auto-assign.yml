@@ -17,8 +17,8 @@ jobs:
             const org = 'livekit';
             
             try {
-              // Check if author is a member of the org
-              await github.rest.orgs.checkMembershipForUser({
+              // Check if author is a public member of the org
+              await github.rest.orgs.checkPublicMembershipForUser({
                 org: org,
                 username: author
               });
