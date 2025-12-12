@@ -8,6 +8,9 @@ from typing import Any, Callable
 from opentelemetry import context as otel_context
 
 from .. import llm, utils
+from ..log import logger
+
+INTERRUPTION_TIMEOUT = 5.0  # seconds
 
 
 class SpeechHandle:
@@ -34,6 +37,8 @@ class SpeechHandle:
         self._chat_items: list[llm.ChatItem] = []
         self._num_steps = 1
         self._agent_turn_context: otel_context.Context | None = None
+
+        self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
@@ -172,8 +177,23 @@ class SpeechHandle:
         if self.done():
             return self
 
-        with contextlib.suppress(asyncio.InvalidStateError):
+        if not self._interrupt_fut.done():
             self._interrupt_fut.set_result(None)
+
+            def _on_timeout() -> None:
+                logger.error(
+                    "speech not done in time after interruption, cancelling the speech arbitrarily.",
+                    extra={"speech_id": self._id, "timeout": INTERRUPTION_TIMEOUT},
+                )
+                for task in self._tasks:
+                    task.cancel()
+                if self._generations:
+                    self._mark_generation_done()
+                self._mark_done()
+
+            self._interrupt_timeout_handle = asyncio.get_event_loop().call_later(
+                INTERRUPTION_TIMEOUT, _on_timeout
+            )
 
         return self
 
@@ -223,6 +243,10 @@ class SpeechHandle:
             self._done_fut.set_result(None)
             if self._generations:
                 self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
+
+        if self._interrupt_timeout_handle is not None:
+            self._interrupt_timeout_handle.cancel()
+            self._interrupt_timeout_handle = None
 
     def _mark_scheduled(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
