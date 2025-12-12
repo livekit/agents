@@ -33,7 +33,5 @@ jobs:
                 team_reviewers: ['agent-devs']
               });
             } catch (error) {
-              // 404 means user is not a public member
-              console.log(`Error message: ${error.message}`);
-              console.log(`Full error: ${JSON.stringify(error)}`);
+              console.log(`Skipped auto-assign for ${author}: ${error.message}`);
             }
