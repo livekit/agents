@@ -161,7 +161,7 @@ def _ensure_strict_json_schema(
 
             if "type" not in non_null:
                 continue
-            
+
             t = non_null["type"]
             if isinstance(t, str):
                 non_null["type"] = [t, "null"]
