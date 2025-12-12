@@ -45,6 +45,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import SpeechLanguages, SpeechModels
@@ -143,7 +144,11 @@ class STT(stt.STT):
         if not is_given(use_streaming):
             use_streaming = True
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=use_streaming, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=use_streaming,
+                interim_results=True,
+                aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
+            )
         )
 
         self._location = location
@@ -457,6 +462,7 @@ class SpeechStream(stt.SpeechStream):
                     speech_data = _streaming_recognize_response_to_speech_data(
                         resp,
                         min_confidence_threshold=self._config.min_confidence_threshold,
+                        start_time_offset=self.start_time_offset,
                     )
                     if speech_data is None:
                         continue
@@ -605,6 +611,16 @@ def _recognize_response_to_speech_event(
                 end_time=end_time,
                 confidence=confidence,
                 text=text,
+                words=[
+                    TimedString(
+                        text=word.word,
+                        start_time=_duration_to_seconds(word.start_offset),
+                        end_time=_duration_to_seconds(word.end_offset),
+                    )
+                    for word in resp.results[0].alternatives[0].words
+                ]
+                if resp.results[0].alternatives[0].words
+                else None,
             )
         ]
 
@@ -615,10 +631,12 @@ def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech.StreamingRecognizeResponse,
     *,
     min_confidence_threshold: float,
+    start_time_offset: float,
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
     final_result = None
+    words: list[cloud_speech.WordInfo] = []
     for result in resp.results:
         if len(result.alternatives) == 0:
             continue
@@ -629,10 +647,12 @@ def _streaming_recognize_response_to_speech_data(
             else:
                 text += result.alternatives[0].transcript
                 confidence += result.alternatives[0].confidence
+                words.extend(result.alternatives[0].words)
 
     if final_result is not None:
         text = final_result.alternatives[0].transcript
         confidence = final_result.alternatives[0].confidence
+        words = list(final_result.alternatives[0].words)
         lg = final_result.language_code
     else:
         confidence /= len(resp.results)
@@ -640,9 +660,25 @@ def _streaming_recognize_response_to_speech_data(
             return None
         lg = resp.results[0].language_code
 
-    if text == "":
+    if text == "" or not words:
         return None
 
-    data = stt.SpeechData(language=lg, start_time=0, end_time=0, confidence=confidence, text=text)
+    data = stt.SpeechData(
+        language=lg,
+        start_time=_duration_to_seconds(words[0].start_offset) + start_time_offset,
+        end_time=_duration_to_seconds(words[-1].end_offset) + start_time_offset,
+        confidence=confidence,
+        text=text,
+        words=[
+            TimedString(
+                text=word.word,
+                start_time=_duration_to_seconds(word.start_offset) + start_time_offset,
+                end_time=_duration_to_seconds(word.end_offset) + start_time_offset,
+                start_time_offset=start_time_offset,
+                confidence=word.confidence,
+            )
+            for word in words
+        ],
+    )
 
     return data

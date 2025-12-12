@@ -85,6 +85,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,  # only final transcripts
+                aligned_transcript=False,  # only chunk start times are available
             ),
         )
 
@@ -309,7 +310,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=data["start_s"],
+                                    start_time=data["start_s"] + self.start_time_offset,
                                 )
                             ],
                         )

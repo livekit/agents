@@ -17,6 +17,7 @@ from livekit.agents import (
 )
 from livekit.agents.stt import stt
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.voice.io import TimedString
 from spitch import AsyncSpitch
 
 
@@ -27,7 +28,14 @@ class _STTOptions:
 
 class STT(stt.STT):
     def __init__(self, *, language: str = "en") -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=False,
+                interim_results=False,
+                # word timestamps don't seem to work despite the docs saying they do
+                aligned_transcript=False,
+            )
+        )
 
         self._opts = _STTOptions(language=language)
         self._client = AsyncSpitch()
@@ -40,7 +48,7 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Spitch"
 
-    def update_options(self, language: str):
+    def update_options(self, language: str) -> None:
         self._opts.language = language or self._opts.language
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
@@ -62,14 +70,33 @@ class STT(stt.STT):
             resp = await self._client.speech.transcribe(
                 language=config.language,  # type: ignore
                 content=data,
-                model=model,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
+                timestamp="word" if "mansa" in model else None,
             )
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[
-                    stt.SpeechData(text=resp.text or "", language=config.language or ""),
+                    stt.SpeechData(
+                        text=resp.text or "",
+                        language=config.language or "",
+                        start_time=resp.segments[0].start
+                        if resp.segments and resp.segments[0]
+                        else 0,
+                        end_time=resp.segments[-1].end
+                        if resp.segments and resp.segments[-1]
+                        else 0,
+                        words=[
+                            TimedString(
+                                text=segment.text,
+                                start_time=segment.start,
+                                end_time=segment.end,
+                            )
+                            for segment in resp.segments
+                        ]
+                        if resp.segments
+                        else None,
+                    ),
                 ],
             )
         except spitch.APITimeoutError as e:
