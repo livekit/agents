@@ -52,12 +52,16 @@ class FunctionToolCall(BaseModel):
     name: str
     arguments: str
     call_id: str
+    extra: dict[str, Any] | None = None
+    """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
 class ChoiceDelta(BaseModel):
     role: ChatRole | None = None
     content: str | None = None
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    extra: dict[str, Any] | None = None
+    """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
 class ChatChunk(BaseModel):
