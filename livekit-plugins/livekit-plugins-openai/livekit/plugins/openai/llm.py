@@ -478,6 +478,7 @@ class LLM(llm.LLM):
             top_p=top_p,
             max_completion_tokens=max_completion_tokens,
             timeout=timeout,
+            _strict_tool_schema=False,
         )
 
     @staticmethod
