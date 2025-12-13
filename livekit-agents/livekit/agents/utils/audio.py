@@ -104,7 +104,7 @@ class AudioByteStream:
         frames = []
         while len(self._buf) >= self._bytes_per_frame:
             frame_data = self._buf[: self._bytes_per_frame]
-            self._buf = self._buf[self._bytes_per_frame :]
+            del self._buf[: self._bytes_per_frame]
 
             frames.append(
                 rtc.AudioFrame(
