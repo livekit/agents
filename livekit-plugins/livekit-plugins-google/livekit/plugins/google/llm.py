@@ -43,6 +43,7 @@ from .log import logger
 from .models import ChatModels
 from .tools import _LLMTool
 from .utils import create_tools_config, to_fnc_ctx, to_response_format
+from .version import __version__
 
 
 @dataclass
@@ -342,16 +343,19 @@ class LLMStream(llm.LLMStream):
             )
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
+            http_options = self._llm._opts.http_options or types.HttpOptions(
+                timeout=int(self._conn_options.timeout * 1000)
+            )
+            if not http_options.headers:
+                http_options.headers = {}
+            http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
             config = types.GenerateContentConfig(
                 system_instruction=(
                     [types.Part(text=content) for content in extra_data.system_messages]
                     if extra_data.system_messages
                     else None
                 ),
-                http_options=(
-                    self._llm._opts.http_options
-                    or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
-                ),
+                http_options=http_options,
                 **self._extra_kwargs,
             )
             stream = await self._client.aio.models.generate_content_stream(

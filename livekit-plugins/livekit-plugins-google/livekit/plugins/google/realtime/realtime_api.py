@@ -29,6 +29,7 @@ from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModel
 from ..log import logger
 from ..tools import _LLMTool
 from ..utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
+from ..version import __version__
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -373,6 +374,9 @@ class RealtimeSession(llm.RealtimeSession):
         )
         if api_version:
             http_options.api_version = api_version
+        if not http_options.headers:
+            http_options.headers = {}
+        http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
 
         self._client = GenAIClient(
             api_key=self._opts.api_key,
