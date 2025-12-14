@@ -66,6 +66,16 @@ class _LLMOptions:
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
 
 
+BLOCKED_REASONS = [
+    types.FinishReason.SAFETY,
+    types.FinishReason.SPII,
+    types.FinishReason.PROHIBITED_CONTENT,
+    types.FinishReason.BLOCKLIST,
+    types.FinishReason.LANGUAGE,
+    types.FinishReason.RECITATION,
+]
+
+
 class LLM(llm.LLM):
     def __init__(
         self,
@@ -373,19 +383,41 @@ class LLMStream(llm.LLMStream):
                     or not response.candidates[0].content
                     or not response.candidates[0].content.parts
                 ):
-                    logger.warning(f"no candidates in the response: {response}")
-                    continue
+                    logger.warning(f"no content in the response: {response}")
+                    raise APIStatusError(
+                        "no content in the response",
+                        retryable=True,
+                        request_id=request_id,
+                    )
 
                 if len(response.candidates) > 1:
                     logger.warning(
                         "gemini llm: there are multiple candidates in the response, returning response from the first one."  # noqa: E501
                     )
 
-                for part in response.candidates[0].content.parts:
+                candidate = response.candidates[0]
+
+                if candidate.finish_reason in BLOCKED_REASONS:
+                    raise APIStatusError(
+                        f"generation blocked by gemini: {candidate.finish_reason}",
+                        retryable=False,
+                        request_id=request_id,
+                    )
+
+                chunks_yielded = False
+                for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
                     if chat_chunk is not None:
+                        chunks_yielded = True
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
+
+                if candidate.finish_reason == types.FinishReason.STOP and not chunks_yielded:
+                    raise APIStatusError(
+                        "no response generated",
+                        retryable=retryable,
+                        request_id=request_id,
+                    )
 
                 if response.usage_metadata is not None:
                     usage = response.usage_metadata
@@ -448,6 +480,9 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             return chat_chunk
+
+        if not part.text:
+            return None
 
         return llm.ChatChunk(
             id=id,
