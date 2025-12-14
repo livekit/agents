@@ -214,6 +214,12 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
                 raise ValueError("Unable to load AWS credentials")
 
             creds = credentials.get_frozen_credentials()
+
+            # Ensure credentials are valid
+            if not creds.access_key or not creds.secret_key:
+                logger.error("AWS credentials are incomplete")
+                raise ValueError("AWS credentials are incomplete")
+
             logger.debug(
                 f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
             )
@@ -249,10 +255,10 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
 
     def get_credential_expiry_time(self) -> float | None:
         """Get the credential expiry timestamp synchronously.
-        
+
         This loads credentials if not cached and returns the expiry time.
         Used for calculating session duration before the async stream starts.
-        
+
         Returns:
             float | None: Unix timestamp when credentials expire, or None for static credentials.
         """
@@ -261,10 +267,10 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             credentials = session.get_credentials()
             if not credentials:
                 return None
-            
+
             expiry_time = getattr(credentials, "_expiry_time", None)
             if expiry_time:
-                return expiry_time.timestamp()
+                return float(expiry_time.timestamp())
             return None
         except Exception as e:
             logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
@@ -443,43 +449,44 @@ class RealtimeSession(  # noqa: F811
         """Calculate session duration based on credential expiry and AWS 8-min limit."""
         resolver = _get_credentials_resolver()
         credential_expiry = resolver.get_credential_expiry_time()
-        
+
         if credential_expiry is None:
             # Static credentials - just use the max session duration
-            logger.info(f"[SESSION] Static credentials, using max duration: {MAX_SESSION_DURATION_SECONDS}s")
+            logger.info(
+                f"[SESSION] Static credentials, using max duration: {MAX_SESSION_DURATION_SECONDS}s"
+            )
             return MAX_SESSION_DURATION_SECONDS
-        
+
         # Calculate time until we should restart (before credential expiry)
         now = time.time()
         time_until_cred_expiry = credential_expiry - now - CREDENTIAL_EXPIRY_BUFFER_SECONDS
-        
+
         # Use the minimum of session limit and credential expiry
         duration = min(MAX_SESSION_DURATION_SECONDS, time_until_cred_expiry)
-        
+
         if duration < 30:
             logger.warning(
                 f"[SESSION] Very short session duration: {duration:.0f}s. "
                 f"Credentials may expire soon."
             )
             duration = max(duration, 10)  # At least 10 seconds
-        
+
         logger.info(
             f"[SESSION] Session will recycle in {duration:.0f}s "
             f"(max={MAX_SESSION_DURATION_SECONDS}s, time_until_cred_expiry={time_until_cred_expiry:.0f}s)"
         )
-        
+
         return duration
 
     def _start_session_recycle_timer(self) -> None:
         """Start the session recycling timer."""
         if self._session_recycle_task and not self._session_recycle_task.done():
             self._session_recycle_task.cancel()
-        
+
         duration = self._calculate_session_duration()
-        
+
         self._session_recycle_task = asyncio.create_task(
-            self._session_recycle_timer(duration),
-            name="RealtimeSession._session_recycle_timer"
+            self._session_recycle_timer(duration), name="RealtimeSession._session_recycle_timer"
         )
 
     async def _session_recycle_timer(self, duration: float) -> None:
@@ -487,20 +494,24 @@ class RealtimeSession(  # noqa: F811
         try:
             logger.info(f"[SESSION] Recycle timer started, will fire in {duration:.0f}s")
             await asyncio.sleep(duration)
-            
+
             if not self._is_sess_active.is_set():
                 logger.debug("[SESSION] Session no longer active, skipping recycle")
                 return
-            
-            logger.info(f"[SESSION] Session duration limit reached ({duration:.0f}s), initiating recycle")
-            
+
+            logger.info(
+                f"[SESSION] Session duration limit reached ({duration:.0f}s), initiating recycle"
+            )
+
             # Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
             if not self._audio_end_turn_received:
-                logger.info("[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)...")
+                logger.info(
+                    "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
+                )
                 while not self._audio_end_turn_received:
                     await asyncio.sleep(0.1)
                 logger.debug("[SESSION] Assistant finished speaking")
-            
+
             # Wait for audio to actually stop (no new audio for 1 second)
             logger.debug("[SESSION] Waiting for audio to fully stop...")
             last_audio_time = self._last_audio_output_time
@@ -514,15 +525,15 @@ class RealtimeSession(  # noqa: F811
                 else:
                     logger.debug("[SESSION] New audio detected, continuing to wait...")
                     last_audio_time = self._last_audio_output_time
-            
+
             # Close the current generation to signal completion
             if self._current_generation:
                 logger.debug("[SESSION] Closing generation to trigger natural completion")
                 self._close_current_generation()
-            
+
             await asyncio.sleep(0.5)
             await self._graceful_session_recycle()
-            
+
         except asyncio.CancelledError:
             logger.debug("[SESSION] Recycle timer cancelled")
             raise
@@ -532,7 +543,7 @@ class RealtimeSession(  # noqa: F811
     async def _graceful_session_recycle(self) -> None:
         """Gracefully recycle the session, preserving conversation state."""
         logger.info("[SESSION] Starting graceful session recycle")
-        
+
         # Step 1: Drain any pending tool results before stopping tasks
         # Tool results may have arrived after the generation closed but before we cancel tasks
         logger.debug("[SESSION] Draining pending tool results...")
@@ -547,13 +558,13 @@ class RealtimeSession(  # noqa: F811
             except Exception as e:
                 logger.warning(f"[SESSION] Error draining tool result: {e}")
                 break
-        
+
         # Step 2: Signal tasks to stop
         self._is_sess_active.clear()
-        
+
         # Brief pause to let any in-flight send operations complete
         await asyncio.sleep(0.1)
-        
+
         # Step 3: Cancel background tasks
         # Tasks are blocked on channel recv() and won't exit naturally
         if self._audio_input_task and not self._audio_input_task.done():
@@ -563,7 +574,7 @@ class RealtimeSession(  # noqa: F811
                 await self._audio_input_task
             except asyncio.CancelledError:
                 pass
-        
+
         if self._response_task and not self._response_task.done():
             logger.debug("[SESSION] Cancelling response task...")
             self._response_task.cancel()
@@ -571,19 +582,19 @@ class RealtimeSession(  # noqa: F811
                 await self._response_task
             except asyncio.CancelledError:
                 pass
-        
+
         # Step 4: Close the old Bedrock stream
         if self._stream_response:
             try:
                 for event in self._event_builder.create_prompt_end_block():
                     await self._send_raw_event(event)
-                
+
                 if not self._stream_response.input_stream.closed:
                     await self._stream_response.input_stream.close()
             except Exception as e:
                 # Expected - stream may already be closed or in error state
                 logger.debug(f"[SESSION] Error closing stream during recycle (expected): {e}")
-        
+
         # Step 5: Reset state for new session
         self._stream_response = None
         self._bedrock_client = None
@@ -591,17 +602,17 @@ class RealtimeSession(  # noqa: F811
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
         )
-        
+
         # Recreate tool results channel (fixes tool calls after recycle)
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         logger.debug("[SESSION] Created fresh tool results channel")
-        
+
         # Reset session state flags
         self._audio_end_turn_received = False
-        
+
         # Step 6: Start new session with preserved state
         await self.initialize_streams(is_restart=True)
-        
+
         logger.info("[SESSION] Session recycled successfully")
 
     @utils.log_exceptions(logger=logger)
@@ -771,16 +782,20 @@ class RealtimeSession(  # noqa: F811
                     f"Chat context has {len(self._chat_ctx.items)} messages, truncating to {MAX_MESSAGES}"  # noqa: E501
                 )
                 self._chat_ctx.truncate(max_items=MAX_MESSAGES)
-            
+
             # On restart, ensure chat history starts with USER (Nova Sonic requirement)
             restart_ctx = self._chat_ctx
-            if is_restart and self._chat_ctx.items and self._chat_ctx.items[0].role == "assistant":
-                restart_ctx = self._chat_ctx.copy()
-                dummy_msg = restart_ctx.add_message(role="user", content="[Resuming conversation]")
-                restart_ctx.items.remove(dummy_msg)
-                restart_ctx.items.insert(0, dummy_msg)
-                logger.debug("[SESSION] Added dummy USER message to start of chat history")
-            
+            if is_restart and self._chat_ctx.items:
+                first_item = self._chat_ctx.items[0]
+                if first_item.type == "message" and first_item.role == "assistant":
+                    restart_ctx = self._chat_ctx.copy()
+                    dummy_msg = restart_ctx.add_message(
+                        role="user", content="[Resuming conversation]"
+                    )
+                    restart_ctx.items.remove(dummy_msg)
+                    restart_ctx.items.insert(0, dummy_msg)
+                    logger.debug("[SESSION] Added dummy USER message to start of chat history")
+
             init_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
@@ -805,11 +820,11 @@ class RealtimeSession(  # noqa: F811
                 self._process_responses(), name="RealtimeSession._process_responses"
             )
             self._is_sess_active.set()
-            
+
             # Start session recycling timer
             self._session_start_time = time.time()
             self._start_session_recycle_timer()
-            
+
             logger.debug("Stream initialized successfully")
         except Exception as e:
             logger.debug(f"Failed to initialize stream: {str(e)}")
@@ -1096,13 +1111,13 @@ class RealtimeSession(  # noqa: F811
     async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
         """Handle audio content end - track END_TURN for session recycling."""
         log_event_data(event_data)
-        
+
         # Check if this is END_TURN (assistant finished speaking)
         stop_reason = event_data.get("event", {}).get("contentEnd", {}).get("stopReason")
         if stop_reason == "END_TURN":
             self._audio_end_turn_received = True
             logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
-        
+
         # Nova Sonic uses one completion for entire session
         # Don't close generation here - wait for new completionStart or session end
 
@@ -1659,7 +1674,7 @@ class RealtimeSession(  # noqa: F811
         # however, it's mostly cosmetic-- the event loop will still exit
         # TODO: fix this nit
         tasks: list[asyncio.Task[Any]] = []
-        
+
         # Cancel session recycle timer
         if self._session_recycle_task and not self._session_recycle_task.done():
             self._session_recycle_task.cancel()
@@ -1667,7 +1682,7 @@ class RealtimeSession(  # noqa: F811
                 await self._session_recycle_task
             except asyncio.CancelledError:
                 pass
-        
+
         if self._response_task:
             try:
                 await asyncio.wait_for(self._response_task, timeout=1.0)
