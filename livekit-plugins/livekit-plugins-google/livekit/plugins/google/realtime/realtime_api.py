@@ -220,9 +220,9 @@ class RealtimeModel(llm.RealtimeModel):
 
         if not is_given(model):
             if vertexai:
-                model = "gemini-2.0-flash-exp"
+                model = "gemini-live-2.5-flash-native-audio"
             else:
-                model = "gemini-2.0-flash-live-001"
+                model = "gemini-2.5-flash-native-audio-preview-12-2025"
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -576,8 +576,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         # Gemini requires the last message to end with user's turn
         # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
         if is_given(instructions):
+            turns = []
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
             turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
             self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
@@ -930,6 +930,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         if model_turn := server_content.model_turn:
             for part in model_turn.parts or []:
+                if part.thought:
+                    # bypass reasoning output
+                    continue
                 if part.text:
                     current_gen.push_text(part.text)
                 if part.inline_data:
