@@ -404,6 +404,13 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
+                if not candidate.content or not candidate.content.parts:
+                    raise APIStatusError(
+                        "no content in the response",
+                        retryable=retryable,
+                        request_id=request_id,
+                    )
+
                 chunks_yielded = False
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
