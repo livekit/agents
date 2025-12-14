@@ -805,13 +805,8 @@ class RealtimeSession(  # noqa: F811
             self._is_sess_active.set()
             
             # Start session recycling timer
-            if not is_restart:
-                self._session_start_time = time.time()
-                self._start_session_recycle_timer()
-            else:
-                # On restart, reset the start time and restart the timer
-                self._session_start_time = time.time()
-                self._start_session_recycle_timer()
+            self._session_start_time = time.time()
+            self._start_session_recycle_timer()
             
             logger.debug("Stream initialized successfully")
         except Exception as e:
