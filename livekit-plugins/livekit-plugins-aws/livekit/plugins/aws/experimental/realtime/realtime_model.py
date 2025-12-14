@@ -202,8 +202,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             ValueError: If no credentials could be found by boto3.
         """
         # Return cached credentials if available
-        # IMPORTANT: Do NOT refresh credentials mid-session - it breaks the HTTP/2 connection
-        # The session recycling mechanism will restart the session before credentials expire
+        # Session recycling will close the connection and get fresh credentials before these expire
         if self._cached_identity:
             return self._cached_identity
 
@@ -234,9 +233,14 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             if expiry_time:
                 # Session will restart 3 minutes before expiration
                 self._cached_expiry = expiry_time.timestamp() - 180
+                logger.debug(
+                    f"[CREDS] Cached credentials with expiry. "
+                    f"expiry_time={expiry_time}, restart_before={self._cached_expiry}"
+                )
             else:
                 # Static credentials don't have an inherent expiration attribute, cache indefinitely
                 self._cached_expiry = None
+                logger.debug("[CREDS] Cached static credentials (no expiry)")
 
             return identity
         except Exception as e:
@@ -256,14 +260,11 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             session = boto3.Session()  # type: ignore[attr-defined]
             credentials = session.get_credentials()
             if not credentials:
-                logger.debug("[CREDS] get_credential_expiry_time: No credentials found")
                 return None
             
             expiry_time = getattr(credentials, "_expiry_time", None)
             if expiry_time:
-                logger.debug(f"[CREDS] get_credential_expiry_time: Found expiry={expiry_time}")
                 return expiry_time.timestamp()
-            logger.debug("[CREDS] get_credential_expiry_time: No expiry (static credentials)")
             return None
         except Exception as e:
             logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
@@ -438,7 +439,7 @@ class RealtimeSession(  # noqa: F811
         )
         self._bedrock_client = BedrockRuntimeClient(config=config)
 
-    def _calculate_session_duration(self) -> float | None:
+    def _calculate_session_duration(self) -> float:
         """Calculate session duration based on credential expiry and AWS 8-min limit."""
         resolver = _get_credentials_resolver()
         credential_expiry = resolver.get_credential_expiry_time()
@@ -475,9 +476,6 @@ class RealtimeSession(  # noqa: F811
             self._session_recycle_task.cancel()
         
         duration = self._calculate_session_duration()
-        if duration is None:
-            logger.debug("[SESSION] No session recycling needed")
-            return
         
         self._session_recycle_task = asyncio.create_task(
             self._session_recycle_timer(duration),
@@ -535,7 +533,8 @@ class RealtimeSession(  # noqa: F811
         """Gracefully recycle the session, preserving conversation state."""
         logger.info("[SESSION] Starting graceful session recycle")
         
-        # Drain any pending tool results before stopping tasks
+        # Step 1: Drain any pending tool results before stopping tasks
+        # Tool results may have arrived after the generation closed but before we cancel tasks
         logger.debug("[SESSION] Draining pending tool results...")
         while True:
             try:
@@ -549,12 +548,14 @@ class RealtimeSession(  # noqa: F811
                 logger.warning(f"[SESSION] Error draining tool result: {e}")
                 break
         
-        # Clear the session active flag
+        # Step 2: Signal tasks to stop
         self._is_sess_active.clear()
         
+        # Brief pause to let any in-flight send operations complete
         await asyncio.sleep(0.1)
         
-        # Cancel tasks
+        # Step 3: Cancel background tasks
+        # Tasks are blocked on channel recv() and won't exit naturally
         if self._audio_input_task and not self._audio_input_task.done():
             logger.debug("[SESSION] Cancelling audio input task...")
             self._audio_input_task.cancel()
@@ -571,7 +572,7 @@ class RealtimeSession(  # noqa: F811
             except asyncio.CancelledError:
                 pass
         
-        # Close the stream gracefully
+        # Step 4: Close the old Bedrock stream
         if self._stream_response:
             try:
                 for event in self._event_builder.create_prompt_end_block():
@@ -580,9 +581,10 @@ class RealtimeSession(  # noqa: F811
                 if not self._stream_response.input_stream.closed:
                     await self._stream_response.input_stream.close()
             except Exception as e:
+                # Expected - stream may already be closed or in error state
                 logger.debug(f"[SESSION] Error closing stream during recycle (expected): {e}")
         
-        # Reset stream and create fresh components
+        # Step 5: Reset state for new session
         self._stream_response = None
         self._bedrock_client = None
         self._event_builder = seb(
@@ -590,14 +592,14 @@ class RealtimeSession(  # noqa: F811
             audio_content_name=str(uuid.uuid4()),
         )
         
-        # Recreate tool results channel for new session
+        # Recreate tool results channel (fixes tool calls after recycle)
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         logger.debug("[SESSION] Created fresh tool results channel")
         
         # Reset session state flags
         self._audio_end_turn_received = False
         
-        # Reinitialize with preserved state
+        # Step 6: Start new session with preserved state
         await self.initialize_streams(is_restart=True)
         
         logger.info("[SESSION] Session recycled successfully")
