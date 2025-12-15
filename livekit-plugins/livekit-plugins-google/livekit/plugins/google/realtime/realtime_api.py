@@ -589,8 +589,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         # Gemini requires the last message to end with user's turn
         # so we need to add a placeholder user turn in order to trigger a new generation
+        turns = []
         if is_given(instructions):
-            turns = []
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
         turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
