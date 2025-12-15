@@ -68,6 +68,10 @@ MAX_MESSAGE_SIZE = 1024
 MAX_MESSAGES = 40
 DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
+# Session recycling: restart before 8-min AWS limit or credential expiry
+# Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
+MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
+CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic. You are a friend and eagerly helpful assistant."
     "The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."  # noqa: E501
@@ -83,6 +87,20 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
+
+# Shared credentials resolver instance to preserve cache across all sessions
+_shared_credentials_resolver: Boto3CredentialsResolver | None = None
+
+
+def _get_credentials_resolver() -> Boto3CredentialsResolver:
+    """Get or create the shared credentials resolver instance.
+
+    This ensures credential caching works across all RealtimeSession instances.
+    """
+    global _shared_credentials_resolver
+    if _shared_credentials_resolver is None:
+        _shared_credentials_resolver = Boto3CredentialsResolver()
+    return _shared_credentials_resolver
 
 
 @dataclass
@@ -152,6 +170,7 @@ class _ResponseGeneration:
     _first_token_timestamp: float | None = None
     _completed_timestamp: float | None = None
     _restart_attempts: int = 0
+    _done_fut: asyncio.Future[None] | None = None  # Resolved when generation completes
 
 
 class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
@@ -182,10 +201,10 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
         Raises:
             ValueError: If no credentials could be found by boto3.
         """
-        # Return cached credentials if still valid
-        if self._cached_identity and self._cached_expiry:
-            if time.time() < self._cached_expiry:
-                return self._cached_identity
+        # Return cached credentials if available
+        # Session recycling will close the connection and get fresh credentials before these expire
+        if self._cached_identity:
+            return self._cached_identity
 
         try:
             logger.debug("Attempting to load AWS credentials")
@@ -195,6 +214,12 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
                 raise ValueError("Unable to load AWS credentials")
 
             creds = credentials.get_frozen_credentials()
+
+            # Ensure credentials are valid
+            if not creds.access_key or not creds.secret_key:
+                logger.error("AWS credentials are incomplete")
+                raise ValueError("AWS credentials are incomplete")
+
             logger.debug(
                 f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
             )
@@ -212,16 +237,44 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             # Cache the identity and expiry
             self._cached_identity = identity
             if expiry_time:
-                # Refresh 5 minutes before expiration
-                self._cached_expiry = expiry_time.timestamp() - 300
+                # Session will restart 3 minutes before expiration
+                self._cached_expiry = expiry_time.timestamp() - 180
+                logger.debug(
+                    f"[CREDS] Cached credentials with expiry. "
+                    f"expiry_time={expiry_time}, restart_before={self._cached_expiry}"
+                )
             else:
                 # Static credentials don't have an inherent expiration attribute, cache indefinitely
                 self._cached_expiry = None
+                logger.debug("[CREDS] Cached static credentials (no expiry)")
 
             return identity
         except Exception as e:
             logger.error(f"Failed to load AWS credentials: {str(e)}")
             raise ValueError(f"Failed to load AWS credentials: {str(e)}")  # noqa: B904
+
+    def get_credential_expiry_time(self) -> float | None:
+        """Get the credential expiry timestamp synchronously.
+
+        This loads credentials if not cached and returns the expiry time.
+        Used for calculating session duration before the async stream starts.
+
+        Returns:
+            float | None: Unix timestamp when credentials expire, or None for static credentials.
+        """
+        try:
+            session = boto3.Session()  # type: ignore[attr-defined]
+            credentials = session.get_credentials()
+            if not credentials:
+                return None
+
+            expiry_time = getattr(credentials, "_expiry_time", None)
+            if expiry_time:
+                return float(expiry_time.timestamp())
+            return None
+        except Exception as e:
+            logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
+            return None
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -261,7 +314,7 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
             )
         )
-        self.model_id = "amazon.nova-sonic-v1:0"
+        self.model_id = "amazon.nova-2-sonic-v1:0"
         # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic  # noqa: E501
         # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
         # top_p ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
@@ -348,6 +401,11 @@ class RealtimeSession(  # noqa: F811
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
         self._current_generation: _ResponseGeneration | None = None
+        # Session recycling: proactively restart before credential expiry or 8-min limit
+        self._session_start_time: float | None = None
+        self._session_recycle_task: asyncio.Task[None] | None = None
+        self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
+        self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
 
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
@@ -380,12 +438,186 @@ class RealtimeSession(  # noqa: F811
         config = Config(
             endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
             region=self._realtime_model._opts.region,
-            aws_credentials_identity_resolver=Boto3CredentialsResolver(),
+            aws_credentials_identity_resolver=_get_credentials_resolver(),
             auth_scheme_resolver=HTTPAuthSchemeResolver(),
             auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
             user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
         )
         self._bedrock_client = BedrockRuntimeClient(config=config)
+
+    def _calculate_session_duration(self) -> float:
+        """Calculate session duration based on credential expiry and AWS 8-min limit."""
+        resolver = _get_credentials_resolver()
+        credential_expiry = resolver.get_credential_expiry_time()
+
+        if credential_expiry is None:
+            # Static credentials - just use the max session duration
+            logger.info(
+                f"[SESSION] Static credentials, using max duration: {MAX_SESSION_DURATION_SECONDS}s"
+            )
+            return MAX_SESSION_DURATION_SECONDS
+
+        # Calculate time until we should restart (before credential expiry)
+        now = time.time()
+        time_until_cred_expiry = credential_expiry - now - CREDENTIAL_EXPIRY_BUFFER_SECONDS
+
+        # Use the minimum of session limit and credential expiry
+        duration = min(MAX_SESSION_DURATION_SECONDS, time_until_cred_expiry)
+
+        if duration < 30:
+            logger.warning(
+                f"[SESSION] Very short session duration: {duration:.0f}s. "
+                f"Credentials may expire soon."
+            )
+            duration = max(duration, 10)  # At least 10 seconds
+
+        logger.info(
+            f"[SESSION] Session will recycle in {duration:.0f}s "
+            f"(max={MAX_SESSION_DURATION_SECONDS}s, time_until_cred_expiry={time_until_cred_expiry:.0f}s)"
+        )
+
+        return duration
+
+    def _start_session_recycle_timer(self) -> None:
+        """Start the session recycling timer."""
+        if self._session_recycle_task and not self._session_recycle_task.done():
+            self._session_recycle_task.cancel()
+
+        duration = self._calculate_session_duration()
+
+        self._session_recycle_task = asyncio.create_task(
+            self._session_recycle_timer(duration), name="RealtimeSession._session_recycle_timer"
+        )
+
+    async def _session_recycle_timer(self, duration: float) -> None:
+        """Background task that triggers session recycling after duration seconds."""
+        try:
+            logger.info(f"[SESSION] Recycle timer started, will fire in {duration:.0f}s")
+            await asyncio.sleep(duration)
+
+            if not self._is_sess_active.is_set():
+                logger.debug("[SESSION] Session no longer active, skipping recycle")
+                return
+
+            logger.info(
+                f"[SESSION] Session duration limit reached ({duration:.0f}s), initiating recycle"
+            )
+
+            # Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
+            if not self._audio_end_turn_received:
+                logger.info(
+                    "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
+                )
+                while not self._audio_end_turn_received:
+                    await asyncio.sleep(0.1)
+                logger.debug("[SESSION] Assistant finished speaking")
+
+            # Wait for audio to actually stop (no new audio for 1 second)
+            logger.debug("[SESSION] Waiting for audio to fully stop...")
+            last_audio_time = self._last_audio_output_time
+            while True:
+                await asyncio.sleep(0.1)
+                if self._last_audio_output_time == last_audio_time:
+                    await asyncio.sleep(0.9)
+                    if self._last_audio_output_time == last_audio_time:
+                        logger.debug("[SESSION] No new audio for 1s, proceeding with recycle")
+                        break
+                else:
+                    logger.debug("[SESSION] New audio detected, continuing to wait...")
+                    last_audio_time = self._last_audio_output_time
+
+            # Close the current generation to signal completion
+            if self._current_generation:
+                logger.debug("[SESSION] Closing generation to trigger natural completion")
+                self._close_current_generation()
+
+            await asyncio.sleep(0.5)
+            await self._graceful_session_recycle()
+
+        except asyncio.CancelledError:
+            logger.debug("[SESSION] Recycle timer cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[SESSION] Error in recycle timer: {e}")
+
+    async def _graceful_session_recycle(self) -> None:
+        """Gracefully recycle the session, preserving conversation state."""
+        logger.info("[SESSION] Starting graceful session recycle")
+
+        # Step 1: Drain any pending tool results before stopping tasks
+        # Tool results may have arrived after the generation closed but before we cancel tasks
+        logger.debug("[SESSION] Draining pending tool results...")
+        while True:
+            try:
+                tool_result = self._tool_results_ch.recv_nowait()
+                logger.debug(f"[TOOL] Draining pending result: {tool_result['tool_use_id']}")
+                await self._send_tool_events(tool_result["tool_use_id"], tool_result["tool_result"])
+            except utils.aio.channel.ChanEmpty:
+                logger.debug("[SESSION] No more pending tool results")
+                break
+            except Exception as e:
+                logger.warning(f"[SESSION] Error draining tool result: {e}")
+                break
+
+        # Step 2: Signal tasks to stop
+        self._is_sess_active.clear()
+
+        # Brief pause to let any in-flight send operations complete
+        await asyncio.sleep(0.1)
+
+        # Step 3: Cancel background tasks
+        # Tasks are blocked on channel recv() and won't exit naturally
+        # Note: You may see AWS CRT errors about cancelled futures or completed streams.
+        # These are expected and harmless - they're from the C library cleaning up the old HTTP/2 connection.
+        logger.info("[SESSION] Closing old session (AWS CRT errors are expected and harmless)")
+
+        if self._audio_input_task and not self._audio_input_task.done():
+            logger.debug("[SESSION] Cancelling audio input task...")
+            self._audio_input_task.cancel()
+            try:
+                await self._audio_input_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._response_task and not self._response_task.done():
+            logger.debug("[SESSION] Cancelling response task...")
+            self._response_task.cancel()
+            try:
+                await self._response_task
+            except asyncio.CancelledError:
+                pass
+
+        # Step 4: Close the old Bedrock stream
+        if self._stream_response:
+            try:
+                for event in self._event_builder.create_prompt_end_block():
+                    await self._send_raw_event(event)
+
+                if not self._stream_response.input_stream.closed:
+                    await self._stream_response.input_stream.close()
+            except Exception as e:
+                # Expected - stream may already be closed or in error state
+                logger.debug(f"[SESSION] Error closing stream during recycle (expected): {e}")
+
+        # Step 5: Reset state for new session
+        self._stream_response = None
+        self._bedrock_client = None
+        self._event_builder = seb(
+            prompt_name=str(uuid.uuid4()),
+            audio_content_name=str(uuid.uuid4()),
+        )
+
+        # Recreate tool results channel (fixes tool calls after recycle)
+        self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
+        logger.debug("[SESSION] Created fresh tool results channel")
+
+        # Reset session state flags
+        self._audio_end_turn_received = False
+
+        # Step 6: Start new session with preserved state
+        await self.initialize_streams(is_restart=True)
+
+        logger.info("[SESSION] Session recycled successfully")
 
     @utils.log_exceptions(logger=logger)
     async def _send_raw_event(self, event_json: str) -> None:
@@ -554,11 +786,22 @@ class RealtimeSession(  # noqa: F811
                     f"Chat context has {len(self._chat_ctx.items)} messages, truncating to {MAX_MESSAGES}"  # noqa: E501
                 )
                 self._chat_ctx.truncate(max_items=MAX_MESSAGES)
+
+            # On restart, ensure chat history starts with USER (Nova Sonic requirement)
+            restart_ctx = self._chat_ctx
+            if is_restart and self._chat_ctx.items:
+                first_item = self._chat_ctx.items[0]
+                if first_item.type == "message" and first_item.role == "assistant":
+                    restart_ctx = self._chat_ctx.copy()
+                    dummy_msg = llm.ChatMessage(role="user", content=["[Resuming conversation]"])
+                    restart_ctx.items.insert(0, dummy_msg)
+                    logger.debug("[SESSION] Added dummy USER message to start of chat history")
+
             init_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
-                chat_ctx=self.chat_ctx,
+                chat_ctx=restart_ctx,
                 tool_configuration=self._serialize_tool_config(),
                 max_tokens=self._realtime_model._opts.max_tokens,
                 top_p=self._realtime_model._opts.top_p,
@@ -569,15 +812,20 @@ class RealtimeSession(  # noqa: F811
                 await self._send_raw_event(event)
                 logger.debug(f"Sent event: {event}")
 
-            if not is_restart:
-                self._audio_input_task = asyncio.create_task(
-                    self._process_audio_input(), name="RealtimeSession._process_audio_input"
-                )
+            # Always create audio input task (even on restart)
+            self._audio_input_task = asyncio.create_task(
+                self._process_audio_input(), name="RealtimeSession._process_audio_input"
+            )
 
             self._response_task = asyncio.create_task(
                 self._process_responses(), name="RealtimeSession._process_responses"
             )
             self._is_sess_active.set()
+
+            # Start session recycling timer
+            self._session_start_time = time.time()
+            self._start_session_recycle_timer()
+
             logger.debug("Stream initialized successfully")
         except Exception as e:
             logger.debug(f"Failed to initialize stream: {str(e)}")
@@ -633,6 +881,7 @@ class RealtimeSession(  # noqa: F811
                 message_ch=utils.aio.Chan(),
                 function_ch=utils.aio.Chan(),
                 response_id=response_id,
+                _done_fut=asyncio.get_running_loop().create_future(),
             )
             generation_created = True
         else:
@@ -857,10 +1106,19 @@ class RealtimeSession(  # noqa: F811
                     samples_per_channel=len(audio_bytes) // 2,
                 )
             )
+            # Track when we last received audio output (for session recycling)
+            self._last_audio_output_time = time.time()
 
     async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
-        """Handle audio content end - log but don't close generation."""
+        """Handle audio content end - track END_TURN for session recycling."""
         log_event_data(event_data)
+
+        # Check if this is END_TURN (assistant finished speaking)
+        stop_reason = event_data.get("event", {}).get("contentEnd", {}).get("stopReason")
+        if stop_reason == "END_TURN":
+            self._audio_end_turn_received = True
+            logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
+
         # Nova Sonic uses one completion for entire session
         # Don't close generation here - wait for new completionStart or session end
 
@@ -885,6 +1143,10 @@ class RealtimeSession(  # noqa: F811
             self._current_generation.message_ch.close()
         if not self._current_generation.function_ch.closed:
             self._current_generation.function_ch.close()
+
+        # Resolve _done_fut to signal generation is complete (for session recycling)
+        if self._current_generation._done_fut and not self._current_generation._done_fut.done():
+            self._current_generation._done_fut.set_result(None)
 
         logger.debug(
             f"Closed generation for completion_id={self._current_generation.completion_id}"
@@ -1413,6 +1675,15 @@ class RealtimeSession(  # noqa: F811
         # however, it's mostly cosmetic-- the event loop will still exit
         # TODO: fix this nit
         tasks: list[asyncio.Task[Any]] = []
+
+        # Cancel session recycle timer
+        if self._session_recycle_task and not self._session_recycle_task.done():
+            self._session_recycle_task.cancel()
+            try:
+                await self._session_recycle_task
+            except asyncio.CancelledError:
+                pass
+
         if self._response_task:
             try:
                 await asyncio.wait_for(self._response_task, timeout=1.0)
