@@ -269,11 +269,11 @@ class AudioRecognition:
             self._ignore_until = NOT_GIVEN
             return
 
-        emit_from_index = float("inf")
+        emit_from_index: int | None = None
         should_flush = False
         for i, ev in enumerate(self._transcript_buffer):
             if not ev.alternatives:
-                emit_from_index = min(emit_from_index, i)
+                emit_from_index = min(emit_from_index, i) if emit_from_index is not None else i
                 continue
             # vendor doesn't set timestamps properly, in which case we just return
             if ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0:
@@ -281,13 +281,14 @@ class AudioRecognition:
                 self._ignore_until = NOT_GIVEN
                 return
 
+            # depends on https://github.com/livekit/agents/pull/4155 and the gateway PR
             if (
                 ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
                 < self._ignore_until
             ):
-                emit_from_index = float("inf")
+                emit_from_index = None
             else:
-                emit_from_index = min(emit_from_index, i)
+                emit_from_index = min(emit_from_index, i) if emit_from_index is not None else i
                 should_flush = True
                 break
 
@@ -295,7 +296,7 @@ class AudioRecognition:
         # to prevent recursive calls
         events_to_emit = (
             list(self._transcript_buffer)[int(emit_from_index) :]
-            if emit_from_index != float("inf") and should_flush
+            if emit_from_index is not None and should_flush
             else []
         )
         self._transcript_buffer.clear()
@@ -334,6 +335,7 @@ class AudioRecognition:
             # 3. the event is for audio sent before the ignore_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
+            # depends on https://github.com/livekit/agent-gateway/pull/176
             and ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
             < self._ignore_until
         ):

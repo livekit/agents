@@ -32,7 +32,7 @@ SAMPLE_RATE = 16000
 THRESHOLD = 0.65
 MIN_BARGEIN_DURATION = 0.025 * 2  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.2 * 16000)  # 0.1 second at 16000 Hz
+STEP_SIZE = int(0.2 * 16000)  # 0.2 second at 16000 Hz
 PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -161,6 +161,10 @@ class BargeinDetector(
                 raise ValueError(
                     "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
                 )
+
+            if is_given(use_proxy) and not use_proxy:
+                logger.warning("use_proxy should be set to True when using the gateway URL")
+                use_proxy = True
 
         self._opts = BargeinOptions(
             sample_rate=sample_rate,
@@ -501,7 +505,7 @@ class BargeinHttpStream(BargeinStreamBase):
                         if not last_request:
                             logger.debug("no request made for overlap speech")
                         probas = last_request.get("probabilities", [])
-                        inference_duration = last_request["inference_duration"]
+                        inference_duration = last_request.get("inference_duration", 0.0)
                         ev = BargeinEvent(
                             type=BargeinEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
@@ -684,7 +688,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         last_request = last_request or {}
                         if not last_request:
                             logger.debug("no request made for overlap speech")
-                        inference_duration = last_request["inference_duration"]
+                        inference_duration = last_request.get("inference_duration", 0.0)
                         speech_input = last_request.get("speech_input", None)
                         probas = last_request.get("probabilities", [])
                         ev = BargeinEvent(
@@ -854,7 +858,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the LiveKit STT WebSocket."""
+        """Connect to the LiveKit Bargein WebSocket."""
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": self._opts.sample_rate,
@@ -878,7 +882,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
             )
             params["type"] = MSG_SESSION_CREATE
             await ws.send_str(json.dumps(params))
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (
+            aiohttp.ClientConnectorError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit Bargein quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit Bargein") from e
