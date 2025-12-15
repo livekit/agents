@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/github-script@v7
         with:
-          # github-token: ${{ secrets.REVIEW_TOKEN }}
+          github-token: ${{ secrets.REVIEW_TOKEN }}
           script: |
             await github.rest.pulls.requestReviewers({
               owner: context.repo.owner,
