@@ -6,13 +6,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(PYBIND11_FINDPYTHON ON)
 
 find_package(PythonInterp REQUIRED)
+find_package(pybind11 REQUIRED)
 
 message(STATUS "Using Python: ${PYTHON_EXECUTABLE}")
 
 include(FetchContent)
-FetchContent_Declare(pybind11
-                     GIT_REPOSITORY https://github.com/pybind/pybind11.git)
-FetchContent_MakeAvailable(pybind11)
 FetchContent_Declare(blingfire
                      GIT_REPOSITORY https://github.com/microsoft/BlingFire)
 FetchContent_MakeAvailable(blingfire)
