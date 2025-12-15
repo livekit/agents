@@ -418,9 +418,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _mark_restart_needed(self, on_error: bool = False) -> None:
         if not self._session_should_close.is_set():
             self._session_should_close.set()
-
             # reset the msg_ch, do not send messages from previous session
-            new_ch = utils.aio.Chan[ClientEvents]()
             if not on_error:
                 while not self._msg_ch.empty():
                     msg = self._msg_ch.recv_nowait()
@@ -429,9 +427,8 @@ class RealtimeSession(llm.RealtimeSession):
                             "discarding client content for turn completion, may cause generate_reply timeout",
                             extra={"content": str(msg)},
                         )
-                        # new_ch.send_nowait(msg)
 
-            self._msg_ch = new_ch
+            self._msg_ch = utils.aio.Chan[ClientEvents]()
 
     def update_options(
         self,
