@@ -789,10 +789,7 @@ class RealtimeSession(  # noqa: F811
                 first_item = self._chat_ctx.items[0]
                 if first_item.type == "message" and first_item.role == "assistant":
                     restart_ctx = self._chat_ctx.copy()
-                    dummy_msg = restart_ctx.add_message(
-                        role="user", content="[Resuming conversation]"
-                    )
-                    restart_ctx.items.remove(dummy_msg)
+                    dummy_msg = llm.ChatMessage(role="user", content=["[Resuming conversation]"])
                     restart_ctx.items.insert(0, dummy_msg)
                     logger.debug("[SESSION] Added dummy USER message to start of chat history")
 
