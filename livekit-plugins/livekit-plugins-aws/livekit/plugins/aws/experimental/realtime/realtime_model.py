@@ -567,6 +567,10 @@ class RealtimeSession(  # noqa: F811
 
         # Step 3: Cancel background tasks
         # Tasks are blocked on channel recv() and won't exit naturally
+        # Note: You may see AWS CRT errors about cancelled futures or completed streams.
+        # These are expected and harmless - they're from the C library cleaning up the old HTTP/2 connection.
+        logger.info("[SESSION] Closing old session (AWS CRT errors are expected and harmless)")
+
         if self._audio_input_task and not self._audio_input_task.done():
             logger.debug("[SESSION] Cancelling audio input task...")
             self._audio_input_task.cancel()
