@@ -374,9 +374,9 @@ class SpeechStream(stt.SpeechStream):
 
             # words are cumulative
             if timed_words:
-                interim_text = " ".join(word.text for word in timed_words)
-                start_time = timed_words[0].start_time
-                end_time = timed_words[-1].end_time
+                interim_text = " ".join(word for word in timed_words)
+                start_time = timed_words[0].start_time or start_time
+                end_time = timed_words[-1].end_time or end_time
                 confidence = sum(word.confidence or 0.0 for word in timed_words) / len(timed_words)
 
                 interim_event = stt.SpeechEvent(
