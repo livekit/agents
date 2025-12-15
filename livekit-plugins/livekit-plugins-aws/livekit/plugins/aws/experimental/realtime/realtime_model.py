@@ -970,9 +970,9 @@ class RealtimeSession(  # noqa: F811
             logger.debug("[GEN] emit_generation_event called but no generation exists - ignoring")
             return
 
-        # Log whether this is first or duplicate emission
+        # Log whether this is first or re-emission for tool call
         if self._current_generation._emitted:
-            logger.debug(f"[GEN] EMITTING (duplicate) generation_created for response_id={self._current_generation.response_id}")
+            logger.debug(f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}")
         else:
             logger.debug(f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}")
 
