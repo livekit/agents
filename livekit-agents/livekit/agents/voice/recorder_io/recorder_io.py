@@ -291,6 +291,13 @@ class RecorderAudioInput(io.AudioInput):
                 _create_silence_frame(padding, frames[0].sample_rate, frames[0].num_channels),
                 *frames,
             ]
+        # we could pad with silence here with some fixed SR and channels,
+        # but it's better for the user to know that this is happening
+        elif pad_since and self.__started_time is None and not self._padded and not frames:
+            logger.warning(
+                "input speech hasn't started yet, skipping silence padding, "
+                "recording may be inaccurate until the speech starts"
+            )
 
         return frames
 
