@@ -279,6 +279,7 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = self._opts.language[0]
 
+        # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
         final_data = stt.SpeechData(
             language=detected_lg,
             confidence=1.0,

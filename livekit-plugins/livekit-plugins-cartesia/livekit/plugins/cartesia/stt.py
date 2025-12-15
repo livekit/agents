@@ -204,7 +204,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
-        self._last_speech_start_time: float = 0
+        self._last_speech_end_time: float = 0
 
     def update_options(
         self,
@@ -356,12 +356,21 @@ class SpeechStream(stt.SpeechStream):
             request_id = data.get("request_id", self._request_id)
             text = data.get("text", "")
             words = data.get("words", [])
-            start_time = words[0].get("start", 0) if words else self._last_speech_start_time
-            end_time = (
-                words[-1].get("end", 0)
-                if words
-                else data.get("duration", 0) + self._last_speech_start_time
-            )
+            timed_words: list[TimedString] = [
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                )
+                for word in words
+            ]
+            # word timestamps are often within the audio window, so we track time separately
+            if self._last_speech_end_time == 0.0:
+                self._last_speech_end_time = self.start_time_offset
+            start_time = self._last_speech_end_time
+            end_time = start_time + data.get("duration", 0)
+            self._last_speech_end_time = end_time
             is_final = data.get("is_final", False)
             language = data.get("language", self._opts.language or "en")
 
@@ -378,22 +387,12 @@ class SpeechStream(stt.SpeechStream):
 
             speech_data = stt.SpeechData(
                 language=language,
-                start_time=start_time + self.start_time_offset,
-                end_time=end_time + self.start_time_offset,
+                start_time=start_time,
+                end_time=end_time,
                 confidence=data.get("probability", 1.0),
                 text=text,
-                words=[
-                    TimedString(
-                        text=word.get("word", ""),
-                        start_time=word.get("start", 0) + self.start_time_offset,
-                        end_time=word.get("end", 0) + self.start_time_offset,
-                        start_time_offset=self.start_time_offset,
-                    )
-                    for word in words
-                ],
+                words=timed_words,
             )
-
-            self._last_speech_start_time = end_time
 
             if is_final:
                 if self._speech_duration > 0:

@@ -493,10 +493,9 @@ class SpeechStream(stt.SpeechStream):
                 self._event_ch.send_nowait(interim_event)
 
         # 11labs sends both when include_timestamps is True
-        elif message_type in {
-            "committed_transcript",
-            "committed_transcript_with_timestamps",
-        }:
+        elif (
+            message_type == "committed_transcript" and not self._opts.include_timestamps
+        ) or message_type == "committed_transcript_with_timestamps":
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
             if text:

@@ -359,24 +359,25 @@ class SpeechStream(stt.SpeechStream):
             start_time: float = 0
             end_time: float = 0
             confidence: float = 0
-            timed_words: list[TimedString] = []
+            # word timestamps are in milliseconds
+            # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
+            timed_words: list[TimedString] = [
+                TimedString(
+                    text=word.get("text", ""),
+                    start_time=word.get("start", 0) / 1000 + self.start_time_offset,
+                    end_time=word.get("end", 0) / 1000 + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=word.get("confidence", 0),
+                )
+                for word in words
+            ]
 
             # words are cumulative
-            if words:
-                interim_text = " ".join(word.get("text", "") for word in words)
-                start_time = words[0].get("start", 0) / 1000 + self.start_time_offset
-                end_time = words[-1].get("end", 0) / 1000 + self.start_time_offset
-                confidence = sum([word.get("confidence", 0) for word in words]) / max(len(words), 1)
-                timed_words = [
-                    TimedString(
-                        text=word.get("text", ""),
-                        start_time=word.get("start", 0) / 1000 + self.start_time_offset,
-                        end_time=word.get("end", 0) / 1000 + self.start_time_offset,
-                        start_time_offset=self.start_time_offset,
-                        confidence=word.get("confidence", 0),
-                    )
-                    for word in words
-                ]
+            if timed_words:
+                interim_text = " ".join(word.text for word in timed_words)
+                start_time = timed_words[0].start_time
+                end_time = timed_words[-1].end_time
+                confidence = sum(word.confidence or 0.0 for word in timed_words) / len(timed_words)
 
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -405,12 +406,9 @@ class SpeechStream(stt.SpeechStream):
                     if is_given(word.start_time)
                     and word.start_time >= self._last_preflight_start_time
                 ]
-                utterance_confidence = (
-                    sum(word.confidence or 0.0 for word in utterance_words)
-                    / max(len(utterance_words), 1)
-                    if utterance_words
-                    else 0
-                )
+                utterance_confidence = sum(
+                    word.confidence or 0.0 for word in utterance_words
+                ) / max(len(utterance_words), 1)
 
                 final_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
