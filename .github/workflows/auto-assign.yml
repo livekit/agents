@@ -6,33 +6,20 @@ permissions:
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
+    branches: [main]
 
 jobs:
   assign:
-    if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.REVIEW_TOKEN }}
+          # github-token: ${{ secrets.REVIEW_TOKEN }}
           script: |
-            const author = context.payload.pull_request.user.login;
-            const org = context.repo.owner;
-            
-            try {
-              // Check if author is a member of the org
-              await github.rest.orgs.checkMembershipForUser({
-                org: org,
-                username: author
-              });
-              
-              // If we get here, user is a member (204 response)
-              await github.rest.pulls.requestReviewers({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.payload.pull_request.number,
-                team_reviewers: ['agent-devs']
-              });
-            } catch (error) {
-              console.log(`Skipped auto-assign for ${author}: ${error.message}`);
-            }
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              team_reviewers: ['agent-devs']
+            });
