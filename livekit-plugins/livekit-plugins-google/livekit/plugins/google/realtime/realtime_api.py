@@ -1202,6 +1202,8 @@ class RealtimeSession(llm.RealtimeSession):
             sc.model_turn
             or (sc.output_transcription and sc.output_transcription.text is not None)
             or (sc.input_transcription and sc.input_transcription.text is not None)
+            or (sc.interrupted is not None)
+            or (sc.turn_complete is not None)
         ):
             return True
 
