@@ -180,7 +180,10 @@ class TTS(tts.TTS):
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        if is_given(base_url):
+            self._base_url = base_url
         if is_given(model):
             self._opts.model = model
 
