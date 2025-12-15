@@ -141,8 +141,8 @@ unlink:
 
     # Remove and re-add the package to get PyPI version
     uv remove --dev {{ package_name }} 2>/dev/null || true
-    uv add {{ package_name }}
-    uv sync --reinstall-package {{ package_name }}
+    uv add --upgrade-package {{ package_name }} {{ package_name }}
+    uv sync
 
     # Clear any rust-sdk env var
     rm -f .env
