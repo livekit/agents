@@ -122,20 +122,22 @@ class ConsoleAudioOutput(io.AudioOutput):
             label="Console",
             next_in_chain=None,
             sample_rate=SAMPLE_RATE,
-            capabilities=io.AudioOutputCapabilities(pause=False),  # TODO(theomonnom): support pause
+            capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self._loop = loop
 
-        self._capturing = False
         self._pushed_duration: float = 0.0
         self._capture_start: float = 0.0
-        self._dispatch_handle: asyncio.TimerHandle | None = None
-
-        self._flush_complete = asyncio.Event()
-        self._flush_complete.set()
+        self._flush_task: asyncio.Task[None] | None = None
 
         self._output_buf = bytearray()
         self._audio_lock = threading.Lock()
+        self._output_buf_empty = asyncio.Event()
+        self._output_buf_empty.set()
+        self._interrupted_ev = asyncio.Event()
+
+        self._paused_at: float | None = None
+        self._paused_duration: float = 0.0
 
     @property
     def audio_lock(self) -> threading.Lock:
@@ -145,52 +147,93 @@ class ConsoleAudioOutput(io.AudioOutput):
     def audio_buffer(self) -> bytearray:
         return self._output_buf
 
+    @property
+    def paused(self) -> bool:
+        return self._paused_at is not None
+
+    def mark_output_empty(self) -> None:
+        self._output_buf_empty.set()
+
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
-        await self._flush_complete.wait()
 
-        if not self._capturing:
-            self._capturing = True
-            self._pushed_duration = 0.0
+        if self._flush_task and not self._flush_task.done():
+            logger.error("capture_frame called while previous flush is in progress")
+            await self._flush_task
+
+        if not self._pushed_duration:
             self._capture_start = time.monotonic()
 
         self._pushed_duration += frame.duration
         with self._audio_lock:
             self._output_buf += frame.data  # TODO: optimize
+            self._output_buf_empty.clear()
 
     def flush(self) -> None:
         super().flush()
-        if self._capturing:
-            self._flush_complete.clear()
-            self._capturing = False
-            to_wait = max(0.0, self._pushed_duration - (time.monotonic() - self._capture_start))
+        if self._pushed_duration:
+            if self._flush_task and not self._flush_task.done():
+                logger.error("flush called while previous flush is in progress")
+                self._flush_task.cancel()
 
-            def _dispatch_playback_finished() -> None:
-                self.on_playback_finished(
-                    playback_position=self._pushed_duration, interrupted=False
-                )
-                self._flush_complete.set()
-                self._pushed_duration = 0.0
-
-            self._dispatch_handle = self._loop.call_later(to_wait, _dispatch_playback_finished)
+            self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
-        self._capturing = False
-
         with self._audio_lock:
             self._output_buf.clear()
+            self._output_buf_empty.set()
 
-        if self._pushed_duration > 0.0:
-            if self._dispatch_handle is not None:
-                self._dispatch_handle.cancel()
+        if self._pushed_duration:
+            self._interrupted_ev.set()
 
-            self._flush_complete.set()
-            played_duration = min(time.monotonic() - self._capture_start, self._pushed_duration)
-            self.on_playback_finished(
-                playback_position=played_duration,
-                interrupted=played_duration + 1.0 < self._pushed_duration,
+    def pause(self) -> None:
+        super().pause()
+
+        if self._paused_at is None:
+            self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        super().resume()
+
+        if self._paused_at is not None:
+            self._paused_duration += time.monotonic() - self._paused_at
+            self._paused_at = None
+
+    async def _wait_for_playout(self) -> None:
+        async def _wait_buffered_audio() -> None:
+            while len(self._output_buf) > 0:
+                await self._output_buf_empty.wait()
+                await asyncio.sleep(0)
+
+        wait_for_interruption = asyncio.create_task(self._interrupted_ev.wait())
+        wait_for_playout = asyncio.create_task(_wait_buffered_audio())
+        try:
+            await asyncio.wait(
+                [wait_for_playout, wait_for_interruption], return_when=asyncio.FIRST_COMPLETED
             )
-            self._pushed_duration = 0.0
+            interrupted = wait_for_interruption.done()
+        finally:
+            wait_for_playout.cancel()
+            wait_for_interruption.cancel()
+
+        if self._paused_at is not None:
+            self._paused_duration += time.monotonic() - self._paused_at
+            self._paused_at = None
+
+        if interrupted:
+            played_duration = time.monotonic() - self._capture_start - self._paused_duration
+            played_duration = min(max(0, played_duration), self._pushed_duration)
+        else:
+            played_duration = self._pushed_duration
+
+        self.on_playback_finished(playback_position=played_duration, interrupted=interrupted)
+
+        self._pushed_duration = 0.0
+        self._paused_at = None
+        self._paused_duration = 0.0
+        self._interrupted_ev.clear()
+        with self._audio_lock:
+            self._output_buf_empty.set()
 
 
 class AgentsConsole:
@@ -588,18 +631,24 @@ class AgentsConsole:
 
         FRAME_SAMPLES = 240
         with self._io_audio_output.audio_lock:
-            bytes_needed = frames * 2
-            if len(self._io_audio_output.audio_buffer) < bytes_needed:
-                available_bytes = len(self._io_audio_output.audio_buffer)
-                outdata[: available_bytes // 2, 0] = np.frombuffer(
-                    self._io_audio_output.audio_buffer, dtype=np.int16, count=available_bytes // 2
-                )
-                outdata[available_bytes // 2 :, 0] = 0
-                del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
+            if self._io_audio_output.paused:
+                outdata[:] = 0
             else:
-                chunk = self._io_audio_output.audio_buffer[:bytes_needed]
-                outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
-                del self._io_audio_output.audio_buffer[:bytes_needed]
+                bytes_needed = frames * 2
+                if len(self._io_audio_output.audio_buffer) < bytes_needed:
+                    available_bytes = len(self._io_audio_output.audio_buffer)
+                    outdata[: available_bytes // 2, 0] = np.frombuffer(
+                        self._io_audio_output.audio_buffer,
+                        dtype=np.int16,
+                        count=available_bytes // 2,
+                    )
+                    outdata[available_bytes // 2 :, 0] = 0
+                    del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
+                    self._io_audio_output.mark_output_empty()
+                else:
+                    chunk = self._io_audio_output.audio_buffer[:bytes_needed]
+                    outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
+                    del self._io_audio_output.audio_buffer[:bytes_needed]
 
         num_chunks = frames // FRAME_SAMPLES
         for i in range(num_chunks):
