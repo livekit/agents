@@ -972,9 +972,13 @@ class RealtimeSession(  # noqa: F811
 
         # Log whether this is first or re-emission for tool call
         if self._current_generation._emitted:
-            logger.debug(f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}")
+            logger.debug(
+                f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}"
+            )
         else:
-            logger.debug(f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}")
+            logger.debug(
+                f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
+            )
 
         self._current_generation._emitted = True
         generation_ev = llm.GenerationCreatedEvent(
@@ -1081,7 +1085,9 @@ class RealtimeSession(  # noqa: F811
                 # This is a new assistant response - close previous and create new
                 logger.debug("[GEN] ASSISTANT SPECULATIVE text received")
                 if self._current_generation is not None:
-                    logger.debug(f"[GEN] Closing previous generation (response_id={self._current_generation.response_id}) for new SPECULATIVE")
+                    logger.debug(
+                        f"[GEN] Closing previous generation (response_id={self._current_generation.response_id}) for new SPECULATIVE"
+                    )
                     self._close_current_generation()
                 self._create_response_generation()
         else:

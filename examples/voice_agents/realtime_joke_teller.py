@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from typing import Any
 
 import python_weather
@@ -156,10 +157,15 @@ async def tell_joke(category: str = "Any") -> dict[str, Any] | ToolError:
 
 class Assistant(Agent):
     def __init__(self, name: str = "Sonic") -> None:
+        current_time = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
         super().__init__(
             instructions=f"Your name is {name}, and you are a friendly and enthusiastic voice assistant. "
+            f"The current date and time is {current_time}. "
             "You love helping people and having natural conversations. "
             "You can check the weather anywhere in the world, search the web for information, and tell jokes. "
+            "When telling jokes, always check if they're appropriate for all audiences before sharing. "
+            "Avoid jokes with cultural humor, dark humor, offensive content, or adult themes. "
+            "if you get a joke from the tool that you feel you shouldn't share, just call the tool again"
             "But you're also happy to just chat about anything! "
             "Be warm, conversational, and engaging. "
             "Keep your responses natural and concise for voice interaction. "
