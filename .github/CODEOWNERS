@@ -1,4 +1,4 @@
 # CODEOWNERS file for automatic review requests
 # Any change to the repository will automatically request a review from the agents-devs team
 
-* @livekit/agents-devs
+* @livekit/agent-devs
