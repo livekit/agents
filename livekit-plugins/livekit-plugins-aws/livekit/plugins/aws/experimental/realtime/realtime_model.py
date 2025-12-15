@@ -218,10 +218,10 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             return self._cached_identity
 
         try:
-            logger.debug("Attempting to load AWS credentials")
+            logger.debug("[CREDS] Attempting to load AWS credentials")
             credentials = self.session.get_credentials()
             if not credentials:
-                logger.error("Unable to load AWS credentials")
+                logger.error("[CREDS] Unable to load AWS credentials")
                 raise ValueError("Unable to load AWS credentials")
 
             creds = credentials.get_frozen_credentials()
@@ -232,7 +232,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
                 raise ValueError("AWS credentials are incomplete")
 
             logger.debug(
-                f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
+                f"[CREDS] AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
             )
 
             # Get expiration time if available (for temporary credentials)
@@ -261,7 +261,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
 
             return identity
         except Exception as e:
-            logger.error(f"Failed to load AWS credentials: {str(e)}")
+            logger.error(f"[CREDS] Failed to load AWS credentials: {str(e)}")
             raise ValueError(f"Failed to load AWS credentials: {str(e)}")  # noqa: B904
 
     def get_credential_expiry_time(self) -> float | None:
