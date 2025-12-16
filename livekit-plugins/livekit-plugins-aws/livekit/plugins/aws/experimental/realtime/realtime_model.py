@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import concurrent.futures
 import json
 import os
 import time
@@ -621,16 +622,14 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Session duration limit reached ({duration:.0f}s), initiating recycle"
             )
 
-            # Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
+            # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
             if not self._audio_end_turn_received:
-                logger.info(
-                    "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
-                )
+                logger.info("[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)...")
                 while not self._audio_end_turn_received:
                     await asyncio.sleep(0.1)
                 logger.debug("[SESSION] Assistant finished speaking")
 
-            # Wait for audio to actually stop (no new audio for 1 second)
+            # Step 2: Wait for audio to fully stop (no new audio for 1 second)
             logger.debug("[SESSION] Waiting for audio to fully stop...")
             last_audio_time = self._last_audio_output_time
             while True:
@@ -644,12 +643,22 @@ class RealtimeSession(  # noqa: F811
                     logger.debug("[SESSION] New audio detected, continuing to wait...")
                     last_audio_time = self._last_audio_output_time
 
-            # Close the current generation to signal completion
-            if self._current_generation:
-                logger.debug("[SESSION] Closing generation to trigger natural completion")
-                self._close_current_generation()
+            # Step 3: Send close events to trigger completionEnd from Nova Sonic
+            # This must happen BEFORE cancelling tasks so response task can receive completionEnd
+            logger.info("[SESSION] Sending close events to Nova Sonic...")
+            if self._stream_response:
+                for event in self._event_builder.create_prompt_end_block():
+                    await self._send_raw_event(event)
 
-            await asyncio.sleep(0.5)
+            # Step 4: Wait for completionEnd and let _done_fut resolve
+            if self._current_generation and self._current_generation._done_fut:
+                try:
+                    await asyncio.wait_for(self._current_generation._done_fut, timeout=2.0)
+                    logger.debug("[SESSION] Generation completed (completionEnd received)")
+                except asyncio.TimeoutError:
+                    logger.warning("[SESSION] Timeout waiting for completionEnd, proceeding anyway")
+                    self._close_current_generation()
+
             await self._graceful_session_recycle()
 
         except asyncio.CancelledError:
@@ -662,8 +671,7 @@ class RealtimeSession(  # noqa: F811
         """Gracefully recycle the session, preserving conversation state."""
         logger.info("[SESSION] Starting graceful session recycle")
 
-        # Step 1: Drain any pending tool results before stopping tasks
-        # Tool results may have arrived after the generation closed but before we cancel tasks
+        # Step 1: Drain any pending tool results
         logger.debug("[SESSION] Draining pending tool results...")
         while True:
             try:
@@ -680,59 +688,48 @@ class RealtimeSession(  # noqa: F811
         # Step 2: Signal tasks to stop
         self._is_sess_active.clear()
 
-        # Brief pause to let any in-flight send operations complete
-        await asyncio.sleep(0.1)
+        # Step 3: Wait for response task to exit naturally, then cancel if needed
+        if self._response_task and not self._response_task.done():
+            try:
+                #TODO: Even waiting for 30 seconds this never just happens.
+                #See if we can figure out how to make this more graceful
+                await asyncio.wait_for(self._response_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                logger.debug("[SESSION] Response task timeout, cancelling...")
+                self._response_task.cancel()
+                try:
+                    await self._response_task
+                except asyncio.CancelledError:
+                    pass
 
-        # Step 3: Cancel background tasks
-        # Tasks are blocked on channel recv() and won't exit naturally
-        # Note: You may see AWS CRT errors about cancelled futures or completed streams.
-        # These are expected and harmless - they're from the C library cleaning up the old HTTP/2 connection.
-        logger.info("[SESSION] Closing old session (AWS CRT errors are expected and harmless)")
-
+        # Step 4: Cancel audio input task (blocked on channel, won't exit naturally)
         if self._audio_input_task and not self._audio_input_task.done():
-            logger.debug("[SESSION] Cancelling audio input task...")
             self._audio_input_task.cancel()
             try:
                 await self._audio_input_task
             except asyncio.CancelledError:
                 pass
 
-        if self._response_task and not self._response_task.done():
-            logger.debug("[SESSION] Cancelling response task...")
-            self._response_task.cancel()
-            try:
-                await self._response_task
-            except asyncio.CancelledError:
-                pass
-
-        # Step 4: Close the old Bedrock stream
+        # Step 5: Close the stream (close events already sent in _session_recycle_timer)
         if self._stream_response:
             try:
-                for event in self._event_builder.create_prompt_end_block():
-                    await self._send_raw_event(event)
-
                 if not self._stream_response.input_stream.closed:
                     await self._stream_response.input_stream.close()
             except Exception as e:
-                # Expected - stream may already be closed or in error state
-                logger.debug(f"[SESSION] Error closing stream during recycle (expected): {e}")
+                logger.debug(f"[SESSION] Error closing stream (expected): {e}")
 
-        # Step 5: Reset state for new session
+        # Step 6: Reset state for new session
         self._stream_response = None
         self._bedrock_client = None
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
         )
-
-        # Recreate tool results channel (fixes tool calls after recycle)
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         logger.debug("[SESSION] Created fresh tool results channel")
-
-        # Reset session state flags
         self._audio_end_turn_received = False
 
-        # Step 6: Start new session with preserved state
+        # Step 7: Start new session with preserved state
         await self.initialize_streams(is_restart=True)
 
         logger.info("[SESSION] Session recycled successfully")
@@ -1402,6 +1399,10 @@ class RealtimeSession(  # noqa: F811
                 # and not self.stream_response.output_stream.closed:
                 try:
                     result = await output_stream.receive()
+                    if result is None:
+                        # Stream closed, exit gracefully
+                        logger.debug("[SESSION] Stream returned None, exiting")
+                        break
                     if result.value and result.value.bytes_:
                         try:
                             response_data = result.value.bytes_.decode("utf-8")
@@ -1412,6 +1413,17 @@ class RealtimeSession(  # noqa: F811
                             logger.warning(f"JSON decode error: {response_data}")
                     else:
                         logger.warning("No response received")
+                except concurrent.futures.InvalidStateError:
+                    # Future was cancelled during shutdown - expected when AWS CRT
+                    # tries to deliver data to cancelled futures
+                    logger.debug("[SESSION] Future cancelled during receive (expected during shutdown)")
+                    break
+                except AttributeError as ae:
+                    # Result is None during shutdown
+                    if "'NoneType' object has no attribute" in str(ae):
+                        logger.debug("[SESSION] Stream closed during receive (expected during shutdown)")
+                        break
+                    raise
                 except asyncio.CancelledError:
                     logger.info("Response processing task cancelled")
                     self._close_current_generation()
