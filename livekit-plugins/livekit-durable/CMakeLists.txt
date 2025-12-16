@@ -12,7 +12,26 @@ target_include_directories(lk_durable PRIVATE
 
 target_compile_definitions(lk_durable PRIVATE Py_BUILD_CORE)
 
-set_target_properties(lk_durable PROPERTIES PREFIX "" OUTPUT_NAME "lk_durable" C_STANDARD 99)
+# from https://github.com/pybind/pybind11/blob/d4f9cfbc2866f2156e1b17cb478a67088c6063f6/tools/pybind11NewTools.cmake#L146
+execute_process(
+  COMMAND "${Python_EXECUTABLE}" "-c"
+    "import sys, importlib; s = importlib.import_module('distutils.sysconfig' if sys.version_info < (3,10) else 'sysconfig'); print(s.get_config_var('EXT_SUFFIX') or s.get_config_var('SO') or '')"
+  OUTPUT_VARIABLE _PY_EXT_SUFFIX
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(_PY_EXT_SUFFIX STREQUAL "")
+  message(FATAL_ERROR "Could not determine Python EXT_SUFFIX/SO")
+endif()
+
+get_filename_component(_PY_DEBUG_POSTFIX "${_PY_EXT_SUFFIX}" NAME_WE)
+get_filename_component(_PY_SUFFIX        "${_PY_EXT_SUFFIX}" EXT)
+
+set_target_properties(lk_durable PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "lk_durable"
+  DEBUG_POSTFIX "${_PY_DEBUG_POSTFIX}"
+  SUFFIX "${_PY_SUFFIX}"
+)
 
 if(DEFINED Python_EXTENSION_SUFFIX)
   set_target_properties(lk_durable PROPERTIES SUFFIX "${Python_EXTENSION_SUFFIX}")
