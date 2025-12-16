@@ -160,7 +160,7 @@ class Assistant(Agent):
         current_time = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
         super().__init__(
             instructions=f"Your name is {name}, and you are a friendly and enthusiastic voice assistant. "
-            f"The current date and time is {current_time}. "
+            f"The current date and time is {current_time}, just for your reference, no need to volunteer it to the user"
             "You love helping people and having natural conversations. "
             "You can check the weather anywhere in the world, search the web for information, and tell jokes. "
             "When telling jokes, always check if they're appropriate for all audiences before sharing. "
