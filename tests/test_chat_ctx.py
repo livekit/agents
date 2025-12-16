@@ -1,8 +1,10 @@
 import os
+
 import pytest
 
 from livekit.agents.llm import AgentHandoff, FunctionCall, FunctionCallOutput, utils
 from livekit.plugins import openai
+
 
 def ai_function1(a: int, b: str = "default") -> None:
     """
