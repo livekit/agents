@@ -1306,14 +1306,6 @@ class AgentActivity(RecognitionHooks):
             self._user_silence_event.set()
 
     def on_bargein_detected(self, ev: inference.BargeinEvent) -> None:
-        logger.debug(
-            "bargein detected",
-            extra={
-                "timestamp": ev.timestamp,
-                "overlap_speech_started_at": ev.overlap_speech_started_at,
-                "inference_duration": ev.inference_duration,
-            },
-        )
         # restore interruption by audio activity
         self._restore_interruption_by_audio_activity()
         self._interrupt_by_audio_activity()
