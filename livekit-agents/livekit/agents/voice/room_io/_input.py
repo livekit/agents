@@ -224,7 +224,9 @@ class _ParticipantInputStream(Generic[T], ABC):
             and self._room._token is not None
             and self._room._server_url is not None
         ):
-            self._processor._on_credentials_updated(token=self._room._token, url=self._room._server_url)
+            self._processor._on_credentials_updated(
+                token=self._room._token, url=self._room._server_url
+            )
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
