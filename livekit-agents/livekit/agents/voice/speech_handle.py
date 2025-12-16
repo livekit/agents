@@ -187,8 +187,6 @@ class SpeechHandle:
                 )
                 for task in self._tasks:
                     task.cancel()
-                if self._generations:
-                    self._mark_generation_done()
                 self._mark_done()
 
             self._interrupt_timeout_handle = asyncio.get_event_loop().call_later(
