@@ -2,4 +2,4 @@
 
 from livekit import blingfire
 
-print("Successfully imported livekit.blingfire")
+print("Successfully imported livekit.blingfire", blingfire)
