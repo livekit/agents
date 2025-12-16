@@ -91,7 +91,7 @@ class STT(stt.STT):
         profanity_filter: bool = False,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        base_url: str = "https://api.deepgram.com/v1/listen",
+        base_url: str = "https://api.deepgram.com/v2/listen",
         numerals: bool = False,
         mip_opt_out: bool = False,
     ) -> None:
