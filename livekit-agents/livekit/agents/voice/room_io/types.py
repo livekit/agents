@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, TypeAlias
 
 from livekit import rtc
 
@@ -44,9 +44,9 @@ class NoiseCancellationParams:
     track: rtc.Track
 
 
-NoiseCancellationSelector = Callable[
+NoiseCancellationSelector: TypeAlias = Callable[
     [NoiseCancellationParams],
-    Optional[rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame]],
+    rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None,
 ]
 
 
