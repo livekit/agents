@@ -32,7 +32,7 @@ SAMPLE_RATE = 16000
 THRESHOLD = 0.65
 MIN_BARGEIN_DURATION = 0.025 * 2  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.2 * 16000)  # 0.2 second at 16000 Hz
+STEP_SIZE = int(0.2 * 16000)  # 0.1 second at 16000 Hz
 PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -109,6 +109,7 @@ class BargeinOptions:
     base_url: str
     api_key: str
     api_secret: str
+    # whether to use the inference instead of the hosted API
     use_proxy: bool
 
 
@@ -162,9 +163,9 @@ class BargeinDetector(
                     "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
                 )
 
-            if is_given(use_proxy) and not use_proxy:
-                logger.warning("use_proxy should be set to True when using the gateway URL")
-                use_proxy = True
+            use_proxy = True
+        else:
+            use_proxy = False
 
         self._opts = BargeinOptions(
             sample_rate=sample_rate,
@@ -177,7 +178,7 @@ class BargeinDetector(
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            use_proxy=use_proxy if is_given(use_proxy) else lk_base_url == DEFAULT_BASE_URL,
+            use_proxy=use_proxy,
         )
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._sample_rate = sample_rate
@@ -727,6 +728,13 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 if accumulated_samples >= self._model._opts.step_size and overlap_speech_started:
                     created_at = perf_counter_ns()
                     header = struct.pack("<Q", created_at)  # 8 bytes
+                    logger.debug(
+                        "sending inference data to LiveKit Bargein",
+                        extra={
+                            "created_at": created_at,
+                            "samples": len(inference_s16_data[:start_idx]),
+                        },
+                    )
                     await ws.send_bytes(header + inference_s16_data[:start_idx].tobytes())
                     cache[created_at] = {
                         "speech_input": inference_s16_data[:start_idx].copy(),
@@ -780,7 +788,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         logger.debug(
                             "bargein detected",
                             extra={
-                                "created_at": created_at,
                                 "inference_duration": inference_duration,
                             },
                         )
@@ -802,7 +809,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     logger.debug(
                         "inference done",
                         extra={
-                            "created_at": created_at,
                             "inference_duration": inference_duration,
                         },
                     )
