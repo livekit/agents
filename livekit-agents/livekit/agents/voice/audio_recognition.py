@@ -360,6 +360,16 @@ class AudioRecognition:
                 ev,
                 speaking=self._speaking if self._vad else None,
             )
+            
+            # Filter out soft-acks (brief affirmations) from being accumulated in the transcript
+            # These should not trigger new agent responses when the agent is actively speaking/thinking
+            transcript_lower = transcript.strip().lower()
+            soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
+            if transcript_lower in soft_ack_set:
+                if self._session.agent_state in ("speaking", "thinking"):
+                    # Don't append the soft-ack to the transcript when agent is actively processing
+                    return
+            
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time

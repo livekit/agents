@@ -1248,6 +1248,15 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
+        # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
+        text_lower = ev.alternatives[0].text.strip().lower()
+        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
+        is_soft_ack = text_lower in soft_ack_set
+        agent_state = self._session.agent_state
+        if is_soft_ack and agent_state in ("speaking", "thinking"):
+            # Silently ignore soft-ack while agent is actively processing
+            return
+
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
@@ -1274,6 +1283,15 @@ class AgentActivity(RecognitionHooks):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
+            return
+
+        # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
+        text_lower = ev.alternatives[0].text.strip().lower()
+        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
+        is_soft_ack = text_lower in soft_ack_set
+        agent_state = self._session.agent_state
+        if is_soft_ack and agent_state in ("speaking", "thinking"):
+            # Silently ignore soft-ack while agent is actively processing
             return
 
         self._session._user_input_transcribed(
@@ -1390,6 +1408,7 @@ class AgentActivity(RecognitionHooks):
     async def _user_turn_completed_task(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
     ) -> None:
+        print(f"DEBUG: _user_turn_completed_task called with transcript='{info.new_transcript}'")
         if old_task is not None:
             # We never cancel user code as this is very confusing.
             # So we wait for the old execution of on_user_turn_completed to finish.
@@ -1527,10 +1546,12 @@ class AgentActivity(RecognitionHooks):
         if speech_handle is None:
             # Ensure the new message is passed to generate_reply
             # This preserves the original message_id, making it easier for users to track responses
+            print(f"DEBUG: Calling _generate_reply for user_message='{user_message.text_content if user_message else None}'")
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
             )
+            print(f"DEBUG: _generate_reply returned, speech_handle={speech_handle}")
 
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated
@@ -2041,7 +2062,7 @@ class AgentActivity(RecognitionHooks):
 
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
-        elif self._session.agent_state == "speaking":
+        elif self._session.agent_state in ("speaking", "thinking"):
             self._session._update_agent_state("listening")
 
         await text_tee.aclose()

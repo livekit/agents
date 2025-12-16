@@ -159,6 +159,7 @@ class FakeRecognizeStream(RecognizeStream):
         return self._attempt
 
     def send_fake_transcript(self, transcript: str, is_final: bool = True) -> None:
+        print(f"DEBUG FakeSTT: send_fake_transcript(text={transcript!r}, is_final={is_final})")
         self._event_ch.send_nowait(
             SpeechEvent(
                 type=SpeechEventType.FINAL_TRANSCRIPT

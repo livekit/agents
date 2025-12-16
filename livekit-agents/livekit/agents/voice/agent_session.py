@@ -1166,6 +1166,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._agent_state == state:
             return
 
+        old_state = self._agent_state
+
         if state == "speaking":
             self._llm_error_counts = 0
             self._tts_error_counts = 0
@@ -1180,6 +1182,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
                 # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
+        elif state == "listening":
+            pass
         elif self._agent_speaking_span is not None:
             # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
@@ -1190,7 +1194,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
-        old_state = self._agent_state
         self._agent_state = state
         self.emit(
             "agent_state_changed",

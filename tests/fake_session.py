@@ -48,7 +48,7 @@ def create_session(
         min_interruption_duration=0.5 / speed_factor,
         min_endpointing_delay=0.5 / speed_factor,
         max_endpointing_delay=6.0 / speed_factor,
-        false_interruption_timeout=2.0 / speed_factor,
+        false_interruption_timeout=None,  # Disable false interruption timeout for testing
         **(extra_kwargs or {}),
     )
 
