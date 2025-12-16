@@ -99,7 +99,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     await session.start(agent=agent, room=ctx.room)
 
-    await session.say("Hey, how can I help you today?", allow_interruptions=True)
+    await session.say("Hey, how can I help you today?", allow_interruptions=False)
 
 
 if __name__ == "__main__":

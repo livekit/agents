@@ -43,6 +43,7 @@ from .log import logger
 from .models import ChatModels
 from .tools import _LLMTool
 from .utils import create_tools_config, to_fnc_ctx, to_response_format
+from .version import __version__
 
 
 @dataclass
@@ -64,6 +65,16 @@ class _LLMOptions:
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
+
+
+BLOCKED_REASONS = [
+    types.FinishReason.SAFETY,
+    types.FinishReason.SPII,
+    types.FinishReason.PROHIBITED_CONTENT,
+    types.FinishReason.BLOCKLIST,
+    types.FinishReason.LANGUAGE,
+    types.FinishReason.RECITATION,
+]
 
 
 class LLM(llm.LLM):
@@ -342,16 +353,19 @@ class LLMStream(llm.LLMStream):
             )
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
+            http_options = self._llm._opts.http_options or types.HttpOptions(
+                timeout=int(self._conn_options.timeout * 1000)
+            )
+            if not http_options.headers:
+                http_options.headers = {}
+            http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
             config = types.GenerateContentConfig(
                 system_instruction=(
                     [types.Part(text=content) for content in extra_data.system_messages]
                     if extra_data.system_messages
                     else None
                 ),
-                http_options=(
-                    self._llm._opts.http_options
-                    or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
-                ),
+                http_options=http_options,
                 **self._extra_kwargs,
             )
             stream = await self._client.aio.models.generate_content_stream(
@@ -373,19 +387,48 @@ class LLMStream(llm.LLMStream):
                     or not response.candidates[0].content
                     or not response.candidates[0].content.parts
                 ):
-                    logger.warning(f"no candidates in the response: {response}")
-                    continue
+                    logger.warning(f"no content in the response: {response}")
+                    raise APIStatusError(
+                        "no content in the response",
+                        retryable=True,
+                        request_id=request_id,
+                    )
 
                 if len(response.candidates) > 1:
                     logger.warning(
                         "gemini llm: there are multiple candidates in the response, returning response from the first one."  # noqa: E501
                     )
 
-                for part in response.candidates[0].content.parts:
+                candidate = response.candidates[0]
+
+                if candidate.finish_reason in BLOCKED_REASONS:
+                    raise APIStatusError(
+                        f"generation blocked by gemini: {candidate.finish_reason}",
+                        retryable=False,
+                        request_id=request_id,
+                    )
+
+                if not candidate.content or not candidate.content.parts:
+                    raise APIStatusError(
+                        "no content in the response",
+                        retryable=retryable,
+                        request_id=request_id,
+                    )
+
+                chunks_yielded = False
+                for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
                     if chat_chunk is not None:
+                        chunks_yielded = True
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
+
+                if candidate.finish_reason == types.FinishReason.STOP and not chunks_yielded:
+                    raise APIStatusError(
+                        "no response generated",
+                        retryable=retryable,
+                        request_id=request_id,
+                    )
 
                 if response.usage_metadata is not None:
                     usage = response.usage_metadata
@@ -448,6 +491,9 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             return chat_chunk
+
+        if not part.text:
+            return None
 
         return llm.ChatChunk(
             id=id,

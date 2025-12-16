@@ -28,6 +28,7 @@ from .api import LiveAvatarAPI, LiveAvatarException
 from .log import logger
 
 SAMPLE_RATE = 24000
+KEEP_ALIVE_INTERVAL = 60
 _AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
 _AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
@@ -181,6 +182,7 @@ class AvatarSession:
     async def _main_task(self) -> None:
         ws_conn = await self._api._ensure_http_session().ws_connect(url=self._ws_url)
         closing = False
+        ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
 
         async def _forward_audio() -> None:
             async for audio_frame in self._audio_buffer:
@@ -200,6 +202,20 @@ class AvatarSession:
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
 
+        async def _keep_alive_task() -> None:
+            try:
+                while True:
+                    await ping_interval.tick()
+                    if closing:
+                        break
+                    msg = {
+                        "type": "session.keep_alive",
+                        "event_id": str(uuid.uuid4()),
+                    }
+                    self.send_event(msg)
+            except asyncio.CancelledError:
+                return
+
         @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal closing
@@ -207,6 +223,7 @@ class AvatarSession:
             async for msg in self._msg_ch:
                 try:
                     await ws_conn.send_json(data=msg)
+                    ping_interval.reset()
                 except Exception:
                     break
             closing = True
@@ -229,6 +246,7 @@ class AvatarSession:
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
             asyncio.create_task(_recv_task(), name="_recv_task"),
+            asyncio.create_task(_keep_alive_task(), name="_keep_alive_task"),
         ]
         try:
             done, _ = await asyncio.wait(io_tasks, return_when=asyncio.FIRST_COMPLETED)
