@@ -644,7 +644,7 @@ class AgentsConsole:
                     )
                     outdata[available_bytes // 2 :, 0] = 0
                     del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
-                    self._io_audio_output.mark_output_empty()
+                    self.io_loop.call_soon_threadsafe(self._io_audio_output.mark_output_empty)
                 else:
                     chunk = self._io_audio_output.audio_buffer[:bytes_needed]
                     outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
