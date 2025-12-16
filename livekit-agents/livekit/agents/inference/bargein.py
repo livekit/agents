@@ -71,6 +71,9 @@ class BargeinEvent:
     total_duration: float = 0.0
     """Time taken to perform the inference, in seconds."""
 
+    detection_delay: float = 0.0
+    """Total time from the onset of the speech to the detection of the bargein, in seconds."""
+
     overlap_speech_started_at: float | None = None
     """Timestamp (in seconds) when the overlap speech started. Useful for emitting held transcripts."""
 
@@ -515,6 +518,9 @@ class BargeinHttpStream(BargeinStreamBase):
                             speech_input=last_request.get("speech_input", None),
                             probabilities=np.array(probas, dtype=np.float32) if probas else None,
                             total_duration=total_duration,
+                            detection_delay=time.time()
+                            - self._overlap_speech_started_at
+                            + total_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
@@ -563,6 +569,9 @@ class BargeinHttpStream(BargeinStreamBase):
                         probabilities=np.array(resp.get("probabilities", []), dtype=np.float32)
                         if resp.get("probabilities", [])
                         else None,
+                        detection_delay=time.time()
+                        - self._overlap_speech_started_at
+                        + total_duration,
                     )
                     self._event_ch.send_nowait(ev)
                     self._bargein_detector.emit("bargein_detected", ev)
@@ -708,6 +717,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             speech_input=speech_input,
                             probabilities=np.array(probas, dtype=np.float32) if probas else None,
                             total_duration=total_duration,
+                            detection_delay=time.time()
+                            - self._overlap_speech_started_at
+                            + total_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
@@ -813,6 +825,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=cache[created_at].get("speech_input", None),
                             probabilities=np.array(probas, dtype=np.float32) if probas else None,
+                            detection_delay=time.time()
+                            - self._overlap_speech_started_at
+                            + total_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("bargein_detected", ev)
