@@ -789,9 +789,10 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         total_duration = (perf_counter_ns() - created_at) / 1e9
                         prediction_duration = data.get("prediction_duration", 0.0)
                         probas = data.get("probabilities", [])
+                        speech_input = cache.get(created_at, {}).get("speech_input", None)
                         cache[created_at] = {
                             "total_duration": total_duration,
-                            "speech_input": cache.get(created_at, {}).get("speech_input", None),
+                            "speech_input": speech_input,
                             "probabilities": data.get("probabilities", []),
                             "is_bargein": True,
                             "created_at": created_at,
@@ -801,7 +802,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             extra={
                                 "total_duration": total_duration,
                                 "prediction_duration": prediction_duration,
-                                "samples": len(cache.get(created_at, {}).get("speech_input", [])),
+                                "samples": len(speech_input) if speech_input is not None else 0,
                             },
                         )
                         ev = BargeinEvent(
@@ -820,18 +821,19 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     created_at = int(data["created_at"])
                     total_duration = (perf_counter_ns() - created_at) / 1e9
                     prediction_duration = data.get("prediction_duration", 0.0)
-                    if len(cache.get(created_at, {}).get("speech_input", [])):
+                    speech_input = cache.get(created_at, {}).get("speech_input", None)
+                    if speech_input is not None and len(speech_input) > 0:
                         logger.debug(
                             "inference done",
                             extra={
                                 "total_duration": total_duration,
                                 "prediction_duration": prediction_duration,
-                                "samples": len(cache.get(created_at, {}).get("speech_input", [])),
+                                "samples": len(speech_input),
                             },
                         )
                         cache[created_at] = {
                             "total_duration": total_duration,
-                            "speech_input": cache.get(created_at, {}).get("speech_input", None),
+                            "speech_input": speech_input,
                             "probabilities": data.get("probabilities", []),
                             "is_bargein": data.get("is_bargein", False),
                             "created_at": created_at,
