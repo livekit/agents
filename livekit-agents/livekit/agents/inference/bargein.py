@@ -35,7 +35,7 @@ MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
 STEP_SIZE = int(0.2 * 16000)  # 0.2 second at 16000 Hz
 PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
-DEFAULT_BASE_URL = "https://oashburn1a.agent-gateway.staging.livekit.cloud/v1"
+DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
 
 MSG_INPUT_AUDIO = "input_audio"
 MSG_SESSION_CREATE = "session.create"
