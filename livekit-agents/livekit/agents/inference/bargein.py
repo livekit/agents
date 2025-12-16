@@ -32,10 +32,10 @@ SAMPLE_RATE = 16000
 THRESHOLD = 0.65
 MIN_BARGEIN_DURATION = 0.025 * 2  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.15 * 16000)  # 0.15 second at 16000 Hz
+STEP_SIZE = int(0.2 * 16000)  # 0.2 second at 16000 Hz
 PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
-DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
+DEFAULT_BASE_URL = "https://oashburn1a.agent-gateway.staging.livekit.cloud/v1"
 
 MSG_INPUT_AUDIO = "input_audio"
 MSG_SESSION_CREATE = "session.create"
@@ -549,7 +549,7 @@ class BargeinHttpStream(BargeinStreamBase):
                 is_bargein = resp["is_bargein"]
                 inference_duration = (time.perf_counter_ns() - resp["created_at"]) / 1e9
                 cache[resp["created_at"]] = {
-                    "inference_duration": inference_duration,
+                    "total_duration": inference_duration,
                     "speech_input": data,
                 } | resp
                 if overlap_speech_started and is_bargein:
@@ -596,6 +596,14 @@ class BargeinHttpStream(BargeinStreamBase):
                 #     "is_bargein": bool,
                 #     "probabilities": list[float], optional
                 # }
+                logger.debug(
+                    "inference done",
+                    extra={
+                        "created_at": created_at,
+                        "is_bargein": data["is_bargein"],
+                        "prediction_duration": (time.perf_counter_ns() - created_at) / 1e9,
+                    },
+                )
                 return data
             except Exception as e:
                 msg = await resp.text()
@@ -679,6 +687,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         start_idx - shift_size : start_idx
                     ]
                     start_idx = shift_size
+                    cache.clear()
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
@@ -705,7 +714,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
-                    cache.clear()
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
@@ -828,6 +836,15 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             "is_bargein": data.get("is_bargein", False),
                             "created_at": created_at,
                         }
+                    else:
+                        logger.debug(
+                            "inference done but cache expired",
+                            extra={
+                                "created_at": created_at,
+                                "total_duration": inference_duration,
+                                "prediction_duration": prediction_duration,
+                            },
+                        )
                 elif msg_type == MSG_SESSION_CLOSED:
                     pass
                 elif msg_type == MSG_ERROR:
@@ -964,10 +981,15 @@ class _BoundedCache(Generic[_K, _V]):
         return self._cache.get(key, default)
 
     def pop(self, predicate: Callable[[_V], bool] | None = None) -> tuple[_K | None, _V | None]:
-        while self._cache:
-            key, value = self._cache.popitem(last=True)
-            if predicate is None or predicate(value):
-                return key, value
+        if predicate is None:
+            if self._cache:
+                return self._cache.popitem(last=True)
+            return self._default_key, self._default_value
+
+        # Find and remove only the matching entry, preserving others
+        for key in reversed(list(self._cache.keys())):
+            if predicate(self._cache[key]):
+                return key, self._cache.pop(key)
         return self._default_key, self._default_value
 
     def clear(self) -> None:
