@@ -545,7 +545,11 @@ class SpeechStream(stt.SpeechStream):
             )
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (
+            aiohttp.ClientConnectorError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit STT quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit STT") from e
