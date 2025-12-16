@@ -19,8 +19,10 @@ import base64
 import json
 import os
 import weakref
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Union, cast
+import uuid
 
 import aiohttp
 
@@ -36,19 +38,18 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .constants import (
+    API_AUTH_HEADER,
+    API_VERSION_HEADER,
+    API_VERSION,
+)
+
 from .log import logger
 from .models import (
     TTSDefaultVoiceId,
     TTSEncoding,
     TTSModels,
 )
-
-API_AUTH_HEADER = "api_key"
-API_VERSION_HEADER = "version"
-API_VERSION = "v1"
-
-BUFFERED_WORDS_COUNT = 10
-
 
 @dataclass
 class _TTSOptions:
@@ -73,11 +74,12 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model: TTSModels | str = "asyncflow_multilingual_v1.0",
-        language: str = "en",
+        language: str | None = None,
         encoding: TTSEncoding = "pcm_s16le",
         voice: str = TTSDefaultVoiceId,
         sample_rate: int = 32000,
         http_session: aiohttp.ClientSession | None = None,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         base_url: str = "https://api.async.ai",
     ) -> None:
         """
@@ -96,6 +98,7 @@ class TTS(tts.TTS):
                 read from the ASYNCAI_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp
                 ClientSession to use. If not provided, a new session will be created.
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             base_url (str, optional): The base URL for the Async API. Defaults to "https://api.async.ai".
         """
 
@@ -126,10 +129,22 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
+    
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "AsyncAI"
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
-            f"/text_to_speech/websocket/ws?api_key={self._opts.api_key}&version={API_VERSION}"
+            f"/text_to_speech/websocket/ws?{API_AUTH_HEADER}={self._opts.api_key}&{API_VERSION_HEADER}={API_VERSION}"
         )
 
         init_payload = {
@@ -141,6 +156,9 @@ class TTS(tts.TTS):
                 "sample_rate": self._opts.sample_rate,
             },
         }
+
+        if self._opts.language is not None:
+            init_payload["language"] = self._opts.language
         ws = await asyncio.wait_for(session.ws_connect(url), timeout)
         await ws.send_str(json.dumps(init_payload))
         return ws
@@ -185,7 +203,9 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -204,9 +224,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -219,32 +236,43 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for ev in self._sent_tokenizer_stream:
+        input_sent_event = asyncio.Event()
+        sent_tokens = deque[str]()
+
+        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+
+        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str) -> None:
+            async for ev in sent_tokenizer_stream:
                 token_pkt = {}
                 token_pkt["transcript"] = ev.token + " "
+                token_pkt["context_id"] = asyncai_context_id
                 token_pkt["force"] = True
+                sent_tokens.append(ev.token + " ")
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
+                input_sent_event.set()
 
-            # end_pkt = {}
-            # end_pkt["transcript"] = ""
-            # await ws.send_str(json.dumps(end_pkt))
+            end_pkt = {}
+            end_pkt["transcript"] = ""
+            end_pkt["context_id"] = asyncai_context_id
+            await ws.send_str(json.dumps(end_pkt))
 
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    sent_tokenizer_stream.flush()
                     continue
 
-                self._sent_tokenizer_stream.push_text(data)
+                sent_tokenizer_stream.push_text(data)
 
-            self._sent_tokenizer_stream.end_input()
+            sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str) -> None:
             current_segment_id: str | None = None
+            await input_sent_event.wait()
+
             while True:
-                msg = await ws.receive()
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -259,29 +287,34 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
+                segment_id = data.get("context_id")
                 if current_segment_id is None:
-                    current_segment_id = "new_segment"
-                    output_emitter.start_segment(segment_id="new_segment")
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    output_emitter.push(b64data)
-                    if data.get("final") and data["final"] is True:
+                    current_segment_id = segment_id
+                    output_emitter.start_segment(segment_id=segment_id)
+                if data.get("final") and data["final"] is True:
+                    if sent_tokenizer_stream.closed:
                         output_emitter.end_input()
                         break
+                elif data.get("audio"):
+                    b64data = base64.b64decode(data["audio"])
+                    output_emitter.push(b64data)
                 else:
                     logger.warning("unexpected message %s", data)
 
+        async_context_id = str(uuid.uuid4())
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
+                    asyncio.create_task(_sentence_stream_task(ws, async_context_id)),
+                    asyncio.create_task(_recv_task(ws, async_context_id)),
                 ]
 
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    input_sent_event.set()
+                    await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
