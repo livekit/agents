@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-xai"
 dynamic = ["version"]
-description = "Agent Framework plugin for LiveAvatar"
+description = "Agent Framework plugin for xAI"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
