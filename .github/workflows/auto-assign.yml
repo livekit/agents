@@ -3,6 +3,7 @@ name: Auto-assign reviewers
 permissions:
   contents: read
   pull-requests: write
+  members: read
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
