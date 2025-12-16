@@ -32,7 +32,7 @@ SAMPLE_RATE = 16000
 THRESHOLD = 0.65
 MIN_BARGEIN_DURATION = 0.025 * 2  # 25ms per frame
 MAX_WINDOW_SIZE = 3 * 16000  # 3 seconds at 16000 Hz
-STEP_SIZE = int(0.2 * 16000)  # 0.1 second at 16000 Hz
+STEP_SIZE = int(0.15 * 16000)  # 0.15 second at 16000 Hz
 PREFIX_SIZE = int(0.5 * 16000)  # 0.5 second at 16000 Hz
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -728,6 +728,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 if accumulated_samples >= self._model._opts.step_size and overlap_speech_started:
                     created_at = perf_counter_ns()
                     header = struct.pack("<Q", created_at)  # 8 bytes
+                    await ws.send_bytes(header + inference_s16_data[:start_idx].tobytes())
                     logger.debug(
                         "sending inference data to LiveKit Bargein",
                         extra={
@@ -735,7 +736,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             "samples": len(inference_s16_data[:start_idx]),
                         },
                     )
-                    await ws.send_bytes(header + inference_s16_data[:start_idx].tobytes())
                     cache[created_at] = {
                         "speech_input": inference_s16_data[:start_idx].copy(),
                     }
@@ -762,7 +762,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 ):
                     if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="LiveKit Bargein connection closed unexpectedly")
+                    raise APIStatusError(
+                        message=f"LiveKit Bargein connection closed unexpectedly: {msg.data}"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected LiveKit Bargein message type %s", msg.type)
@@ -777,10 +779,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     created_at = int(data["created_at"])
                     if overlap_speech_started:
                         inference_duration = (perf_counter_ns() - created_at) / 1e9
+                        prediction_duration = data.get("prediction_duration", 0.0)
                         probas = data.get("probabilities", [])
                         cache[created_at] = {
                             "inference_duration": inference_duration,
-                            "speech_input": data.get("speech_input", None),
+                            "speech_input": cache.get(created_at, {}).get("speech_input", None),
                             "probabilities": data.get("probabilities", []),
                             "is_bargein": True,
                             "created_at": created_at,
@@ -788,7 +791,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         logger.debug(
                             "bargein detected",
                             extra={
-                                "inference_duration": inference_duration,
+                                "total_duration": inference_duration,
+                                "prediction_duration": prediction_duration,
+                                "samples": len(cache.get(created_at, {}).get("speech_input", [])),
                             },
                         )
                         ev = BargeinEvent(
@@ -806,19 +811,23 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 elif msg_type == MSG_INFERENCE_DONE:
                     created_at = int(data["created_at"])
                     inference_duration = (perf_counter_ns() - created_at) / 1e9
-                    logger.debug(
-                        "inference done",
-                        extra={
+                    prediction_duration = data.get("prediction_duration", 0.0)
+                    if len(cache.get(created_at, {}).get("speech_input", [])):
+                        logger.debug(
+                            "inference done",
+                            extra={
+                                "total_duration": inference_duration,
+                                "prediction_duration": prediction_duration,
+                                "samples": len(cache.get(created_at, {}).get("speech_input", [])),
+                            },
+                        )
+                        cache[created_at] = {
                             "inference_duration": inference_duration,
-                        },
-                    )
-                    cache[created_at] = {
-                        "inference_duration": inference_duration,
-                        "speech_input": cache.get(created_at, {}).get("speech_input", None),
-                        "probabilities": data.get("probabilities", []),
-                        "is_bargein": data.get("is_bargein", False),
-                        "created_at": created_at,
-                    }
+                            "speech_input": cache.get(created_at, {}).get("speech_input", None),
+                            "probabilities": data.get("probabilities", []),
+                            "is_bargein": data.get("is_bargein", False),
+                            "created_at": created_at,
+                        }
                 elif msg_type == MSG_SESSION_CLOSED:
                     pass
                 elif msg_type == MSG_ERROR:
