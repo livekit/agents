@@ -39,7 +39,8 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        self.session.generate_reply()
+        # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
+        self.session.generate_reply(allow_interruptions=False)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active

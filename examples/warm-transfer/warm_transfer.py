@@ -23,6 +23,7 @@ load_dotenv()
 # ensure the following variables/env vars are set
 SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")  # "ST_abcxyz"
 SUPERVISOR_PHONE_NUMBER = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")  # "+12003004000"
+SIP_NUMBER = os.getenv("LIVEKIT_SIP_NUMBER")  # "+15005006000" - caller ID shown to supervisor
 
 
 class SupportAgent(Agent):
@@ -60,6 +61,7 @@ class SupportAgent(Agent):
             result = await WarmTransferTask(
                 target_phone_number=SUPERVISOR_PHONE_NUMBER,
                 sip_trunk_id=SIP_TRUNK_ID,
+                sip_number=SIP_NUMBER,
                 chat_ctx=self.chat_ctx,
                 # add extra instructions for summarization
                 # you can also customize the entire instructions by overriding the `get_instructions` method

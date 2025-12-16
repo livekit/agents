@@ -70,6 +70,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         *,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         sip_trunk_id: NotGivenOr[str] = NOT_GIVEN,
+        sip_number: NotGivenOr[str] = NOT_GIVEN,
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
@@ -107,6 +108,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             raise ValueError(
                 "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable or `sip_trunk_id` argument must be set"
             )
+
+        self._sip_number = (
+            sip_number if is_given(sip_number) else os.getenv("LIVEKIT_SIP_NUMBER", "")
+        )
 
         # background audio and io
         self._background_audio = BackgroundAudioPlayer()
@@ -302,6 +307,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 room_name=human_agent_room_name,
                 participant_identity=self._human_agent_identity,
                 wait_until_answered=True,
+                sip_number=self._sip_number or None,
             )
         )
 

@@ -29,6 +29,7 @@ from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModel
 from ..log import logger
 from ..tools import _LLMTool
 from ..utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
+from ..version import __version__
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -40,6 +41,8 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     quality=75,
     resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
 )
+
+lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 
 
 @dataclass
@@ -220,9 +223,9 @@ class RealtimeModel(llm.RealtimeModel):
 
         if not is_given(model):
             if vertexai:
-                model = "gemini-2.0-flash-exp"
+                model = "gemini-live-2.5-flash-native-audio"
             else:
-                model = "gemini-2.0-flash-live-001"
+                model = "gemini-2.5-flash-native-audio-preview-12-2025"
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -373,6 +376,9 @@ class RealtimeSession(llm.RealtimeSession):
         )
         if api_version:
             http_options.api_version = api_version
+        if not http_options.headers:
+            http_options.headers = {}
+        http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
 
         self._client = GenAIClient(
             api_key=self._opts.api_key,
@@ -411,10 +417,19 @@ class RealtimeSession(llm.RealtimeSession):
                 finally:
                     self._active_session = None
 
-    def _mark_restart_needed(self) -> None:
+    def _mark_restart_needed(self, on_error: bool = False) -> None:
         if not self._session_should_close.is_set():
             self._session_should_close.set()
             # reset the msg_ch, do not send messages from previous session
+            if not on_error:
+                while not self._msg_ch.empty():
+                    msg = self._msg_ch.recv_nowait()
+                    if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
+                        logger.warning(
+                            "discarding client content for turn completion, may cause generate_reply timeout",
+                            extra={"content": str(msg)},
+                        )
+
             self._msg_ch = utils.aio.Chan[ClientEvents]()
 
     def update_options(
@@ -579,8 +594,8 @@ class RealtimeSession(llm.RealtimeSession):
         turns = []
         if is_given(instructions):
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -744,7 +759,7 @@ class RealtimeSession(llm.RealtimeSession):
                 if isinstance(msg, types.LiveClientContent):
                     await session.send_client_content(
                         turns=msg.turns,  # type: ignore
-                        turn_complete=msg.turn_complete or True,
+                        turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
@@ -759,10 +774,24 @@ class RealtimeSession(llm.RealtimeSession):
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
+                if lk_google_debug and isinstance(
+                    msg,
+                    (
+                        types.LiveClientContent,
+                        types.LiveClientToolResponse,
+                        types.LiveClientRealtimeInput,
+                    ),
+                ):
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not msg.media_chunks:
+                        logger.debug(
+                            f">>> sent {type(msg).__name__}",
+                            extra={"content": msg.model_dump(exclude_defaults=True)},
+                        )
+
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
-                self._mark_restart_needed()
+                self._mark_restart_needed(on_error=True)
         finally:
             logger.debug("send task finished.")
 
@@ -777,15 +806,41 @@ class RealtimeSession(llm.RealtimeSession):
                         break
 
                 async for response in session.receive():
+                    if lk_google_debug:
+                        resp_copy = response.model_dump(exclude_defaults=True)
+                        # remove audio from debugging logs
+                        if (
+                            (sc := resp_copy.get("server_content"))
+                            and (mt := sc.get("model_turn"))
+                            and (parts := mt.get("parts"))
+                        ):
+                            for part in parts:
+                                if part and part.get("inline_data"):
+                                    part["inline_data"] = "<audio>"
+                        logger.debug("<<< received response", extra={"response": resp_copy})
+
                     if not self._current_generation or self._current_generation._done:
-                        if response.server_content and response.server_content.interrupted:
-                            # interrupt a generation already done
-                            self._handle_input_speech_started()
-                            # reset the flag and still start a new generation in case it has any other content
-                            response.server_content.interrupted = False
+                        if (sc := response.server_content) and sc.interrupted:
+                            # two cases an interrupted event is sent without an active generation
+                            # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
+                            # 2) the generation is not started (interrupted -> turn_complete)
+                            # for both cases, we interrupt the agent if there is no pending generation from `generate_reply`
+                            # for the second case, the pending generation will be stopped by `turn_complete` event coming later
+                            if not self._pending_generation_fut:
+                                self._handle_input_speech_started()
+
+                            sc.interrupted = None
+                            sc_copy = sc.model_dump(exclude_none=True)
+                            if not sc_copy:
+                                # ignore empty server content
+                                response.server_content = None
+                                if lk_google_debug:
+                                    logger.debug("ignoring empty server content")
 
                         if self._is_new_generation(response):
                             self._start_new_generation()
+                            if lk_google_debug:
+                                logger.debug(f"new generation started: {self._current_generation}")
 
                     if response.session_resumption_update:
                         if (
@@ -814,7 +869,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in receive task: {e}", exc_info=e)
-                self._mark_restart_needed()
+                self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
 
@@ -930,6 +985,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         if model_turn := server_content.model_turn:
             for part in model_turn.parts or []:
+                if part.thought:
+                    # bypass reasoning output
+                    continue
                 if part.text:
                     current_gen.push_text(part.text)
                 if part.inline_data:
@@ -974,7 +1032,8 @@ class RealtimeSession(llm.RealtimeSession):
         if server_content.generation_complete or server_content.turn_complete:
             current_gen._completed_timestamp = time.time()
 
-        if server_content.interrupted:
+        if server_content.interrupted and not self._pending_generation_fut:
+            # interrupt agent if there is no pending user initiated generation
             self._handle_input_speech_started()
 
         if server_content.turn_complete:
@@ -1027,6 +1086,8 @@ class RealtimeSession(llm.RealtimeSession):
         gen.function_ch.close()
         gen.message_ch.close()
         gen._done = True
+        if lk_google_debug:
+            logger.debug(f"generation done {gen}")
 
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
@@ -1181,8 +1242,10 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription.text is not None)
-            or (sc.input_transcription and sc.input_transcription.text is not None)
+            or (sc.output_transcription and sc.output_transcription is not None)
+            or (sc.input_transcription and sc.input_transcription is not None)
+            or (sc.generation_complete is not None)
+            or (sc.turn_complete is not None)
         ):
             return True
 
