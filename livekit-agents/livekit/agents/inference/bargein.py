@@ -68,7 +68,7 @@ class BargeinEvent:
     is_bargein: bool = False
     """Whether bargein is detected."""
 
-    inference_duration: float = 0.0
+    total_duration: float = 0.0
     """Time taken to perform the inference, in seconds."""
 
     overlap_speech_started_at: float | None = None
@@ -497,30 +497,30 @@ class BargeinHttpStream(BargeinStreamBase):
                         start_idx - shift_size : start_idx
                     ]
                     start_idx = shift_size
+                    cache.clear()
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
-                        _, last_request = cache.pop(lambda x: x.get("inference_duration", 0) > 0)
+                        _, last_request = cache.pop(lambda x: x.get("total_duration", 0) > 0)
                         last_request = last_request or {}
                         if not last_request:
                             logger.debug("no request made for overlap speech")
                         probas = last_request.get("probabilities", [])
-                        inference_duration = last_request.get("inference_duration", 0.0)
+                        total_duration = last_request.get("total_duration", 0.0)
                         ev = BargeinEvent(
                             type=BargeinEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=last_request.get("speech_input", None),
                             probabilities=np.array(probas, dtype=np.float32) if probas else None,
-                            inference_duration=inference_duration,
+                            total_duration=total_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
-                    cache.clear()
                     continue
 
                 if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
@@ -547,9 +547,9 @@ class BargeinHttpStream(BargeinStreamBase):
             async for data in data_chan:
                 resp = await self.predict(data)
                 is_bargein = resp["is_bargein"]
-                inference_duration = (time.perf_counter_ns() - resp["created_at"]) / 1e9
+                total_duration = (time.perf_counter_ns() - resp["created_at"]) / 1e9
                 cache[resp["created_at"]] = {
-                    "total_duration": inference_duration,
+                    "total_duration": total_duration,
                     "speech_input": data,
                 } | resp
                 if overlap_speech_started and is_bargein:
@@ -557,7 +557,7 @@ class BargeinHttpStream(BargeinStreamBase):
                         type=BargeinEventType.BARGEIN,
                         timestamp=time.time(),
                         overlap_speech_started_at=self._overlap_speech_started_at,
-                        inference_duration=inference_duration,
+                        total_duration=total_duration,
                         is_bargein=is_bargein,
                         speech_input=data,
                         probabilities=np.array(resp.get("probabilities", []), dtype=np.float32)
@@ -694,11 +694,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     if overlap_speech_started:
                         logger.debug("overlap speech ended, stopping barge-in inference")
                         # only pop the last complete request
-                        _, last_request = cache.pop(lambda x: x.get("inference_duration", 0) > 0)
+                        _, last_request = cache.pop(lambda x: x.get("total_duration", 0) > 0)
                         last_request = last_request or {}
                         if not last_request:
                             logger.debug("no request made for overlap speech")
-                        inference_duration = last_request.get("inference_duration", 0.0)
+                        total_duration = last_request.get("total_duration", 0.0)
                         speech_input = last_request.get("speech_input", None)
                         probas = last_request.get("probabilities", [])
                         ev = BargeinEvent(
@@ -707,7 +707,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=speech_input,
                             probabilities=np.array(probas, dtype=np.float32) if probas else None,
-                            inference_duration=inference_duration,
+                            total_duration=total_duration,
                         )
                         self._event_ch.send_nowait(ev)
                         self._bargein_detector.emit("overlap_speech_ended", ev)
@@ -786,11 +786,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 elif msg_type == MSG_BARGEIN_DETECTED:
                     created_at = int(data["created_at"])
                     if overlap_speech_started:
-                        inference_duration = (perf_counter_ns() - created_at) / 1e9
+                        total_duration = (perf_counter_ns() - created_at) / 1e9
                         prediction_duration = data.get("prediction_duration", 0.0)
                         probas = data.get("probabilities", [])
                         cache[created_at] = {
-                            "inference_duration": inference_duration,
+                            "total_duration": total_duration,
                             "speech_input": cache.get(created_at, {}).get("speech_input", None),
                             "probabilities": data.get("probabilities", []),
                             "is_bargein": True,
@@ -799,7 +799,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         logger.debug(
                             "bargein detected",
                             extra={
-                                "total_duration": inference_duration,
+                                "total_duration": total_duration,
                                 "prediction_duration": prediction_duration,
                                 "samples": len(cache.get(created_at, {}).get("speech_input", [])),
                             },
@@ -808,7 +808,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             type=BargeinEventType.BARGEIN,
                             timestamp=time.time(),
                             is_bargein=True,
-                            inference_duration=inference_duration,
+                            total_duration=total_duration,
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=cache[created_at].get("speech_input", None),
                             probabilities=np.array(probas, dtype=np.float32) if probas else None,
@@ -818,19 +818,19 @@ class BargeinWebSocketStream(BargeinStreamBase):
                         overlap_speech_started = False
                 elif msg_type == MSG_INFERENCE_DONE:
                     created_at = int(data["created_at"])
-                    inference_duration = (perf_counter_ns() - created_at) / 1e9
+                    total_duration = (perf_counter_ns() - created_at) / 1e9
                     prediction_duration = data.get("prediction_duration", 0.0)
                     if len(cache.get(created_at, {}).get("speech_input", [])):
                         logger.debug(
                             "inference done",
                             extra={
-                                "total_duration": inference_duration,
+                                "total_duration": total_duration,
                                 "prediction_duration": prediction_duration,
                                 "samples": len(cache.get(created_at, {}).get("speech_input", [])),
                             },
                         )
                         cache[created_at] = {
-                            "inference_duration": inference_duration,
+                            "total_duration": total_duration,
                             "speech_input": cache.get(created_at, {}).get("speech_input", None),
                             "probabilities": data.get("probabilities", []),
                             "is_bargein": data.get("is_bargein", False),
@@ -841,7 +841,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             "inference done but cache expired",
                             extra={
                                 "created_at": created_at,
-                                "total_duration": inference_duration,
+                                "total_duration": total_duration,
                                 "prediction_duration": prediction_duration,
                             },
                         )
