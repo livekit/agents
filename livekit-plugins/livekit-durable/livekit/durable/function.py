@@ -22,7 +22,7 @@ from typing import (
     cast,
 )
 
-from . import frame as ext
+import lk_durable as ext
 from .registry import (
     RegisteredFunction,
     lookup_function,
