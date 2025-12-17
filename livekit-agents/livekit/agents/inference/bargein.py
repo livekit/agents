@@ -195,9 +195,7 @@ class BargeinDetector(
             raise ValueError("max_audio_duration must be less than or equal to 3.0 seconds")
 
         lk_base_url = (
-            base_url
-            if base_url
-            else os.environ.get("LIVEKIT_BARGEIN_INFERENCE_URL", DEFAULT_BASE_URL)
+            base_url if base_url else os.getenv("LIVEKIT_REMOTE_EOT_URL", DEFAULT_BASE_URL)
         )
         lk_api_key: str = api_key if api_key else ""
         lk_api_secret: str = api_secret if api_secret else ""
