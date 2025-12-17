@@ -13,7 +13,6 @@ import uuid
 import weakref
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from pickle import TRUE
 from typing import Any, Callable, Literal, cast
 
 import boto3
@@ -1665,7 +1664,7 @@ class RealtimeSession(  # noqa: F811
 
                         text = item.text_content
 
-                        async def _send_user_text() -> None:
+                        async def _send_user_text(text: str = text, fut: asyncio.Future = fut) -> None:
                             try:
                                 # Wait for session to be fully initialized before sending
                                 await self._is_sess_active.wait()
