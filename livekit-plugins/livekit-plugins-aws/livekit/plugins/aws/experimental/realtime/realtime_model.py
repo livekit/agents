@@ -624,7 +624,9 @@ class RealtimeSession(  # noqa: F811
 
             # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
             if not self._audio_end_turn_received:
-                logger.info("[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)...")
+                logger.info(
+                    "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
+                )
                 while not self._audio_end_turn_received:
                     await asyncio.sleep(0.1)
                 logger.debug("[SESSION] Assistant finished speaking")
@@ -691,8 +693,8 @@ class RealtimeSession(  # noqa: F811
         # Step 3: Wait for response task to exit naturally, then cancel if needed
         if self._response_task and not self._response_task.done():
             try:
-                #TODO: Even waiting for 30 seconds this never just happens.
-                #See if we can figure out how to make this more graceful
+                # TODO: Even waiting for 30 seconds this never just happens.
+                # See if we can figure out how to make this more graceful
                 await asyncio.wait_for(self._response_task, timeout=1.0)
             except asyncio.TimeoutError:
                 logger.debug("[SESSION] Response task timeout, cancelling...")
@@ -1416,12 +1418,16 @@ class RealtimeSession(  # noqa: F811
                 except concurrent.futures.InvalidStateError:
                     # Future was cancelled during shutdown - expected when AWS CRT
                     # tries to deliver data to cancelled futures
-                    logger.debug("[SESSION] Future cancelled during receive (expected during shutdown)")
+                    logger.debug(
+                        "[SESSION] Future cancelled during receive (expected during shutdown)"
+                    )
                     break
                 except AttributeError as ae:
                     # Result is None during shutdown
                     if "'NoneType' object has no attribute" in str(ae):
-                        logger.debug("[SESSION] Stream closed during receive (expected during shutdown)")
+                        logger.debug(
+                            "[SESSION] Stream closed during receive (expected during shutdown)"
+                        )
                         break
                     raise
                 except asyncio.CancelledError:
