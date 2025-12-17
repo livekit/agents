@@ -178,12 +178,16 @@ class TTS(tts.TTS):
             self._stream_pacer = text_pacing
 
         if word_timestamps:
-            if "preview" not in self._opts.model and (self._opts.language is not None and self._opts.language not in {
-                "en",
-                "de",
-                "es",
-                "fr",
-            }):
+            if "preview" not in self._opts.model and (
+                self._opts.language is not None
+                and self._opts.language
+                not in {
+                    "en",
+                    "de",
+                    "es",
+                    "fr",
+                }
+            ):
                 # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
                 logger.warning(
                     "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
