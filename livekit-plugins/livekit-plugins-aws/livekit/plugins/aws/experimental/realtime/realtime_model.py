@@ -13,6 +13,7 @@ import uuid
 import weakref
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
+from pickle import TRUE
 from typing import Any, Callable, Literal, cast
 
 import boto3
@@ -299,8 +300,8 @@ class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        model: REALTIME_MODELS | str = "amazon.nova-sonic-v1:0",
-        modalities: MODALITIES = "audio",
+        model: REALTIME_MODELS | str = "amazon.nova-2-sonic-v1:0",
+        modalities: MODALITIES = "mixed",
         voice: NotGivenOr[SONIC1_VOICES | SONIC2_VOICES | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -313,8 +314,8 @@ class RealtimeModel(llm.RealtimeModel):
         """Instantiate a new RealtimeModel.
 
         Args:
-            model (REALTIME_MODELS | str): Bedrock model ID for realtime inference. Defaults to "amazon.nova-sonic-v1:0".
-            modalities (MODALITIES): Input/output mode. "audio" for audio-only (Sonic 1.0), "mixed" for audio + text input (Sonic 2.0). Defaults to "audio".
+            model (REALTIME_MODELS | str): Bedrock model ID for realtime inference. Defaults to "amazon.nova-2-sonic-v1:0".
+            modalities (MODALITIES): Input/output mode. "audio" for audio-only (Sonic 1.0), "mixed" for audio + text input (Sonic 2.0). Defaults to "mixed".
             voice (SONIC1_VOICES | SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Defaults to "tiffany".
             temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
             top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
@@ -1657,7 +1658,26 @@ class RealtimeSession(  # noqa: F811
                         logger.debug(
                             f"Sending user message as interactive text: {item.text_content}"
                         )
-                        self._pending_generation_fut = self.send_interactive_text(item.text_content)
+                        # Send interactive text to Nova Sonic (triggers generation)
+                        # This is the flow for generate_reply(user_input=...) from the framework
+                        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+                        self._pending_generation_fut = fut
+
+                        text = item.text_content
+
+                        async def _send_user_text() -> None:
+                            try:
+                                # Wait for session to be fully initialized before sending
+                                await self._is_sess_active.wait()
+                                await self._send_text_message(text, interactive=True)
+                            except Exception as e:
+                                if not fut.done():
+                                    fut.set_exception(e)
+                                if self._pending_generation_fut is fut:
+                                    self._pending_generation_fut = None
+
+                        asyncio.create_task(_send_user_text())
+
                     self._sent_message_ids.add(item.id)
                     self._chat_ctx.items.append(item)
                 else:
@@ -1869,8 +1889,8 @@ class RealtimeSession(  # noqa: F811
 
         Note:
             User messages flow through AgentSession.generate_reply(user_input=...) →
-            update_chat_ctx() → send_interactive_text().
-            This method is for fullfilling AgentSession.generate_reply() instructions/prompts.
+            update_chat_ctx() which sends interactive text to Nova Sonic.
+            This method handles the instructions parameter for system-level prompts.
         """
         # Check if generate_reply is supported (requires mixed modalities)
         if self._realtime_model.modalities != "mixed":
@@ -1910,6 +1930,8 @@ class RealtimeSession(  # noqa: F811
             # Send text message asynchronously
             async def _send_text() -> None:
                 try:
+                    # Wait for session to be fully initialized before sending
+                    await self._is_sess_active.wait()
                     await self._send_text_message(instructions, interactive=True)
                 except Exception as e:
                     if not fut.done():
@@ -1945,66 +1967,6 @@ class RealtimeSession(  # noqa: F811
             "generate_reply: no instructions and no pending generation, returning empty future"
         )
         return asyncio.Future[llm.GenerationCreatedEvent]()
-
-    def send_interactive_text(self, text: str) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        """Send user text as interactive content (triggers generation).
-
-        This is different from generate_reply(instructions=...) in that:
-        - The text is sent as USER role content
-        - It's added to Nova's conversation context
-        - It triggers a generation response
-
-        Use this for actual user messages.
-        Use generate_reply(instructions=...) for system prompts/commands.
-
-        Args:
-            text: The user's message text
-
-        Returns:
-            Future that resolves when generation starts
-        """
-        if self._realtime_model.modalities != "mixed":
-            fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.set_exception(
-                llm.RealtimeError("Text input not supported (requires mixed modalities)")
-            )
-            return fut
-
-        logger.info(
-            f"send_interactive_text: sending user message: '{text[:50]}{'...' if len(text) > 50 else ''}'"
-        )
-
-        # Create future for generation event
-        fut = asyncio.Future[llm.GenerationCreatedEvent]()
-        self._pending_generation_fut = fut
-
-        # Send text message with interactive=True
-        async def _send_text() -> None:
-            try:
-                await self._send_text_message(text, interactive=True)
-            except Exception as e:
-                if not fut.done():
-                    fut.set_exception(e)
-                if self._pending_generation_fut is fut:
-                    self._pending_generation_fut = None
-
-        asyncio.create_task(_send_text())
-
-        # Set timeout
-        def _on_timeout() -> None:
-            if not fut.done():
-                fut.set_exception(
-                    llm.RealtimeError("send_interactive_text timed out waiting for generation")
-                )
-                if self._pending_generation_fut is fut:
-                    self._pending_generation_fut = None
-
-        timeout_handle = asyncio.get_running_loop().call_later(
-            self._realtime_model._generate_reply_timeout, _on_timeout
-        )
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
-
-        return fut
 
     async def _send_text_message(self, text: str, interactive: bool = True) -> None:
         """Internal method to send text message to Nova Sonic 2.0.

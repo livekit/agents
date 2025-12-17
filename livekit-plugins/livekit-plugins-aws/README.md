@@ -10,6 +10,20 @@ Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transc
 
 See [https://docs.livekit.io/agents/integrations/aws/](https://docs.livekit.io/agents/integrations/aws/) for more information.
 
+## ⚠️ Breaking Change
+
+**Default model changed to Nova 2.0 Sonic**: `RealtimeModel()` now defaults to `amazon.nova-2-sonic-v1:0` with `modalities="mixed"` (was `amazon.nova-sonic-v1:0` with `modalities="audio"`).
+
+If you need the previous behavior, explicitly specify Nova 1.0 Sonic:
+```python
+model = aws.realtime.RealtimeModel.with_nova_sonic_1()
+# or
+model = aws.realtime.RealtimeModel(
+    model="amazon.nova-sonic-v1:0",
+    modalities="audio"
+)
+```
+
 ## Installation
 
 ```bash
@@ -165,21 +179,21 @@ Amazon Nova 2 Sonic is a unified speech-to-speech foundation model that delivers
 from livekit.plugins import aws
 
 # Nova Sonic 1.0 (audio-only, original model)
-model = aws.realtime.RealtimeModel.with_nova_1_sonic()
+model = aws.realtime.RealtimeModel.with_nova_sonic_1()
 
 # Nova Sonic 2.0 (audio + text input, latest)
-model = aws.realtime.RealtimeModel.with_nova_2_sonic()
+model = aws.realtime.RealtimeModel.with_nova_sonic_2()
 ```
 
 ### Voice Selection
 
-Use the `VoiceIdV1` or `VoiceIdV2` enums for IDE autocomplete and type safety. Any voice ID string is accepted for flexibility with future voices.
+Voices are specified as lowercase strings. Import `SONIC1_VOICES` or `SONIC2_VOICES` type hints for IDE autocomplete.
 
 ```python
-from livekit.plugins.aws.experimental.realtime import VoiceIdV2
+from livekit.plugins.aws.experimental.realtime import SONIC2_VOICES
 
-model = aws.realtime.RealtimeModel.with_nova_2_sonic(
-    voice=VoiceIdV2.CAROLINA  # Portuguese, feminine
+model = aws.realtime.RealtimeModel.with_nova_sonic_2(
+    voice="carolina"  # Portuguese, feminine
 )
 ```
 
@@ -253,8 +267,8 @@ await session.generate_reply(
 Control how quickly the agent responds to pauses:
 
 ```python
-model = aws.realtime.RealtimeModel.with_nova_2_sonic(
-    endpointing_sensitivity="MEDIUM"  # HIGH, MEDIUM (default), LOW
+model = aws.realtime.RealtimeModel.with_nova_sonic_2(
+    turn_detection="MEDIUM"  # HIGH, MEDIUM (default), LOW
 )
 ```
 
@@ -268,7 +282,10 @@ model = aws.realtime.RealtimeModel.with_nova_2_sonic(
 from livekit import agents
 from livekit.agents import Agent, AgentSession
 from livekit.plugins import aws
-from livekit.plugins.aws.experimental.realtime import VoiceId
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 class Assistant(Agent):
     def __init__(self):
@@ -288,9 +305,9 @@ async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
     
     session = AgentSession(
-        llm=aws.realtime.RealtimeModel.with_nova_2_sonic(
-            voice=VoiceId.MATTHEW,
-            endpointing_sensitivity="MEDIUM",
+        llm=aws.realtime.RealtimeModel.with_nova_sonic_2(
+            voice="matthew",
+            turn_detection="MEDIUM",
             tool_choice="auto"
         )
     )
