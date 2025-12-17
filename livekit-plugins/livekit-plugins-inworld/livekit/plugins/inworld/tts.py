@@ -474,8 +474,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 flush_msg = {"flush_context": {}, "contextId": context_id}
                 await ws.send_str(json.dumps(flush_msg))
 
-            # Signal that we've finished sending all input
-            # Don't send close_context here - that only happens on timeout or explicit close
             input_flushed.set()
 
         async def _recv_task(
