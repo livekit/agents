@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import heapq
 import json
+import string
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -107,6 +108,9 @@ class _PreemptiveGeneration:
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
+        # Translation table used to strip punctuation when checking for filler words.
+        self._punct_strip_table = str.maketrans("", "", string.punctuation)
+
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
@@ -1187,6 +1191,21 @@ class AgentActivity(RecognitionHooks):
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
 
+        # At this point we have decided that this counts as a *valid* interruption
+        # candidate based on duration/word-count. Log it separately from ignored
+        # interruptions for easier debugging.
+        transcript = None
+        if self._audio_recognition is not None:
+            transcript = self._audio_recognition.current_transcript
+
+        logger.debug(
+            "processing valid user interruption",
+            extra={
+                "user_transcript": transcript,
+                "agent_state": self._session.agent_state,
+            },
+        )
+
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
 
@@ -1212,6 +1231,63 @@ class AgentActivity(RecognitionHooks):
                 self._current_speech.interrupt()
 
     # region recognition hooks
+
+    def _should_ignore_interrupt_for_text(
+        self,
+        text: str,
+        confidence: float | None,
+    ) -> bool:
+        """Return True if this transcript should *not* interrupt the agent.
+
+        This is used to ignore filler-only utterances such as "uh", "umm",
+        "hmm", "haan" while the agent is speaking, while still allowing those
+        same words to be treated as normal user speech when the agent is quiet.
+        """
+        opt = self._session.options
+        ignored_words = getattr(opt, "ignored_interrupt_words", None)
+        if not ignored_words:
+            return False
+
+        # Only filter when the agent is actively speaking; when the agent is
+        # listening we still want these utterances to be considered user input.
+        if self._session.agent_state != "speaking":
+            return False
+
+        # Normalize and tokenize the transcript.
+        normalized = text.lower().translate(self._punct_strip_table).strip()
+        if not normalized:
+            return False
+
+        tokens = [t for t in normalized.split() if t]
+        if not tokens:
+            return False
+
+        # Only ignore if *all* tokens are configured as fillers. Mixed content
+        # such as "umm okay stop" should still interrupt the agent.
+        if not all(token in ignored_words for token in tokens):
+            return False
+
+        min_conf = getattr(opt, "ignored_interrupt_min_confidence", None)
+
+        log_extra = {
+            "user_transcript": text,
+            "normalized_tokens": tokens,
+            "confidence": confidence,
+            "ignored_words": list(ignored_words),
+        }
+
+        if min_conf is not None and confidence is not None and confidence < min_conf:
+            logger.debug(
+                "ignoring low-confidence filler interruption while agent is speaking",
+                extra=log_extra,
+            )
+        else:
+            logger.debug(
+                "ignoring filler-only interruption while agent is speaking",
+                extra=log_extra,
+            )
+
+        return True
 
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
@@ -1245,6 +1321,19 @@ class AgentActivity(RecognitionHooks):
             return
 
         if ev.speech_duration >= self._session.options.min_interruption_duration:
+            # When STT is available, try to avoid interrupting on filler-only
+            # audio while the agent is speaking by peeking at the current
+            # transcript. If no transcript is available yet, fall back to the
+            # original behaviour for responsiveness.
+            if (
+                self.stt is not None
+                and self._audio_recognition is not None
+                and self._audio_recognition.current_transcript
+            ):
+                current_text = self._audio_recognition.current_transcript
+                if self._should_ignore_interrupt_for_text(current_text, confidence=None):
+                    return
+
             self._interrupt_by_audio_activity()
 
         if (
@@ -1270,11 +1359,25 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-        if ev.alternatives[0].text and self._turn_detection not in (
+        text = ev.alternatives[0].text
+        confidence = ev.alternatives[0].confidence
+
+        if text and self._turn_detection not in (
             "manual",
             "realtime_llm",
         ):
-            self._interrupt_by_audio_activity()
+            if self._should_ignore_interrupt_for_text(text, confidence):
+                # Log ignored interruptions separately from the ones that are
+                # allowed to preempt TTS.
+                logger.debug(
+                    "ignored interim transcript interruption",
+                    extra={
+                        "user_transcript": text,
+                        "confidence": confidence,
+                    },
+                )
+            else:
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False
@@ -1301,11 +1404,23 @@ class AgentActivity(RecognitionHooks):
         # we call _interrupt_by_audio_activity (idempotent) to pause the speech, if possible
         # which will also be immediately interrupted
 
+        text = ev.alternatives[0].text
+        confidence = ev.alternatives[0].confidence
+
         if self._audio_recognition and self._turn_detection not in (
             "manual",
             "realtime_llm",
         ):
-            self._interrupt_by_audio_activity()
+            if self._should_ignore_interrupt_for_text(text, confidence):
+                logger.debug(
+                    "ignored final transcript interruption",
+                    extra={
+                        "user_transcript": text,
+                        "confidence": confidence,
+                    },
+                )
+            else:
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False

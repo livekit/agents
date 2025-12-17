@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -90,6 +91,13 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    # When the agent is speaking, treat utterances that only contain these words
+    # as fillers and do not use them to interrupt TTS.
+    # The set is stored already lowercased for fast membership tests.
+    ignored_interrupt_words: frozenset[str] | None = None
+    # Optional confidence threshold used when deciding whether to ignore
+    # filler-only interruptions while the agent is speaking.
+    ignored_interrupt_min_confidence: float | None = None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -160,6 +168,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
+        ignored_interrupt_words: NotGivenOr[Sequence[str] | None] = NOT_GIVEN,
+        ignored_interrupt_min_confidence: float | None = 0.5,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -265,6 +275,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._video_sampler = video_sampler
 
+        # Build the ignored interruption words set from either the explicit
+        # parameter or the environment, normalizing to lowercase.
+        ignored_interrupt_words_set: frozenset[str] | None = None
+        env_ignored_raw = os.getenv("LIVEKIT_IGNORED_INTERRUPT_WORDS")
+        words_src: Sequence[str] | None
+
+        if is_given(ignored_interrupt_words):
+            words_src = cast(Sequence[str] | None, ignored_interrupt_words)
+        elif env_ignored_raw:
+            words_src = [w.strip() for w in env_ignored_raw.split(",") if w.strip()]
+        else:
+            words_src = None
+
+        if words_src:
+            ignored_interrupt_words_set = frozenset(w.lower() for w in words_src if w.strip())
+
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
@@ -286,6 +312,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             preemptive_generation=preemptive_generation,
             ivr_detection=ivr_detection,
+            ignored_interrupt_words=ignored_interrupt_words_set,
+            ignored_interrupt_min_confidence=ignored_interrupt_min_confidence,
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
