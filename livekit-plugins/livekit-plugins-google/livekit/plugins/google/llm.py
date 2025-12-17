@@ -46,6 +46,11 @@ from .utils import create_tools_config, to_fnc_ctx, to_response_format
 from .version import __version__
 
 
+def _is_gemini_3_model(model: str) -> bool:
+    """Check if model is Gemini 3 series"""
+    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+
+
 @dataclass
 class _LLMOptions:
     model: ChatModels | str
@@ -168,10 +173,13 @@ class LLM(llm.LLM):
         # Validate thinking_config
         if is_given(thinking_config):
             _thinking_budget = None
+            _thinking_level = None
             if isinstance(thinking_config, dict):
                 _thinking_budget = thinking_config.get("thinking_budget")
+                _thinking_level = thinking_config.get("thinking_level")
             elif isinstance(thinking_config, types.ThinkingConfig):
                 _thinking_budget = thinking_config.thinking_budget
+                _thinking_level = getattr(thinking_config, "thinking_level", None)
 
             if _thinking_budget is not None:
                 if not isinstance(_thinking_budget, int):
@@ -202,6 +210,8 @@ class LLM(llm.LLM):
             project=gcp_project,
             location=gcp_location,
         )
+        # Store thought_signatures for Gemini 3 multi-turn function calling
+        self._thought_signatures: dict[str, bytes] = {}
 
     @property
     def model(self) -> str:
@@ -295,9 +305,45 @@ class LLM(llm.LLM):
         if is_given(self._opts.seed):
             extra["seed"] = self._opts.seed
 
-        # Add thinking config if thinking_budget is provided
+        # Handle thinking_config based on model version
         if is_given(self._opts.thinking_config):
-            extra["thinking_config"] = self._opts.thinking_config
+            is_gemini_3 = _is_gemini_3_model(self._opts.model)
+            thinking_cfg = self._opts.thinking_config
+
+            # Extract both parameters
+            _budget = None
+            _level = None
+            if isinstance(thinking_cfg, dict):
+                _budget = thinking_cfg.get("thinking_budget")
+                _level = thinking_cfg.get("thinking_level")
+            elif isinstance(thinking_cfg, types.ThinkingConfig):
+                _budget = thinking_cfg.thinking_budget
+                _level = getattr(thinking_cfg, "thinking_level", None)
+
+            if is_gemini_3:
+                # Gemini 3: only support thinking_level
+                if _budget is not None and _level is None:
+                    logger.warning(
+                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
+                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
+                    )
+                if _level is not None:
+                    # Use thinking_level only (pass as dict since SDK may not have this field yet)
+                    extra["thinking_config"] = {"thinking_level": _level}
+                # If neither, let API use default
+            else:
+                # Gemini 2.5 and earlier: only support thinking_budget
+                if _level is not None and _budget is None:
+                    raise ValueError(
+                        f"Model {self._opts.model} does not support thinking_level. "
+                        "Please use thinking_budget (int) instead for Gemini 2.5 and earlier models."
+                    )
+                if _budget is not None:
+                    # Use thinking_budget only
+                    extra["thinking_config"] = types.ThinkingConfig(thinking_budget=_budget)
+                else:
+                    # Pass through original config if no specific handling needed
+                    extra["thinking_config"] = self._opts.thinking_config
 
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
@@ -344,7 +390,14 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
+            # Pass thought_signatures for Gemini 3 multi-turn function calling
+            thought_sigs = (
+                self._llm._thought_signatures if _is_gemini_3_model(self._model) else None
+            )
+            turns_dict, extra_data = self._chat_ctx.to_provider_format(
+                format="google", thought_signatures=thought_sigs
+            )
+
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             function_declarations = to_fnc_ctx(self._tools)
             tools_config = create_tools_config(
@@ -368,6 +421,7 @@ class LLMStream(llm.LLMStream):
                 http_options=http_options,
                 **self._extra_kwargs,
             )
+
             stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
@@ -476,17 +530,25 @@ class LLMStream(llm.LLMStream):
 
     def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call:
+            tool_call = llm.FunctionToolCall(
+                arguments=json.dumps(part.function_call.args),
+                name=part.function_call.name,
+                call_id=part.function_call.id or utils.shortuuid("function_call_"),
+            )
+
+            # Store thought_signature for Gemini 3 multi-turn function calling
+            if (
+                _is_gemini_3_model(self._model)
+                and hasattr(part, "thought_signature")
+                and part.thought_signature
+            ):
+                self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
+
             chat_chunk = llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
-                    tool_calls=[
-                        llm.FunctionToolCall(
-                            arguments=json.dumps(part.function_call.args),
-                            name=part.function_call.name,
-                            call_id=part.function_call.id or utils.shortuuid("function_call_"),
-                        )
-                    ],
+                    tool_calls=[tool_call],
                     content=part.text,
                 ),
             )
