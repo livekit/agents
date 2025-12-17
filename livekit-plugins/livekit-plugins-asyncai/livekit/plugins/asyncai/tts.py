@@ -132,7 +132,7 @@ class TTS(tts.TTS):
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
-    
+
     @property
     def model(self) -> str:
         return self._opts.model
@@ -295,9 +295,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if sent_tokenizer_stream.closed:
                         output_emitter.end_input()
                         break
-                elif data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    output_emitter.push(b64data)
+                elif (audio := data.get("audio")) is not None:
+                    if not audio:
+                        continue
+                    try:
+                        b64data = base64.b64decode(audio)
+                        output_emitter.push(b64data)
+                    except Exception:
+                        logger.warning("invalid audio payload %s", data)
+                        continue
                 else:
                     logger.warning("unexpected message %s", data)
 
