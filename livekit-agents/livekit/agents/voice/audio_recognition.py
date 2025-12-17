@@ -213,7 +213,7 @@ class AudioRecognition:
 
     def start_barge_in_monitoring(self) -> None:
         """Start user audio monitoring for barge-in detection when agent starts speaking."""
-        if not self._barge_in_enabled or not self._bargein_ch:
+        if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
         self._agent_speaking = True
         self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechStartedSentinel())
@@ -224,7 +224,7 @@ class AudioRecognition:
         user_speaking_span: trace.Span | None = None,
     ) -> None:
         """Start barge-in inference when agent is speaking and overlap speech starts."""
-        if not self._barge_in_enabled or not self._bargein_ch:
+        if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
         if self._agent_speaking:
             self._bargein_ch.send_nowait(
@@ -235,7 +235,7 @@ class AudioRecognition:
 
     def end_barge_in_inference(self, user_speaking_span: trace.Span | None = None) -> None:
         """End barge-in inference when agent is speaking and overlap speech ends."""
-        if not self._barge_in_enabled or not self._bargein_ch:
+        if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
 
         # Only set is_bargein=false if not already set (avoid overwriting true from bargein detection)
@@ -253,9 +253,11 @@ class AudioRecognition:
 
     def end_barge_in_monitoring(self, ignore_until: float) -> None:
         """End barge-in monitoring and ignore transcript until the given timestamp (when agent stops speaking or barge-in is detected)."""
-        if not self._barge_in_enabled:
+        if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
+
         self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechEndedSentinel())
+
         if self._agent_speaking:
             # no barge-in is detected, end the inference (idempotent)
             if not is_given(self._ignore_until):
@@ -965,6 +967,10 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+            if self._bargein_ch:
+                while not self._bargein_ch.empty():
+                    self._bargein_ch.recv_nowait()
+                self._bargein_ch.close()
 
     def _ensure_user_turn_span(self) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
