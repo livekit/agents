@@ -13,6 +13,8 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
 
+from .types import GrokVoices
+
 XAI_BASE_URL = "wss://api.x.ai/v1/realtime"
 
 XAI_DEFAULT_TURN_DETECTION = ServerVad(
@@ -29,7 +31,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[str | None] = "ara",
+        voice: NotGivenOr[GrokVoices | str | None] = "ara",
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = XAI_DEFAULT_TURN_DETECTION,
