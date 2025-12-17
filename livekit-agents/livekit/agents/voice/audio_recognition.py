@@ -255,6 +255,7 @@ class AudioRecognition:
         """End barge-in monitoring and ignore transcript until the given timestamp (when agent stops speaking or barge-in is detected)."""
         if not self._barge_in_enabled:
             return
+        self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechEndedSentinel())
         if self._agent_speaking:
             # no barge-in is detected, end the inference (idempotent)
             if not is_given(self._ignore_until):
