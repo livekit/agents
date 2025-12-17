@@ -57,7 +57,7 @@ async def entrypoint(job: JobContext):
     await asyncio.sleep(1)
 
     # --- Example 2: Using stream() (WebSocket streaming) ---
-    streamed_text = "This is an example using WebSocket streaming for lower latency real-time synthesis. This is an example using WebSocket streaming for lower latency real-time synthesis. This is an example using WebSocket streaming for lower latency real-time synthesis. This is an example using WebSocket streaming for lower latency real-time synthesis."
+    streamed_text = "This is an example using WebSocket streaming for lower latency real-time synthesis."
     logger.info(f'streaming (WebSocket): "{streamed_text}"')
 
     
