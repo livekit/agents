@@ -60,6 +60,7 @@ Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 TextNormalization = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
+
 @dataclass
 class _TTSOptions:
     model: str
