@@ -52,7 +52,7 @@ DEFAULT_WS_URL = "wss://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
 DEFAULT_TEMPERATURE = 1.1
 DEFAULT_SPEAKING_RATE = 1.0
-DEFAULT_BUFFER_CHAR_THRESHOLD = 250
+DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
@@ -470,13 +470,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     self._mark_started()
                     await ws.send_str(json.dumps(send_msg))
 
-            # Flush remaining text and close context to signal completion
-            flush_msg = {"flush_context": {}, "contextId": context_id}
-            await ws.send_str(json.dumps(flush_msg))
+                # Flush after each sentence to trigger audio generation
+                flush_msg = {"flush_context": {}, "contextId": context_id}
+                await ws.send_str(json.dumps(flush_msg))
 
-            # Close context - this triggers contextClosed which is our completion signal
-            close_msg = {"close_context": {}, "contextId": context_id}
-            await ws.send_str(json.dumps(close_msg))
+            # Signal that we've finished sending all input
+            # Don't send close_context here - that only happens on timeout or explicit close
             input_flushed.set()
 
         async def _recv_task(
