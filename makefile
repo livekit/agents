@@ -142,7 +142,6 @@ link-rtc: ## Link to local python-rtc (default FFI version)
 	cd $(PYTHON_RTC) && python rust-sdks/download_ffi.py --platform "$$PLATFORM_OS" --arch "$$PLATFORM_ARCH" --output livekit/rtc/resources; \
 	echo "$(CYAN)🔗 Adding local python-rtc to agents...$(RESET)"; \
 	cd $(AGENTS_PROJECT) && uv add --editable "../../python-sdks/livekit-rtc" && uv sync; \
-	rm -f $(AGENTS_PROJECT)/.env; \
 	echo "$(BOLD)$(GREEN)✅ Linked to local python-rtc (with default FFI version)$(RESET)"
 
 link-rtc-local: ## Build and link local rust SDK from source
@@ -163,7 +162,6 @@ link-rtc-local: ## Build and link local rust SDK from source
 	echo "$(CYAN)   LIVEKIT_LIB_PATH=$$RUST_LIB_PATH$(RESET)"; \
 	echo "$(CYAN)🔗 Adding local python-rtc to agents...$(RESET)"; \
 	cd $(AGENTS_PROJECT) && uv add --editable "../../python-sdks/livekit-rtc" && uv sync; \
-	echo "LIVEKIT_LIB_PATH=$$RUST_LIB_PATH" > $(AGENTS_PROJECT)/.env; \
 	echo "$(BOLD)$(GREEN)✅ Linked to local rust-sdk + python-rtc$(RESET)"; \
 	echo ""; \
 	echo "$(BOLD)$(YELLOW)📋 To use the local rust lib in your terminal, run:$(RESET)"; \
@@ -187,7 +185,6 @@ endif
 	fi; \
 	uv remove $(PACKAGE_NAME) 2>/dev/null || true; \
 	uv add "$(PACKAGE_NAME)==$(VERSION)" && uv sync; \
-	rm -f .env; \
 	echo "$(BOLD)$(GREEN)✅ Linked to livekit $(VERSION)$(RESET)"
 
 unlink-rtc: ## Unlink local and restore PyPI version
@@ -204,7 +201,6 @@ unlink-rtc: ## Unlink local and restore PyPI version
 	fi; \
 	uv remove --dev $(PACKAGE_NAME) 2>/dev/null || true; \
 	uv add --upgrade-package $(PACKAGE_NAME) $(PACKAGE_NAME) && uv sync; \
-	rm -f .env; \
 	echo "$(BOLD)$(GREEN)✅ Restored PyPI version$(RESET)"
 
 status: ## Show current linking status
@@ -228,9 +224,10 @@ status: ## Show current linking status
 		echo "   livekit: PyPI (v$$VERSION)"; \
 	fi; \
 	echo ""; \
-	if [ -f .env ] && grep -q "LIVEKIT_LIB_PATH" .env; then \
+	if [ -n "$$LIVEKIT_LIB_PATH" ]; then \
 		SUBMODULE_COMMIT=$$([ -n "$$RUST_SUBMODULE_DIR" ] && cd "$$RUST_SUBMODULE_DIR" 2>/dev/null && git rev-parse --short HEAD || echo 'unknown'); \
 		echo "   FFI: LOCAL BUILD (rust-sdks @ $$SUBMODULE_COMMIT)"; \
+		echo "   path: $$LIVEKIT_LIB_PATH"; \
 	elif [ "$$IS_LOCAL_EDITABLE" = "true" ]; then \
 		FFI_PATH="$$(cd $(PYTHON_RTC) 2>/dev/null && pwd || echo "")/livekit/rtc/resources"; \
 		if [ -d "$$FFI_PATH" ] && { [ -f "$$FFI_PATH/liblivekit_ffi.dylib" ] || [ -f "$$FFI_PATH/liblivekit_ffi.so" ] || [ -f "$$FFI_PATH/livekit_ffi.dll" ]; }; then \
@@ -344,14 +341,15 @@ doctor: ## Check development environment health
 		VERSION=$$(echo "$$SHOW_OUTPUT" | grep "^Version:" | awk '{print $$2}'); \
 		echo "   ✓ livekit: PyPI v$$VERSION"; \
 	fi; \
-	if [ -f .env ] && grep -q "LIVEKIT_LIB_PATH" .env; then \
-		LIVEKIT_LIB_PATH=$$(grep "LIVEKIT_LIB_PATH" .env | cut -d'=' -f2); \
-		if [ -d "$$LIVEKIT_LIB_PATH" ]; then \
-			echo "   ✓ FFI: Local build at $$LIVEKIT_LIB_PATH"; \
+	if [ -n "$$LIVEKIT_LIB_PATH" ]; then \
+		if [ -f "$$LIVEKIT_LIB_PATH" ]; then \
+			echo "   ✓ LIVEKIT_LIB_PATH: $$LIVEKIT_LIB_PATH"; \
 		else \
-			echo "   ✗ FFI: Local build path not found: $$LIVEKIT_LIB_PATH"; \
+			echo "   ✗ LIVEKIT_LIB_PATH set but file not found: $$LIVEKIT_LIB_PATH"; \
 			ISSUES=$$((ISSUES + 1)); \
 		fi; \
+	else \
+		echo "   ⚠ LIVEKIT_LIB_PATH: not set (using bundled FFI)"; \
 	fi; \
 	echo ""; \
 	if [ $$ISSUES -eq 0 ]; then \
