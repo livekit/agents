@@ -57,30 +57,14 @@ async def entrypoint(job: JobContext):
     await asyncio.sleep(1)
 
     # --- Example 2: Using stream() (WebSocket streaming) ---
-    streamed_text = (
-        "This is an example using WebSocket streaming for lower latency real-time synthesis."
-    )
+    streamed_text = "This is an example using WebSocket streaming for lower latency real-time synthesis. This is an example using WebSocket streaming for lower latency real-time synthesis. This is an example using WebSocket streaming for lower latency real-time synthesis. This is an example using WebSocket streaming for lower latency real-time synthesis."
     logger.info(f'streaming (WebSocket): "{streamed_text}"')
 
+    
     stream = tts.stream()
-
-    # Simulate streaming input (e.g., from an LLM) by pushing chunks
-    # The TTS internally buffers and tokenizes these into sentences
-    chunks = [
-        "This is an example ",
-        "using WebSocket streaming ",
-        "for lower latency ",
-        "real-time synthesis.",
-    ]
-
-    for chunk in chunks:
-        logger.debug(f"pushing chunk: {chunk!r}")
-        stream.push_text(chunk)
-        await asyncio.sleep(0.1)  # Simulate generation delay
-
-    stream.flush()
+    stream.push_text(streamed_text)
     stream.end_input()
-
+    
     # Consume streamed audio
     playout_q: asyncio.Queue[Optional[rtc.AudioFrame]] = asyncio.Queue()
 
@@ -112,9 +96,9 @@ async def entrypoint(job: JobContext):
     playout_task = asyncio.create_task(_playout_task())
 
     await asyncio.gather(synth_task, playout_task)
-    await stream.aclose()
 
     logger.info("WebSocket streaming complete")
+    await stream.aclose()
     # List available voices
     try:
         voices = await tts.list_voices()
