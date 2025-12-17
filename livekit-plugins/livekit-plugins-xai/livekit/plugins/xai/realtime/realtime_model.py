@@ -50,7 +50,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             base_url_val = XAI_BASE_URL
         super().__init__(
             base_url=base_url_val,
-            model="grok-1118",
+            model="grok-4-1-fast-non-reasoning",
             voice=voice,
             api_key=api_key,
             modalities=["audio"],
