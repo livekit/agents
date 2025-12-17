@@ -1144,7 +1144,10 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.start_barge_in_inference(speech_duration=0)
+                self._audio_recognition.start_barge_in_inference(
+                    speech_duration=0,
+                    user_speaking_span=self._session._user_speaking_span,
+                )
 
         # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
@@ -1157,9 +1160,10 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         if self.vad is None:
-            self._session._update_user_state("listening")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.end_barge_in_inference()
+                self._audio_recognition.end_barge_in_inference(self._session._user_speaking_span)
+
+            self._session._update_user_state("listening")
 
         if ev.user_transcription_enabled:
             self._session._user_input_transcribed(
@@ -1260,7 +1264,8 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("speaking")
         if self.bargein_enabled and self._audio_recognition:
             self._audio_recognition.start_barge_in_inference(
-                speech_duration=ev.speech_duration if ev else None
+                speech_duration=ev.speech_duration if ev else None,
+                user_speaking_span=self._session._user_speaking_span,
             )
         self._user_silence_event.clear()
 
@@ -1273,12 +1278,14 @@ class AgentActivity(RecognitionHooks):
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration
+
+        if self.bargein_enabled and self._audio_recognition:
+            self._audio_recognition.end_barge_in_inference(self._session._user_speaking_span)
+
         self._session._update_user_state(
             "listening",
             last_speaking_time=speech_end_time,
         )
-        if self.bargein_enabled and self._audio_recognition:
-            self._audio_recognition.end_barge_in_inference()
         self._user_silence_event.set()
 
         if (

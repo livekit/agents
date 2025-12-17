@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, Union, cast
 
 from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan
 
 from livekit import rtc
 
@@ -217,19 +218,37 @@ class AudioRecognition:
         self._agent_speaking = True
         self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechStartedSentinel())
 
-    def start_barge_in_inference(self, speech_duration: float | None = None) -> None:
+    def start_barge_in_inference(
+        self,
+        speech_duration: float | None = None,
+        user_speaking_span: trace.Span | None = None,
+    ) -> None:
         """Start barge-in inference when agent is speaking and overlap speech starts."""
         if not self._barge_in_enabled or not self._bargein_ch:
             return
         if self._agent_speaking:
             self._bargein_ch.send_nowait(
-                inference.BargeinStreamBase._OverlapSpeechStartedSentinel(speech_duration)
+                inference.BargeinStreamBase._OverlapSpeechStartedSentinel(
+                    speech_duration, user_speaking_span
+                )
             )
 
-    def end_barge_in_inference(self) -> None:
+    def end_barge_in_inference(self, user_speaking_span: trace.Span | None = None) -> None:
         """End barge-in inference when agent is speaking and overlap speech ends."""
         if not self._barge_in_enabled or not self._bargein_ch:
             return
+
+        # Only set is_bargein=false if not already set (avoid overwriting true from bargein detection)
+        if user_speaking_span and user_speaking_span.is_recording():
+            if isinstance(user_speaking_span, ReadableSpan):
+                if (
+                    user_speaking_span.attributes
+                    and user_speaking_span.attributes.get(trace_types.ATTR_IS_BARGEIN) is None
+                ):
+                    user_speaking_span.set_attribute(trace_types.ATTR_IS_BARGEIN, "false")
+            else:
+                user_speaking_span.set_attribute(trace_types.ATTR_IS_BARGEIN, "false")
+
         self._bargein_ch.send_nowait(inference.BargeinStreamBase._OverlapSpeechEndedSentinel())
 
     def end_barge_in_monitoring(self, ignore_until: float) -> None:
@@ -549,8 +568,8 @@ class AudioRecognition:
         # - allow RECOGNITION_USAGE to pass through immediately
         if ev.type != stt.SpeechEventType.RECOGNITION_USAGE and self._barge_in_enabled:
             if self._should_hold_stt_event(ev):
-                logger.debug(
-                    "holding event until ignore_until expires",
+                logger.trace(
+                    "holding STT event until ignore_until expires",
                     extra={
                         "event": ev.type,
                         "ignore_until": self._ignore_until

@@ -85,3 +85,6 @@ ATTR_EXCEPTION_MESSAGE = "exception.message"
 
 # Platform-specific attributes
 ATTR_LANGFUSE_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
+
+# Bargein attributes
+ATTR_IS_BARGEIN = "lk.is_bargein"
