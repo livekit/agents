@@ -31,7 +31,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[GrokVoices | str | None] = "ara",
+        voice: NotGivenOr[GrokVoices | str | None] = "Ara",
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = XAI_DEFAULT_TURN_DETECTION,

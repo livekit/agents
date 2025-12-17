@@ -1,7 +1,9 @@
 from typing import Literal
 
 GrokVoices = Literal[
-    "ara",
-    "eve",
-    "leo",
+    "Ara",
+    "Eve",
+    "Leo",
+    "Rex",
+    "Sal",
 ]
