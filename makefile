@@ -152,12 +152,22 @@ link-rtc-local: ## Build and link local rust SDK from source
 	cd $(RUST_SUBMODULE) && cargo build --release -p livekit-ffi; \
 	echo "$(CYAN)📝 Generating protobuf FFI protocol...$(RESET)"; \
 	cd $(PYTHON_RTC) && ./generate_proto.sh; \
-	RUST_LIB_PATH="$$(cd $(RUST_SUBMODULE) && pwd)/target/release"; \
+	RUST_LIB_DIR="$$(cd $(RUST_SUBMODULE) && pwd)/target/release"; \
+	if [ "$(OS)" = "darwin" ]; then \
+		RUST_LIB_PATH="$$RUST_LIB_DIR/liblivekit_ffi.dylib"; \
+	elif [ "$(OS)" = "linux" ]; then \
+		RUST_LIB_PATH="$$RUST_LIB_DIR/liblivekit_ffi.so"; \
+	else \
+		RUST_LIB_PATH="$$RUST_LIB_DIR/livekit_ffi.dll"; \
+	fi; \
 	echo "$(CYAN)   LIVEKIT_LIB_PATH=$$RUST_LIB_PATH$(RESET)"; \
 	echo "$(CYAN)🔗 Adding local python-rtc to agents...$(RESET)"; \
 	cd $(AGENTS_PROJECT) && uv add --editable "../../python-sdks/livekit-rtc" && uv sync; \
 	echo "LIVEKIT_LIB_PATH=$$RUST_LIB_PATH" > $(AGENTS_PROJECT)/.env; \
-	echo "$(BOLD)$(GREEN)✅ Linked to local rust-sdk + python-rtc$(RESET)"
+	echo "$(BOLD)$(GREEN)✅ Linked to local rust-sdk + python-rtc$(RESET)"; \
+	echo ""; \
+	echo "$(BOLD)$(YELLOW)📋 To use the local rust lib in your terminal, run:$(RESET)"; \
+	echo "$(BOLD)   export LIVEKIT_LIB_PATH=$$RUST_LIB_PATH$(RESET)"
 
 link-rtc-version: ## Install specific livekit version from PyPI (e.g., make link-rtc-version VERSION=0.18.0)
 ifndef VERSION
