@@ -59,11 +59,10 @@ async def entrypoint(job: JobContext):
     streamed_text = "This is an example using WebSocket streaming for lower latency real-time synthesis."
     logger.info(f'streaming (WebSocket): "{streamed_text}"')
 
-    
     stream = tts.stream()
     stream.push_text(streamed_text)
     stream.end_input()
-    
+
     # Consume streamed audio
     playout_q: asyncio.Queue[Optional[rtc.AudioFrame]] = asyncio.Queue()
 
