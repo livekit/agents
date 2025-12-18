@@ -163,8 +163,8 @@ class AgentActivity(RecognitionHooks):
         )
         self._turn_detection = self._validate_turn_detection(turn_detection)
 
-        # barge-in detection
-        self._bargein_detection_enabled: bool = self.bargein_detection is not None
+        self._bargein_detector: inference.BargeinDetector | None = self._resolve_bargein_detection()
+        self._bargein_detection_enabled: bool = self._bargein_detector is not None
 
         # this allows taking over audio interruption temporarily until barge-in is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -607,7 +607,7 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
-            bargein_detection=self.bargein_detection,
+            bargein_detection=self._bargein_detector,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
             turn_detection=self._turn_detection,
@@ -2804,8 +2804,7 @@ class AgentActivity(RecognitionHooks):
     def vad(self) -> vad.VAD | None:
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
-    @property
-    def bargein_detection(self) -> inference.BargeinDetector | None:
+    def _resolve_bargein_detection(self) -> inference.BargeinDetector | None:
         if not (
             self.stt is not None
             and self.stt.capabilities.aligned_transcript
