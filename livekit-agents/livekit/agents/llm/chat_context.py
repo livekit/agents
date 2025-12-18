@@ -183,6 +183,13 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Extra data for this function call. Can include provider-specific data
+    (e.g., extra["google"] for thought signatures)."""
+    group_id: str | None = None
+    """Optional group ID for parallel function calls. When multiple function calls
+    should be grouped together (e.g., parallel tool calls from a single API response),
+    set this to a shared value. If not set, falls back to using id for grouping."""
 
 
 class FunctionCallOutput(BaseModel):
