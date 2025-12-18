@@ -1194,11 +1194,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
+        print(f"SESSION: Emitting agent_state_changed: {old_state} -> {state}, closing={self._closing}")
         self._agent_state = state
         self.emit(
             "agent_state_changed",
             AgentStateChangedEvent(old_state=old_state, new_state=state),
         )
+        print(f"SESSION: Emitted agent_state_changed event: {old_state} -> {state}")
 
     def _update_user_state(
         self, state: UserState, *, last_speaking_time: float | None = None

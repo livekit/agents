@@ -1290,8 +1290,10 @@ class AgentActivity(RecognitionHooks):
         soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
         is_soft_ack = text_lower in soft_ack_set
         agent_state = self._session.agent_state
+        print(f"DEBUG on_final_transcript: text='{text_lower}', is_soft_ack={is_soft_ack}, agent_state={agent_state}")
         if is_soft_ack and agent_state in ("speaking", "thinking"):
             # Silently ignore soft-ack while agent is actively processing
+            print(f"DEBUG on_final_transcript: FILTERING OUT soft-ack during {agent_state}")
             return
 
         self._session._user_input_transcribed(

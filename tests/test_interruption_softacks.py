@@ -44,7 +44,10 @@ async def test_scenario_1_soft_acks_during_speaking() -> None:
     agent = SimpleAgent()
 
     agent_state_events = []
-    session.on("agent_state_changed", agent_state_events.append)
+    def log_state_event(ev):
+        print(f"TEST: Captured event: {ev.old_state} -> {ev.new_state}")
+        agent_state_events.append(ev)
+    session.on("agent_state_changed", log_state_event)
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
     # If soft-acks caused interruptions, we'd see multiple thinking phases
@@ -72,12 +75,14 @@ async def test_scenario_2_soft_acks_when_silent() -> None:
     speed = 5.0
     actions = FakeActions()
     
-    # Agent asks a question and waits
-    actions.add_llm("Are you ready to start?", input="system")
+    # User initiates conversation
+    actions.add_user_speech(0.5, 1.0, "Start")
+    # Agent asks a question
+    actions.add_llm("Are you ready to start?", input="Start")
     actions.add_tts(1.0)
     
-    # User responds with soft-ack while agent is silent
-    actions.add_user_speech(2.0, 2.1, "Yeah")
+    # User responds with soft-ack while agent is silent (after speaking finishes)
+    actions.add_user_speech(4.0, 4.1, "Yeah")
     # Agent should process this as valid input and respond
     actions.add_llm("Great, let's begin!", input="Yeah")
     actions.add_tts(1.0)
@@ -86,17 +91,19 @@ async def test_scenario_2_soft_acks_when_silent() -> None:
     agent = SimpleAgent()
 
     agent_state_events = []
-    session.on("agent_state_changed", agent_state_events.append)
+    def log_state_event(ev):
+        print(f"TEST: Captured event #{len(agent_state_events)}: {ev.old_state} -> {ev.new_state}")
+        agent_state_events.append(ev)
+    session.on("agent_state_changed", log_state_event)
 
-    # Use longer drain_delay for scenario 2 since the second response needs more time
-    await asyncio.wait_for(run_session(session, agent, drain_delay=3.0), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
-    # When agent is silent, soft-acks should NOT be ignored
-    # We should see the agent respond to the soft-ack
     transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
-    
-    # Should have at least 2 entries into thinking state (question + response to soft-ack)
+    print(f"\nTEST: Total events captured: {len(agent_state_events)}")
+    print(f"TEST: All transitions: {transitions}")
     thinking_entries = [t for t in transitions if t[1] == "thinking"]
+    print(f"TEST: Thinking transitions: {thinking_entries}")
+    print(f"TEST: Number of thinking phases: {len(thinking_entries)}")
     assert len(thinking_entries) >= 2, (
         f"Soft-ack while agent silent should trigger a response. "
         f"Expected at least 2 thinking phases, got {len(thinking_entries)}. "
