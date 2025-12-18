@@ -165,15 +165,6 @@ class AgentActivity(RecognitionHooks):
 
         # barge-in detection
         self._bargein_detection_enabled: bool = self.bargein_detection is not None
-        if (
-            self._turn_detection in ("manual", "realtime_llm")
-            or isinstance(self.llm, llm.RealtimeModel)
-        ) and self._bargein_detection_enabled:
-            logger.warning(
-                "turn_detection is set to 'manual' or 'realtime_llm', "
-                "but bargein_detection is provided, ignoring the bargein_detection setting"
-            )
-            self._bargein_detection_enabled = False
 
         # this allows taking over audio interruption temporarily until barge-in is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -2815,11 +2806,39 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def bargein_detection(self) -> inference.BargeinDetector | None:
-        return (
-            self._agent._bargein_detection
-            if is_given(self._agent._bargein_detection)
-            else self._session.bargein_detection
-        )
+        if not (
+            self.stt is not None
+            and self.stt.capabilities.aligned_transcript
+            and self.vad is not None
+            and self._turn_detection not in ("manual", "realtime_llm")
+            and not isinstance(self.llm, llm.RealtimeModel)
+        ):
+            if (
+                self._agent._bargein_detection is not False
+                or self._session.bargein_detection is not False
+            ):
+                logger.warning(
+                    "bargein_detection is provided, but it's not compatible with the current configuration and will be disabled"
+                )
+            return None
+
+        if is_given(self._agent._bargein_detection):
+            if self._agent._bargein_detection is False:
+                return None
+            elif self._agent._bargein_detection is True:
+                return inference.BargeinDetector()
+            else:
+                return cast(inference.BargeinDetector, self._agent._bargein_detection)
+
+        if is_given(self._session.bargein_detection):
+            if self._session.bargein_detection is False:
+                return None
+            elif self._session.bargein_detection is True:
+                return inference.BargeinDetector()
+            else:
+                return cast(inference.BargeinDetector, self._session.bargein_detection)
+
+        return inference.BargeinDetector()
 
     @property
     def stt(self) -> stt.STT | None:

@@ -433,7 +433,7 @@ class AudioRecognition:
 
     def update_bargein_detection(self, bargein_detection: inference.BargeinDetector | None) -> None:
         self._bargein_detection = bargein_detection
-        if bargein_detection:
+        if bargein_detection is not None:
             self._bargein_ch = aio.Chan[
                 Union[
                     rtc.AudioFrame,
