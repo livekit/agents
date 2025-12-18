@@ -286,6 +286,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
+        exclude_handoff: bool = False,
         tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -323,6 +324,9 @@ class ChatContext:
                 continue
 
             if exclude_empty_message and item.type == "message" and not item.content:
+                continue
+
+            if exclude_handoff and item.type == "agent_handoff":
                 continue
 
             if (
