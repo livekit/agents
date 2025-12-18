@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from typing import Optional
 
@@ -63,22 +62,7 @@ async def entrypoint(job: JobContext):
     logger.info(f'streaming (WebSocket): "{streamed_text}"')
 
     stream = tts.stream()
-
-    # Simulate streaming input (e.g., from an LLM) by pushing chunks
-    # The TTS internally buffers and tokenizes these into sentences
-    chunks = [
-        "This is an example ",
-        "using WebSocket streaming ",
-        "for lower latency ",
-        "real-time synthesis.",
-    ]
-
-    for chunk in chunks:
-        logger.debug(f"pushing chunk: {chunk!r}")
-        stream.push_text(chunk)
-        await asyncio.sleep(0.1)  # Simulate generation delay
-
-    stream.flush()
+    stream.push_text(streamed_text)
     stream.end_input()
 
     # Consume streamed audio
@@ -112,19 +96,9 @@ async def entrypoint(job: JobContext):
     playout_task = asyncio.create_task(_playout_task())
 
     await asyncio.gather(synth_task, playout_task)
-    await stream.aclose()
 
     logger.info("WebSocket streaming complete")
-    # List available voices
-    try:
-        voices = await tts.list_voices()
-        logger.info(f"[Inworld TTS] {len(voices)} voices available in this workspace")
-        if voices:
-            logger.info(
-                f"[Inworld TTS] Logging information for first voice: {json.dumps(voices[0], indent=2)}"
-            )
-    except Exception as e:
-        logger.error(f"[Inworld TTS] Failed to list voices: {e}")
+    await stream.aclose()
 
 
 if __name__ == "__main__":
