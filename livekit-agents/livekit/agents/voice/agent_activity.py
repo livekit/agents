@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import heapq
 import json
+import string
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -120,6 +121,11 @@ class AgentActivity(RecognitionHooks):
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
+        
+        # Track when agent finished speaking to filter soft-acks that arrive after transition
+        self._agent_speech_finished_at: float | None = None
+        self._soft_ack_grace_period = 5.0  # 5 second grace period to filter soft-acks after speaking (covers STT processing delays)
+        self._last_transcript_was_soft_ack = False  # Flag to prevent state transition on soft-ack
 
         # for false interruption handling
         self._paused_speech: SpeechHandle | None = None
@@ -1250,13 +1256,29 @@ class AgentActivity(RecognitionHooks):
 
         # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
         text_lower = ev.alternatives[0].text.strip().lower()
-        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-        is_soft_ack = text_lower in soft_ack_set
+        # Remove punctuation for soft-ack detection (including hyphens)
+        text_cleaned = text_lower.translate(str.maketrans('', '', string.punctuation))
+        soft_ack_set = {"okay", "yeah", "uhhuh", "ok", "hmm", "right"}
+        is_soft_ack = text_cleaned in soft_ack_set
+        # Use 'speaking' parameter to know if agent was speaking when user speech started
+        was_agent_speaking = speaking is True
         agent_state = self._session.agent_state
-        if is_soft_ack and agent_state in ("speaking", "thinking"):
-            # Silently ignore soft-ack while agent is actively processing
+        is_agent_thinking = agent_state == "thinking"
+        
+        # Also check if agent just finished speaking (within grace period)
+        just_finished_speaking = False
+        if self._agent_speech_finished_at is not None:
+            time_since_finished = time.time() - self._agent_speech_finished_at
+            if time_since_finished < self._soft_ack_grace_period:
+                just_finished_speaking = True
+        
+        if is_soft_ack and (was_agent_speaking or is_agent_thinking or just_finished_speaking):
+            # Silently ignore soft-ack while agent is actively processing or just finished
             return
 
+        # Reset the grace period timestamp since we're processing valid user input
+        self._agent_speech_finished_at = None
+        
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
@@ -1287,15 +1309,31 @@ class AgentActivity(RecognitionHooks):
 
         # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
         text_lower = ev.alternatives[0].text.strip().lower()
-        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-        is_soft_ack = text_lower in soft_ack_set
+        # Remove punctuation for soft-ack detection (including hyphens)
+        text_cleaned = text_lower.translate(str.maketrans('', '', string.punctuation))
+        soft_ack_set = {"okay", "yeah", "uhhuh", "ok", "hmm", "right"}
+        is_soft_ack = text_cleaned in soft_ack_set
         agent_state = self._session.agent_state
-        print(f"DEBUG on_final_transcript: text='{text_lower}', is_soft_ack={is_soft_ack}, agent_state={agent_state}")
-        if is_soft_ack and agent_state in ("speaking", "thinking"):
-            # Silently ignore soft-ack while agent is actively processing
-            print(f"DEBUG on_final_transcript: FILTERING OUT soft-ack during {agent_state}")
+        # Use 'speaking' parameter to know if agent was speaking when user speech started
+        # This is more reliable than current agent_state which may have changed by now
+        was_agent_speaking = speaking is True
+        is_agent_thinking = agent_state == "thinking"
+        
+        # Also check if agent just finished speaking (within grace period)
+        # to handle soft-acks that arrive after state transition
+        just_finished_speaking = False
+        if self._agent_speech_finished_at is not None:
+            time_since_finished = time.time() - self._agent_speech_finished_at
+            if time_since_finished < self._soft_ack_grace_period:
+                just_finished_speaking = True
+        
+        if is_soft_ack and (was_agent_speaking or is_agent_thinking or just_finished_speaking):
+            # Silently ignore soft-ack while agent is actively processing or just finished
             return
 
+        # Reset the grace period timestamp since we're processing valid user input
+        self._agent_speech_finished_at = None
+        
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
                 language=ev.alternatives[0].language,
@@ -1588,6 +1626,8 @@ class AgentActivity(RecognitionHooks):
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
+            if self._session.agent_state == "speaking":
+                self._agent_speech_finished_at = time.time()
             self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
@@ -1764,6 +1804,7 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
+            self._agent_speech_finished_at = time.time()
             self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
@@ -2036,6 +2077,7 @@ class AgentActivity(RecognitionHooks):
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
+                self._agent_speech_finished_at = time.time()
                 self._session._update_agent_state("listening")
 
             speech_handle._mark_generation_done()
@@ -2065,6 +2107,8 @@ class AgentActivity(RecognitionHooks):
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
         elif self._session.agent_state in ("speaking", "thinking"):
+            if self._session.agent_state == "speaking":
+                self._agent_speech_finished_at = time.time()
             self._session._update_agent_state("listening")
 
         await text_tee.aclose()
@@ -2446,6 +2490,8 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
+            if self._session.agent_state == "speaking":
+                self._agent_speech_finished_at = time.time()
             self._session._update_agent_state("listening")
             current_span.set_attribute(
                 trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
