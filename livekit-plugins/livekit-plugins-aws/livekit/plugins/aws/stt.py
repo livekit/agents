@@ -28,6 +28,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .utils import DEFAULT_REGION
@@ -101,7 +102,11 @@ class STT(stt.STT):
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
     ):
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript="word"
+            )
+        )
 
         if not _AWS_SDK_AVAILABLE:
             raise ImportError(
@@ -322,8 +327,20 @@ class SpeechStream(stt.SpeechStream):
 
         return stt.SpeechData(
             language=resp.language_code or self._opts.language,
-            start_time=resp.start_time if resp.start_time is not None else 0.0,
-            end_time=resp.end_time if resp.end_time is not None else 0.0,
+            start_time=(resp.start_time or 0.0) + self.start_time_offset,
+            end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
+            words=[
+                TimedString(
+                    text=item.content,
+                    start_time=item.start_time + self.start_time_offset,
+                    end_time=item.end_time + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=item.confidence or 0.0,
+                )
+                for item in resp.alternatives[0].items
+            ]
+            if resp.alternatives and resp.alternatives[0].items
+            else None,
         )

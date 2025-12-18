@@ -105,7 +105,9 @@ class STT(stt.STT):
         """  # noqa: E501
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
+            capabilities=stt.STTCapabilities(
+                streaming=use_realtime, interim_results=use_realtime, aligned_transcript=False
+            )
         )
         if detect_language:
             language = ""
