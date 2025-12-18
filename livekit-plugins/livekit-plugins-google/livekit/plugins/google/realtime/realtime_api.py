@@ -473,9 +473,12 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        chat_ctx = chat_ctx.copy(
+            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+        )
         async with self._session_lock:
             if not self._active_session:
-                self._chat_ctx = chat_ctx.copy()
+                self._chat_ctx = chat_ctx
                 return
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
@@ -490,9 +493,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(
-                exclude_function_call=True,
-            ).to_provider_format(format="google", inject_dummy_user_message=False)
+            turns_dict, _ = append_ctx.copy().to_provider_format(
+                format="google", inject_dummy_user_message=False
+            )
             # we are not generating, and do not need to inject
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(
@@ -507,7 +510,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
-        self._chat_ctx = chat_ctx.copy()
+        self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
@@ -686,6 +689,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._active_session = session
                         turns_dict, _ = self._chat_ctx.copy(
                             exclude_function_call=True,
+                            exclude_handoff=True,
+                            exclude_instructions=True,
+                            exclude_empty_message=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]

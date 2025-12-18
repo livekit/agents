@@ -1614,6 +1614,10 @@ class RealtimeSession(  # noqa: F811
         if self._chat_ctx_ready is None:
             self._chat_ctx_ready = asyncio.get_running_loop().create_future()
 
+        chat_ctx = chat_ctx.copy(
+            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+        )
+
         # Initial context setup (once)
         if not self._chat_ctx_ready.done():
             self._chat_ctx = chat_ctx.copy()
