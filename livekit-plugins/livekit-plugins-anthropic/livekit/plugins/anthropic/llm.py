@@ -87,7 +87,7 @@ class LLM(llm.LLM):
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
         thinking_enabled (bool, optional): If True, enables extended thinking. Defaults to disabled.
-        thinking_budget_tokens (int, optional): The token budget for extended thinking. Must be less than max_tokens. Defaults to 64 when thinking is enabled.
+        thinking_budget_tokens (int, optional): The token budget for extended thinking. Must be less than max_tokens. Defaults to 1024 when thinking is enabled.
         """  # noqa: E501
 
         super().__init__()
@@ -165,7 +165,7 @@ class LLM(llm.LLM):
             budget = (
                 self._opts.thinking_budget_tokens
                 if is_given(self._opts.thinking_budget_tokens)
-                else 64
+                else 1024
             )
             max_tokens = extra["max_tokens"]
             if budget >= max_tokens:
