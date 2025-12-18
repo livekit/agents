@@ -1,13 +1,10 @@
 """xAI plugin for LiveKit Agents"""
 
-from openai.types.beta.realtime.session import TurnDetection
-
 from . import realtime
 from .version import __version__
 
 __all__ = [
     "realtime",
-    "TurnDetection",
     "__version__",
 ]
 
