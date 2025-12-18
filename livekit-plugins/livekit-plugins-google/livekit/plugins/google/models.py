@@ -14,6 +14,13 @@ SpeechModels = Literal[
     "latest_long",
     "latest_short",
 ]
+# https://docs.cloud.google.com/speech-to-text/docs/transcription-model
+
+SpeechModelsV2 = Literal[
+    "telephony",
+    "chirp_2",
+    "chirp_3",
+]
 
 SpeechLanguages = Literal[
     "af-ZA",

@@ -27,8 +27,16 @@ from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
-from google.cloud.speech_v2 import SpeechAsyncClient
-from google.cloud.speech_v2.types import cloud_speech
+from google.cloud.speech_v1 import (
+    SpeechAsyncClient as SpeechAsyncClientV1,
+    types as cloud_speech_v1,
+)
+from google.cloud.speech_v1.types.resource import (
+    PhraseSet as PhraseSetV1,
+    SpeechAdaptation as SpeechAdaptationV1,
+)
+from google.cloud.speech_v2 import SpeechAsyncClient as SpeechAsyncClientV2
+from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 from livekit import rtc
 from livekit.agents import (
@@ -48,7 +56,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
-from .models import SpeechLanguages, SpeechModels
+from .models import SpeechLanguages, SpeechModels, SpeechModelsV2
 
 LgType = Union[SpeechLanguages, str]
 LanguageCode = Union[LgType, list[LgType]]
@@ -77,20 +85,41 @@ class STTOptions:
     min_confidence_threshold: float
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
 
-    def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
+    @property
+    def version(self) -> int:
+        if self.model in SpeechModelsV2:
+            return 2
+        return 1
+
+    def build_adaptation(
+        self,
+    ) -> cloud_speech_v2.SpeechAdaptation | SpeechAdaptationV1 | None:
         if is_given(self.keywords):
-            return cloud_speech.SpeechAdaptation(
-                phrase_sets=[
-                    cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
-                        inline_phrase_set=cloud_speech.PhraseSet(
-                            phrases=[
-                                cloud_speech.PhraseSet.Phrase(value=keyword, boost=boost)
-                                for keyword, boost in self.keywords
-                            ]
+            if self.version == 2:
+                return cloud_speech_v2.SpeechAdaptation(
+                    phrase_sets=[
+                        cloud_speech_v2.SpeechAdaptation.AdaptationPhraseSet(
+                            inline_phrase_set=cloud_speech_v2.PhraseSet(
+                                phrases=[
+                                    cloud_speech_v2.PhraseSet.Phrase(value=keyword, boost=boost)
+                                    for keyword, boost in self.keywords
+                                ]
+                            )
                         )
-                    )
-                ]
-            )
+                    ]
+                )
+            elif self.version == 1:
+                return SpeechAdaptationV1(
+                    phrase_sets=[
+                        PhraseSetV1(
+                            name="keywords",
+                            phrases=[
+                                PhraseSetV1.Phrase(value=phrase, boost=boost)
+                                for phrase, boost in self.keywords
+                            ],
+                        )
+                    ]
+                )
         return None
 
 
@@ -183,9 +212,13 @@ class STT(stt.STT):
             keywords=keywords,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
-        self._pool = utils.ConnectionPool[SpeechAsyncClient](
+        self._pool_v2 = utils.ConnectionPool[SpeechAsyncClientV2](
             max_session_duration=_max_session_duration,
-            connect_cb=self._create_client,
+            connect_cb=self._create_client_v2,
+        )
+        self._pool_v1 = utils.ConnectionPool[SpeechAsyncClientV1](
+            max_session_duration=_max_session_duration,
+            connect_cb=self._create_client_v1,
         )
 
     @property
@@ -196,28 +229,46 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Google Cloud Platform"
 
-    async def _create_client(self, timeout: float) -> SpeechAsyncClient:
+    async def _create_client_v2(self, timeout: float) -> SpeechAsyncClientV2:
         # Add support for passing a specific location that matches recognizer
         # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
         # TODO(long): how to set timeout?
         client_options = None
-        client: SpeechAsyncClient | None = None
+        client: SpeechAsyncClientV2 | None = None
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
         if is_given(self._credentials_info):
-            client = SpeechAsyncClient.from_service_account_info(
+            client = SpeechAsyncClientV2.from_service_account_info(
                 self._credentials_info, client_options=client_options
             )
         elif is_given(self._credentials_file):
-            client = SpeechAsyncClient.from_service_account_file(
+            client = SpeechAsyncClientV2.from_service_account_file(
                 self._credentials_file, client_options=client_options
             )
         else:
-            client = SpeechAsyncClient(client_options=client_options)
+            client = SpeechAsyncClientV2(client_options=client_options)
         assert client is not None
         return client
 
-    def _get_recognizer(self, client: SpeechAsyncClient) -> str:
+    async def _create_client_v1(self, timeout: float) -> SpeechAsyncClientV1:
+        client_options = None
+        client: SpeechAsyncClientV1 | None = None
+        if self._location != "global":
+            client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
+        if is_given(self._credentials_info):
+            client = SpeechAsyncClientV1.from_service_account_info(
+                self._credentials_info, client_options=client_options
+            )
+        elif is_given(self._credentials_file):
+            client = SpeechAsyncClientV1.from_service_account_file(
+                self._credentials_file, client_options=client_options
+            )
+        else:
+            client = SpeechAsyncClientV1(client_options=client_options)
+        assert client is not None
+        return client
+
+    def _get_recognizer(self, client: SpeechAsyncClientV2) -> str:
         # TODO(theomonnom): should we use recognizers?
         # recognizers may improve latency https://cloud.google.com/speech-to-text/v2/docs/recognizers#understand_recognizers
 
@@ -255,14 +306,14 @@ class STT(stt.STT):
         config = self._sanitize_options(language=language)
         frame = rtc.combine_audio_frames(buffer)
 
-        config = cloud_speech.RecognitionConfig(
-            explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
-                encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+        config = cloud_speech_v2.RecognitionConfig(
+            explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
+                encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=frame.sample_rate,
                 audio_channel_count=frame.num_channels,
             ),
             adaptation=config.build_adaptation(),
-            features=cloud_speech.RecognitionFeatures(
+            features=cloud_speech_v2.RecognitionFeatures(
                 enable_automatic_punctuation=config.punctuate,
                 enable_spoken_punctuation=config.spoken_punctuation,
                 enable_word_time_offsets=config.enable_word_time_offsets,
@@ -273,9 +324,9 @@ class STT(stt.STT):
         )
 
         try:
-            async with self._pool.connection(timeout=conn_options.timeout) as client:
+            async with self._pool_v2.connection(timeout=conn_options.timeout) as client:
                 raw = await client.recognize(
-                    cloud_speech.RecognizeRequest(
+                    cloud_speech_v2.RecognizeRequest(
                         recognizer=self._get_recognizer(client),
                         config=config,
                         content=frame.data.tobytes(),
@@ -300,7 +351,8 @@ class STT(stt.STT):
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
-            pool=self._pool,
+            pool_v1=self._pool_v1,
+            pool_v2=self._pool_v2,
             recognizer_cb=self._get_recognizer,
             config=config,
             conn_options=conn_options,
@@ -337,7 +389,8 @@ class STT(stt.STT):
         if is_given(location):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
-            self._pool.invalidate()
+            self._pool_v1.invalidate()
+            self._pool_v2.invalidate()
         if is_given(keywords):
             self._config.keywords = keywords
 
@@ -353,7 +406,8 @@ class STT(stt.STT):
             )
 
     async def aclose(self) -> None:
-        await self._pool.aclose()
+        await self._pool_v1.aclose()
+        await self._pool_v2.aclose()
         await super().aclose()
 
 
@@ -363,13 +417,15 @@ class SpeechStream(stt.SpeechStream):
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        pool: utils.ConnectionPool[SpeechAsyncClient],
-        recognizer_cb: Callable[[SpeechAsyncClient], str],
+        pool_v1: utils.ConnectionPool[SpeechAsyncClientV1],
+        pool_v2: utils.ConnectionPool[SpeechAsyncClientV2],
+        recognizer_cb: Callable[[SpeechAsyncClientV2], str],
         config: STTOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=config.sample_rate)
 
-        self._pool = pool
+        self._pool_v1 = pool_v1
+        self._pool_v2 = pool_v2
         self._recognizer_cb = recognizer_cb
         self._config = config
         self._reconnect_event = asyncio.Event()
@@ -409,45 +465,199 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        if self._config.version == 2:
+            await self._run_v2()
+        else:
+            await self._run_v1()
+
+    async def _handle_stream_tasks(
+        self,
+        process_stream_coro: asyncio.Task,
+        should_stop: asyncio.Event,
+    ) -> bool:
+        """Handle stream processing and reconnect tasks.
+
+        Returns True if should continue loop, False if should break.
+        """
+        wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                [process_stream_coro, wait_reconnect_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                if task != wait_reconnect_task:
+                    task.result()
+            if wait_reconnect_task not in done:
+                return False  # break the loop
+            self._reconnect_event.clear()
+            return True  # continue the loop
+        finally:
+            should_stop.set()
+            if not process_stream_coro.done() and not wait_reconnect_task.done():
+                try:
+                    await asyncio.wait_for(process_stream_coro, timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+            await utils.aio.gracefully_cancel(process_stream_coro, wait_reconnect_task)
+
+    def _handle_stream_error(self, e: Exception, audio_pushed: bool) -> None:
+        """Handle streaming errors with common logic."""
+        if isinstance(e, DeadlineExceeded):
+            raise APITimeoutError() from None
+        elif isinstance(e, GoogleAPICallError):
+            if e.code == 409:
+                if audio_pushed:
+                    logger.debug("stream timed out, restarting.")
+            else:
+                raise APIStatusError(f"{e.message} {e.details}", status_code=e.code or -1) from e
+        else:
+            raise APIConnectionError() from e
+
+    async def _run_v1(self) -> None:
         audio_pushed = False
 
-        # google requires a async generator when calling streaming_recognize
-        # this function basically convert the queue into a async generator
         async def input_generator(
-            client: SpeechAsyncClient, should_stop: asyncio.Event
-        ) -> AsyncGenerator[cloud_speech.StreamingRecognizeRequest, None]:
+            streaming_config: cloud_speech_v1.StreamingRecognitionConfig,
+            should_stop: asyncio.Event,
+        ) -> AsyncGenerator[cloud_speech_v1.StreamingRecognizeRequest, None]:
             nonlocal audio_pushed
             try:
-                # first request should contain the config
-                yield cloud_speech.StreamingRecognizeRequest(
-                    recognizer=self._recognizer_cb(client),
-                    streaming_config=self._streaming_config,
-                )
-
+                yield cloud_speech_v1.StreamingRecognizeRequest(streaming_config=streaming_config)
                 async for frame in self._input_ch:
-                    # when the stream is aborted due to reconnect, this input_generator
-                    # needs to stop consuming frames
-                    # when the generator stops, the previous gRPC stream will close
                     if should_stop.is_set():
                         return
-
                     if isinstance(frame, rtc.AudioFrame):
-                        yield cloud_speech.StreamingRecognizeRequest(audio=frame.data.tobytes())
+                        yield cloud_speech_v1.StreamingRecognizeRequest(
+                            audio_content=frame.data.tobytes()
+                        )
                         if not audio_pushed:
                             audio_pushed = True
-
             except Exception:
-                logger.exception("an error occurred while streaming input to google STT")
+                logger.exception("an error occurred while streaming input to google STT v1")
 
         async def process_stream(
-            client: SpeechAsyncClient,
-            stream: AsyncIterable[cloud_speech.StreamingRecognizeResponse],
+            client: SpeechAsyncClientV1,
+            stream: AsyncIterable[cloud_speech_v1.StreamingRecognizeResponse],
+        ) -> None:
+            has_started = False
+            async for resp in stream:
+                for result in resp.results:
+                    if not has_started:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                        )
+                        has_started = True
+
+                    speech_data = _streaming_recognize_response_to_speech_data_v1(
+                        result,
+                        min_confidence_threshold=self._config.min_confidence_threshold,
+                        start_time_offset=self.start_time_offset,
+                    )
+                    if speech_data is None:
+                        continue
+
+                    event_type = (
+                        stt.SpeechEventType.FINAL_TRANSCRIPT
+                        if result.is_final
+                        else stt.SpeechEventType.INTERIM_TRANSCRIPT
+                    )
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=event_type, alternatives=[speech_data])
+                    )
+
+                    if (
+                        result.is_final
+                        and time.time() - self._session_connected_at > _max_session_duration
+                    ):
+                        logger.debug("Google STT maximum connection time reached. Reconnecting...")
+                        self._pool_v1.remove(client)
+                        if has_started:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            )
+                        self._reconnect_event.set()
+                        return
+
+                if (
+                    resp.speech_event_type
+                    == cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.END_OF_SINGLE_UTTERANCE
+                ):
+                    if has_started:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        )
+                        has_started = False
+
+        while True:
+            audio_pushed = False
+            try:
+                async with self._pool_v1.connection(timeout=self._conn_options.timeout) as client:
+                    adaptation = self._config.build_adaptation()
+                    streaming_config = cloud_speech_v1.StreamingRecognitionConfig(
+                        config=cloud_speech_v1.RecognitionConfig(
+                            encoding=cloud_speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
+                            sample_rate_hertz=self._config.sample_rate,
+                            audio_channel_count=1,
+                            language_code=self._config.languages[0],
+                            alternative_language_codes=(
+                                self._config.languages[1:]
+                                if len(self._config.languages) > 1
+                                else []
+                            ),
+                            model=self._config.model,
+                            enable_automatic_punctuation=self._config.punctuate,
+                            enable_word_time_offsets=self._config.enable_word_time_offsets,
+                            adaptation=adaptation,
+                        ),
+                        interim_results=self._config.interim_results,
+                    )
+
+                    should_stop = asyncio.Event()
+                    stream = await client.streaming_recognize(
+                        requests=input_generator(streaming_config, should_stop)
+                    )
+                    self._session_connected_at = time.time()
+
+                    process_task = asyncio.create_task(process_stream(client, stream))
+                    if not await self._handle_stream_tasks(process_task, should_stop):
+                        break
+            except Exception as e:
+                self._handle_stream_error(e, audio_pushed)
+
+    async def _run_v2(self) -> None:
+        audio_pushed = False
+
+        async def input_generator(
+            client: SpeechAsyncClientV2,
+            streaming_config: cloud_speech_v2.StreamingRecognitionConfig,
+            should_stop: asyncio.Event,
+        ) -> AsyncGenerator[cloud_speech_v2.StreamingRecognizeRequest, None]:
+            nonlocal audio_pushed
+            try:
+                yield cloud_speech_v2.StreamingRecognizeRequest(
+                    recognizer=self._recognizer_cb(client),
+                    streaming_config=streaming_config,
+                )
+                async for frame in self._input_ch:
+                    if should_stop.is_set():
+                        return
+                    if isinstance(frame, rtc.AudioFrame):
+                        yield cloud_speech_v2.StreamingRecognizeRequest(audio=frame.data.tobytes())
+                        if not audio_pushed:
+                            audio_pushed = True
+            except Exception:
+                logger.exception("an error occurred while streaming input to google STT v2")
+
+        async def process_stream(
+            client: SpeechAsyncClientV2,
+            stream: AsyncIterable[cloud_speech_v2.StreamingRecognizeResponse],
         ) -> None:
             has_started = False
             async for resp in stream:
                 if (
                     resp.speech_event_type
-                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
+                    == cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                 ):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
@@ -456,7 +666,7 @@ class SpeechStream(stt.SpeechStream):
 
                 if (
                     resp.speech_event_type
-                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED  # noqa: E501
+                    == cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
                 ):
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(
@@ -467,36 +677,31 @@ class SpeechStream(stt.SpeechStream):
                     if speech_data is None:
                         continue
 
-                    if not result.is_final:
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                alternatives=[speech_data],
+                    event_type = (
+                        stt.SpeechEventType.FINAL_TRANSCRIPT
+                        if result.is_final
+                        else stt.SpeechEventType.INTERIM_TRANSCRIPT
+                    )
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=event_type, alternatives=[speech_data])
+                    )
+
+                    if (
+                        result.is_final
+                        and time.time() - self._session_connected_at > _max_session_duration
+                    ):
+                        logger.debug("Google STT maximum connection time reached. Reconnecting...")
+                        self._pool_v2.remove(client)
+                        if has_started:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                             )
-                        )
-                    else:
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                alternatives=[speech_data],
-                            )
-                        )
-                        if time.time() - self._session_connected_at > _max_session_duration:
-                            logger.debug(
-                                "Google STT maximum connection time reached. Reconnecting..."
-                            )
-                            self._pool.remove(client)
-                            if has_started:
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                )
-                                has_started = False
-                            self._reconnect_event.set()
-                            return
+                        self._reconnect_event.set()
+                        return
 
                 if (
                     resp.speech_event_type
-                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                    == cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
                 ):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
@@ -506,24 +711,25 @@ class SpeechStream(stt.SpeechStream):
         while True:
             audio_pushed = False
             try:
-                async with self._pool.connection(timeout=self._conn_options.timeout) as client:
-                    self._streaming_config = cloud_speech.StreamingRecognitionConfig(
-                        config=cloud_speech.RecognitionConfig(
-                            explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
-                                encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                async with self._pool_v2.connection(timeout=self._conn_options.timeout) as client:
+                    adaptation = self._config.build_adaptation()
+                    streaming_config = cloud_speech_v2.StreamingRecognitionConfig(
+                        config=cloud_speech_v2.RecognitionConfig(
+                            explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
+                                encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
                                 sample_rate_hertz=self._config.sample_rate,
                                 audio_channel_count=1,
                             ),
-                            adaptation=self._config.build_adaptation(),
+                            adaptation=adaptation,
                             language_codes=self._config.languages,
                             model=self._config.model,
-                            features=cloud_speech.RecognitionFeatures(
+                            features=cloud_speech_v2.RecognitionFeatures(
                                 enable_automatic_punctuation=self._config.punctuate,
                                 enable_word_time_offsets=self._config.enable_word_time_offsets,
                                 enable_spoken_punctuation=self._config.spoken_punctuation,
                             ),
                         ),
-                        streaming_features=cloud_speech.StreamingRecognitionFeatures(
+                        streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
                             interim_results=self._config.interim_results,
                             enable_voice_activity_events=self._config.enable_voice_activity_events,
                         ),
@@ -531,46 +737,15 @@ class SpeechStream(stt.SpeechStream):
 
                     should_stop = asyncio.Event()
                     stream = await client.streaming_recognize(
-                        requests=input_generator(client, should_stop),
+                        requests=input_generator(client, streaming_config, should_stop)
                     )
                     self._session_connected_at = time.time()
 
-                    process_stream_task = asyncio.create_task(process_stream(client, stream))
-                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                    try:
-                        done, _ = await asyncio.wait(
-                            [process_stream_task, wait_reconnect_task],
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in done:
-                            if task != wait_reconnect_task:
-                                task.result()
-                        if wait_reconnect_task not in done:
-                            break
-                        self._reconnect_event.clear()
-                    finally:
-                        should_stop.set()
-                        if not process_stream_task.done() and not wait_reconnect_task.done():
-                            # try to gracefully stop the process_stream_task
-                            try:
-                                await asyncio.wait_for(process_stream_task, timeout=1.0)
-                            except asyncio.TimeoutError:
-                                pass
-
-                        await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
-            except DeadlineExceeded:
-                raise APITimeoutError() from None
-            except GoogleAPICallError as e:
-                if e.code == 409:
-                    if audio_pushed:
-                        logger.debug("stream timed out, restarting.")
-                else:
-                    raise APIStatusError(
-                        f"{e.message} {e.details}", status_code=e.code or -1
-                    ) from e
+                    process_task = asyncio.create_task(process_stream(client, stream))
+                    if not await self._handle_stream_tasks(process_task, should_stop):
+                        break
             except Exception as e:
-                raise APIConnectionError() from e
+                self._handle_stream_error(e, audio_pushed)
 
 
 def _duration_to_seconds(duration: Duration | timedelta) -> float:
@@ -582,7 +757,7 @@ def _duration_to_seconds(duration: Duration | timedelta) -> float:
 
 
 def _recognize_response_to_speech_event(
-    resp: cloud_speech.RecognizeResponse,
+    resp: cloud_speech_v2.RecognizeResponse,
 ) -> stt.SpeechEvent:
     text = ""
     confidence = 0.0
@@ -628,7 +803,7 @@ def _recognize_response_to_speech_event(
 
 
 def _streaming_recognize_response_to_speech_data(
-    resp: cloud_speech.StreamingRecognizeResponse,
+    resp: cloud_speech_v2.StreamingRecognizeResponse,
     *,
     min_confidence_threshold: float,
     start_time_offset: float,
@@ -636,7 +811,7 @@ def _streaming_recognize_response_to_speech_data(
     text = ""
     confidence = 0.0
     final_result = None
-    words: list[cloud_speech.WordInfo] = []
+    words: list[cloud_speech_v2.WordInfo] = []
     for result in resp.results:
         if len(result.alternatives) == 0:
             continue
@@ -682,3 +857,52 @@ def _streaming_recognize_response_to_speech_data(
     )
 
     return data
+
+
+def _streaming_recognize_response_to_speech_data_v1(
+    result: cloud_speech_v1.StreamingRecognitionResult,
+    *,
+    min_confidence_threshold: float,
+    start_time_offset: float,
+) -> stt.SpeechData | None:
+    if len(result.alternatives) == 0:
+        return None
+
+    alt = result.alternatives[0]
+    text = alt.transcript
+    confidence = alt.confidence
+    words = list(alt.words)
+
+    if not result.is_final and confidence < min_confidence_threshold:
+        return None
+
+    if text == "":
+        return None
+
+    # V1 API may not always return word-level timing
+    if words:
+        start_time = _duration_to_seconds(words[0].start_time) + start_time_offset
+        end_time = _duration_to_seconds(words[-1].end_time) + start_time_offset
+        timed_words = [
+            TimedString(
+                text=word.word,
+                start_time=_duration_to_seconds(word.start_time) + start_time_offset,
+                end_time=_duration_to_seconds(word.end_time) + start_time_offset,
+                start_time_offset=start_time_offset,
+                confidence=word.confidence if hasattr(word, "confidence") else confidence,
+            )
+            for word in words
+        ]
+    else:
+        start_time = start_time_offset
+        end_time = start_time_offset
+        timed_words = []
+
+    return stt.SpeechData(
+        language=result.language_code or "",
+        start_time=start_time,
+        end_time=end_time,
+        confidence=confidence,
+        text=text,
+        words=timed_words,
+    )
