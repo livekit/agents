@@ -50,6 +50,7 @@ def _is_gemini_3_model(model: str) -> bool:
     """Check if model is Gemini 3 series"""
     return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
 
+
 def _is_gemini_3_flash_model(model: str) -> bool:
     """Check if model is Gemini 3 Flash"""
     return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
