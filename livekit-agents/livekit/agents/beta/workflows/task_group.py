@@ -41,12 +41,14 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         self,
         *,
         summarize_chat_ctx: bool = True,
+        return_exceptions: bool = False,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
     ):
         """Creates a TaskGroup instance."""
         super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
 
         self._summarize_chat_ctx = summarize_chat_ctx
+        self._return_exceptions = return_exceptions
         self._visited_tasks = set[str]()
         self._registered_factories: OrderedDict[str, _FactoryInfo] = OrderedDict()
 
@@ -84,8 +86,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     task_stack.insert(0, task_id)
                 continue
             except Exception as e:
-                self.complete(e)
-                break
+                if self._return_exceptions:
+                    task_results[task_id] = e
+                    continue
+                else:
+                    self.complete(e)
+                    return
 
         try:
             if self._summarize_chat_ctx:
