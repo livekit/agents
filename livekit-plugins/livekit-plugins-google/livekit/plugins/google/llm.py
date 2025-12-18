@@ -86,7 +86,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: ChatModels | str = "gemini-2.0-flash-001",
+        model: ChatModels | str = "gemini-3-flash-preview",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
@@ -428,6 +428,7 @@ class LLMStream(llm.LLMStream):
                 config=config,
             )
 
+            chunks_yielded = False
             async for response in stream:
                 if response.prompt_feedback:
                     raise APIStatusError(
@@ -469,7 +470,6 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
-                chunks_yielded = False
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
                     if chat_chunk is not None:

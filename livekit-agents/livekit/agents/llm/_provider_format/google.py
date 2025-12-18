@@ -56,7 +56,7 @@ def to_chat_ctx(
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content))
         elif msg.type == "function_call":
-            fc_part = {
+            fc_part: dict[str, Any] = {
                 "function_call": {
                     "id": msg.call_id,
                     "name": msg.name,
