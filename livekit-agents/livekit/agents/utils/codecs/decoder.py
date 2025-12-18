@@ -256,6 +256,9 @@ class AudioStreamDecoder:
                     data += part
                     remaining -= len(part)
                 if chunk_id == b"fmt ":
+                    if len(data) < 16:
+                        raise ValueError("Invalid WAV file: fmt chunk too small")
+
                     audio_format, wave_channels, wave_rate, _, _, bits_per_sample = struct.unpack(
                         "<HHIIHH", data[:16]
                     )
