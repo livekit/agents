@@ -344,6 +344,10 @@ class AudioRecognition:
             return
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            import logging
+            import string
+            logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+            
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
@@ -356,6 +360,8 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            logger_debug.debug(f"[AUDIO_RECOGNITION_FINAL] Raw transcript received: '{transcript}'")
+            
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking if self._vad else None,
@@ -363,17 +369,23 @@ class AudioRecognition:
             
             # Filter out soft-acks (brief affirmations) from being accumulated in the transcript
             # These should not trigger new agent responses when the agent is actively speaking/thinking
+            # Remove punctuation before comparison to handle cases like "Yeah." or "okay?"
             transcript_lower = transcript.strip().lower()
+            transcript_clean = transcript_lower.translate(str.maketrans('', '', string.punctuation))
             soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-            if transcript_lower in soft_ack_set:
+            is_soft_ack = transcript_clean in soft_ack_set
+            if is_soft_ack:
+                logger_debug.debug(f"[AUDIO_RECOGNITION_FINAL] Soft-ack detected: '{transcript_clean}' (raw: '{transcript_lower}'), agent_state={self._session.agent_state}")
                 if self._session.agent_state in ("speaking", "thinking"):
                     # Don't append the soft-ack to the transcript when agent is actively processing
+                    logger_debug.warning(f"[AUDIO_RECOGNITION_FINAL] FILTERING soft-ack '{transcript_clean}' because agent in {self._session.agent_state} state")
                     return
             
             extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
             logger.debug("received user transcript", extra=extra)
+            logger_debug.debug(f"[AUDIO_RECOGNITION_FINAL] Appending transcript to _audio_transcript")
 
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
@@ -451,6 +463,9 @@ class AudioRecognition:
                 )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+            import logging
+            logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+            logger_debug.debug(f"[AUDIO_RECOGNITION] Setting interim transcript to: '{ev.alternatives[0].text}'")
             self._hooks.on_interim_transcript(ev, speaking=self._speaking if self._vad else None)
             self._audio_interim_transcript = ev.alternatives[0].text
 

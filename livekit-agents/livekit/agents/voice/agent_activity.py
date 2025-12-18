@@ -131,6 +131,9 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
+        
+        # for soft-ack grace period - wait for STT before interrupting on VAD
+        self._vad_grace_period_task: asyncio.Task[None] | None = None
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1173,11 +1176,15 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(self) -> None:
+        import logging
+        logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+        
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
+            logger_debug.debug(f"[_INTERRUPT_BY_ACTIVITY] Skipping - realtime model turn detection enabled")
             return
 
         if (
@@ -1189,6 +1196,7 @@ class AgentActivity(RecognitionHooks):
 
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
+                logger_debug.debug(f"[_INTERRUPT_BY_ACTIVITY] Skipping - word count {len(split_words(text, split_character=True))} < {opt.min_interruption_words}")
                 return
 
         if self._rt_session is not None:
@@ -1199,6 +1207,7 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
+            logger_debug.warning(f"[_INTERRUPT_BY_ACTIVITY] Interrupting current speech, agent_state={self._session.agent_state}")
             self._paused_speech = self._current_speech
 
             # reset the false interruption timer
@@ -1207,13 +1216,17 @@ class AgentActivity(RecognitionHooks):
                 self._false_interruption_timer = None
 
             if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
+                logger_debug.warning(f"[_INTERRUPT_BY_ACTIVITY] Pausing audio and transitioning to listening state")
                 self._session.output.audio.pause()
                 self._session._update_agent_state("listening")
             else:
+                logger_debug.warning(f"[_INTERRUPT_BY_ACTIVITY] Interrupting current speech (no pause)")
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
 
                 self._current_speech.interrupt()
+        else:
+            logger_debug.debug(f"[_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech={self._current_speech is not None}")
 
     # region recognition hooks
 
@@ -1242,38 +1255,97 @@ class AgentActivity(RecognitionHooks):
             self._start_false_interruption_timer(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+        import logging
+        logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+        
         if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
         if ev.speech_duration >= self._session.options.min_interruption_duration:
+            # SOFT-ACK GUARD: If agent is actively speaking, check if this looks like a soft-ack
+            # This prevents VAD from triggering state transition to "listening" before STT confirms
+            import string
+            agent_state = self._session.agent_state
+            current_text = ""
+            if self._audio_recognition is not None:
+                current_text = self._audio_recognition.current_transcript.strip().lower()
+            
+            # Remove punctuation for soft-ack comparison
+            current_text_clean = current_text.translate(str.maketrans('', '', string.punctuation))
+            logger_debug.info(f"[VAD_DONE] speech_duration={ev.speech_duration:.3f}s, agent_state={agent_state}, current_text='{current_text}' (clean: '{current_text_clean}')")
+            
+            if agent_state in ("speaking", "thinking") and self._audio_recognition is not None:
+                soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
+                
+                # If we have confirmed text that matches a soft-ack, block the interrupt
+                if current_text_clean and current_text_clean in soft_ack_set:
+                    logger_debug.warning(f"[SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack '{current_text_clean}' while agent_state={agent_state}")
+                    # Skip interrupt to preserve speaking state, let STT final transcript handler decide
+                    return
+                
+                # If current_text is empty (STT hasn't produced transcript yet), use a grace period
+                # Wait a short time for STT to produce a transcript, then check again before interrupting
+                if not current_text_clean:
+                    logger_debug.info(f"[VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state={agent_state})")
+                    
+                    # Cancel any existing grace period task
+                    if self._vad_grace_period_task and not self._vad_grace_period_task.done():
+                        self._vad_grace_period_task.cancel()
+                    
+                    async def _check_for_soft_ack_after_delay():
+                        try:
+                            await asyncio.sleep(0.35)  # Wait 350ms for STT to produce transcript
+                            
+                            # Re-check agent state and transcript after grace period
+                            agent_state_after = self._session.agent_state
+                            current_text_after = ""
+                            if self._audio_recognition is not None:
+                                current_text_after = self._audio_recognition.current_transcript.strip().lower()
+                            current_text_clean_after = current_text_after.translate(str.maketrans('', '', string.punctuation))
+                            
+                            logger_debug.info(f"[VAD_GRACE_PERIOD_END] After 350ms: agent_state={agent_state_after}, current_text='{current_text_after}' (clean: '{current_text_clean_after}')")
+                            
+                            # Check if it's a soft-ack - if so, don't interrupt
+                            if agent_state_after in ("speaking", "thinking"):
+                                if current_text_clean_after and current_text_clean_after in soft_ack_set:
+                                    logger_debug.warning(f"[SOFT-ACK_GUARD_DELAYED] BLOCKING interrupt for soft-ack '{current_text_clean_after}' (detected after grace period)")
+                                    return
+                                
+                                # If still speaking but not a soft-ack, interrupt
+                                logger_debug.info(f"[VAD_INTERRUPT_DELAYED] After grace period, interrupting: agent_state={agent_state_after}, text='{current_text_clean_after}'")
+                                self._interrupt_by_audio_activity()
+                        except asyncio.CancelledError:
+                            logger_debug.debug(f"[VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled")
+                            pass
+                    
+                    self._vad_grace_period_task = asyncio.create_task(_check_for_soft_ack_after_delay())
+                    return
+            
+            logger_debug.info(f"[VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state={agent_state}")
             self._interrupt_by_audio_activity()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
+        import logging
+        logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+        
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
         # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
+        import string
         text_lower = ev.alternatives[0].text.strip().lower()
-        # Remove punctuation for soft-ack detection (including hyphens)
-        text_cleaned = text_lower.translate(str.maketrans('', '', string.punctuation))
-        soft_ack_set = {"okay", "yeah", "uhhuh", "ok", "hmm", "right"}
-        is_soft_ack = text_cleaned in soft_ack_set
-        # Use 'speaking' parameter to know if agent was speaking when user speech started
-        was_agent_speaking = speaking is True
+        # Remove punctuation for soft-ack comparison
+        text_clean = text_lower.translate(str.maketrans('', '', string.punctuation))
+        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
+        is_soft_ack = text_clean in soft_ack_set
         agent_state = self._session.agent_state
-        is_agent_thinking = agent_state == "thinking"
+        logger_debug.info(f"[INTERIM_TRANSCRIPT] text='{text_lower}' (clean: '{text_clean}'), is_soft_ack={is_soft_ack}, agent_state={agent_state}")
         
-        # Also check if agent just finished speaking (within grace period)
-        just_finished_speaking = False
-        if self._agent_speech_finished_at is not None:
-            time_since_finished = time.time() - self._agent_speech_finished_at
-            if time_since_finished < self._soft_ack_grace_period:
-                just_finished_speaking = True
-        
-        if is_soft_ack and (was_agent_speaking or is_agent_thinking or just_finished_speaking):
-            # Silently ignore soft-ack while agent is actively processing or just finished
+        if is_soft_ack and agent_state in ("speaking", "thinking"):
+            # Silently ignore soft-ack while agent is actively processing
+            logger_debug.warning(f"[INTERIM_FILTER] Filtering soft-ack '{text_clean}' (agent in {agent_state})")
             return
 
         # Reset the grace period timestamp since we're processing valid user input
@@ -1303,33 +1375,30 @@ class AgentActivity(RecognitionHooks):
                 self._start_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
+        import logging
+        logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+        
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
         # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
+        import string
         text_lower = ev.alternatives[0].text.strip().lower()
-        # Remove punctuation for soft-ack detection (including hyphens)
-        text_cleaned = text_lower.translate(str.maketrans('', '', string.punctuation))
-        soft_ack_set = {"okay", "yeah", "uhhuh", "ok", "hmm", "right"}
-        is_soft_ack = text_cleaned in soft_ack_set
+        # Remove punctuation for soft-ack comparison
+        text_clean = text_lower.translate(str.maketrans('', '', string.punctuation))
+        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
+        is_soft_ack = text_clean in soft_ack_set
         agent_state = self._session.agent_state
-        # Use 'speaking' parameter to know if agent was speaking when user speech started
-        # This is more reliable than current agent_state which may have changed by now
-        was_agent_speaking = speaking is True
-        is_agent_thinking = agent_state == "thinking"
+        logger_debug.info(f"[FINAL_TRANSCRIPT] text='{text_lower}' (clean: '{text_clean}'), is_soft_ack={is_soft_ack}, agent_state={agent_state}, speaking={speaking}")
         
-        # Also check if agent just finished speaking (within grace period)
-        # to handle soft-acks that arrive after state transition
-        just_finished_speaking = False
-        if self._agent_speech_finished_at is not None:
-            time_since_finished = time.time() - self._agent_speech_finished_at
-            if time_since_finished < self._soft_ack_grace_period:
-                just_finished_speaking = True
-        
-        if is_soft_ack and (was_agent_speaking or is_agent_thinking or just_finished_speaking):
-            # Silently ignore soft-ack while agent is actively processing or just finished
+        if is_soft_ack and agent_state in ("speaking", "thinking"):
+            # Silently ignore soft-ack while agent is actively processing
+            logger_debug.warning(f"[FINAL_FILTER] Filtering soft-ack '{text_clean}' (agent in {agent_state})")
             return
+        
+        if is_soft_ack:
+            logger_debug.info(f"[FINAL_PROCESS] Processing soft-ack '{text_clean}' because agent_state={agent_state}")
 
         # Reset the grace period timestamp since we're processing valid user input
         self._agent_speech_finished_at = None

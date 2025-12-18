@@ -1163,6 +1163,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_agent_state(
         self, state: AgentState, *, otel_context: otel_context.Context | None = None
     ) -> None:
+        import logging
+        logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+        logger_debug.warning(f"[AGENT_STATE_CHANGE] {self._agent_state} -> {state}")
+        
         if self._agent_state == state:
             return
 
