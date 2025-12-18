@@ -1172,7 +1172,6 @@ class RealtimeSessionBeta(
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
-                exclude_function_call=True,
                 exclude_handoff=True,
             )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:

@@ -493,7 +493,7 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy().to_provider_format(
+            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
                 format="google", inject_dummy_user_message=False
             )
             # we are not generating, and do not need to inject
