@@ -252,6 +252,7 @@ class AudioRecognition:
 
     def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
         if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
+            self._agent_speaking = False
             return
 
         self._bargein_ch.send_nowait(BargeinStreamBase._AgentSpeechEndedSentinel())

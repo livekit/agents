@@ -732,7 +732,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
         closing_ws = False
         overlap_speech_started: bool = False
         cache: _BoundedCache[int, BargeinCacheEntry] = _BoundedCache(max_len=10)
-        self._user_speech_span: trace.Span | None = None
+        self._user_speech_span = None
 
         @log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
