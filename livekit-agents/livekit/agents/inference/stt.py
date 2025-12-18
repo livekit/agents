@@ -579,7 +579,6 @@ class SpeechStream(stt.SpeechStream):
 
         speech_data = stt.SpeechData(
             language=language,
-            # TODO: update gateway to return wall times since we do retry/reconnects internally @chenghao-mou
             start_time=self.start_time_offset + data.get("start", 0),
             end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
