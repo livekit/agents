@@ -72,6 +72,7 @@ class STTCapabilities:
     streaming: bool
     interim_results: bool
     diarization: bool = False
+    flush: bool = False
 
 
 class STTError(BaseModel):

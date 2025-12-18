@@ -186,7 +186,9 @@ class STT(stt.STT):
         flush_signal: bool | None = None,
         input_audio_codec: str | None = None,
     ) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True, flush=True)
+        )
 
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:

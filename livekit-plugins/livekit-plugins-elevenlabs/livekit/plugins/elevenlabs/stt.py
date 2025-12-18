@@ -76,7 +76,7 @@ class STT(stt.STT):
         tag_audio_events: bool = True,
         use_realtime: bool = False,
         sample_rate: STTRealtimeSampleRates = 16000,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -90,11 +90,16 @@ class STT(stt.STT):
                 Only supported for Scribe v1 model. Default is True.
             use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is False.
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
-            server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
+            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for Scribe v2 realtime model.
+                If None, use the "manual" commit strategy.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
         """  # noqa: E501
 
-        super().__init__(capabilities=STTCapabilities(streaming=use_realtime, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=use_realtime, interim_results=True, flush=use_realtime
+            )
+        )
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
@@ -217,7 +222,7 @@ class STT(stt.STT):
         self,
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
@@ -267,7 +272,7 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
@@ -300,10 +305,12 @@ class SpeechStream(stt.SpeechStream):
             async for data in self._input_ch:
                 # Write audio bytes to buffer and get 50ms frames
                 frames: list[rtc.AudioFrame] = []
+                commit = False
                 if isinstance(data, rtc.AudioFrame):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
+                    commit = True
 
                 for frame in frames:
                     audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
@@ -313,6 +320,17 @@ class SpeechStream(stt.SpeechStream):
                                 "message_type": "input_audio_chunk",
                                 "audio_base_64": audio_b64,
                                 "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                            }
+                        )
+                    )
+                if commit:
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": True,
                                 "sample_rate": self._opts.sample_rate,
                             }
                         )

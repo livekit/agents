@@ -241,7 +241,7 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, diarization=enable_diarization
+                streaming=True, interim_results=True, diarization=enable_diarization, flush=True
             ),
         )
 
@@ -495,6 +495,9 @@ class SpeechStream(stt.RecognizeStream):
             for frame in frames:
                 self._speech_duration += frame.duration
                 await self._client.send_audio(frame.data.tobytes())
+
+            if isinstance(data, self._FlushSentinel):
+                await self._client.force_end_of_utterance()
 
         # TODO - handle the closing of the stream?
 

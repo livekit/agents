@@ -273,7 +273,9 @@ class STT(stt.STT):
             ValueError: If no API key is provided or found in environment variables.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=interim_results, flush=True
+            )
         )
         self._base_url = base_url
 
@@ -963,10 +965,10 @@ class SpeechStream(stt.SpeechStream):
                 message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                 await self._ws.send_str(message)
 
-                if has_ended:
-                    self._audio_duration_collector.flush()
-                    await self._ws.send_str(json.dumps({"type": "stop_recording"}))
-                    has_ended = False
+            if has_ended:
+                self._audio_duration_collector.flush()
+                await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+                has_ended = False
 
         # Tell Gladia we're done sending audio when the stream ends
         if self._ws:
