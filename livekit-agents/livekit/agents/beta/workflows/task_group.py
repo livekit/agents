@@ -44,7 +44,13 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         return_exceptions: bool = False,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
     ):
-        """Creates a TaskGroup instance."""
+        """TaskGroup orchestrates a sequence of multiple AgentTasks. It also allows for users to regress to previous tasks if requested.
+
+        Args:
+            summarize_chat_ctx (bool): Whether or not to summarize the interactions within the TaskGroup into one message and merge the context. Defaults to True.
+            return_exceptions (bool): Whether or not to directly propagate an error. When set to True, the exception is added to the results dictionary and the sequence continues. Defaults to False.
+
+        """
         super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
 
         self._summarize_chat_ctx = summarize_chat_ctx
