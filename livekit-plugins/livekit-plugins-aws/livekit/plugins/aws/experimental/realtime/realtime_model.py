@@ -1664,7 +1664,9 @@ class RealtimeSession(  # noqa: F811
 
                         text = item.text_content
 
-                        async def _send_user_text(text: str = text, fut: asyncio.Future = fut) -> None:
+                        async def _send_user_text(
+                            text: str = text, fut: asyncio.Future = fut
+                        ) -> None:
                             try:
                                 # Wait for session to be fully initialized before sending
                                 await self._is_sess_active.wait()
