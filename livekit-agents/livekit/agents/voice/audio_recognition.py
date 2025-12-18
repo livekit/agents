@@ -105,7 +105,7 @@ class AudioRecognition:
         hooks: RecognitionHooks,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
-        bargein_detector: inference.BargeinDetector | None,
+        bargein_detection: inference.BargeinDetector | None,
         turn_detection: TurnDetectionMode | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
@@ -149,7 +149,7 @@ class AudioRecognition:
 
         # used for barge-in detection
         self._bargein_atask: asyncio.Task[None] | None = None
-        self._bargein_detector = bargein_detector
+        self._bargein_detection = bargein_detection
         self._bargein_ch: (
             aio.Chan[
                 rtc.AudioFrame
@@ -163,7 +163,7 @@ class AudioRecognition:
         self._input_started_at: float | None = None
         self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
-        self._barge_in_enabled: bool = bargein_detector is not None
+        self._barge_in_enabled: bool = bargein_detection is not None
         self._agent_speaking: bool = False
 
         self._user_turn_span: trace.Span | None = None
@@ -205,12 +205,12 @@ class AudioRecognition:
     def start(self) -> None:
         self.update_stt(self._stt)
         self.update_vad(self._vad)
-        self.update_bargein_detector(self._bargein_detector)
+        self.update_bargein_detection(self._bargein_detection)
 
     def stop(self) -> None:
         self.update_stt(None)
         self.update_vad(None)
-        self.update_bargein_detector(None)
+        self.update_bargein_detection(None)
 
     def on_start_of_agent_speech(self) -> None:
         self._agent_speaking = True
@@ -430,9 +430,9 @@ class AudioRecognition:
             self._vad_atask = None
             self._vad_ch = None
 
-    def update_bargein_detector(self, bargein_detector: inference.BargeinDetector | None) -> None:
-        self._bargein_detector = bargein_detector
-        if bargein_detector:
+    def update_bargein_detection(self, bargein_detection: inference.BargeinDetector | None) -> None:
+        self._bargein_detection = bargein_detection
+        if bargein_detection:
             self._bargein_ch = aio.Chan[
                 Union[
                     rtc.AudioFrame,
@@ -443,7 +443,7 @@ class AudioRecognition:
                 ]
             ]()
             self._bargein_atask = asyncio.create_task(
-                self._bargein_task(bargein_detector, self._bargein_ch, self._bargein_atask)
+                self._bargein_task(bargein_detection, self._bargein_ch, self._bargein_atask)
             )
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
@@ -938,7 +938,7 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _bargein_task(
         self,
-        bargein_detector: inference.BargeinDetector,
+        bargein_detection: inference.BargeinDetector,
         audio_input: AsyncIterable[
             rtc.AudioFrame
             | BargeinStreamBase._AgentSpeechStartedSentinel
@@ -951,7 +951,7 @@ class AudioRecognition:
         if task is not None:
             await aio.cancel_and_wait(task)
 
-        stream = bargein_detector.stream()
+        stream = bargein_detection.stream()
 
         @utils.log_exceptions(logger=logger)
         async def _forward() -> None:

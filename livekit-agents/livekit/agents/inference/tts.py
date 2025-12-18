@@ -410,7 +410,10 @@ class TTS(tts.TTS):
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

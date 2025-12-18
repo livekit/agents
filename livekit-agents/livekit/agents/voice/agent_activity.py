@@ -164,14 +164,14 @@ class AgentActivity(RecognitionHooks):
         self._turn_detection = self._validate_turn_detection(turn_detection)
 
         # barge-in detection
-        self._bargein_detection_enabled: bool = self.bargein_detector is not None
+        self._bargein_detection_enabled: bool = self.bargein_detection is not None
         if (
             self._turn_detection in ("manual", "realtime_llm")
             or isinstance(self.llm, llm.RealtimeModel)
         ) and self._bargein_detection_enabled:
             logger.warning(
                 "turn_detection is set to 'manual' or 'realtime_llm', "
-                "but bargein_detector is provided, ignoring the bargein_detector setting"
+                "but bargein_detection is provided, ignoring the bargein_detection setting"
             )
             self._bargein_detection_enabled = False
 
@@ -616,7 +616,7 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=self.vad,
-            bargein_detector=self.bargein_detector,
+            bargein_detection=self.bargein_detection,
             min_endpointing_delay=self.min_endpointing_delay,
             max_endpointing_delay=self.max_endpointing_delay,
             turn_detection=self._turn_detection,
@@ -2814,11 +2814,11 @@ class AgentActivity(RecognitionHooks):
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
-    def bargein_detector(self) -> inference.BargeinDetector | None:
+    def bargein_detection(self) -> inference.BargeinDetector | None:
         return (
-            self._agent._bargein_detector
-            if is_given(self._agent._bargein_detector)
-            else self._session.bargein_detector
+            self._agent._bargein_detection
+            if is_given(self._agent._bargein_detection)
+            else self._session.bargein_detection
         )
 
     @property

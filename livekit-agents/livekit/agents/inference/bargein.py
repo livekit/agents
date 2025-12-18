@@ -294,9 +294,9 @@ class BargeinDetector(
     ) -> BargeinHttpStream | BargeinWebSocketStream:
         stream: BargeinHttpStream | BargeinWebSocketStream
         if self._opts.use_proxy:
-            stream = BargeinWebSocketStream(bargein_detector=self, conn_options=conn_options)
+            stream = BargeinWebSocketStream(model=self, conn_options=conn_options)
         else:
-            stream = BargeinHttpStream(bargein_detector=self, conn_options=conn_options)
+            stream = BargeinHttpStream(model=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -337,10 +337,10 @@ class BargeinStreamBase(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, bargein_detector: BargeinDetector, conn_options: APIConnectOptions) -> None:
-        self._model = bargein_detector
-        self._opts = bargein_detector._opts
-        self._session = bargein_detector._ensure_session()
+    def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
+        self._model = model
+        self._opts = model._opts
+        self._session = model._ensure_session()
         self._last_activity_time = time.perf_counter()
         self._input_ch = aio.Chan[
             Union[
@@ -360,6 +360,7 @@ class BargeinStreamBase(ABC):
         self._sample_rate = self._opts.sample_rate
         self._resampler: rtc.AudioResampler | None = None
         self._overlap_speech_started_at: float | None = None
+        self._user_speech_span: trace.Span | None = None
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -388,7 +389,7 @@ class BargeinStreamBase(ABC):
                         f"failed to detect bargein, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
-                            "bargein_detector": self._model._label,
+                            "model": self._model._label,
                             "attempt": self._num_retries,
                         },
                     )
@@ -490,10 +491,8 @@ class BargeinStreamBase(ABC):
 
 
 class BargeinHttpStream(BargeinStreamBase):
-    def __init__(
-        self, *, bargein_detector: BargeinDetector, conn_options: APIConnectOptions
-    ) -> None:
-        super().__init__(bargein_detector=bargein_detector, conn_options=conn_options)
+    def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
+        super().__init__(model=model, conn_options=conn_options)
 
     def update_options(
         self,
@@ -711,10 +710,8 @@ class BargeinHttpStream(BargeinStreamBase):
 
 
 class BargeinWebSocketStream(BargeinStreamBase):
-    def __init__(
-        self, *, bargein_detector: BargeinDetector, conn_options: APIConnectOptions
-    ) -> None:
-        super().__init__(bargein_detector=bargein_detector, conn_options=conn_options)
+    def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
+        super().__init__(model=model, conn_options=conn_options)
         self._request_id = str(shortuuid("bargein_request_"))
         self._reconnect_event = asyncio.Event()
 
@@ -792,8 +789,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
                 # end inferencing against the overlap speech
                 if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
-                    logger.trace("overlap speech ended, stopping barge-in inference")
                     if overlap_speech_started:
+                        logger.trace("overlap speech ended, stopping barge-in inference")
                         self._user_speech_span = None
                         # only pop the last complete request
                         _, last_entry = cache.pop(lambda x: x.get_total_duration() > 0)
@@ -956,6 +953,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
         while True:
             try:
+                closing_ws = False
                 ws = await self._connect_ws()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -979,6 +977,10 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
                     self._reconnect_event.clear()
                 finally:
+                    closing_ws = True
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
                     await aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     try:
@@ -986,7 +988,8 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     except asyncio.CancelledError:
                         pass
             finally:
-                if ws is not None:
+                closing_ws = True
+                if ws is not None and not ws.closed:
                     await ws.close()
 
     @log_exceptions(logger=logger)
@@ -1013,8 +1016,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 self._session.ws_connect(f"{base_url}/bargein", headers=headers),
                 self._conn_options.timeout,
             )
-            params["type"] = MSG_SESSION_CREATE
-            await ws.send_str(json.dumps(params))
         except (
             aiohttp.ClientConnectorError,
             asyncio.TimeoutError,
@@ -1023,6 +1024,15 @@ class BargeinWebSocketStream(BargeinStreamBase):
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit Bargein quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit Bargein") from e
+
+        try:
+            params["type"] = MSG_SESSION_CREATE
+            await ws.send_str(json.dumps(params))
+        except Exception as e:
+            await ws.close()
+            raise APIConnectionError(
+                "failed to send session.create message to LiveKit Bargein"
+            ) from e
 
         return ws
 
