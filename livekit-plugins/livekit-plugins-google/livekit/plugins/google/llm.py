@@ -50,6 +50,10 @@ def _is_gemini_3_model(model: str) -> bool:
     """Check if model is Gemini 3 series"""
     return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
 
+def _is_gemini_3_flash_model(model: str) -> bool:
+    """Check if model is Gemini 3 Flash"""
+    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+
 
 @dataclass
 class _LLMOptions:
@@ -308,6 +312,7 @@ class LLM(llm.LLM):
         # Handle thinking_config based on model version
         if is_given(self._opts.thinking_config):
             is_gemini_3 = _is_gemini_3_model(self._opts.model)
+            is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
             thinking_cfg = self._opts.thinking_config
 
             # Extract both parameters
@@ -327,10 +332,15 @@ class LLM(llm.LLM):
                         f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
                         "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
                     )
-                if _level is not None:
-                    # Use thinking_level only (pass as dict since SDK may not have this field yet)
-                    extra["thinking_config"] = {"thinking_level": _level}
-                # If neither, let API use default
+                if _level is None:
+                    # If no thinking_level is provided, use the fastest thinking level
+                    if is_gemini_3_flash:
+                        _level = "minimal"
+                    else:
+                        _level = "low"
+                # Use thinking_level only (pass as dict since SDK may not have this field yet)
+                extra["thinking_config"] = {"thinking_level": _level}
+
             else:
                 # Gemini 2.5 and earlier: only support thinking_budget
                 if _level is not None and _budget is None:
