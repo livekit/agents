@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from livekit import rtc
 
 from .. import inference, llm, stt, utils, vad
+from ..inference.bargein import BargeinStreamBase
 from ..log import logger
 from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
@@ -84,7 +85,7 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 
 class RecognitionHooks(Protocol):
-    def on_bargein_detected(self, ev: inference.BargeinEvent) -> None: ...
+    def on_bargein(self, ev: inference.BargeinEvent) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -152,15 +153,15 @@ class AudioRecognition:
         self._bargein_ch: (
             aio.Chan[
                 rtc.AudioFrame
-                | inference.BargeinStreamBase._AgentSpeechStartedSentinel
-                | inference.BargeinStreamBase._AgentSpeechEndedSentinel
-                | inference.BargeinStreamBase._OverlapSpeechStartedSentinel
-                | inference.BargeinStreamBase._OverlapSpeechEndedSentinel
+                | BargeinStreamBase._AgentSpeechStartedSentinel
+                | BargeinStreamBase._AgentSpeechEndedSentinel
+                | BargeinStreamBase._OverlapSpeechStartedSentinel
+                | BargeinStreamBase._OverlapSpeechEndedSentinel
             ]
             | None
         ) = None
         self._input_started_at: float | None = None
-        self._ignore_until: NotGivenOr[float] = NOT_GIVEN
+        self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._barge_in_enabled: bool = bargein_detector is not None
         self._agent_speaking: bool = False
@@ -211,14 +212,14 @@ class AudioRecognition:
         self.update_vad(None)
         self.update_bargein_detector(None)
 
-    def start_barge_in_monitoring(self) -> None:
-        """Start user audio monitoring for barge-in detection when agent starts speaking."""
+    def on_start_of_agent_speech(self) -> None:
+        self._agent_speaking = True
+
         if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
-        self._agent_speaking = True
-        self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechStartedSentinel())
+        self._bargein_ch.send_nowait(BargeinStreamBase._AgentSpeechStartedSentinel())
 
-    def start_barge_in_inference(
+    def on_start_of_overlap_speech(
         self,
         speech_duration: float | None = None,
         user_speaking_span: trace.Span | None = None,
@@ -228,12 +229,10 @@ class AudioRecognition:
             return
         if self._agent_speaking:
             self._bargein_ch.send_nowait(
-                inference.BargeinStreamBase._OverlapSpeechStartedSentinel(
-                    speech_duration, user_speaking_span
-                )
+                BargeinStreamBase._OverlapSpeechStartedSentinel(speech_duration, user_speaking_span)
             )
 
-    def end_barge_in_inference(self, user_speaking_span: trace.Span | None = None) -> None:
+    def on_end_of_overlap_speech(self, user_speaking_span: trace.Span | None = None) -> None:
         """End barge-in inference when agent is speaking and overlap speech ends."""
         if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
@@ -249,46 +248,46 @@ class AudioRecognition:
             else:
                 user_speaking_span.set_attribute(trace_types.ATTR_IS_BARGEIN, "false")
 
-        self._bargein_ch.send_nowait(inference.BargeinStreamBase._OverlapSpeechEndedSentinel())
+        self._bargein_ch.send_nowait(BargeinStreamBase._OverlapSpeechEndedSentinel())
 
-    def end_barge_in_monitoring(self, ignore_until: float) -> None:
-        """End barge-in monitoring and ignore transcript until the given timestamp (when agent stops speaking or barge-in is detected)."""
+    def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
         if not self._barge_in_enabled or not self._bargein_ch or self._bargein_ch.closed:
             return
 
-        self._bargein_ch.send_nowait(inference.BargeinStreamBase._AgentSpeechEndedSentinel())
+        self._bargein_ch.send_nowait(BargeinStreamBase._AgentSpeechEndedSentinel())
 
         if self._agent_speaking:
             # no barge-in is detected, end the inference (idempotent)
-            if not is_given(self._ignore_until):
-                self.end_barge_in_inference()
-            self._ignore_until = (
-                ignore_until
-                if not is_given(self._ignore_until)
-                else min(ignore_until, self._ignore_until)
+            if not is_given(self._ignore_user_transcript_until):
+                self.on_end_of_overlap_speech()
+            self._ignore_user_transcript_until = (
+                ignore_user_transcript_until
+                if not is_given(self._ignore_user_transcript_until)
+                else min(ignore_user_transcript_until, self._ignore_user_transcript_until)
             )
 
             # flush held transcripts if possible
             task = asyncio.create_task(self._flush_held_transcripts())
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
+
         self._agent_speaking = False
 
     async def _flush_held_transcripts(self) -> None:
-        """Flush held transcripts whose *end time* is after the ignore_until timestamp.
+        """Flush held transcripts whose *end time* is after the ignore_user_transcript_until timestamp.
 
         If the event has no timestamps, we assume it is the same as the next valid event.
         """
         if not self._barge_in_enabled:
             return
-        if not is_given(self._ignore_until):
+        if not is_given(self._ignore_user_transcript_until):
             return
         if not self._transcript_buffer:
             return
 
         if not self._input_started_at:
             self._transcript_buffer.clear()
-            self._ignore_until = NOT_GIVEN
+            self._ignore_user_transcript_until = NOT_GIVEN
             return
 
         emit_from_index: int | None = None
@@ -297,16 +296,16 @@ class AudioRecognition:
             if not ev.alternatives:
                 emit_from_index = min(emit_from_index, i) if emit_from_index is not None else i
                 continue
-            # vendor doesn't set timestamps properly, in which case we just return
+            # 0 means vendor doesn't set timestamps properly, in which case we just return
             if ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0:
                 self._transcript_buffer.clear()
-                self._ignore_until = NOT_GIVEN
+                self._ignore_user_transcript_until = NOT_GIVEN
                 return
 
-            # depends on https://github.com/livekit/agents/pull/4155 and the gateway PR
             if (
-                ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
-                < self._ignore_until
+                ev.alternatives[0].end_time > 0
+                and ev.alternatives[0].end_time + self._input_started_at
+                < self._ignore_user_transcript_until
             ):
                 emit_from_index = None
             else:
@@ -322,11 +321,11 @@ class AudioRecognition:
             else []
         )
         self._transcript_buffer.clear()
-        self._ignore_until = NOT_GIVEN
+        self._ignore_user_transcript_until = NOT_GIVEN
 
         for ev in events_to_emit:
             logger.debug(
-                "re-emitting held transcript",
+                "re-emitting held user transcript",
                 extra={
                     "event": ev.type,
                 },
@@ -334,14 +333,14 @@ class AudioRecognition:
             await self._on_stt_event(ev)
 
     def _should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:
-        """Test if the event should be held until the ignore_until timestamp."""
+        """Test if the event should be held until the ignore_user_transcript_until timestamp."""
         if not self._barge_in_enabled:
             return False
 
         if self._agent_speaking:
             return True
 
-        if not is_given(self._ignore_until):
+        if not is_given(self._ignore_user_transcript_until):
             return False
         # sentinel events are always held until
         # we have something concrete to release them
@@ -349,17 +348,17 @@ class AudioRecognition:
             return True
         if (
             # most vendors don't set timestamps properly, in which case we just assume
-            # it is a valid event after the ignore_until timestamp
+            # it is a valid event after the ignore_user_transcript_until timestamp
             is_given(self._input_started_at)
             # check if the event should be held if
             # 1. the stt input stream has started
             # 2. the current event has a valid start and end time, relative to the input stream start time
-            # 3. the event is for audio sent before the ignore_until timestamp
+            # 3. the event is for audio sent before the ignore_user_transcript_until timestamp
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
-            # depends on https://github.com/livekit/agent-gateway/pull/176
-            and ev.alternatives[0].start_time + ev.alternatives[0].end_time + self._input_started_at
-            < self._ignore_until
+            and ev.alternatives[0].end_time > 0
+            and ev.alternatives[0].end_time + self._input_started_at
+            < self._ignore_user_transcript_until
         ):
             return True
 
@@ -408,7 +407,7 @@ class AudioRecognition:
             )
             # reset barge-in related state
             self._transcript_buffer.clear()
-            self._ignore_until = NOT_GIVEN
+            self._ignore_user_transcript_until = NOT_GIVEN
             self._input_started_at = None
         elif self._stt_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
@@ -437,17 +436,17 @@ class AudioRecognition:
             self._bargein_ch = aio.Chan[
                 Union[
                     rtc.AudioFrame,
-                    inference.BargeinStreamBase._AgentSpeechStartedSentinel,
-                    inference.BargeinStreamBase._AgentSpeechEndedSentinel,
-                    inference.BargeinStreamBase._OverlapSpeechStartedSentinel,
-                    inference.BargeinStreamBase._OverlapSpeechEndedSentinel,
+                    BargeinStreamBase._AgentSpeechStartedSentinel,
+                    BargeinStreamBase._AgentSpeechEndedSentinel,
+                    BargeinStreamBase._OverlapSpeechStartedSentinel,
+                    BargeinStreamBase._OverlapSpeechEndedSentinel,
                 ]
             ]()
             self._bargein_atask = asyncio.create_task(
                 self._bargein_task(bargein_detector, self._bargein_ch, self._bargein_atask)
             )
             self._transcript_buffer.clear()
-            self._ignore_until = NOT_GIVEN
+            self._ignore_user_transcript_until = NOT_GIVEN
             self._input_started_at = None
         elif self._bargein_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._bargein_atask))
@@ -566,17 +565,17 @@ class AudioRecognition:
             return
 
         # handle barge-in detection
-        # - hold the event until the ignore_until expires
+        # - hold the event until the ignore_user_transcript_until expires
         # - release only relevant events
         # - allow RECOGNITION_USAGE to pass through immediately
         if ev.type != stt.SpeechEventType.RECOGNITION_USAGE and self._barge_in_enabled:
             if self._should_hold_stt_event(ev):
                 logger.trace(
-                    "holding STT event until ignore_until expires",
+                    "holding STT event until ignore_user_transcript_until expires",
                     extra={
                         "event": ev.type,
-                        "ignore_until": self._ignore_until
-                        if is_given(self._ignore_until)
+                        "ignore_user_transcript_until": self._ignore_user_transcript_until
+                        if is_given(self._ignore_user_transcript_until)
                         else None,
                     },
                 )
@@ -744,7 +743,7 @@ class AudioRecognition:
 
     async def _on_bargein_event(self, ev: inference.BargeinEvent) -> None:
         if ev.type == inference.BargeinEventType.BARGEIN:
-            self._hooks.on_bargein_detected(ev)
+            self._hooks.on_bargein(ev)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
@@ -942,10 +941,10 @@ class AudioRecognition:
         bargein_detector: inference.BargeinDetector,
         audio_input: AsyncIterable[
             rtc.AudioFrame
-            | inference.BargeinStreamBase._AgentSpeechStartedSentinel
-            | inference.BargeinStreamBase._AgentSpeechEndedSentinel
-            | inference.BargeinStreamBase._OverlapSpeechStartedSentinel
-            | inference.BargeinStreamBase._OverlapSpeechEndedSentinel
+            | BargeinStreamBase._AgentSpeechStartedSentinel
+            | BargeinStreamBase._AgentSpeechEndedSentinel
+            | BargeinStreamBase._OverlapSpeechStartedSentinel
+            | BargeinStreamBase._OverlapSpeechEndedSentinel
         ],
         task: asyncio.Task[None] | None,
     ) -> None:

@@ -1144,7 +1144,7 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.start_barge_in_inference(
+                self._audio_recognition.on_start_of_overlap_speech(
                     speech_duration=0,
                     user_speaking_span=self._session._user_speaking_span,
                 )
@@ -1161,7 +1161,7 @@ class AgentActivity(RecognitionHooks):
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         if self.vad is None:
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.end_barge_in_inference(self._session._user_speaking_span)
+                self._audio_recognition.on_end_of_overlap_speech(self._session._user_speaking_span)
 
             self._session._update_user_state("listening")
 
@@ -1250,7 +1250,9 @@ class AgentActivity(RecognitionHooks):
                 self._session.output.audio.pause()
                 self._session._update_agent_state("listening")
                 if self.bargein_enabled and self._audio_recognition:
-                    self._audio_recognition.end_barge_in_monitoring(time.time())
+                    self._audio_recognition.on_end_of_agent_speech(
+                        ignore_user_transcript_until=time.time()
+                    )
                     self._restore_interruption_by_audio_activity()
             else:
                 if self._rt_session is not None:
@@ -1263,7 +1265,7 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
         if self.bargein_enabled and self._audio_recognition:
-            self._audio_recognition.start_barge_in_inference(
+            self._audio_recognition.on_start_of_overlap_speech(
                 speech_duration=ev.speech_duration if ev else None,
                 user_speaking_span=self._session._user_speaking_span,
             )
@@ -1280,7 +1282,7 @@ class AgentActivity(RecognitionHooks):
             speech_end_time = speech_end_time - ev.silence_duration
 
         if self.bargein_enabled and self._audio_recognition:
-            self._audio_recognition.end_barge_in_inference(self._session._user_speaking_span)
+            self._audio_recognition.on_end_of_overlap_speech(self._session._user_speaking_span)
 
         self._session._update_user_state(
             "listening",
@@ -1312,13 +1314,13 @@ class AgentActivity(RecognitionHooks):
         else:
             self._user_silence_event.set()
 
-    def on_bargein_detected(self, ev: inference.BargeinEvent) -> None:
+    def on_bargein(self, ev: inference.BargeinEvent) -> None:
         # restore interruption by audio activity
         self._restore_interruption_by_audio_activity()
         self._interrupt_by_audio_activity()
         if self._audio_recognition:
-            self._audio_recognition.end_barge_in_monitoring(
-                ev.overlap_speech_started_at or ev.timestamp
+            self._audio_recognition.on_end_of_agent_speech(
+                ignore_user_transcript_until=ev.overlap_speech_started_at or ev.timestamp
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
@@ -1645,7 +1647,9 @@ class AgentActivity(RecognitionHooks):
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
             self._session._update_agent_state("listening")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.end_barge_in_monitoring(time.time())
+                self._audio_recognition.on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time()
+                )
                 self._restore_interruption_by_audio_activity()
 
     @utils.log_exceptions(logger=logger)
@@ -1725,7 +1729,7 @@ class AgentActivity(RecognitionHooks):
             started_speaking_at = time.time()
             self._session._update_agent_state("speaking")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.start_barge_in_monitoring()
+                self._audio_recognition.on_start_of_agent_speech()
                 self._interruption_by_audio_activity_enabled = False
 
         audio_out: _AudioOutput | None = None
@@ -1828,7 +1832,9 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.end_barge_in_monitoring(time.time())
+                self._audio_recognition.on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time()
+                )
                 self._restore_interruption_by_audio_activity()
 
     @utils.log_exceptions(logger=logger)
@@ -1999,7 +2005,7 @@ class AgentActivity(RecognitionHooks):
             started_speaking_at = time.time()
             self._session._update_agent_state("speaking")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.start_barge_in_monitoring()
+                self._audio_recognition.on_start_of_agent_speech()
                 self._interruption_by_audio_activity_enabled = False
 
         audio_out: _AudioOutput | None = None
@@ -2107,7 +2113,9 @@ class AgentActivity(RecognitionHooks):
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
                 if self.bargein_enabled and self._audio_recognition:
-                    self._audio_recognition.end_barge_in_monitoring(time.time())
+                    self._audio_recognition.on_end_of_agent_speech(
+                        ignore_user_transcript_until=time.time()
+                    )
                     self._restore_interruption_by_audio_activity()
 
             speech_handle._mark_generation_done()
@@ -2139,7 +2147,9 @@ class AgentActivity(RecognitionHooks):
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self.bargein_enabled and self._audio_recognition:
-                self._audio_recognition.end_barge_in_monitoring(time.time())
+                self._audio_recognition.on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time()
+                )
                 self._restore_interruption_by_audio_activity()
 
         await text_tee.aclose()
@@ -2757,7 +2767,7 @@ class AgentActivity(RecognitionHooks):
                     "speaking", otel_context=self._paused_speech._agent_turn_context
                 )
                 if self.bargein_enabled and self._audio_recognition:
-                    self._audio_recognition.start_barge_in_monitoring()
+                    self._audio_recognition.on_start_of_agent_speech()
                     self._interruption_by_audio_activity_enabled = False
 
                 audio_output.resume()

@@ -17,6 +17,7 @@ class Logger(logging.Logger):
             self._log(DEV_LEVEL, message, args, **kwargs)
 
 
+_logger_class = logging.getLoggerClass()
 logging.setLoggerClass(Logger)
-
 logger: Logger = logging.getLogger("livekit.agents")  # type: ignore[assignment]
+logging.setLoggerClass(_logger_class)

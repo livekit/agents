@@ -3,7 +3,6 @@ from .bargein import (
     BargeinError,
     BargeinEvent,
     BargeinEventType,
-    BargeinStreamBase,
 )
 from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
@@ -18,7 +17,6 @@ __all__ = [
     "TTSModels",
     "LLMModels",
     "BargeinDetector",
-    "BargeinStreamBase",
     "BargeinEvent",
     "BargeinError",
     "BargeinEventType",
