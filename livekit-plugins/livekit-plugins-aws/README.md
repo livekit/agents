@@ -199,21 +199,23 @@ model = aws.realtime.RealtimeModel.with_nova_sonic_2(
 
 #### Nova Sonic 1.0 Voices (11 voices)
 
-- **English**: `MATTHEW`, `TIFFANY`, `AMY`
-- **Spanish**: `LUPE`, `CARLOS`
-- **French**: `AMBRE`, `FLORIAN`
-- **German**: `GRETA`, `LENNART`
-- **Italian**: `BEATRICE`, `LORENZO`
+- **English (US)**: `matthew`, `tiffany`
+- **English (GB)**: `amy`
+- **Spanish**: `lupe`, `carlos`
+- **French**: `ambre`, `florian`
+- **German**: `greta`, `lennart`
+- **Italian**: `beatrice`, `lorenzo`
 
 #### Nova Sonic 2.0 Voices (16 voices)
 
-- **English**: `MATTHEW` (polyglot), `TIFFANY` (polyglot), `AMY`, `OLIVIA`
-- **Spanish**: `LUPE`, `CARLOS`
-- **French**: `AMBRE`, `FLORIAN`
-- **German**: `TINA`, `LENNART`
-- **Italian**: `BEATRICE`, `LORENZO`
-- **Portuguese**: `CAROLINA`, `LEO`
-- **Hindi**: `ARJUN`, `KIARA`
+- **English (US)**: `matthew` (polyglot), `tiffany` (polyglot), `olivia`
+- **English (GB)**: `amy`
+- **Spanish**: `lupe`, `carlos`
+- **French**: `ambre`, `florian`
+- **German**: `tina`, `lennart`
+- **Italian**: `beatrice`, `lorenzo`
+- **Portuguese (Brazilian)**: `carolina`, `leo`
+- **Hindi**: `arjun`, `kiara`
 
 **Note**: Matthew and Tiffany in Nova 2.0 support polyglot mode, seamlessly switching between languages within a single conversation.
 
