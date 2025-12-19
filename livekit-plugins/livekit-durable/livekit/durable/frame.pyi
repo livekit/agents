@@ -1,28 +1,23 @@
+from collections.abc import AsyncGenerator, Coroutine, Generator
 from types import FrameType
-from typing import Any, AsyncGenerator, Coroutine, Generator, Tuple, Union
+from typing import Any, Tuple, Union
 
 def get_frame_ip(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator]) -> int:
     """Get instruction pointer of a generator or coroutine."""
 
-def set_frame_ip(
-    frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], ip: int
-):
+def set_frame_ip(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], ip: int):
     """Set instruction pointer of a generator or coroutine."""
 
 def get_frame_sp(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator]) -> int:
     """Get stack pointer of a generator or coroutine."""
 
-def set_frame_sp(
-    frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], sp: int
-):
+def set_frame_sp(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], sp: int):
     """Set stack pointer of a generator or coroutine."""
 
 def get_frame_bp(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator]) -> int:
     """Get block pointer of a generator or coroutine."""
 
-def set_frame_bp(
-    frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], bp: int
-):
+def set_frame_bp(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], bp: int):
     """Set block pointer of a generator or coroutine."""
 
 def get_frame_stack_at(
@@ -55,7 +50,5 @@ def get_frame_state(
 ) -> int:
     """Get frame state of a generator or coroutine."""
 
-def set_frame_state(
-    frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], state: int
-):
+def set_frame_state(frame: Union[FrameType, Coroutine, Generator, AsyncGenerator], state: int):
     """Set frame state of a generator or coroutine."""

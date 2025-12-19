@@ -1,4 +1,5 @@
 import os
+from collections.abc import Coroutine, Generator
 from types import (
     AsyncGeneratorType,
     CodeType,
@@ -12,9 +13,7 @@ from types import (
 from typing import (
     Any,
     Callable,
-    Coroutine,
     Dict,
-    Generator,
     Optional,
     Tuple,
     TypeVar,
@@ -23,6 +22,7 @@ from typing import (
 )
 
 import lk_durable as ext
+
 from .registry import (
     RegisteredFunction,
     lookup_function,
@@ -76,9 +76,7 @@ def durable(fn: Callable) -> Callable:
     elif isinstance(fn, FunctionType):
         return DurableFunction(fn)
     else:
-        raise TypeError(
-            f"cannot create a durable function from value of type {fn.__qualname__}"
-        )
+        raise TypeError(f"cannot create a durable function from value of type {fn.__qualname__}")
 
 
 class Serializable:
@@ -145,9 +143,7 @@ class Serializable:
             if frame_state < FRAME_CLEARED:
                 print(f"IP = {ip}")
                 print(f"SP = {sp}")
-                for i, (is_null, value) in enumerate(
-                    stack if stack is not None else []
-                ):
+                for i, (is_null, value) in enumerate(stack if stack is not None else []):
                     if is_null:
                         print(f"stack[{i}] = NULL")
                     else:
@@ -317,9 +313,7 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
         **kwargs: Any,
     ):
         self.generator = generator
-        Serializable.__init__(
-            self, generator, registered_fn, coroutine, *args, **kwargs
-        )
+        Serializable.__init__(self, generator, registered_fn, coroutine, *args, **kwargs)
 
     def __iter__(self) -> Generator[_YieldT, _SendT, _ReturnT]:
         return self
