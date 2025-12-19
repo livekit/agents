@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import pathlib
+import pickle
 import re
 import signal
 import sys
@@ -1030,8 +1031,10 @@ def _text_mode(
                         return []
 
                     # serialize the state of the session
+                    state = c.io_session.get_state()
                     with open(sess_dump_file, "wb") as f:
-                        f.write(c.io_session.dumps())
+                        f.write(pickle.dumps(state))
+                    logger.debug("session state serialized")
                 else:
                     result = await c.io_session.run(user_input=text)  # type: ignore
 

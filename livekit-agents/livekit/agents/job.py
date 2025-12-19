@@ -148,6 +148,7 @@ class TextMessageContext:
 
         state = pickle.loads(self._sess_data)
         await self._session.rehydrate(state)
+        logger.debug("session rehydrated")
         return self._session
 
     @property
