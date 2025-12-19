@@ -594,8 +594,11 @@ class Agent:
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:
         """
-        Minimum time-in-seconds the agent must wait after a potential end-of-utterance signal
-        before it declares the user’s turn complete.
+        Minimum time-in-seconds since the last detected speech before the agent
+        declares the user’s turn complete. In VAD mode this effectively behaves
+        like max(VAD silence, min_endpointing_delay); in STT mode it is applied
+        after the STT end-of-speech signal, so it can be additive with the STT
+        provider’s endpointing delay.
 
         If this property was set at Agent creation, it will be used at runtime instead of the session's value.
         """
