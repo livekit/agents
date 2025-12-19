@@ -46,7 +46,7 @@ dependencies = [
     "eval-type-backport",
     "colorama>=0.4.6",
     "av>=16.0.0",
-    "numpy>=1.26.0",
+    "numpy>=2.3.2",
     "pydantic>=2.12.2,<3",
     "nest-asyncio>=1.6.0",
     "opentelemetry-api~=1.39.0",
