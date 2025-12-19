@@ -449,11 +449,7 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
-                if (
-                    not response.candidates
-                    or not response.candidates[0].content
-                    or not response.candidates[0].content.parts
-                ):
+                if not response.candidates:
                     continue
 
                 if len(response.candidates) > 1:
@@ -462,6 +458,9 @@ class LLMStream(llm.LLMStream):
                     )
 
                 candidate = response.candidates[0]
+
+                if not candidate.content or not candidate.content.parts:
+                    continue
 
                 if candidate.finish_reason is not None:
                     finish_reason = candidate.finish_reason
