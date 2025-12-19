@@ -48,6 +48,7 @@ from .job import (
     JobProcess,
     JobRequest,
     RunningJobInfo,
+    TextMessageContext,
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
@@ -319,6 +320,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
+        self._sms_handler_fnc: Callable[[TextMessageContext], Awaitable[None]] | None = None
 
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
@@ -455,6 +457,35 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._session_end_fnc = on_session_end
             self._agent_name = agent_name
             self._server_type = type
+            return f
+
+        if func is not None:
+            return decorator(func)
+
+        return decorator
+
+    def sms_handler(
+        self,
+        func: Callable[[TextMessageContext], Awaitable[None]] | None = None,
+    ) -> (
+        Callable[[TextMessageContext], Awaitable[None]]
+        | Callable[
+            [Callable[[TextMessageContext], Awaitable[None]]],
+            Callable[[TextMessageContext], Awaitable[None]],
+        ]
+    ):
+        """
+        Decorator or direct registrar for the SMS received event.
+        """
+
+        def decorator(
+            f: Callable[[TextMessageContext], Awaitable[None]],
+        ) -> Callable[[TextMessageContext], Awaitable[None]]:
+            if self._sms_handler_fnc is not None:
+                raise RuntimeError(
+                    "The AgentServer currently only supports registering only one sms_handler"
+                )
+            self._sms_handler_fnc = f
             return f
 
         if func is not None:

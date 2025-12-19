@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import pickle
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Literal,
     Optional,
@@ -838,6 +840,34 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
+    def dumps(self) -> bytes:
+        tool_ctx = llm.ToolContext(self.tools)
+        return pickle.dumps(
+            {
+                "tools": list(tool_ctx.function_tools.keys()),
+                "chat_ctx": self._chat_ctx.to_dict(),
+                "agent": self._agent,
+            }
+        )
+
+    async def rehydrate(self, state: dict[str, Any]) -> None:
+        tool_ctx = llm.ToolContext(self.tools)
+        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+        for name in state["tools"]:
+            if name in tool_ctx.function_tools:
+                valid_tools.append(tool_ctx.function_tools[name])
+            else:
+                logger.warning("tool not found when unpickling", extra={"missing_tool": name})
+
+        self._tools = valid_tools
+        self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
+
+        if self._started:
+            # only allow rehydrate session that not started yet?
+            await self._update_activity(state["agent"])
+        else:
+            await self.start(agent=state["agent"])
+
     def update_options(
         self,
         *,
@@ -1076,8 +1106,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._activity.resume()
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
-        if wait_on_enter:
-            assert self._activity._on_enter_task is not None
+        if wait_on_enter and self._activity._on_enter_task:
             await asyncio.shield(self._activity._on_enter_task)
 
     @utils.log_exceptions(logger=logger)

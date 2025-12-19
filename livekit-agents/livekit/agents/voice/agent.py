@@ -93,6 +93,7 @@ class Agent:
 
         self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
+        self._rehydrated = False
 
     @property
     def id(self) -> str:
@@ -358,6 +359,35 @@ class Agent:
             raise RuntimeError("no activity context found, the agent is not running")
 
         return self._activity
+
+    def __getstate__(self) -> dict[str, Any]:
+        tool_ctx = llm.ToolContext(self.tools)
+        return {
+            "tools": list(tool_ctx.function_tools.keys()),
+            "chat_ctx": self.chat_ctx.to_dict(),
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        try:
+            self.__init__()
+        except TypeError as e:
+            logger.error("Agent rehydration requires a zero-argument constructor")
+            raise e
+
+        tool_ctx = llm.ToolContext(self.tools)
+        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+        for name in state["tools"]:
+            if name in tool_ctx.function_tools:
+                valid_tools.append(tool_ctx.function_tools[name])
+            else:
+                logger.warning("tool not found when unpickling", extra={"missing_tool": name})
+
+        # TODO: serialize the ongoing speech tasks?
+        # TODO: support AgentTask
+
+        self._tools = valid_tools
+        self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
+        self._rehydrated = True  # skip on_enter when rehydrating
 
     class default:
         @staticmethod

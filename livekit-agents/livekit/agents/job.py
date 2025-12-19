@@ -22,6 +22,7 @@ import inspect
 import json
 import logging
 import multiprocessing as mp
+import pickle
 import tempfile
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .voice.agent_session import AgentSession
     from .voice.report import SessionReport
+    from .voice.run_result import RunResult
 
 
 def get_job_context() -> JobContext:
@@ -127,6 +129,34 @@ class _ContextLogFieldsFilter(logging.Filter):
                 setattr(record, key, value)
 
         return True
+
+
+class TextMessageContext:
+    def __init__(self, *, text: str, session: AgentSession, sess_data: bytes | None) -> None:
+        self._text = text
+        self._session = session
+        self._sess_data = sess_data
+        self._result: RunResult | None = None
+
+    async def send_result(self, result: RunResult) -> None:
+        self._result = result
+
+    async def rehydrated_session(self) -> AgentSession:
+        # TODO: it should be AgentSession(...).rehydrate(context)
+        if not self._sess_data:
+            return self._session
+
+        state = pickle.loads(self._sess_data)
+        await self._session.rehydrate(state)
+        return self._session
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def result(self) -> RunResult | None:
+        return self._result
 
 
 class JobContext:

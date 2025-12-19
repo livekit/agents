@@ -474,10 +474,11 @@ class AgentActivity(RecognitionHooks):
                     finally:
                         _OnEnterContextVar.reset(tk)
 
-                self._on_enter_task = task = self._create_speech_task(
-                    _traceable_on_enter(), name="AgentTask_on_enter"
-                )
-                _set_activity_task_info(task, inline_task=True)
+                if not self._agent._rehydrated:
+                    self._on_enter_task = task = self._create_speech_task(
+                        _traceable_on_enter(), name="AgentTask_on_enter"
+                    )
+                    _set_activity_task_info(task, inline_task=True)
             finally:
                 start_span.end()
 

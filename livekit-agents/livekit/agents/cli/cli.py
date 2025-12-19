@@ -13,11 +13,12 @@ import pathlib
 import re
 import signal
 import sys
+import tempfile
 import textwrap
 import threading
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
@@ -37,7 +38,7 @@ from rich.theme import Theme
 from livekit import rtc
 
 from .._exceptions import CLIError
-from ..job import JobExecutorType
+from ..job import JobExecutorType, TextMessageContext
 from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio
@@ -985,7 +986,12 @@ def live_status(
         yield update
 
 
-def _text_mode(c: AgentsConsole) -> None:
+def _text_mode(
+    c: AgentsConsole,
+    *,
+    sms_handler: Callable[[TextMessageContext], Awaitable[None]] | None,
+    sess_dump_file: str | None,
+) -> None:
     def _key_read(ch: str) -> None:
         if ch == key.CTRL_T:
             raise _ToggleMode()
@@ -1006,8 +1012,30 @@ def _text_mode(c: AgentsConsole) -> None:
 
         def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
             async def _generate(text: str) -> list[RunEvent]:
-                sess = await c.io_session.run(user_input=text)  # type: ignore
-                return sess.events.copy()
+                if sms_handler is not None:
+                    assert sess_dump_file
+
+                    sess_data: bytes | None = None
+                    if os.path.exists(sess_dump_file):
+                        with open(sess_dump_file, "rb") as f:
+                            sess_data = f.read()
+                    text_context = TextMessageContext(
+                        text=text, session=c.io_session, sess_data=sess_data
+                    )
+
+                    await sms_handler(text_context)
+                    result = text_context.result
+                    if result is None:
+                        logger.warning("result is not set from the sms handler")
+                        return []
+
+                    # serialize the state of the session
+                    with open(sess_dump_file, "wb") as f:
+                        f.write(c.io_session.dumps())
+                else:
+                    result = await c.io_session.run(user_input=text)  # type: ignore
+
+                return result.events.copy()
 
             def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
                 if exception := task.exception():
@@ -1176,6 +1204,8 @@ def _run_console(
     output_device: str | None,
     mode: ConsoleMode,
     record: bool,
+    simulate_sms: bool,
+    sess_dump_file: str | None,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
@@ -1228,6 +1258,18 @@ def _run_console(
         console_worker = _ConsoleWorker(server=server, shutdown_cb=_on_worker_shutdown)
         console_worker.start()
 
+        temp_file: str | None = None
+        sms_handler: Callable[[TextMessageContext], Awaitable[None]] | None = None
+        if simulate_sms:
+            assert server._sms_handler_fnc is not None, (
+                "sms_handler is required when simulating SMS"
+            )
+            sms_handler = server._sms_handler_fnc
+            if not sess_dump_file:
+                sess_dump_file = temp_file = tempfile.mktemp(
+                    suffix=".pkl", prefix="lk-agents-sess_"
+                )
+
         # TODO: wait for a session request the agents console context before showing any of the mode
         try:
             c.wait_for_io_acquisition()
@@ -1235,7 +1277,7 @@ def _run_console(
             while True:
                 try:
                     if c.console_mode == "text":
-                        _text_mode(c)
+                        _text_mode(c, sms_handler=sms_handler, sess_dump_file=sess_dump_file)
                     elif c.console_mode == "audio":
                         _audio_mode(c, input_device=input_device, output_device=output_device)
 
@@ -1247,6 +1289,8 @@ def _run_console(
         finally:
             console_worker.shutdown()
             console_worker.join()
+            if temp_file and pathlib.Path(temp_file).exists():
+                pathlib.Path(temp_file).unlink()
 
     except CLIError as e:
         c.print(" ")
@@ -1370,6 +1414,13 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             bool,
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
+        sms: Annotated[
+            bool, typer.Option(help="Whether to simulate an SMS received event")
+        ] = False,
+        sess_dump_file: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(help="Path to the serialized AgentSession data file"),
+        ] = None,
         record: Annotated[bool, typer.Option(help="Whether to record the AgentSession")] = False,
     ) -> None:
         """
@@ -1389,8 +1440,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             server=server,
             input_device=input_device,
             output_device=output_device,
-            mode="text" if text else "audio",
+            mode="text" if text or sms else "audio",
             record=record,
+            simulate_sms=sms,
+            sess_dump_file=sess_dump_file,
         )
 
     @app.command()

@@ -10,6 +10,7 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
+    TextMessageContext,
     cli,
     metrics,
     room_io,
@@ -72,6 +73,15 @@ def prewarm(proc: JobProcess):
 
 
 server.setup_fnc = prewarm
+
+
+@server.sms_handler()
+async def sms_handler(ctx: TextMessageContext):
+    logger.info(f"SMS received: {ctx.text}")
+
+    session = await ctx.rehydrated_session()
+    result = await session.run(user_input=ctx.text)
+    await ctx.send_result(result)
 
 
 @server.rtc_session()
