@@ -9,13 +9,20 @@
 #error Python 3.10-3.14 is required
 #endif
 
-#if PY_MINOR_VERSION == 14
+
+/* only for internal headers */
+#define Py_BUILD_CORE
 #include "internal/pycore_code.h"
+#if PY_MINOR_VERSION == 14
 #include "internal/pycore_interpframe_structs.h"
 #include "internal/pycore_stackref.h"
 #endif
-
+#if PY_MINOR_VERSION >= 11
 #include "internal/pycore_frame.h"
+#endif
+#undef Py_BUILD_CORE
+
+
 
 // This is a redefinition of the private PyTryBlock from <= 3.10.
 // https://github.com/python/cpython/blob/3.8/Include/frameobject.h#L10
@@ -27,6 +34,52 @@ typedef struct {
   int b_level;
 } PyTryBlock;
 
+#if PY_MINOR_VERSION >= 11
+
+typedef _PyInterpreterFrame Frame;
+
+#elif PY_MINOR_VERSION == 10
+
+typedef signed char PyFrameState;
+
+// https://github.com/python/cpython/blob/3.10/Include/cpython/frameobject.h#L28
+struct _frame {
+  PyObject_VAR_HEAD struct _frame *f_back; /* previous frame, or NULL */
+  PyCodeObject *f_code;                    /* code segment */
+  PyObject *f_builtins;    /* builtin symbol table (PyDictObject) */
+  PyObject *f_globals;     /* global symbol table (PyDictObject) */
+  PyObject *f_locals;      /* local symbol table (any mapping) */
+  PyObject **f_valuestack; /* points after the last local */
+  PyObject *f_trace;       /* Trace function */
+  int f_stackdepth;        /* Depth of value stack */
+  char f_trace_lines;      /* Emit per-line trace events? */
+  char f_trace_opcodes;    /* Emit per-opcode trace events? */
+
+  /* Borrowed reference to a generator, or NULL */
+  PyObject *f_gen;
+
+  int f_lasti;          /* Last instruction if called */
+  int f_lineno;         /* Current line number. Only valid if non-zero */
+  int f_iblock;         /* index in f_blockstack */
+  PyFrameState f_state; /* What state the frame is in */
+  PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
+  PyObject *f_localsplus[1];             /* locals+stack, dynamically sized */
+};
+
+typedef struct _frame Frame;
+
+enum _framestate {
+  FRAME_CREATED = -2,
+  FRAME_SUSPENDED = -1,
+  FRAME_EXECUTING = 0,
+  FRAME_RETURNED = 1,
+  FRAME_UNWINDING = 2,
+  FRAME_RAISED = 3,
+  FRAME_CLEARED = 4
+};
+
+#endif
+
 // This is a redefinition of the private PyCoroWrapper from 3.8-3.13.
 // https://github.com/python/cpython/blob/3.8/Objects/genobject.c#L840
 // https://github.com/python/cpython/blob/3.9/Objects/genobject.c#L830
@@ -37,8 +90,6 @@ typedef struct {
 typedef struct {
   PyObject_HEAD PyCoroObject *cw_coroutine;
 } PyCoroWrapper;
-
-typedef _PyInterpreterFrame Frame;
 
 #if PY_MINOR_VERSION <= 10
 static int get_frame_iblock_limit(Frame *frame) { return CO_MAXBLOCKS; }
@@ -69,57 +120,98 @@ static PyTryBlock *get_frame_blockstack(Frame *frame) { return NULL; }
 static Frame *get_frame(PyGenObject *gen_like) {
 #if PY_MINOR_VERSION >= 14
   Frame *frame = (Frame *)(&gen_like->gi_iframe);
-#else
+#elif PY_MINOR_VERSION >= 11
   Frame *frame = (Frame *)(struct _PyInterpreterFrame *)(gen_like->gi_iframe);
+#elif PY_MINOR_VERSION == 10
+  Frame *frame = (Frame *)(gen_like->gi_frame);
 #endif
   assert(frame);
   return frame;
 }
 
-static int get_frame_lasti(Frame *frame) {
+static PyCodeObject *get_frame_code(Frame *frame) {
 #if PY_MINOR_VERSION >= 14
   PyObject *executable = PyStackRef_AsPyObjectBorrow(frame->f_executable);
   PyCodeObject *code = (PyCodeObject *)executable;
-#else
+#elif PY_MINOR_VERSION >= 13
   PyCodeObject *code = (PyCodeObject *)frame->f_executable;
+#elif PY_MINOR_VERSION >= 10
+  PyCodeObject *code = (PyCodeObject *)frame->f_code;
 #endif
+  assert(code);
+  return code;
+}
+
+static int get_frame_lasti(Frame *frame) {
+  PyCodeObject *code = get_frame_code(frame);
+#if PY_MINOR_VERSION == 11 || PY_MINOR_VERSION == 12
+  assert(frame->prev_instr);
+  return (int)((intptr_t)frame->prev_instr - (intptr_t)_PyCode_CODE(code));
+#elif PY_MINOR_VERSION == 10
+  return frame->f_lasti;
+#else
   assert(frame->instr_ptr);
   return (int)((intptr_t)frame->instr_ptr - (intptr_t)_PyCode_CODE(code));
+#endif
 }
 
 static void set_frame_lasti(Frame *frame, int lasti) {
-#if PY_MINOR_VERSION >= 14
-  PyObject *executable = PyStackRef_AsPyObjectBorrow(frame->f_executable);
-  PyCodeObject *code = (PyCodeObject *)executable;
+  PyCodeObject *code = get_frame_code(frame);
+#if PY_MINOR_VERSION == 11 || PY_MINOR_VERSION == 12
+  frame->prev_instr =
+      (_Py_CODEUNIT *)((intptr_t)_PyCode_CODE(code) + (intptr_t)lasti);
+#elif PY_MINOR_VERSION == 10
+  frame->f_lasti = lasti;
 #else
-  PyCodeObject *code = (PyCodeObject *)frame->f_executable;
-#endif
   frame->instr_ptr =
       (_Py_CODEUNIT *)((intptr_t)_PyCode_CODE(code) + (intptr_t)lasti);
+#endif
 }
 
 static int get_frame_state(PyGenObject *gen_like) {
+#if PY_MINOR_VERSION == 10
+  Frame *frame = (Frame *)(gen_like->gi_frame);
+  if (!frame)
+    return FRAME_CLEARED;
+  return frame->f_state;
+#else
   return gen_like->gi_frame_state;
+#endif
 }
 
 static void set_frame_state(PyGenObject *gen_like, int fs) {
+#if PY_MINOR_VERSION == 10
+  Frame *frame = get_frame(gen_like);
+  frame->f_state = (PyFrameState)fs;
+
+#else
   gen_like->gi_frame_state = (int8_t)fs;
+#endif
 }
 
 static int valid_frame_state(int fs) {
+#if PY_MINOR_VERSION >= 13
   return fs == FRAME_CREATED || fs == FRAME_SUSPENDED ||
-         fs == FRAME_SUSPENDED_YIELD_FROM || fs == FRAME_EXECUTING ||
-         fs == FRAME_COMPLETED || fs == FRAME_CLEARED;
+         fs == FRAME_EXECUTING || fs == FRAME_COMPLETED ||
+         fs == FRAME_CLEARED || fs == FRAME_SUSPENDED_YIELD_FROM;
+
+#elif PY_MINOR_VERSION >= 11
+  return fs == FRAME_CREATED || fs == FRAME_SUSPENDED ||
+         fs == FRAME_EXECUTING || fs == FRAME_COMPLETED || fs == FRAME_CLEARED;
+#elif PY_MINOR_VERSION == 10
+  return fs == FRAME_CREATED || fs == FRAME_SUSPENDED ||
+         fs == FRAME_EXECUTING || fs == FRAME_RETURNED ||
+         fs == FRAME_UNWINDING || fs == FRAME_RAISED || fs == FRAME_CLEARED;
+#endif
 }
 
 static int get_frame_stacktop_limit(Frame *frame) {
-#if PY_MINOR_VERSION >= 14
-  PyObject *executable = PyStackRef_AsPyObjectBorrow(frame->f_executable);
-  PyCodeObject *code = (PyCodeObject *)executable;
+  PyCodeObject *code = get_frame_code(frame);
+#if PY_MINOR_VERSION == 10
+  return code->co_stacksize + code->co_nlocals;
 #else
-  PyCodeObject *code = (PyCodeObject *)frame->f_executable;
-#endif
   return code->co_stacksize + code->co_nlocalsplus;
+#endif
 }
 
 static int get_frame_stacktop(Frame *frame) {
@@ -127,10 +219,18 @@ static int get_frame_stacktop(Frame *frame) {
   ptrdiff_t stacktop = frame->stackpointer - frame->localsplus;
   assert(stacktop >= 0 && stacktop < get_frame_stacktop_limit(frame));
   return (int)stacktop;
-#else
+#elif PY_MINOR_VERSION >= 11
   int stacktop = frame->stacktop;
   assert(stacktop >= 0 && stacktop < get_frame_stacktop_limit(frame));
   return stacktop;
+#elif PY_MINOR_VERSION == 10
+  assert(frame->f_localsplus);
+  assert(frame->f_valuestack);
+  int stacktop =
+      (int)(frame->f_valuestack - frame->f_localsplus) + frame->f_stackdepth;
+  assert(stacktop >= 0 && stacktop < get_frame_stacktop_limit(frame));
+  return stacktop;
+
 #endif
 }
 
@@ -138,9 +238,17 @@ static void set_frame_stacktop(Frame *frame, int stacktop) {
 #if PY_MINOR_VERSION >= 14
   assert(stacktop >= 0 && stacktop < get_frame_stacktop_limit(frame));
   frame->stackpointer = frame->localsplus + stacktop;
-#else
+#elif PY_MINOR_VERSION >= 11
   assert(stacktop >= 0 && stacktop < get_frame_stacktop_limit(frame));
   frame->stacktop = stacktop;
+#elif PY_MINOR_VERSION == 10
+  assert(stacktop >= 0 && stacktop < get_frame_stacktop_limit(frame));
+  assert(frame->f_localsplus);
+  assert(frame->f_valuestack);
+  int base = (int)(frame->f_valuestack - frame->f_localsplus);
+  assert(stacktop >= base);
+  frame->f_stackdepth = stacktop - base;
+
 #endif
 }
 
@@ -294,8 +402,10 @@ static PyObject *ext_get_frame_stack_at(PyObject *self, PyObject *args) {
 
 #if PY_MINOR_VERSION >= 14
   PyObject *stack_obj = PyStackRef_AsPyObjectBorrow(frame->localsplus[index]);
-#else
+#elif PY_MINOR_VERSION >= 11
   PyObject *stack_obj = frame->localsplus[index];
+#elif PY_MINOR_VERSION == 10
+  PyObject *stack_obj = frame->f_localsplus[index];
 #endif
   if (!stack_obj) {
     is_null = Py_True;
@@ -394,7 +504,13 @@ static PyObject *ext_set_frame_sp(PyObject *self, PyObject *args) {
     }
   }
 #else
+
+#if PY_MINOR_VERSION >= 11
   PyObject **localsplus = frame->localsplus;
+
+#elif PY_MINOR_VERSION == 10
+  PyObject **localsplus = frame->f_localsplus;
+#endif
 
   if (sp > current_sp) {
     for (int i = current_sp; i < sp; i++) {
@@ -515,7 +631,12 @@ static PyObject *ext_set_frame_stack_at(PyObject *self, PyObject *args) {
   }
 
 #else
+
+#if PY_MINOR_VERSION >= 11
   PyObject **localsplus = frame->localsplus;
+#elif PY_MINOR_VERSION == 10
+  PyObject **localsplus = frame->f_localsplus;
+#endif
 
   PyObject *prev = localsplus[index];
   if (PyObject_IsTrue(unset)) {

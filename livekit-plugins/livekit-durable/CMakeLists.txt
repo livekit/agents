@@ -10,7 +10,7 @@ target_include_directories(lk_durable PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/livekit/durable
 )
 
-target_compile_definitions(lk_durable PRIVATE Py_BUILD_CORE)
+# target_compile_definitions(lk_durable PRIVATE Py_BUILD_CORE)
 
 # from https://github.com/pybind/pybind11/blob/d4f9cfbc2866f2156e1b17cb478a67088c6063f6/tools/pybind11NewTools.cmake#L146
 execute_process(
