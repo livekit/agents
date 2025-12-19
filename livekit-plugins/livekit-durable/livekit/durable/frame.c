@@ -126,10 +126,10 @@ static PyCodeObject *get_frame_code(Frame *frame) {
 #if PY_MINOR_VERSION >= 14
   PyObject *executable = PyStackRef_AsPyObjectBorrow(frame->f_executable);
   PyCodeObject *code = (PyCodeObject *)executable;
+#elif PY_MINOR_VERSION >= 13
+  PyCodeObject *code = (PyCodeObject *)frame->f_executable;
 #elif PY_MINOR_VERSION >= 10
   PyCodeObject *code = (PyCodeObject *)frame->f_code;
-#else
-  PyCodeObject *code = (PyCodeObject *)frame->f_executable;
 #endif
   assert(code);
   return code;
@@ -627,7 +627,6 @@ static PyObject *ext_set_frame_stack_at(PyObject *self, PyObject *args) {
 
 #if PY_MINOR_VERSION >= 11
   PyObject **localsplus = frame->localsplus;
-
 #elif PY_MINOR_VERSION == 10
   PyObject **localsplus = frame->f_localsplus;
 #endif
