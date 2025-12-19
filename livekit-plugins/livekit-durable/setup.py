@@ -94,7 +94,7 @@ setuptools.setup(
     package_data={"livekit.durable": ["py.typed"]},
     cmdclass={"build_ext": CMakeBuild},
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.9.0",
+    python_requires=">=3.10.0,<3.15",
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
