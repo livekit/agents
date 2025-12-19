@@ -42,6 +42,8 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
 )
 
+lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+
 
 @dataclass
 class InputTranscription:
@@ -471,9 +473,12 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        chat_ctx = chat_ctx.copy(
+            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+        )
         async with self._session_lock:
             if not self._active_session:
-                self._chat_ctx = chat_ctx.copy()
+                self._chat_ctx = chat_ctx
                 return
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
@@ -488,9 +493,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(
-                exclude_function_call=True,
-            ).to_provider_format(format="google", inject_dummy_user_message=False)
+            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                format="google", inject_dummy_user_message=False
+            )
             # we are not generating, and do not need to inject
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(
@@ -505,7 +510,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
-        self._chat_ctx = chat_ctx.copy()
+        self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
@@ -684,6 +689,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._active_session = session
                         turns_dict, _ = self._chat_ctx.copy(
                             exclude_function_call=True,
+                            exclude_handoff=True,
+                            exclude_instructions=True,
+                            exclude_empty_message=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
@@ -772,6 +780,20 @@ class RealtimeSession(llm.RealtimeSession):
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
+                if lk_google_debug and isinstance(
+                    msg,
+                    (
+                        types.LiveClientContent,
+                        types.LiveClientToolResponse,
+                        types.LiveClientRealtimeInput,
+                    ),
+                ):
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not msg.media_chunks:
+                        logger.debug(
+                            f">>> sent {type(msg).__name__}",
+                            extra={"content": msg.model_dump(exclude_defaults=True)},
+                        )
+
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
@@ -790,15 +812,41 @@ class RealtimeSession(llm.RealtimeSession):
                         break
 
                 async for response in session.receive():
+                    if lk_google_debug:
+                        resp_copy = response.model_dump(exclude_defaults=True)
+                        # remove audio from debugging logs
+                        if (
+                            (sc := resp_copy.get("server_content"))
+                            and (mt := sc.get("model_turn"))
+                            and (parts := mt.get("parts"))
+                        ):
+                            for part in parts:
+                                if part and part.get("inline_data"):
+                                    part["inline_data"] = "<audio>"
+                        logger.debug("<<< received response", extra={"response": resp_copy})
+
                     if not self._current_generation or self._current_generation._done:
-                        if response.server_content and response.server_content.interrupted:
-                            # interrupt a generation already done
-                            self._handle_input_speech_started()
-                            # reset the flag and still start a new generation in case it has any other content
-                            response.server_content.interrupted = False
+                        if (sc := response.server_content) and sc.interrupted:
+                            # two cases an interrupted event is sent without an active generation
+                            # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
+                            # 2) the generation is not started (interrupted -> turn_complete)
+                            # for both cases, we interrupt the agent if there is no pending generation from `generate_reply`
+                            # for the second case, the pending generation will be stopped by `turn_complete` event coming later
+                            if not self._pending_generation_fut:
+                                self._handle_input_speech_started()
+
+                            sc.interrupted = None
+                            sc_copy = sc.model_dump(exclude_none=True)
+                            if not sc_copy:
+                                # ignore empty server content
+                                response.server_content = None
+                                if lk_google_debug:
+                                    logger.debug("ignoring empty server content")
 
                         if self._is_new_generation(response):
                             self._start_new_generation()
+                            if lk_google_debug:
+                                logger.debug(f"new generation started: {self._current_generation}")
 
                     if response.session_resumption_update:
                         if (
@@ -990,7 +1038,8 @@ class RealtimeSession(llm.RealtimeSession):
         if server_content.generation_complete or server_content.turn_complete:
             current_gen._completed_timestamp = time.time()
 
-        if server_content.interrupted:
+        if server_content.interrupted and not self._pending_generation_fut:
+            # interrupt agent if there is no pending user initiated generation
             self._handle_input_speech_started()
 
         if server_content.turn_complete:
@@ -1043,6 +1092,8 @@ class RealtimeSession(llm.RealtimeSession):
         gen.function_ch.close()
         gen.message_ch.close()
         gen._done = True
+        if lk_google_debug:
+            logger.debug(f"generation done {gen}")
 
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
@@ -1197,9 +1248,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         if (sc := resp.server_content) and (
             sc.model_turn
-            or (sc.output_transcription and sc.output_transcription.text is not None)
-            or (sc.input_transcription and sc.input_transcription.text is not None)
-            or (sc.interrupted is not None)
+            or (sc.output_transcription and sc.output_transcription is not None)
+            or (sc.input_transcription and sc.input_transcription is not None)
+            or (sc.generation_complete is not None)
             or (sc.turn_complete is not None)
         ):
             return True

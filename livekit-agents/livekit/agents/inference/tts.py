@@ -362,7 +362,11 @@ class TTS(tts.TTS):
             ws = await asyncio.wait_for(
                 session.ws_connect(f"{base_url}/tts", headers=headers), timeout
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (
+            aiohttp.ClientConnectorError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit TTS quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit TTS") from e

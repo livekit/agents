@@ -324,21 +324,38 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info = Field()
+        field_info: FieldInfo | None = None
+        field_attrs: dict[str, Any] = {}
 
         # Annotated[str, Field(description="...")]
         if get_origin(type_hint) is Annotated:
             annotated_args = get_args(type_hint)
             type_hint = annotated_args[0]
-            field_info = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), field_info
+            annotated_field = next(
+                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
             )
+            if annotated_field and hasattr(annotated_field, "asdict"):
+                # `asdict` is available after pydantic 2.12
+                field_attrs = annotated_field.asdict()["attributes"]
+            elif annotated_field:
+                field_attrs["default"] = annotated_field.default
+                field_attrs["description"] = annotated_field.description
+                field_info = annotated_field
 
-        if default_value is not ... and field_info.default is PydanticUndefined:
-            field_info.default = default_value
+        if (
+            default_value is not ...
+            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
+        ):
+            field_attrs["default"] = default_value
 
-        if field_info.description is None:
-            field_info.description = param_docs.get(param_name, None)
+        if field_attrs.get("description") is None:
+            field_attrs["description"] = param_docs.get(param_name, None)
+
+        if not field_info:
+            field_info = Field(**field_attrs)
+        else:
+            for k, v in field_attrs.items():
+                setattr(field_info, k, v)
 
         fields[param_name] = (type_hint, field_info)
 
