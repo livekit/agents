@@ -1,8 +1,8 @@
-import pickle
 import asyncio
-from livekit import durable
+import pickle
 from types import coroutine
-from dataclasses import dataclass
+
+from livekit import durable
 
 
 @coroutine
@@ -25,14 +25,13 @@ class EffectCall:
         return "EffectCall"
 
 
-
 async def my_network_call() -> None:
     # some request here
     pass
 
+
 @durable.durable
 async def my_function_tool() -> None:
-    
     result = await EffectCall(my_network_call)
 
     await EffectCall(asyncio.sleep(5))
@@ -50,16 +49,16 @@ assert isinstance(my_effect, EffectCall)
 pickle.dumps(g)
 
 
-
-
-
 import pickle
+
 from livekit import durable
+
 
 @durable.durable
 def my_generator():
     for i in range(3):
         yield i
+
 
 g = my_generator()
 print(next(g))  # 0
