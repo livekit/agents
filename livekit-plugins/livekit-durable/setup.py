@@ -79,7 +79,6 @@ setuptools.setup(
     url="https://github.com/livekit/agents",
     classifiers=[
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: Apache Software License",
         "Topic :: Multimedia :: Sound/Audio",
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",

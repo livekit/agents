@@ -1,4 +1,59 @@
 import pickle
+import asyncio
+from livekit import durable
+from types import coroutine
+from dataclasses import dataclass
+
+
+@coroutine
+@durable.durable
+def yields(n):
+    return (yield n)
+
+
+class EffectCall:
+    def __init__(self, external_coro) -> None:
+        self._c = external_coro
+
+    def __await__(self):
+        return yields(self)
+
+    def __reduce_ex__(self, protocol):
+        return (type(self), (None,))
+
+    def __repr__(self) -> None:
+        return "EffectCall"
+
+
+
+async def my_network_call() -> None:
+    # some request here
+    pass
+
+@durable.durable
+async def my_function_tool() -> None:
+    
+    result = await EffectCall(my_network_call)
+
+    await EffectCall(asyncio.sleep(5))
+    await MyAgentTask()
+
+
+g = my_function_tool().__await__()
+
+pickle.dumps(g)
+
+my_effect = next(g)
+print(my_effect)
+assert isinstance(my_effect, EffectCall)
+
+pickle.dumps(g)
+
+
+
+
+
+import pickle
 from livekit import durable
 
 @durable.durable
