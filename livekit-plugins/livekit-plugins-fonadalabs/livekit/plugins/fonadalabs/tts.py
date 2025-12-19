@@ -12,12 +12,12 @@ from typing import Literal
 import aiohttp
 
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
+    APIConnectionError,
     APIStatusError,
-    utils,
+    DEFAULT_API_CONNECT_OPTIONS,
     tts,
+    utils,
 )
 
 from .log import logger
@@ -56,7 +56,7 @@ class TTS(tts.TTS):
         num_channels: Number of audio channels (default: 1, mono)
         http_session: Optional aiohttp.ClientSession instance to use (for advanced use)
     """
-    
+
     def __init__(
         self,
         *,
@@ -73,7 +73,7 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
-        
+
         self._api_key = api_key or os.environ.get("FONADALABS_API_KEY")
         if not self._api_key:
             raise ValueError(
@@ -84,22 +84,22 @@ class TTS(tts.TTS):
         if voice and voice.strip() and voice.strip() != "Vaanee":
             logger.warning(f"Voice '{voice}' is not supported. Using 'Vaanee' instead.")
         self._voice = "Vaanee"
-        
+
         # Validate language
         supported_languages = ["Hindi", "English", "Tamil", "Telugu"]
         if not language or not language.strip():
             raise ValueError(f"Language is required. Supported languages: {', '.join(supported_languages)}")
-        
+
         language_normalized = language.strip()
         if language_normalized not in supported_languages:
             raise ValueError(
                 f"Language '{language}' is not supported. "
                 f"Supported languages: {', '.join(supported_languages)}"
             )
-        
+
         self._language = language_normalized
         self._base_url = (api_url or FONADALABS_TTS_BASE_URL).rstrip("/")
-        
+
         # Build WebSocket URL
         if api_url:
             ws_url = api_url.replace("http://", "ws://").replace("https://", "wss://")
@@ -107,14 +107,14 @@ class TTS(tts.TTS):
                 ws_url = ws_url.rstrip("/") + "/tts/generate-audio-ws"
         else:
             ws_url = FONADALABS_TTS_WS_URL
-        
+
         self._ws_url = ws_url
         self._http_session = http_session
         self._own_session = http_session is None
         if self._own_session:
             self._http_session = aiohttp.ClientSession()
 
-    async def synthesize(self, text: str) -> "SynthesizeStream":
+    async def synthesize(self, text: str) -> SynthesizeStream:
         """Synthesize speech from text."""
         return SynthesizeStream(
             tts=self,
@@ -126,24 +126,27 @@ class TTS(tts.TTS):
         self,
         *,
         conn_options: APIConnectOptions | None = None,
-    ) -> "SynthesizeStream":
+    ) -> SynthesizeStream:
         """Create a streaming TTS session - required by LiveKit agents framework.
-        
+
         This method is called by LiveKit agents framework to get a streaming TTS instance.
         The text will be provided to the stream via the input channel.
-        
+
         Args:
             conn_options: Connection options for the stream
-            
+
         Returns:
             SynthesizeStream instance that can accept text via its input channel
         """
+        # The SynthesizeStream expects the text argument as a keyword, not as a positional arg.
+        # This is correct because LiveKit agents framework expects a streaming TTS object
+        # which receives text segments asynchronously via an input channel, not at instantiation.
+        # By passing 'text=None' as a keyword argument, the SynthesizeStream knows to expect text on its input channel.
         return SynthesizeStream(
             tts=self,
             conn_options=conn_options or DEFAULT_API_CONNECT_OPTIONS,
             text=None,  # Text will be provided via input channel
         )
-
     async def aclose(self) -> None:
         """Close the TTS instance and cleanup resources."""
         if self._own_session and self._http_session and not self._http_session.closed:
@@ -181,7 +184,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             num_channels=self._tts.num_channels,
             mime_type="audio/pcm",
         )
-        
+
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             """Send TTS request."""
             try:
@@ -197,15 +200,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                         if not hasattr(self, '_input_ch'):
                             logger.error("_input_ch not found on SynthesizeStream", extra=self._build_log_context())
                             raise ValueError("_input_ch not available on SynthesizeStream")
-                        
+
                         logger.debug(f"_input_ch type: {type(self._input_ch)}", extra=self._build_log_context())
-                        
+
                         # Read all segments from input channel until it's closed
                         segment_count = 0
                         async for segment in self._input_ch:
                             segment_count += 1
                             logger.debug(f"Received segment {segment_count}: type={type(segment)}, value={str(segment)[:50]}...", extra=self._build_log_context())
-                            
+
                             # Handle different segment types
                             if isinstance(segment, str):
                                 text_segments.append(segment)
@@ -222,7 +225,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             else:
                                 # Try to convert to string
                                 text_segments.append(str(segment))
-                        
+
                         logger.info(f"Finished reading from input channel: {segment_count} segments, {len(text_segments)} text segments", extra=self._build_log_context())
                     except asyncio.CancelledError:
                         logger.warning("Reading from input channel was cancelled", extra=self._build_log_context())
@@ -230,17 +233,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     except Exception as e:
                         logger.error(f"Error reading from input channel: {e}", exc_info=True, extra=self._build_log_context())
                         raise ValueError(f"Failed to read text from input channel: {e}")
-                    
+
                     if not text_segments:
                         logger.error("No text segments received from input channel", extra=self._build_log_context())
                         raise ValueError(
                             "No text provided. Use synthesize(text) or provide text via input channel."
                         )
-                    
+
                     # Concatenate text segments (join with space)
                     text = " ".join(text_segments)
                     logger.info(f"Read text from input channel ({len(text_segments)} segments, {len(text)} chars): {text[:100]}...", extra=self._build_log_context())
-                
+
                 request_data = {
                     "api_key": self._tts._api_key,
                     "text": text,
@@ -284,7 +287,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             self._connection_state = ConnectionState.CONNECTING
-            
+
             # Create WebSocket connection using aiohttp
             timeout = aiohttp.ClientTimeout(total=self._conn_options.timeout)
             ws = await self._tts._http_session.ws_connect(
@@ -295,7 +298,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._connection_state = ConnectionState.CONNECTED
 
             logger.info("WebSocket connected successfully", extra=self._build_log_context())
-            
+
             try:
 
                 self._send_task = asyncio.create_task(send_task(ws))
@@ -363,12 +366,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 logger.debug("Generation complete event received", extra=self._build_log_context())
                 output_emitter.end_input()
                 return False  # Stop processing
-            
+
             # Check for errors - check multiple indicators
             if status == "error" or msg_type == "error" or resp.get("error") or resp.get("error_message"):
                 await self._handle_error_message(resp)
                 return False  # Stop processing on error
-            
+
             # Handle other message types
             if msg_type == "audio":
                 return await self._handle_audio_message(resp, output_emitter)
@@ -420,12 +423,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Handle error messages from the API."""
         # Log the full response for debugging
         logger.debug(f"Error response received: {resp}", extra=self._build_log_context())
-        
+
         # Check multiple possible locations for error message
         error_data = resp.get("data", {})
         if not isinstance(error_data, dict):
             error_data = {}
-        
+
         # Try to get error message from various locations
         error_msg = (
             error_data.get("message") or 
@@ -438,10 +441,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             (str(error_data) if error_data and error_data != {} else None) or
             "Unknown error"
         )
-        
+
         error_code = error_data.get("code") or resp.get("code") or resp.get("error_code", "unknown")
         error_type = error_data.get("error") or error_data.get("type") or resp.get("type") or resp.get("error_type", "")
-        
+
         # If we still have "Unknown error", log the full response
         if error_msg == "Unknown error" or not error_msg:
             logger.warning(
