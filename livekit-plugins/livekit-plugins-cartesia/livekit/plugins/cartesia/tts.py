@@ -523,7 +523,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             logger.exception(
                 "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                extra={"cartesia_context_id": cartesia_context_id, "error": e},
+                extra={"cartesia_context_id": cartesia_context_id},
             )
             raise APIConnectionError() from e
 
