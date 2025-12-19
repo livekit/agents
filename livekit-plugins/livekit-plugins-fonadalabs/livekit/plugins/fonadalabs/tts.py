@@ -11,8 +11,8 @@ from typing import Literal
 
 import aiohttp
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
+    APIConnectionError,
     APIStatusError,
     DEFAULT_API_CONNECT_OPTIONS,
     tts,
