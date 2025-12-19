@@ -183,6 +183,13 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Extra data for this function call. Can include provider-specific data
+    (e.g., extra["google"] for thought signatures)."""
+    group_id: str | None = None
+    """Optional group ID for parallel function calls. When multiple function calls
+    should be grouped together (e.g., parallel tool calls from a single API response),
+    set this to a shared value. If not set, falls back to using id for grouping."""
 
 
 class FunctionCallOutput(BaseModel):
@@ -279,6 +286,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
+        exclude_handoff: bool = False,
         tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -316,6 +324,9 @@ class ChatContext:
                 continue
 
             if exclude_empty_message and item.type == "message" and not item.content:
+                continue
+
+            if exclude_handoff and item.type == "agent_handoff":
                 continue
 
             if (

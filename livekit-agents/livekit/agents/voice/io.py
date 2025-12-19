@@ -10,7 +10,7 @@ from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
-from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..types import FlushSentinel, TimedString as TimedString
 from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?
@@ -41,22 +41,6 @@ TTSNode = Callable[
         Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
     ],
 ]
-
-
-class TimedString(str):
-    start_time: NotGivenOr[float]
-    end_time: NotGivenOr[float]
-
-    def __new__(
-        cls,
-        text: str,
-        start_time: NotGivenOr[float] = NOT_GIVEN,
-        end_time: NotGivenOr[float] = NOT_GIVEN,
-    ) -> TimedString:
-        obj = super().__new__(cls, text)
-        obj.start_time = start_time
-        obj.end_time = end_time
-        return obj
 
 
 class AudioInput:

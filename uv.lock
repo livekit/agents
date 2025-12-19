@@ -70,6 +70,7 @@ members = [
     "livekit-plugins-turn-detector",
     "livekit-plugins-ultravox",
     "livekit-plugins-upliftai",
+    "livekit-plugins-xai",
 ]
 constraints = [{ name = "onnxruntime", marker = "python_full_version == '3.9.*'", specifier = "<1.20.0" }]
 
@@ -1660,7 +1661,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.0.22"
+version = "1.0.23"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1668,13 +1669,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/11/da/05e47ed90a5b31b517fa9e4e379d19202da12202ecd14978d6b366e4de2c/livekit-1.0.22.tar.gz", hash = "sha256:e1dbfae3a00ca9eb76326d829395348d89ceea111df2c8dc585f9a90bc98e388", size = 321769 }
+sdist = { url = "https://files.pythonhosted.org/packages/3e/c1/f830461f707f11294e5e4c0209dfdb5ece28d04c9a4131c87dd134589d40/livekit-1.0.23.tar.gz", hash = "sha256:890bf0b4062b1b6ea7213bef5c39a04c18cfa5021ca7171ce979219caf568f57", size = 321690 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/b5/624fa36a2dd8b5e050a41727e0e2cde1359849a7b3a582f207695d768f2e/livekit-1.0.22-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:cda2233f8a1cc58dcefbd7a1a009a4cff8a75e8d4ceb7748f912ee6c70d1afd3", size = 11064184 },
-    { url = "https://files.pythonhosted.org/packages/c4/7a/a7f6877c3bc2d128d4c5040fd8ce7d5b6d3d617b8728b56aa86052d09582/livekit-1.0.22-py3-none-macosx_11_0_arm64.whl", hash = "sha256:5ff84a22da406d93fd690b2eddac80a964271ab60d4b9d1e11ceb4111f4ba7b1", size = 9835258 },
-    { url = "https://files.pythonhosted.org/packages/38/f3/a1c674e91b295d29fcbed4c1a9fa92aa36e85e58c0f89926e49b5816284d/livekit-1.0.22-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:b2f93f4635fac3c09f9f43319fba4c55a63000ee9abfe2ca5c299f89fca923fb", size = 15401621 },
-    { url = "https://files.pythonhosted.org/packages/83/c8/71490d3f433aa110298cad061b4ac61d320b4ae1c3f2d28ec5b247680c48/livekit-1.0.22-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:8be8bcb6bf23d305f39ee627e2a1668da607b478453dcc3e67cdeedfe0bb1f02", size = 12615712 },
-    { url = "https://files.pythonhosted.org/packages/db/aa/8282c358a0fc2b46571eeae7ad2d1c0483a7ecc3038d1812a3d1ea4e7eaa/livekit-1.0.22-py3-none-win_amd64.whl", hash = "sha256:25da46b4bdbf5bb1ff8cf6e8d918b7d6c338ce5f608305bef2a6ff8881710c94", size = 11743481 },
+    { url = "https://files.pythonhosted.org/packages/88/40/77984b969293ed9ed4fad3d4423146557fb0dcfa634229bc2f08ffbc701c/livekit-1.0.23-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:e2cdea92fad7d1ccf97ee93c13b1577ef2a2e6faaae2f5e6b753d628c33eb618", size = 11061728 },
+    { url = "https://files.pythonhosted.org/packages/37/cb/e3d24c0166576387d1d80a1fe8ffdf9a0fa999c11360d428de6c4c2299a2/livekit-1.0.23-py3-none-macosx_11_0_arm64.whl", hash = "sha256:8a6638fc15025fc1fccb299ffaa4776f2bb5fa1accb749316e1d610a33086432", size = 9835290 },
+    { url = "https://files.pythonhosted.org/packages/d4/17/34030bc8b015f1a470979382a762738996c9cab1aa03aac5c14953c6b3e3/livekit-1.0.23-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:e195f9b6e3afb66d8ef304bb4931367a161372cc078deaef2ead90aa0b25adbe", size = 15159729 },
+    { url = "https://files.pythonhosted.org/packages/eb/8c/084d10d329c8f8e1d4121e36968c61699b30f45e5d20d15a5a49a2266825/livekit-1.0.23-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:9acb18617241a54a973bad2c1f22d097eb2254a7b0e7eed1d56b6e54face872b", size = 12629199 },
+    { url = "https://files.pythonhosted.org/packages/25/1c/a002ae03576abcb64ab9a168398c88b1a44bc97fba351037f4c67da10aa8/livekit-1.0.23-py3-none-win_amd64.whl", hash = "sha256:68adfd55ad54eb439eb67c8299fc47ae137180c60445786180f85811d28877d0", size = 11747026 },
 ]
 
 [[package]]
@@ -1853,6 +1854,9 @@ ultravox = [
 upliftai = [
     { name = "livekit-plugins-upliftai" },
 ]
+xai = [
+    { name = "livekit-plugins-xai" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1864,7 +1868,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=1.0.22,<2" },
+    { name = "livekit", specifier = ">=1.0.23,<2" },
     { name = "livekit-api", specifier = ">=1.0.7,<2" },
     { name = "livekit-blingfire", specifier = "~=1.0" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
@@ -1911,6 +1915,7 @@ requires-dist = [
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
+    { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-protocol", specifier = ">=1.1,<2" },
     { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.10.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
@@ -1932,7 +1937,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "nvidia", "openai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hedra", "hume", "images", "inworld", "langchain", "lmnt", "mcp", "minimax", "mistralai", "neuphonic", "nltk", "nvidia", "openai", "resemble", "rime", "sarvam", "silero", "simli", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2614,6 +2619,16 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
 ]
+
+[[package]]
+name = "livekit-plugins-xai"
+source = { editable = "livekit-plugins/livekit-plugins-xai" }
+dependencies = [
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-protocol"

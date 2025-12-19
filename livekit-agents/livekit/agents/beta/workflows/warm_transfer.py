@@ -131,7 +131,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         prev_convo = ""
         if chat_ctx:
             context_copy = chat_ctx.copy(
-                exclude_empty_message=True, exclude_instructions=True, exclude_function_call=True
+                exclude_empty_message=True,
+                exclude_instructions=True,
+                exclude_function_call=True,
+                exclude_handoff=True,
             )
             for msg in context_copy.items:
                 if msg.type != "message":

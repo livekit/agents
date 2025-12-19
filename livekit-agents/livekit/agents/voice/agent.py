@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -380,6 +381,15 @@ class Agent:
 
             conn_options = activity.session.conn_options.stt_conn_options
             async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                _audio_input_started_at: float = (
+                    activity.session._recorder_io.recording_started_at
+                    if activity.session._recorder_io
+                    and activity.session._recorder_io.recording_started_at
+                    else activity.session._started_at
+                    if activity.session._started_at
+                    else time.time()
+                )
+                stream.start_time_offset = time.time() - _audio_input_started_at
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
