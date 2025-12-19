@@ -232,7 +232,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raise
                     except Exception as e:
                         logger.error(f"Error reading from input channel: {e}", exc_info=True, extra=self._build_log_context())
-                        raise ValueError(f"Failed to read text from input channel: {e}")
+                        raise ValueError(f"Failed to read text from input channel: {e}") from e
 
                     if not text_segments:
                         logger.error("No text segments received from input channel", extra=self._build_log_context())
@@ -431,10 +431,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         # Try to get error message from various locations
         error_msg = (
-            error_data.get("message") or 
-            error_data.get("error") or 
-            resp.get("message") or 
-            resp.get("error") or 
+            error_data.get("message") or
+            error_data.get("error") or
+            resp.get("message") or
+            resp.get("error") or
             resp.get("error_message") or
             error_data.get("detail") or
             resp.get("detail") or
