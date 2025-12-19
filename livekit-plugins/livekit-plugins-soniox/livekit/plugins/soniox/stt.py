@@ -318,7 +318,7 @@ class SpeechStream(stt.SpeechStream):
             logger.error(f"Error while sending keep alive message: {e}")
 
     async def _prepare_audio_task(self):
-        """Read audio frames, process VAD, and enqueue PCM data for sending."""
+        """Read audio frames and enqueue PCM data for sending."""
         if not self._ws:
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
             return
