@@ -9,12 +9,20 @@
 #error Python 3.10-3.14 is required
 #endif
 
-#include "internal/pycore_code.h"
 
+/* only for internal headers */
+#define Py_BUILD_CORE
+#include "internal/pycore_code.h"
 #if PY_MINOR_VERSION == 14
 #include "internal/pycore_interpframe_structs.h"
 #include "internal/pycore_stackref.h"
 #endif
+#if PY_MINOR_VERSION >= 11
+#include "internal/pycore_frame.h"
+#endif
+#undef Py_BUILD_CORE
+
+
 
 // This is a redefinition of the private PyTryBlock from <= 3.10.
 // https://github.com/python/cpython/blob/3.8/Include/frameobject.h#L10
@@ -27,7 +35,6 @@ typedef struct {
 } PyTryBlock;
 
 #if PY_MINOR_VERSION >= 11
-#include "internal/pycore_frame.h"
 
 typedef _PyInterpreterFrame Frame;
 
