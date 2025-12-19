@@ -27,7 +27,7 @@ on:
 jobs:
   build_plugins:
     runs-on: ubuntu-latest
-    if: inputs.package != 'livekit-plugins-browser' && inputs.package != 'livekit-blingfire'
+    if: inputs.package != 'livekit-plugins-browser' && inputs.package != 'livekit-blingfire' && inputs.package != 'livekit-durable'
     steps:
       - uses: actions/checkout@v4
         with:
