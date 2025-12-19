@@ -44,7 +44,6 @@ BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 
 # WebSocket messages and tokens.
 KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
-FINALIZE_MESSAGE = '{"type": "finalize"}'
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
