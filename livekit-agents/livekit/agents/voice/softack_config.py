@@ -7,6 +7,50 @@ and provides utilities for soft-ack validation.
 import os
 import string
 from typing import Set
+from pathlib import Path
+
+# Load .env file to ensure environment variables are available
+try:
+    from dotenv import load_dotenv
+    
+    env_path = None
+    current_dir = Path.cwd()
+    
+    # Search strategy:
+    # 1. Current working directory
+    # 2. Parent directories up to 5 levels
+    # 3. Known locations: examples/voice_agents/, examples/
+    
+    search_locations = [current_dir] + list(current_dir.parents[:10])
+    
+    for search_dir in search_locations:
+        # Direct .env in this directory
+        candidate = search_dir / '.env'
+        if candidate.exists():
+            env_path = candidate
+            break
+        
+        # Check examples/voice_agents/.env
+        candidate = search_dir / 'examples' / 'voice_agents' / '.env'
+        if candidate.exists():
+            env_path = candidate
+            break
+        
+        # Check examples/.env.example as fallback
+        candidate = search_dir / 'examples' / '.env.example'
+        if candidate.exists():
+            env_path = candidate
+            break
+    
+    if env_path:
+        load_dotenv(env_path)
+    else:
+        # No .env file found, try default load_dotenv() behavior
+        load_dotenv()
+        
+except ImportError:
+    # dotenv not installed, skip loading (env vars might be set via other means)
+    pass
 
 
 def _load_soft_acks_from_env() -> Set[str]:
@@ -18,16 +62,24 @@ def _load_soft_acks_from_env() -> Set[str]:
     Returns:
         Set of lowercase soft-ack words. Defaults to standard set if env var not set.
     """
+    import logging #c
+    logger = logging.getLogger("livekit.agents.voice.softacks") #c
+    
     env_value = os.getenv("LIVEKIT_SOFT_ACKS", "").strip()
+    
+    logger.info(f"[SOFTACK_CONFIG] LIVEKIT_SOFT_ACKS env var: '{env_value}'") #c
     
     if env_value:
         # Parse comma-separated values and normalize
         soft_acks = {item.strip().lower() for item in env_value.split(",") if item.strip()}
         if soft_acks:  # Only use if non-empty
+            logger.info(f"[SOFTACK_CONFIG] Loaded custom soft-acks from env: {soft_acks}")#c
             return soft_acks
     
     # Default soft-ack set
-    return {"okay", "yeah", "uhhuh", "ok", "hmm", "right"}
+    default_set = {"okay", "yeah", "uhhuh", "ok", "hmm", "right"} #c
+    logger.info(f"[SOFTACK_CONFIG] Using default soft-acks: {default_set}") #c
+    return default_set #c
 
 
 # Global soft-ack set loaded at module import
