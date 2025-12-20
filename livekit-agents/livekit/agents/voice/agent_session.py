@@ -767,11 +767,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._activity is not None:
                 if not drain:
                     try:
-                        await self._activity.interrupt()
+                        # force interrupt speeches when closing the session
+                        await self._activity.interrupt(force=True)
                     except RuntimeError:
                         # uninterruptible speech
-                        # TODO(long): force interrupt or wait for it to finish?
-                        # it might be an audio played from the error callback
                         pass
                 await self._activity.drain()
 
