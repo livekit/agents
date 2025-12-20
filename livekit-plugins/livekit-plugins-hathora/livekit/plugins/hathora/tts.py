@@ -219,7 +219,7 @@ class ChatterboxChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         should_flush = False
         try:
-            url = f"{self._base_url}"
+            url = f"{self._opts.base_url}"
 
             url_query_params = []
             if self._opts.exaggeration is not None:
