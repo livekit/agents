@@ -558,14 +558,19 @@ class LLMStream(llm.LLMStream):
             )
             return chat_chunk
 
-        if not part.text:
-            return None
-
-        extra= None
+        # Strip thinking tokens
+        content = part.text if not part.thought else None
+        delta_extra= None
         if part.thought:
-            extra = { "google": { "is_thought": True }}
+            delta_extra = { "google": { "thinking": part.text }}
+
+        if not content and not delta_extra:
+            return None
 
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(content=part.text, role="assistant", extra=extra),
+            delta=llm.ChoiceDelta(
+                content=content,
+                role="assistant",
+                extra=delta_extra),
         )
