@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, TypeAlias
 
 from livekit import rtc
 
@@ -44,8 +44,9 @@ class NoiseCancellationParams:
     track: rtc.Track
 
 
-NoiseCancellationSelector = Callable[
-    [NoiseCancellationParams], Optional[rtc.NoiseCancellationOptions]
+NoiseCancellationSelector: TypeAlias = Callable[
+    [NoiseCancellationParams],
+    rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None,
 ]
 
 
@@ -65,7 +66,12 @@ class AudioInputOptions:
     num_channels: int = 1
     frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None = None
+    noise_cancellation: (
+        rtc.NoiseCancellationOptions
+        | NoiseCancellationSelector
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None
+    ) = None
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
@@ -242,7 +248,9 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     audio_frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: rtc.NoiseCancellationOptions | None = None
+    noise_cancellation: rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None = (
+        None
+    )
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,

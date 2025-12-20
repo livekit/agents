@@ -724,6 +724,7 @@ class RealtimeSession(
                 exclude_function_call=True,
                 exclude_instructions=True,
                 exclude_empty_message=True,
+                exclude_handoff=True,
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -1103,6 +1104,7 @@ class RealtimeSession(
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
+            chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_instructions=True)
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
 
@@ -1340,7 +1342,9 @@ class RealtimeSession(
             )
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
-            chat_ctx = self.chat_ctx.copy()
+            chat_ctx = self.chat_ctx.copy(
+                exclude_handoff=True,
+            )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
                 assert new_item.type == "message"
@@ -1664,12 +1668,12 @@ class RealtimeSession(
                     .get("cached_tokens_details", {})
                     .get("image_tokens", 0),
                 ),
-                image_tokens=0,
+                image_tokens=usage.get("input_token_details", {}).get("image_tokens", 0),
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
-                image_tokens=0,
+                image_tokens=usage.get("output_token_details", {}).get("image_tokens", 0),
             ),
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider

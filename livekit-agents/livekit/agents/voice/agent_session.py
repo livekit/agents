@@ -207,10 +207,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 register as an interruption. Default ``0.5`` s.
             min_interruption_words (int): Minimum number of words to consider
                 an interruption, only used if stt enabled. Default ``0``.
-            min_endpointing_delay (float): Minimum time-in-seconds the agent
-                must wait after a potential end-of-utterance signal (from VAD
-                or an EOU model) before it declares the user’s turn complete.
-                Default ``0.5`` s.
+            min_endpointing_delay (float): Minimum time-in-seconds since the
+                last detected speech before the agent declares the user’s turn
+                complete. In VAD mode this effectively behaves like
+                max(VAD silence, min_endpointing_delay); in STT mode it is
+                applied after the STT end-of-speech signal, so it can be
+                additive with the STT provider’s endpointing delay. Default
+                ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
@@ -764,11 +767,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._activity is not None:
                 if not drain:
                     try:
-                        await self._activity.interrupt()
+                        # force interrupt speeches when closing the session
+                        await self._activity.interrupt(force=True)
                     except RuntimeError:
                         # uninterruptible speech
-                        # TODO(long): force interrupt or wait for it to finish?
-                        # it might be an audio played from the error callback
                         pass
                 await self._activity.drain()
 

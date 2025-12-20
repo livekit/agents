@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -380,6 +381,15 @@ class Agent:
 
             conn_options = activity.session.conn_options.stt_conn_options
             async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                _audio_input_started_at: float = (
+                    activity.session._recorder_io.recording_started_at
+                    if activity.session._recorder_io
+                    and activity.session._recorder_io.recording_started_at
+                    else activity.session._started_at
+                    if activity.session._started_at
+                    else time.time()
+                )
+                stream.start_time_offset = time.time() - _audio_input_started_at
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
@@ -584,8 +594,11 @@ class Agent:
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:
         """
-        Minimum time-in-seconds the agent must wait after a potential end-of-utterance signal
-        before it declares the user’s turn complete.
+        Minimum time-in-seconds since the last detected speech before the agent
+        declares the user’s turn complete. In VAD mode this effectively behaves
+        like max(VAD silence, min_endpointing_delay); in STT mode it is applied
+        after the STT end-of-speech signal, so it can be additive with the STT
+        provider’s endpointing delay.
 
         If this property was set at Agent creation, it will be used at runtime instead of the session's value.
         """
