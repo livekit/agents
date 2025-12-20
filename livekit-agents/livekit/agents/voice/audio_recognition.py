@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import string
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
+from .softack_config import SOFT_ACK_SET
 from . import io
 from ._utils import _set_participant_attributes
 from .agent import ModelSettings
@@ -372,8 +374,7 @@ class AudioRecognition:
             # Remove punctuation before comparison to handle cases like "Yeah." or "okay?"
             transcript_lower = transcript.strip().lower()
             transcript_clean = transcript_lower.translate(str.maketrans('', '', string.punctuation))
-            soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-            is_soft_ack = transcript_clean in soft_ack_set
+            is_soft_ack = transcript_clean in SOFT_ACK_SET
             if is_soft_ack:
                 logger_debug.debug(f"[AUDIO_RECOGNITION_FINAL] Soft-ack detected: '{transcript_clean}' (raw: '{transcript_lower}'), agent_state={self._session.agent_state}")
                 if self._session.agent_state in ("speaking", "thinking"):

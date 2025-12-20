@@ -17,6 +17,7 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
+from .softack_config import SOFT_ACK_SET
 from ..llm.tool_context import (
     StopResponse,
     ToolFlag,
@@ -122,7 +123,7 @@ class AgentActivity(RecognitionHooks):
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
         
-        # Track when agent finished speaking to filter soft-acks that arrive after transition
+        # Track when agent finished speaking to filter soft-acks in transition window
         self._agent_speech_finished_at: float | None = None
         self._soft_ack_grace_period = 5.0  # 5 second grace period to filter soft-acks after speaking (covers STT processing delays)
         self._last_transcript_was_soft_ack = False  # Flag to prevent state transition on soft-ack
@@ -1276,10 +1277,8 @@ class AgentActivity(RecognitionHooks):
             logger_debug.info(f"[VAD_DONE] speech_duration={ev.speech_duration:.3f}s, agent_state={agent_state}, current_text='{current_text}' (clean: '{current_text_clean}')")
             
             if agent_state in ("speaking", "thinking") and self._audio_recognition is not None:
-                soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-                
                 # If we have confirmed text that matches a soft-ack, block the interrupt
-                if current_text_clean and current_text_clean in soft_ack_set:
+                if current_text_clean and current_text_clean in SOFT_ACK_SET:
                     logger_debug.warning(f"[SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack '{current_text_clean}' while agent_state={agent_state}")
                     # Skip interrupt to preserve speaking state, let STT final transcript handler decide
                     return
@@ -1308,7 +1307,7 @@ class AgentActivity(RecognitionHooks):
                             
                             # Check if it's a soft-ack - if so, don't interrupt
                             if agent_state_after in ("speaking", "thinking"):
-                                if current_text_clean_after and current_text_clean_after in soft_ack_set:
+                                if current_text_clean_after and current_text_clean_after in SOFT_ACK_SET:
                                     logger_debug.warning(f"[SOFT-ACK_GUARD_DELAYED] BLOCKING interrupt for soft-ack '{current_text_clean_after}' (detected after grace period)")
                                     return
                                 
@@ -1333,13 +1332,12 @@ class AgentActivity(RecognitionHooks):
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
-        # SOFT-ACK FILTERING: Only drop soft-acks when agent is actively processing (speaking OR thinking)
+        
         import string
         text_lower = ev.alternatives[0].text.strip().lower()
         # Remove punctuation for soft-ack comparison
         text_clean = text_lower.translate(str.maketrans('', '', string.punctuation))
-        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-        is_soft_ack = text_clean in soft_ack_set
+        is_soft_ack = text_clean in SOFT_ACK_SET
         agent_state = self._session.agent_state
         logger_debug.info(f"[INTERIM_TRANSCRIPT] text='{text_lower}' (clean: '{text_clean}'), is_soft_ack={is_soft_ack}, agent_state={agent_state}")
         
@@ -1387,8 +1385,7 @@ class AgentActivity(RecognitionHooks):
         text_lower = ev.alternatives[0].text.strip().lower()
         # Remove punctuation for soft-ack comparison
         text_clean = text_lower.translate(str.maketrans('', '', string.punctuation))
-        soft_ack_set = {"okay", "yeah", "uh-huh", "ok", "hmm", "right"}
-        is_soft_ack = text_clean in soft_ack_set
+        is_soft_ack = text_clean in SOFT_ACK_SET
         agent_state = self._session.agent_state
         logger_debug.info(f"[FINAL_TRANSCRIPT] text='{text_lower}' (clean: '{text_clean}'), is_soft_ack={is_soft_ack}, agent_state={agent_state}, speaking={speaking}")
         
