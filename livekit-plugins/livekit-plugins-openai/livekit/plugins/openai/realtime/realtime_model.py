@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.llm.tool_context import (
+    Toolset,
     get_function_info,
     get_raw_function_info,
     is_function_tool,
@@ -732,9 +733,13 @@ class RealtimeSession(
 
             try:
                 for ev in events:
-                    msg = ev.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
-                    self.emit("openai_client_event_queued", msg)
-                    await ws_conn.send_str(json.dumps(msg))
+                    if isinstance(ev, BaseModel):
+                        ev = ev.model_dump(
+                            by_alias=True, exclude_unset=True, exclude_defaults=False
+                        )
+
+                    self.emit("openai_client_event_queued", ev)
+                    await ws_conn.send_str(json.dumps(ev))
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
@@ -841,7 +846,7 @@ class RealtimeSession(
 
                         logger.debug(f">>> {msg_copy}")
                 except Exception:
-                    break
+                    logger.exception("failed to send event")
 
             closing = True
             await ws_conn.close()
@@ -1180,17 +1185,19 @@ class RealtimeSession(
 
         return events
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Toolset]
+    ) -> None:
         async with self._update_fnc_ctx_lock:
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
-            assert isinstance(ev.session, RealtimeSessionCreateRequest)
-            assert ev.session.tools is not None
+            # assert isinstance(ev.session, RealtimeSessionCreateRequest)
+            # assert ev.session.tools is not None
             retained_tool_names: set[str] = set()
-            for t in ev.session.tools:
-                if isinstance(t, RealtimeFunctionTool) and t.name is not None:
-                    retained_tool_names.add(t.name)
+            for t in ev["session"]["tools"]:
+                if name := t.get("name"):
+                    retained_tool_names.add(name)
                 # TODO(dz): handle MCP tools
             retained_tools = [
                 tool
@@ -1203,9 +1210,10 @@ class RealtimeSession(
             ]
             self._tools = llm.ToolContext(retained_tools)
 
+    # this function can be overrided
     def _create_tools_update_event(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
-    ) -> SessionUpdateEvent:
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Toolset]
+    ) -> dict:
         oai_tools: list[RealtimeFunctionTool] = []
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
@@ -1217,6 +1225,8 @@ class RealtimeSession(
                 tool_desc = tool_info.raw_schema
                 tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
+            elif isinstance(tool, Toolset):
+                continue  # Toolset handled by subclasses (only xAI for now)
             else:
                 logger.error(
                     "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
@@ -1234,7 +1244,7 @@ class RealtimeSession(
                 )
                 continue
 
-        return SessionUpdateEvent(
+        event = SessionUpdateEvent(
             type="session.update",
             session=RealtimeSessionCreateRequest.model_construct(
                 type="realtime",
@@ -1243,6 +1253,9 @@ class RealtimeSession(
             ),
             event_id=utils.shortuuid("tools_update_"),
         )
+
+        event_dict = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+        return event_dict
 
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")
