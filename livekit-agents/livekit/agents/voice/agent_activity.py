@@ -127,6 +127,9 @@ class AgentActivity(RecognitionHooks):
         self._agent_speech_finished_at: float | None = None
         self._soft_ack_grace_period = 5.0  # 5 second grace period to filter soft-acks after speaking (covers STT processing delays)
         self._last_transcript_was_soft_ack = False  # Flag to prevent state transition on soft-ack
+        
+        # Track if a soft-ack was filtered during VAD grace period (independent of current_text)
+        self._soft_ack_detected_in_grace_period = False
 
         # for false interruption handling
         self._paused_speech: SpeechHandle | None = None
@@ -135,6 +138,7 @@ class AgentActivity(RecognitionHooks):
         
         # for soft-ack grace period - wait for STT before interrupting on VAD
         self._vad_grace_period_task: asyncio.Task[None] | None = None
+        self._grace_period_soft_ack_callback: callable | None = None  # Callback to mark soft-ack during grace period
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1288,6 +1292,9 @@ class AgentActivity(RecognitionHooks):
                 if not current_text_clean:
                     logger_debug.info(f"[VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state={agent_state})")
                     
+                    # Reset the flag for this grace period
+                    self._soft_ack_detected_in_grace_period = False
+                    
                     # Cancel any existing grace period task
                     if self._vad_grace_period_task and not self._vad_grace_period_task.done():
                         self._vad_grace_period_task.cancel()
@@ -1296,27 +1303,26 @@ class AgentActivity(RecognitionHooks):
                         try:
                             await asyncio.sleep(0.35)  # Wait 350ms for STT to produce transcript
                             
-                            # Re-check agent state and transcript after grace period
+                            # Re-check agent state and the soft-ack detection flag
                             agent_state_after = self._session.agent_state
-                            current_text_after = ""
-                            if self._audio_recognition is not None:
-                                current_text_after = self._audio_recognition.current_transcript.strip().lower()
-                            current_text_clean_after = current_text_after.translate(str.maketrans('', '', string.punctuation))
                             
-                            logger_debug.info(f"[VAD_GRACE_PERIOD_END] After 350ms: agent_state={agent_state_after}, current_text='{current_text_after}' (clean: '{current_text_clean_after}')")
+                            logger_debug.info(f"[VAD_GRACE_PERIOD_END] After 350ms: agent_state={agent_state_after}, soft_ack_detected_this_period={self._soft_ack_detected_in_grace_period}")
                             
-                            # Check if it's a soft-ack - if so, don't interrupt
+                            # If agent is still speaking/thinking, check if a soft-ack was detected
                             if agent_state_after in ("speaking", "thinking"):
-                                if current_text_clean_after and current_text_clean_after in SOFT_ACK_SET:
-                                    logger_debug.warning(f"[SOFT-ACK_GUARD_DELAYED] BLOCKING interrupt for soft-ack '{current_text_clean_after}' (detected after grace period)")
+                                if self._soft_ack_detected_in_grace_period:
+                                    logger_debug.warning(f"[SOFT-ACK_GUARD_DELAYED] BLOCKING interrupt - soft-ack was filtered during grace period")
                                     return
                                 
-                                # If still speaking but not a soft-ack, interrupt
-                                logger_debug.info(f"[VAD_INTERRUPT_DELAYED] After grace period, interrupting: agent_state={agent_state_after}, text='{current_text_clean_after}'")
+                                # If no soft-ack was detected, it's a real interruption, proceed with interrupt
+                                logger_debug.info(f"[VAD_INTERRUPT_DELAYED] After grace period, no soft-ack detected, proceeding with interrupt")
                                 self._interrupt_by_audio_activity()
                         except asyncio.CancelledError:
                             logger_debug.debug(f"[VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled")
                             pass
+                        finally:
+                            # Always reset the flag when grace period completes
+                            self._soft_ack_detected_in_grace_period = False
                     
                     self._vad_grace_period_task = asyncio.create_task(_check_for_soft_ack_after_delay())
                     return
@@ -1344,8 +1350,13 @@ class AgentActivity(RecognitionHooks):
         if is_soft_ack and agent_state in ("speaking", "thinking"):
             # Silently ignore soft-ack while agent is actively processing
             logger_debug.warning(f"[INTERIM_FILTER] Filtering soft-ack '{text_clean}' (agent in {agent_state})")
+            # Mark that a soft-ack was filtered (if we're in a grace period)
+            if self._vad_grace_period_task and not self._vad_grace_period_task.done():
+                self._soft_ack_detected_in_grace_period = True
             return
 
+        # Reset the grace period flag since we're processing valid user input
+        self._soft_ack_detected_in_grace_period = False
         # Reset the grace period timestamp since we're processing valid user input
         self._agent_speech_finished_at = None
         
@@ -1392,11 +1403,16 @@ class AgentActivity(RecognitionHooks):
         if is_soft_ack and agent_state in ("speaking", "thinking"):
             # Silently ignore soft-ack while agent is actively processing
             logger_debug.warning(f"[FINAL_FILTER] Filtering soft-ack '{text_clean}' (agent in {agent_state})")
+            # Mark that a soft-ack was filtered (if we're in a grace period)
+            if self._vad_grace_period_task and not self._vad_grace_period_task.done():
+                self._soft_ack_detected_in_grace_period = True
             return
         
         if is_soft_ack:
             logger_debug.info(f"[FINAL_PROCESS] Processing soft-ack '{text_clean}' because agent_state={agent_state}")
 
+        # Reset the grace period flag since we're processing valid user input
+        self._soft_ack_detected_in_grace_period = False
         # Reset the grace period timestamp since we're processing valid user input
         self._agent_speech_finished_at = None
         
