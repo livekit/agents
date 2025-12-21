@@ -76,7 +76,6 @@ class STT(stt.STT):
         params: dict[str, Any] | SimplismartSTTOptions = SimplismartSTTOptions(),
         http_session: aiohttp.ClientSession | None = None,
     ):
-
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=False,
@@ -97,6 +96,7 @@ class STT(stt.STT):
         self._base_url = base_url
         self._logger = logger.getChild(self.__class__.__name__)
         self._session = http_session
+
     @property
     def model(self) -> str:
         return "whisper"
@@ -117,10 +117,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-
-        language = (
-            self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
-        )
+        language = self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
         audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
@@ -140,9 +137,7 @@ class STT(stt.STT):
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
-                    self._logger.error(
-                        f"Simplismart API error: {res.status} - {error_text}"
-                    )
+                    self._logger.error(f"Simplismart API error: {res.status} - {error_text}")
                     raise APIStatusError(
                         message=f"Simplismart API Error: {error_text}",
                         status_code=res.status,

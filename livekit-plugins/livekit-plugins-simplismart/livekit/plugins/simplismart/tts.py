@@ -25,7 +25,6 @@ class SimplismartTTSOptions(BaseModel):
 
 
 class TTS(tts.TTS):
-
     def __init__(
         self,
         *,
@@ -76,20 +75,16 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "ChunkedStream":
-
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = tts._opts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-
         payload = self._opts.model_dump()
         payload["prompt"] = self._input_text
         payload["voice"] = self._tts._voice
