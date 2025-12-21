@@ -1206,6 +1206,7 @@ class RealtimeSession(
                     is_raw_function_tool(tool)
                     and get_raw_function_info(tool).name in retained_tool_names
                 )
+                or isinstance(tool, ProviderTool)
             ]
             self._tools = llm.ToolContext(retained_tools)
 

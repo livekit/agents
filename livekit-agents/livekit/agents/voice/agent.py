@@ -152,7 +152,9 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         """
         Updates the agent's available function tools.
 
@@ -166,7 +168,13 @@ class Agent:
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
-        invalid = [t for t in tools if not (is_function_tool(t) or is_raw_function_tool(t) or isinstance(t, llm.ProviderTool))]
+        invalid = [
+            t
+            for t in tools
+            if not (
+                is_function_tool(t) or is_raw_function_tool(t) or isinstance(t, llm.ProviderTool)
+            )
+        ]
         if invalid:
             kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
             raise TypeError(
