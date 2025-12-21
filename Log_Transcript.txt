@@ -1,0 +1,922 @@
+#Log Transcript of one conversation showing soft ack interrupt handling
+
+PS C:\Users\Chaitanya Roy\OneDrive\Desktop\AI_Agent> cd agents
+PS C:\Users\Chaitanya Roy\OneDrive\Desktop\AI_Agent\agents> python .\examples\voice_agents\basic_agent.py console
+
+    Agents   Starting console mode 🚀
+
+    20:26:00.434 DEBUG  asyncio            Using proactor: IocpProactor  
+    20:26:00.437 INFO   livekit.agents     starting worker {"version": "1.3.6", "rtc-version": "1.0.20"}
+    20:26:00.438 INFO   livekit.agents     starting inference executor  
+    20:26:00.469 INFO   livekit.agents     initializing process {"pid": 22928, "inference": true}
+    20:26:03.748 INFO   livekit.agents     process initialized {"pid": 22928, "inference": true, "elapsed_time": 3.28}
+    20:26:03.751 INFO   livekit.agents     HTTP server listening on :56521  
+    20:26:03.762 INFO   livekit.agents     initializing job runner {"tid": 21064}
+    20:26:03.852 DEBUG  asyncio            Using proactor: IocpProactor  
+    20:26:03.854 INFO   livekit.agents     job runner initialized {"tid": 21064, "elapsed_time": 0.09}
+    20:26:04.136 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] initializing -> initializing {"room": "mock_room"}
+    20:26:04.139 DEBUG  livekit.agents     http_session(): creating a new httpclient ctx {"room": "mock_room"}
+    20:26:04.381 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] initializing -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: initializing -> listening, closing=False
+SESSION: Emitted agent_state_changed event: initializing -> listening
+    20:26:04.383 DEBUG  livekit.agents     using audio io: `Console` -> `AgentSession` -> `Console` {"room": "mock_room"}
+    20:26:04.384 WARNI… livekit.agents     resume_false_interruption is enabled but audio output does not support pause, it will be ignored  
+                                         {"audio_output": "Console", "room": "mock_room"}
+    20:26:04.385 DEBUG  livekit.agents     using transcript io: `AgentSession` -> (none) {"room": "mock_room"}
+    20:26:04.387 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> thinking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: listening -> thinking, closing=False
+SESSION: Emitted agent_state_changed event: listening -> thinking
+    20:26:07.351 INFO   livekit.agents     LLM metrics  
+                                         {"model_name": "openai/gpt-4.1-mini", "model_provider": "livekit", "ttft": 2.71, "prompt_tokens": 151, 
+"prompt_cached_tokens": 0, "completion_tokens": 22, "tokens_per_second": 6.86, "room": "mock_room"}
+    20:26:07.430 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] thinking -> speaking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: thinking -> speaking, closing=False
+SESSION: Emitted agent_state_changed event: thinking -> speaking
+    20:26:08.934 INFO   livekit.agents     TTS metrics  
+                                         {"model_name": "cartesia/sonic-2", "model_provider": "livekit", "ttfb": 0.2762512000044808, "audio_duration": 5.62,     
+"room": "mock_room"}
+    20:26:10.868 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 5.75, "room": "mock_room"}
+    20:26:12.146 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 1.3, "room": "mock_room"}
+    20:26:12.644 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 0.5, "room": "mock_room"}
+    20:26:13.057 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] speaking -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: speaking -> listening, closing=False
+SESSION: Emitted agent_state_changed event: speaking -> listening
+    20:26:13.063 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> listening {"room": "mock_room"}
+    20:26:13.447 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 0.8, "room": "mock_room"}
+    20:26:15.043 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 1.6, "room": "mock_room"}
+    20:26:15.529 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.533 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.536 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.545 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.547 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.549 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.551 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.552 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.554 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.555 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.557 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.558 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.620 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.623 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.626 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.629 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.631 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.632 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.635 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.636 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.638 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.719 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.722 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.726 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.730 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.732 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.734 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.737 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.740 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.743 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.831 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.835 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.837 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.845 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.848 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.850 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.851 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.896s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.853 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.854 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.941 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.928s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.944 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.946 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.948 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.960s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.950 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.952 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:15.954 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.992s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:15.955 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:15.957 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.020 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.024s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:16.021 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.024 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.028 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.056s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:16.029 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.031 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.033 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.088s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:16.034 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.035 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.036 DEBUG  livekit.….softacks [AUDIO_RECOGNITION] Setting interim transcript to: 'Tell me about his' {"room": "mock_room"}
+    20:26:16.037 INFO   livekit.….softacks [INTERIM_TRANSCRIPT] text='tell me about his' (clean: 'tell me about his'), is_soft_ack=False, agent_state=listening  
+                                           {"room": "mock_room"}
+    20:26:16.039 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.120 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.120s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.128 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.130 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.134 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.152s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.136 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.138 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.140 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.184s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.143 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.144 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.229 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.216s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.234 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.237 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.244 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.248s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.247 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.250 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.251 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.280s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.253 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.254 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.329 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.312s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.335 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.337 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.340 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.344s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.344 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.346 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.349 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.376s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.351 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.352 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.353 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.408s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.355 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.357 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.419 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.440s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.425 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.428 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.431 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.472s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.434 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.436 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.446 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.504s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.448 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.449 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.518 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.536s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.522 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.526 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.530 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.568s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.532 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.534 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.535 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.600s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.537 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.538 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.629 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.632s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.635 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.637 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.641 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.664s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.644 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.645 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.646 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.696s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.648 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.649 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.729 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.728s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.734 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.736 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.742 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.760s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.746 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.748 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.750 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.792s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.752 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.753 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.820 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.824s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.826 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.829 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.832 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.856s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.836 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.837 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.840 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.888s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.842 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.844 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.917 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.920s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.921 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.922 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.926 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.952s, agent_state=listening, current_text='tell me about his' (clean: 'tell me about     
+                                           his')                                                                                                                 
+                                           {"room": "mock_room"}
+    20:26:16.928 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:16.929 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.949 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 1.9, "room": "mock_room"}
+    20:26:16.951 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Tell me about history of India.' {"room": "mock_room"}
+    20:26:16.952 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='tell me about history of india.' (clean: 'tell me about history of india'),                  
+                                           is_soft_ack=False, agent_state=listening, speaking=False                                                              
+                                           {"room": "mock_room"}
+    20:26:16.955 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:16.956 DEBUG  livekit.agents     received user transcript  
+                                         {"user_transcript": "Tell me about history of India.", "language": "en", "transcript_delay": 0.596778392791748, "room": 
+"mock_room"}
+    20:26:16.958 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Appending transcript to _audio_transcript {"room": "mock_room"}
+    20:26:17.020 DEBUG  livekit.…_detector eou prediction  
+                                           {"eou_probability": 0.6193848252296448, "duration": 0.054, "input": "<|im_start|>assistant\nhey what can i do for you 
+today want to chat need info or something fun<|im_end|>\n<|im_start|>user\ntell me about history of india", "room": "mock_room"}
+DEBUG: _user_turn_completed_task called with transcript='Tell me about history of India.'
+    20:26:17.026 DEBUG  livekit.agents     using preemptive generation {"preemptive_lead_time": 0.06596875190734863, "room": "mock_room"}
+    20:26:17.027 INFO   livekit.agents     EOU metrics  
+                                         {"model_name": "multilingual", "model_provider": "livekit", "end_of_utterance_delay": 0.67, "transcription_delay": 0.6, 
+"room": "mock_room"}
+    20:26:17.029 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> thinking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: listening -> thinking, closing=False
+SESSION: Emitted agent_state_changed event: listening -> thinking
+    20:26:17.949 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] thinking -> speaking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: thinking -> speaking, closing=False
+SESSION: Emitted agent_state_changed event: thinking -> speaking
+    20:26:19.115 INFO   livekit.agents     LLM metrics  
+                                         {"model_name": "openai/gpt-4.1-mini", "model_provider": "livekit", "ttft": 0.57, "prompt_tokens": 187, 
+"prompt_cached_tokens": 0, "completion_tokens": 120, "tokens_per_second": 55.72, "room": "mock_room"}
+    20:26:21.917 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 4.9, "room": "mock_room"}
+    20:26:25.324 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:25.332 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:26:25.336 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:25.338 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:26:25.340 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:26:25.431 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:25.433 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:26:25.435 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:26:25.437 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:25.439 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:26:25.442 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:26:25.445 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:25.446 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:26:25.447 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:26:25.519 DEBUG  livekit.….softacks [AUDIO_RECOGNITION] Setting interim transcript to: 'Yeah.' {"room": "mock_room"}
+    20:26:25.522 INFO   livekit.….softacks [INTERIM_TRANSCRIPT] text='yeah.' (clean: 'yeah'), is_soft_ack=True, agent_state=speaking {"room": "mock_room"}       
+    20:26:25.526 WARNI… livekit.….softacks [INTERIM_FILTER] Filtering soft-ack 'yeah' (agent in speaking) {"room": "mock_room"}
+    20:26:25.533 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.536 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.539 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.541 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.542 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.546 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.617 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.620 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.625 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.629 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.631 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.633 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.719 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:25.725 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:25.733 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.85, "room": "mock_room"}
+    20:26:25.737 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Yeah.' {"room": "mock_room"}
+    20:26:25.740 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='yeah.' (clean: 'yeah'), is_soft_ack=True, agent_state=speaking, speaking=False  
+                                           {"room": "mock_room"}
+    20:26:25.744 WARNI… livekit.….softacks [FINAL_FILTER] Filtering soft-ack 'yeah' (agent in speaking) {"room": "mock_room"}
+    20:26:25.747 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Soft-ack detected: 'yeah' (raw: 'yeah.'), agent_state=speaking {"room": "mock_room"}        
+    20:26:25.748 WARNI… livekit.….softacks [AUDIO_RECOGNITION_FINAL] FILTERING soft-ack 'yeah' because agent in speaking state {"room": "mock_room"}
+    20:26:25.802 INFO   livekit.….softacks [VAD_GRACE_PERIOD_END] After 350ms: agent_state=speaking, soft_ack_detected_this_period=True {"room": "mock_room"}    
+    20:26:25.804 WARNI… livekit.….softacks [SOFT-ACK_GUARD_DELAYED] BLOCKING interrupt - soft-ack was filtered during grace period {"room": "mock_room"}
+    20:26:27.839 INFO   livekit.agents     TTS metrics  
+                                         {"model_name": "cartesia/sonic-2", "model_provider": "livekit", "ttfb": 0.2719553999922937, "audio_duration": 34.78,    
+"room": "mock_room"}
+    20:26:28.523 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.527 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.629 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.634 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.637 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.643 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.656 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.659 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.729 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.733 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.736 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.738 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.744 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=speaking, current_text='yeah.' (clean: 'yeah')  
+                                           {"room": "mock_room"}
+    20:26:28.747 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'yeah' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.786 DEBUG  livekit.….softacks [AUDIO_RECOGNITION] Setting interim transcript to: 'Uh-huh.' {"room": "mock_room"}
+    20:26:28.790 INFO   livekit.….softacks [INTERIM_TRANSCRIPT] text='uh-huh.' (clean: 'uhhuh'), is_soft_ack=True, agent_state=speaking {"room": "mock_room"}    
+    20:26:28.795 WARNI… livekit.….softacks [INTERIM_FILTER] Filtering soft-ack 'uhhuh' (agent in speaking) {"room": "mock_room"}
+    20:26:28.818 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:28.821 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.824 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:28.829 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.832 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:28.835 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.921 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:28.928 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:28.996 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.25, "room": "mock_room"}
+    20:26:29.001 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Uh-huh.' {"room": "mock_room"}
+    20:26:29.003 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='uh-huh.' (clean: 'uhhuh'), is_soft_ack=True, agent_state=speaking, speaking=False  
+                                           {"room": "mock_room"}
+    20:26:29.007 WARNI… livekit.….softacks [FINAL_FILTER] Filtering soft-ack 'uhhuh' (agent in speaking) {"room": "mock_room"}
+    20:26:29.009 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Soft-ack detected: 'uhhuh' (raw: 'uh-huh.'), agent_state=speaking {"room": "mock_room"}     
+    20:26:29.013 WARNI… livekit.….softacks [AUDIO_RECOGNITION_FINAL] FILTERING soft-ack 'uhhuh' because agent in speaking state {"room": "mock_room"}
+    20:26:32.124 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.128 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.132 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.135 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.222 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.225 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.228 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.231 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.234 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.237 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.329 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.333 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.336 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.342 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.347 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.351 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.352 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.355 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.420 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.427 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.430 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.433 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.435 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.437 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.520 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.896s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:32.527 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:32.533 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.6, "room": "mock_room"}
+    20:26:32.536 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Good.' {"room": "mock_room"}
+    20:26:32.537 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='good.' (clean: 'good'), is_soft_ack=True, agent_state=speaking, speaking=False  
+                                           {"room": "mock_room"}
+    20:26:32.539 WARNI… livekit.….softacks [FINAL_FILTER] Filtering soft-ack 'good' (agent in speaking) {"room": "mock_room"}
+    20:26:32.541 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Soft-ack detected: 'good' (raw: 'good.'), agent_state=speaking {"room": "mock_room"}        
+    20:26:32.543 WARNI… livekit.….softacks [AUDIO_RECOGNITION_FINAL] FILTERING soft-ack 'good' because agent in speaking state {"room": "mock_room"}
+    20:26:35.629 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.0, "room": "mock_room"}
+    20:26:35.933 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:35.936 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.019 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.023 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.030 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.034 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.036 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.038 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.120 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.128 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.132 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.135 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.138 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.141 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.231 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.235 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.238 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.241 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.243 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.246 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.328 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.333 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.337 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.339 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.341 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.896s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.345 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.348 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.928s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.350 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.422 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.960s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.427 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.432 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.992s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:36.435 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:36.671 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 1.1, "room": "mock_room"}
+    20:26:41.625 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 5.0, "room": "mock_room"}
+    20:26:44.522 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:44.526 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:44.628 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=speaking, current_text='uh-huh.' (clean: 'uhhuh')  
+                                           {"room": "mock_room"}
+    20:26:44.633 WARNI… livekit.….softacks [SOFT-ACK_GUARD] BLOCKING interrupt for soft-ack 'uhhuh' while agent_state=speaking {"room": "mock_room"}
+    20:26:44.638 DEBUG  livekit.….softacks [AUDIO_RECOGNITION] Setting interim transcript to: 'Make' {"room": "mock_room"}
+    20:26:44.641 INFO   livekit.….softacks [INTERIM_TRANSCRIPT] text='make' (clean: 'make'), is_soft_ack=False, agent_state=speaking {"room": "mock_room"}       
+    20:26:44.646 WARNI… livekit.….softacks [_INTERRUPT_BY_ACTIVITY] Interrupting current speech, agent_state=speaking {"room": "mock_room"}
+    20:26:44.648 WARNI… livekit.….softacks [_INTERRUPT_BY_ACTIVITY] Interrupting current speech (no pause) {"room": "mock_room"}
+    20:26:44.649 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=speaking, current_text='make' (clean: 'make') {"room": "mock_room"}    
+    20:26:44.650 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=speaking {"room": "mock_room"}
+    20:26:44.651 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=True {"room": "mock_room"}
+    20:26:44.653 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=speaking, current_text='make' (clean: 'make') {"room": "mock_room"}    
+    20:26:44.654 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=speaking {"room": "mock_room"}
+    20:26:44.655 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=True {"room": "mock_room"}
+    20:26:44.656 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] speaking -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: speaking -> listening, closing=False
+SESSION: Emitted agent_state_changed event: speaking -> listening
+    20:26:44.659 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> listening {"room": "mock_room"}
+    20:26:44.731 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.735 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.737 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:44.742 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.745 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.747 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:44.749 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.751 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.752 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:44.821 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.826 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.828 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:44.831 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.835 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.837 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:44.839 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.841 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.843 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:44.926 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=listening, current_text='make' (clean: 'make')  
+                                           {"room": "mock_room"}
+    20:26:44.930 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:44.931 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:45.122 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.4, "room": "mock_room"}
+    20:26:45.129 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Wait.' {"room": "mock_room"}
+    20:26:45.132 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='wait.' (clean: 'wait'), is_soft_ack=False, agent_state=listening, speaking=False  
+                                           {"room": "mock_room"}
+    20:26:45.136 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:45.138 DEBUG  livekit.agents     received user transcript  
+                                         {"user_transcript": "Wait.", "language": "en", "transcript_delay": 0.8079392910003662, "room": "mock_room"}
+    20:26:45.140 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Appending transcript to _audio_transcript {"room": "mock_room"}
+    20:26:45.285 DEBUG  livekit.…_detector eou prediction  
+                                           {"eou_probability": 0.00846689473837614, "duration": 0.137, "input": "<|im_start|>assistant\nhey what can i do for you
+today want to chat need info or something fun<|im_end|>\n<|im_start|>user\ntell me about history of india<|im_end|>\n<|im_start|>assistant\nindia's history is   
+rich and diverse spanning thousands of years it started with ancient civilizations like the indus valley around 2500 bce followed by the vedic period shaping its
+culture and religion empires like the maurya and gupta were golden eras of art and science india faced invasions and influences from persians greeks mughals and 
+the british who ruled until 1947 the country gained independence through a non-violent movement led by figures like gandhi today india is a vibrant democracy    
+with deep historical roots want details on a specific era<|im_end|>\n<|im_start|>user\nwait", "room": "mock_room"}
+    20:26:45.454 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 0.4, "room": "mock_room"}
+    20:26:46.024 INFO   livekit.agents     LLM metrics  
+                                         {"model_name": "openai/gpt-4.1-mini", "model_provider": "livekit", "ttft": 0.77, "prompt_tokens": 316, 
+"prompt_cached_tokens": 0, "completion_tokens": 10, "tokens_per_second": 11.4, "room": "mock_room"}
+    20:26:46.868 INFO   livekit.agents     TTS metrics  
+                                         {"model_name": "cartesia/sonic-2", "model_provider": "livekit", "ttfb": 0.26109439998981543, "audio_duration": 2.46,    
+"room": "mock_room"}
+DEBUG: _user_turn_completed_task called with transcript='Wait.'
+    20:26:47.340 DEBUG  livekit.agents     using preemptive generation {"preemptive_lead_time": 2.1975059509277344, "room": "mock_room"}
+    20:26:47.343 INFO   livekit.agents     EOU metrics  
+                                         {"model_name": "multilingual", "model_provider": "livekit", "end_of_utterance_delay": 3.01, "transcription_delay": 0.81,
+"room": "mock_room"}
+    20:26:47.349 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> thinking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: listening -> thinking, closing=False
+SESSION: Emitted agent_state_changed event: listening -> thinking
+    20:26:47.355 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] thinking -> speaking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: thinking -> speaking, closing=False
+SESSION: Emitted agent_state_changed event: thinking -> speaking
+    20:26:49.822 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] speaking -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: speaking -> listening, closing=False
+SESSION: Emitted agent_state_changed event: speaking -> listening
+    20:26:49.830 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> listening {"room": "mock_room"}
+    20:26:50.430 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 5.0, "room": "mock_room"}
+    20:26:52.523 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.528 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.531 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.534 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.536 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.538 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.629 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.632 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.635 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.639 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.641 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.644 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.647 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.648 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.650 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.730 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.733 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.735 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.738 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.741 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.744 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.748 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.750 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.751 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.819 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.821 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.823 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.826 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.827 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.829 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.832 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.833 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.834 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.920 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.923 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.928 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:52.932 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.896s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:26:52.934 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:26:52.936 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:53.032 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 2.6, "room": "mock_room"}
+    20:26:53.037 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Yeah.' {"room": "mock_room"}
+    20:26:53.039 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='yeah.' (clean: 'yeah'), is_soft_ack=True, agent_state=listening, speaking=False  
+                                           {"room": "mock_room"}
+    20:26:53.053 INFO   livekit.….softacks [FINAL_PROCESS] Processing soft-ack 'yeah' because agent_state=listening {"room": "mock_room"}
+    20:26:53.054 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:26:53.056 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Soft-ack detected: 'yeah' (raw: 'yeah.'), agent_state=listening {"room": "mock_room"}       
+    20:26:53.057 DEBUG  livekit.agents     received user transcript  
+                                         {"user_transcript": "Yeah.", "language": "en", "transcript_delay": 0.7259647846221924, "room": "mock_room"}
+    20:26:53.059 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Appending transcript to _audio_transcript {"room": "mock_room"}
+    20:26:53.195 DEBUG  livekit.…_detector eou prediction  
+                                           {"eou_probability": 0.024753669276833534, "duration": 0.127, "input": "<|im_start|>assistant\nhey what can i do for   
+you today want to chat need info or something fun<|im_end|>\n<|im_start|>user\ntell me about history of india<|im_end|>\n<|im_start|>assistant\nindia's history  
+is rich and diverse spanning thousands of years it started with ancient civilizations like the indus valley around 2500 bce followed by the vedic period shaping 
+its culture and religion empires like the maurya and gupta were golden eras of art and science india faced invasions and influences from persians greeks mughals 
+and the british who ruled until 1947 the country gained independence through a non-violent movement led by figures like gandhi today india is a vibrant democracy
+with deep historical roots want details on a specific era<|im_end|>\n<|im_start|>user\nwait<|im_end|>\n<|im_start|>assistant\nno rush just say when you're       
+ready<|im_end|>\n<|im_start|>user\nyeah", "room": "mock_room"}
+DEBUG: _user_turn_completed_task called with transcript='Yeah.'
+    20:26:53.199 DEBUG  livekit.agents     using preemptive generation {"preemptive_lead_time": 0.13787460327148438, "room": "mock_room"}
+    20:26:53.200 INFO   livekit.agents     EOU metrics  
+                                         {"model_name": "multilingual", "model_provider": "livekit", "end_of_utterance_delay": 0.87, "transcription_delay": 0.73,
+"room": "mock_room"}
+    20:26:53.202 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> thinking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: listening -> thinking, closing=False
+SESSION: Emitted agent_state_changed event: listening -> thinking
+    20:26:54.041 INFO   livekit.agents     LLM metrics  
+                                         {"model_name": "openai/gpt-4.1-mini", "model_provider": "livekit", "ttft": 0.68, "prompt_tokens": 335, 
+"prompt_cached_tokens": 0, "completion_tokens": 25, "tokens_per_second": 25.55, "room": "mock_room"}
+    20:26:54.224 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] thinking -> speaking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: thinking -> speaking, closing=False
+SESSION: Emitted agent_state_changed event: thinking -> speaking
+    20:26:56.205 INFO   livekit.agents     TTS metrics  
+                                         {"model_name": "cartesia/sonic-2", "model_provider": "livekit", "ttfb": 0.27582450000045355, "audio_duration": 7.34,    
+"room": "mock_room"}
+    20:26:58.023 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 5.0, "room": "mock_room"}
+    20:27:01.223 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.15, "room": "mock_room"}
+    20:27:01.574 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] speaking -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: speaking -> listening, closing=False
+SESSION: Emitted agent_state_changed event: speaking -> listening
+    20:27:01.581 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> listening {"room": "mock_room"}
+    20:27:02.327 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 1.05, "room": "mock_room"}
+    20:27:02.734 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.738 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.741 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.746 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.749 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.751 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.819 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.822 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.825 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.829 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.831 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.835 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.836 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.837 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.839 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.921 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.925 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.929 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.933 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.935 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.937 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:02.941 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:02.942 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:02.944 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.027 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.030 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.031 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.036 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.038 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.039 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.041 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.042 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.044 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.132 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.135 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.137 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.140 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.896s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.143 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.147 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.150 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.928s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.152 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.153 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.220 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.960s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.222 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.223 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.227 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.992s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.229 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.231 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.232 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.024s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.233 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.235 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.317 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.056s, agent_state=listening, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:03.319 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.321 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.326 DEBUG  livekit.….softacks [AUDIO_RECOGNITION] Setting interim transcript to: 'Colonial period' {"room": "mock_room"}
+    20:27:03.329 INFO   livekit.….softacks [INTERIM_TRANSCRIPT] text='colonial period' (clean: 'colonial period'), is_soft_ack=False, agent_state=listening      
+                                           {"room": "mock_room"}
+    20:27:03.331 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.333 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.088s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.335 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.336 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.338 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.120s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.339 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.340 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.429 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.152s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.435 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.438 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.441 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.184s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.444 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.446 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.448 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.216s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.450 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.451 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.529 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.248s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.534 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.536 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.543 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.280s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.546 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.548 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.550 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.312s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.551 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.552 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.553 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.344s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.555 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.556 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.618 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.376s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.621 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.624 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.629 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.408s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.633 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.634 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.636 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.440s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.637 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.638 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.727 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.472s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.730 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.734 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.736 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.504s, agent_state=listening, current_text='colonial period' (clean: 'colonial period')   
+                                           {"room": "mock_room"}
+    20:27:03.738 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.739 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.741 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 1.45, "room": "mock_room"}
+    20:27:03.746 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Colonial period.' {"room": "mock_room"}
+    20:27:03.747 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='colonial period.' (clean: 'colonial period'), is_soft_ack=False, agent_state=listening,      
+                                           speaking=True                                                                                                         
+                                           {"room": "mock_room"}
+    20:27:03.749 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.750 DEBUG  livekit.agents     received user transcript  
+                                         {"user_transcript": "Colonial period.", "language": "en", "transcript_delay": 0.5180282592773438, "room": "mock_room"}  
+    20:27:03.751 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Appending transcript to _audio_transcript {"room": "mock_room"}
+    20:27:03.753 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.536s, agent_state=listening, current_text='colonial period.' (clean: 'colonial period')  
+                                           {"room": "mock_room"}
+    20:27:03.755 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:03.756 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:03.887 DEBUG  livekit.…_detector eou prediction  
+                                           {"eou_probability": 0.6298880577087402, "duration": 0.122, "input": "<|im_start|>assistant\nindia's history is rich   
+and diverse spanning thousands of years it started with ancient civilizations like the indus valley around 2500 bce followed by the vedic period shaping its     
+culture and religion empires like the maurya and gupta were golden eras of art and science india faced invasions and influences from persians greeks mughals and 
+the british who ruled until 1947 the country gained independence through a non-violent movement led by figures like gandhi today india is a vibrant democracy    
+with deep historical roots want details on a specific era<|im_end|>\n<|im_start|>user\nwait<|im_end|>\n<|im_start|>assistant\nno rush just say when you're       
+ready<|im_end|>\n<|im_start|>user\nyeah<|im_end|>\n<|im_start|>assistant\ngreat what part of india's history should we dive into ancient times empires colonial  
+period or independence<|im_end|>\n<|im_start|>user\ncolonial period", "room": "mock_room"}
+DEBUG: _user_turn_completed_task called with transcript='Colonial period.'
+    20:27:03.891 DEBUG  livekit.agents     using preemptive generation {"preemptive_lead_time": 0.1386256217956543, "room": "mock_room"}
+    20:27:03.892 INFO   livekit.agents     EOU metrics  
+                                         {"model_name": "multilingual", "model_provider": "livekit", "end_of_utterance_delay": 0.66, "transcription_delay": 0.52,
+"room": "mock_room"}
+    20:27:03.894 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> thinking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: listening -> thinking, closing=False
+SESSION: Emitted agent_state_changed event: listening -> thinking
+    20:27:05.199 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] thinking -> speaking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: thinking -> speaking, closing=False
+SESSION: Emitted agent_state_changed event: thinking -> speaking
+    20:27:06.284 INFO   livekit.agents     LLM metrics  
+                                         {"model_name": "openai/gpt-4.1-mini", "model_provider": "livekit", "ttft": 0.75, "prompt_tokens": 371, 
+"prompt_cached_tokens": 0, "completion_tokens": 111, "tokens_per_second": 43.94, "room": "mock_room"}
+    20:27:08.143 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 4.45, "room": "mock_room"}
+    20:27:13.040 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 4.9, "room": "mock_room"}
+    20:27:14.347 INFO   livekit.agents     TTS metrics  
+                                         {"model_name": "cartesia/sonic-2", "model_provider": "livekit", "ttfb": 0.282550000003539, "audio_duration": 32.09,     
+"room": "mock_room"}
+    20:27:15.541 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.512s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.543 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.628 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.544s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.631 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.635 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.639 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.576s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.641 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.646 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.647 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.608s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.648 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.649 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.730 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.640s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.732 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.734 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.736 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.672s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.737 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.739 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.742 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.704s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.744 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.746 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.839 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.736s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.843 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.849 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.854 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.768s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.856 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.858 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.862 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.800s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.865 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.866 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.948 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.832s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.952 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.955 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.961 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.864s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.964 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.967 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:15.969 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.896s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:15.970 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:15.972 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:16.033 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.928s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:16.037 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:16.040 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:16.048 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.960s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:16.049 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:16.051 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:16.053 INFO   livekit.….softacks [VAD_DONE] speech_duration=0.992s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:16.054 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:16.055 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:16.131 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.024s, agent_state=speaking, current_text='' (clean: '') {"room": "mock_room"}
+    20:27:16.134 INFO   livekit.….softacks [VAD_GRACE_PERIOD] Starting grace period to wait for STT transcript (agent_state=speaking) {"room": "mock_room"}      
+    20:27:16.138 DEBUG  livekit.….softacks [VAD_GRACE_PERIOD_CANCELLED] Grace period was cancelled {"room": "mock_room"}
+    20:27:16.145 DEBUG  livekit.….softacks [AUDIO_RECOGNITION] Setting interim transcript to: 'Okay. But wait.' {"room": "mock_room"}
+    20:27:16.148 INFO   livekit.….softacks [INTERIM_TRANSCRIPT] text='okay. but wait.' (clean: 'okay but wait'), is_soft_ack=False, agent_state=speaking         
+                                           {"room": "mock_room"}
+    20:27:16.150 WARNI… livekit.….softacks [_INTERRUPT_BY_ACTIVITY] Interrupting current speech, agent_state=speaking {"room": "mock_room"}
+    20:27:16.152 WARNI… livekit.….softacks [_INTERRUPT_BY_ACTIVITY] Interrupting current speech (no pause) {"room": "mock_room"}
+    20:27:16.153 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.056s, agent_state=speaking, current_text='okay. but wait.' (clean: 'okay but wait')      
+                                           {"room": "mock_room"}
+    20:27:16.155 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=speaking {"room": "mock_room"}
+    20:27:16.156 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=True {"room": "mock_room"}
+    20:27:16.157 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] speaking -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: speaking -> listening, closing=False
+SESSION: Emitted agent_state_changed event: speaking -> listening
+    20:27:16.160 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.088s, agent_state=listening, current_text='okay. but wait.' (clean: 'okay but wait')     
+                                           {"room": "mock_room"}
+    20:27:16.163 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:16.165 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=True {"room": "mock_room"}
+    20:27:16.166 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> listening {"room": "mock_room"}
+    20:27:16.237 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.120s, agent_state=listening, current_text='okay. but wait.' (clean: 'okay but wait')     
+                                           {"room": "mock_room"}
+    20:27:16.245 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:16.248 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:16.252 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 3.15, "room": "mock_room"}
+    20:27:16.255 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Raw transcript received: 'Okay. But wait.' {"room": "mock_room"}
+    20:27:16.256 INFO   livekit.….softacks [FINAL_TRANSCRIPT] text='okay. but wait.' (clean: 'okay but wait'), is_soft_ack=False, agent_state=listening,         
+                                           speaking=True                                                                                                         
+                                           {"room": "mock_room"}
+    20:27:16.259 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:16.260 DEBUG  livekit.agents     received user transcript  
+                                         {"user_transcript": "Okay. But wait.", "language": "en", "transcript_delay": 0.5257151126861572, "room": "mock_room"}   
+    20:27:16.262 DEBUG  livekit.….softacks [AUDIO_RECOGNITION_FINAL] Appending transcript to _audio_transcript {"room": "mock_room"}
+    20:27:16.267 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.152s, agent_state=listening, current_text='okay. but wait.' (clean: 'okay but wait')     
+                                           {"room": "mock_room"}
+    20:27:16.269 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:16.270 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:16.275 INFO   livekit.….softacks [VAD_DONE] speech_duration=1.184s, agent_state=listening, current_text='okay. but wait.' (clean: 'okay but wait')     
+                                           {"room": "mock_room"}
+    20:27:16.285 INFO   livekit.….softacks [VAD_INTERRUPT] Calling _interrupt_by_audio_activity, agent_state=listening {"room": "mock_room"}
+    20:27:16.288 DEBUG  livekit.….softacks [_INTERRUPT_BY_ACTIVITY] No current speech to interrupt, current_speech=False {"room": "mock_room"}
+    20:27:16.470 DEBUG  livekit.…_detector eou prediction  
+                                           {"eou_probability": 0.011307933367788792, "duration": 0.172, "input": "<|im_start|>assistant\nno rush just say when   
+you're ready<|im_end|>\n<|im_start|>user\nyeah<|im_end|>\n<|im_start|>assistant\ngreat what part of india's history should we dive into ancient times empires    
+colonial period or independence<|im_end|>\n<|im_start|>user\ncolonial period<|im_end|>\n<|im_start|>assistant\nduring the colonial period india was largely      
+controlled by the british east india company starting in the 18th century which gradually took over from the mughal empire after the 1857 rebellion the british  
+crown directly ruled india until 1947 this time saw major political social and economic changes including railways a legal system and education reforms but also 
+exploitation and resistance movements the push for independence grew strong leading to leaders like gandhi promoting non-violent protests anything specific you  
+want to know about that period<|im_end|>\n<|im_start|>user\nokay but wait", "room": "mock_room"}
+DEBUG: _user_turn_completed_task called with transcript='Okay. But wait.'
+    20:27:16.474 DEBUG  livekit.agents     using preemptive generation {"preemptive_lead_time": 0.208787202835083, "room": "mock_room"}
+    20:27:16.476 INFO   livekit.agents     EOU metrics  
+                                         {"model_name": "multilingual", "model_provider": "livekit", "end_of_utterance_delay": 0.74, "transcription_delay": 0.53,
+"room": "mock_room"}
+    20:27:16.478 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] listening -> thinking {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: listening -> thinking, closing=False
+SESSION: Emitted agent_state_changed event: listening -> thinking
+    20:27:16.507 INFO   livekit.….softacks [VAD_GRACE_PERIOD_END] After 350ms: agent_state=thinking, soft_ack_detected_this_period=False  
+                                           {"room": "mock_room"}
+    20:27:16.510 INFO   livekit.….softacks [VAD_INTERRUPT_DELAYED] After grace period, no soft-ack detected, proceeding with interrupt {"room": "mock_room"}     
+    20:27:16.512 WARNI… livekit.….softacks [_INTERRUPT_BY_ACTIVITY] Interrupting current speech, agent_state=thinking {"room": "mock_room"}
+    20:27:16.513 WARNI… livekit.….softacks [_INTERRUPT_BY_ACTIVITY] Interrupting current speech (no pause) {"room": "mock_room"}
+    20:27:16.515 WARNI… livekit.….softacks [AGENT_STATE_CHANGE] thinking -> listening {"room": "mock_room"}
+SESSION: Emitting agent_state_changed: thinking -> listening, closing=False
+SESSION: Emitted agent_state_changed event: thinking -> listening
+    20:27:21.228 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 5.0, "room": "mock_room"}
+    20:27:21.530 INFO   livekit.agents     STT metrics  
+                                         {"model_name": "deepgram/nova-3", "model_provider": "livekit", "audio_duration": 0.25, "room": "mock_room"}
+    
