@@ -515,8 +515,9 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_tools(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
     ) -> None:
+        function_tools = [t for t in tools if llm.is_function_tool(t) or llm.is_raw_function_tool(t)]
         new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
-            tools, use_parameters_json_schema=False, tool_behavior=self._opts.tool_behavior
+            function_tools, use_parameters_json_schema=False, tool_behavior=self._opts.tool_behavior
         )
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}

@@ -99,7 +99,7 @@ class _PreemptiveGeneration:
     user_message: llm.ChatMessage
     info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
-    tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
     tool_choice: llm.ToolChoice | None
     created_at: float
 
@@ -858,6 +858,8 @@ class AgentActivity(RecognitionHooks):
                         info = get_raw_function_info(tool)
                     elif is_function_tool(tool):
                         info = get_function_info(tool)
+                    else:
+                        continue
 
                     if not info or (info.flags & ToolFlag.IGNORE_ON_ENTER):
                         continue
@@ -1763,7 +1765,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -1794,7 +1796,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,

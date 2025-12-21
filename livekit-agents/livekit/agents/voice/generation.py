@@ -114,7 +114,7 @@ async def _llm_inference_task(
         llm_node = await llm_node
 
     # update the tool context after llm node
-    tool_ctx.update_tools(tools)
+    tool_ctx.update_tools(tools)  # type: ignore
 
     if isinstance(llm_node, str):
         data.generated_text = llm_node

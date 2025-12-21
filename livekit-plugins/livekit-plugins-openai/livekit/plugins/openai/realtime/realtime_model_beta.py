@@ -1049,7 +1049,7 @@ class RealtimeSessionBeta(
                     and get_raw_function_info(tool).name in retained_tool_names
                 )
             ]
-            self._tools = llm.ToolContext(retained_tools)
+            self._tools = llm.ToolContext(retained_tools)  # type: ignore
 
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
