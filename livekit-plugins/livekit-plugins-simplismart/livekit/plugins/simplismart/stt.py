@@ -17,53 +17,54 @@
 This module provides an STT implementation that uses the SimpliSmart API.
 """
 
+import asyncio
+import base64
+import os
+from typing import Any, Literal
+
+import aiohttp
+from pydantic import BaseModel
+
 from livekit.agents import (
-    stt,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    APIConnectionError,
+    stt,
     utils,
 )
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, rtc
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from pydantic import BaseModel
-from typing import Literal, Optional, List, Any
-import os
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-import base64
-import aiohttp
-import asyncio
 
 from .log import logger
 
 
 class SimplismartSTTOptions(BaseModel):
-    language: Optional[str] = None
+    language: str | None = None
     task: Literal["transcribe", "translate"] = "transcribe"
     without_timestamps: bool = True
     vad_model: Literal["silero", "frame"] = "frame"
     vad_filter: bool = True
     word_timestamps: bool = False
-    vad_onset: Optional[float] = 0.5
-    vad_offset: Optional[float] = None
+    vad_onset: float | None = 0.5
+    vad_offset: float | None = None
     min_speech_duration_ms: int = 0
     max_speech_duration_s: float = 30
     min_silence_duration_ms: int = 2000
     speech_pad_ms: int = 400
     diarization: bool = False
-    initial_prompt: Optional[str] = None
-    hotwords: Optional[str] = None
+    initial_prompt: str | None = None
+    hotwords: str | None = None
     num_speakers: int = 0
-    compression_ratio_threshold: Optional[float] = 2.4
+    compression_ratio_threshold: float | None = 2.4
     beam_size: int = 4
     temperature: float = 0.0
     multilingual: bool = False
-    max_tokens: Optional[float] = 400
-    log_prob_threshold: Optional[float] = -1.0
+    max_tokens: float | None = 400
+    log_prob_threshold: float | None = -1.0
     length_penalty: int = 1
     repetition_penalty: float = 1.01
-    suppress_tokens: List[int] = [-1]
+    suppress_tokens: list[int] = [-1]
     strict_hallucination_reduction: bool = False
 
 
@@ -73,7 +74,7 @@ class STT(stt.STT):
         *,
         base_url: str,
         api_key: str | None = None,
-        params: dict[str, Any] | SimplismartSTTOptions = SimplismartSTTOptions(),
+        params: dict[str, Any] | SimplismartSTTOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
@@ -87,6 +88,9 @@ class STT(stt.STT):
         self._api_key = api_key or os.environ.get("SIMPLISMART_API_KEY")
         if not self._api_key:
             raise ValueError("SIMPLISMART_API_KEY is not set")
+
+        if params is None:
+            params = SimplismartSTTOptions()
 
         if isinstance(params, SimplismartSTTOptions):
             self._opts = params

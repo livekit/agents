@@ -1,3 +1,12 @@
+import asyncio
+import os
+from typing import Any
+
+import aiohttp
+
+# from .log import logger
+from pydantic import BaseModel
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -7,14 +16,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-
-# from .log import logger
-from pydantic import BaseModel
-from typing import Any
-import os
-import aiohttp
-import asyncio
 
 
 class SimplismartTTSOptions(BaseModel):
@@ -32,7 +33,7 @@ class TTS(tts.TTS):
         model="simplismart-tts",
         voice="tara",
         api_key: str | None = None,
-        params: dict[str, Any] | SimplismartTTSOptions = SimplismartTTSOptions(),
+        params: dict[str, Any] | SimplismartTTSOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
         **kwargs: Any,
     ) -> None:
@@ -50,6 +51,9 @@ class TTS(tts.TTS):
             raise ValueError("SIMPLISMART_API_KEY is not set")
 
         self._session = http_session
+
+        if params is None:
+            params = SimplismartTTSOptions()
 
         if isinstance(params, SimplismartTTSOptions):
             self._opts = params
