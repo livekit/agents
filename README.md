@@ -94,7 +94,7 @@ Watch the advanced interruption handling in action:
 
 Complete execution logs and debug output from test runs are available in the log transcript file:
 
-**File**: [agents/Log_Transcript.txt](agents/Log_Transcript.txt)
+**File**: [agents/Log_Transcript.txt](Log_Transcript.txt)
 
 This file contains:
 - Full VAD interrupt event logs
