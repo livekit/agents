@@ -113,7 +113,6 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 async for audio_data, _ in resp.content.iter_chunks():
                     output_emitter.push(audio_data)
-                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
