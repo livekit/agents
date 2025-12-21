@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from livekit.agents import llm
 from livekit.agents.llm import FunctionTool, RawFunctionTool
 from livekit.agents.llm.tool_context import (
@@ -12,7 +14,7 @@ __all__ = ["to_fnc_ctx"]
 DEFAULT_REGION = "us-east-1"
 
 
-def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[dict]:
+def to_fnc_ctx(fncs: Sequence[FunctionTool | RawFunctionTool]) -> list[dict]:
     return [_build_tool_spec(fnc) for fnc in fncs]
 
 

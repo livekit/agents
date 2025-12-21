@@ -26,8 +26,10 @@ from livekit.agents.llm import (
     ChatContext,
     FunctionTool,
     FunctionToolCall,
+    ProviderTool,
     RawFunctionTool,
     ToolChoice,
+    ToolContext,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -133,7 +135,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -152,7 +154,9 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tools_list = to_fnc_ctx(tools)
+            tool_context = ToolContext(tools)
+
+            tools_list = to_fnc_ctx(tool_context.function_tools.values())
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 
@@ -216,7 +220,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

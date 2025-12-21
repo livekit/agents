@@ -11,10 +11,12 @@ from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, 
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
+    FunctionTool,
+    ProviderTool,
+    RawFunctionTool,
     ToolChoice,
     utils as llm_utils,
 )
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -71,7 +73,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,

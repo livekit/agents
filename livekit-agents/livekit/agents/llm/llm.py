@@ -336,7 +336,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool | RawFunctionTool]:
+    def tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
         return self._tools
 
     async def aclose(self) -> None:
