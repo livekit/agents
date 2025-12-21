@@ -84,7 +84,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 
 Watch the advanced interruption handling in action:
 
-[![Interruption Handling Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/0.jpg)](https://drive.google.com/file/d/17pmRfW48wyxG8cXvmQnIsIlsIt-WxVDj/view?usp=drivesdk)
+[![Interruption Handling Demo]](Salescode.AI_Assignment_video.mp4)
 
 *Demo showcasing soft-ack filtering, semantic detection, and real-time interruption handling*
 
