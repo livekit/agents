@@ -34,7 +34,8 @@ LiveKit's default VAD system triggers interrupts on any detected speech, includi
 - "Uh-huh"
 - "Hmm" 
 - "Right"
-(Note: In some cases, the STT pipeline may transcribe these soft acknowledgements like ‘hmm’ as a different word. If this occurs, please refer to the logs for the exact recognized transcript.)
+
+
 
 When an agent is actively speaking, these filler words should be **ignored** rather than treated as active interruptions. The original system couldn't distinguish between:
 - ✗ **Passive**: "Yeah, okay" (user acknowledging) → Should NOT interrupt agent
@@ -79,7 +80,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 
 ---
 
-## � Demo Video
+## Demo Video
 
 Watch the advanced interruption handling in action:
 
@@ -89,7 +90,7 @@ Watch the advanced interruption handling in action:
 
 ---
 
-## �🔧 High-Level Solution Design
+## 🔧 High-Level Solution Design
 
 ### Architecture Overview
 
@@ -112,6 +113,7 @@ Is there a semantic interrupt keyword? → YES → INTERRUPT immediately
     ↓ NO
 BLOCK interrupt (passive input while agent speaking)
 ```
+(Note: In some cases, the STT pipeline may transcribe these soft acknowledgements like 'hmm' as a different word. If this occurs, please refer to the logs for the exact recognized transcript.)
 
 ### Key Design Principles
 
@@ -315,7 +317,7 @@ Call: self._interrupt_by_audio_activity()
 
 ---
 
-##  How to Run the Agent
+## 🚀 How to Run the Agent
 
 ### Step 1: Install Dependencies
 
@@ -403,7 +405,7 @@ logging.getLogger("livekit.agents.voice.softacks").setLevel(logging.DEBUG)
 
 ---
 
-## Core concepts
+<!-- ## Core concepts
 
 - Agent: An LLM-based application with defined instructions.
 - AgentSession: A container for agents that manages interactions with end users.
@@ -703,7 +705,7 @@ To get started quickly, try the [Agents Playground](https://agents-playground.li
 python myagent.py start
 ```
 
-Runs the agent with production-ready optimizations.
+Runs the agent with production-ready optimizations. -->
 
 ## Contributing
 
