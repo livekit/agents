@@ -268,7 +268,7 @@ class Agent:
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         model_settings: ModelSettings,
     ) -> (
         AsyncIterable[llm.ChatChunk | str | FlushSentinel]

@@ -382,7 +382,7 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[FunctionTool | RawFunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -405,6 +405,10 @@ class LLMStream(llm.LLMStream):
             )
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
+            tool_context = llm.ToolContext(self._tools)
+            tools_config = create_tools_config(tool_context)
+            if tools_config:
+                self._extra_kwargs["tools"] = tools_config
             http_options = self._llm._opts.http_options or types.HttpOptions(
                 timeout=int(self._conn_options.timeout * 1000)
             )
@@ -420,11 +424,6 @@ class LLMStream(llm.LLMStream):
                 http_options=http_options,
                 **self._extra_kwargs,
             )
-
-            tool_context = llm.ToolContext(self._tools)
-            tools_config = create_tools_config(tool_context)
-            if tools_config:
-                config.tools = tools_config
 
             stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
