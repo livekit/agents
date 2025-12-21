@@ -267,6 +267,27 @@ class ToolContext:
         tools.extend(self._provider_tools)
         return tools
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ToolContext):
+            return False
+
+        if self._tools_map.keys() != other._tools_map.keys():
+            return False
+
+        for name in self._tools_map:
+            if self._tools_map[name] is not other._tools_map[name]:
+                return False
+
+        if len(self._provider_tools) != len(other._provider_tools):
+            return False
+
+        self_provider_ids = {id(tool) for tool in self._provider_tools}
+        other_provider_ids = {id(tool) for tool in other._provider_tools}
+        if self_provider_ids != other_provider_ids:
+            return False
+
+        return True
+
     def update_tools(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
         self._tools = tools.copy()
 
