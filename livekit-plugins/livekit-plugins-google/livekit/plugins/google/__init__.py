@@ -22,7 +22,6 @@ See https://docs.livekit.io/agents/integrations/stt/google/ for more information
 from . import beta, realtime, tools
 from .llm import LLM
 from .stt import STT, SpeechStream
-from .tools import _LLMTool
 from .tts import TTS
 from .version import __version__
 
@@ -34,7 +33,6 @@ __all__ = [
     "__version__",
     "beta",
     "LLM",
-    "_LLMTool",
     "tools",
 ]
 from livekit.agents import Plugin
