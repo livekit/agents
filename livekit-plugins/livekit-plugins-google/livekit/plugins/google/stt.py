@@ -460,7 +460,10 @@ class SpeechStream(stt.SpeechStream):
         if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(model):
+            old_version = self._config.version
             self._config.model = model
+            if self._config.version != old_version:
+                self._pool.invalidate()
         if is_given(min_confidence_threshold):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(keywords):
@@ -486,6 +489,7 @@ class SpeechStream(stt.SpeechStream):
                         enable_automatic_punctuation=self._config.punctuate,
                         enable_word_time_offsets=self._config.enable_word_time_offsets,
                         enable_spoken_punctuation=self._config.spoken_punctuation,
+                        enable_word_confidence=self._config.enable_word_confidence,
                     ),
                 ),
                 streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
@@ -572,19 +576,21 @@ class SpeechStream(stt.SpeechStream):
         ) -> None:
             has_started = False
             async for resp in stream:
-                if resp.speech_event_type in {
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN,
-                    cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN,
-                }:
+                if resp.speech_event_type == (
+                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
+                    if self._config.version == 2
+                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
+                ):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
                     has_started = True
 
-                if resp.speech_event_type in {
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED,  # noqa: E501
-                    cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED,  # noqa: E501
-                }:
+                if resp.speech_event_type == (
+                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                    if self._config.version == 2
+                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                ):
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(
                         resp,
@@ -621,10 +627,11 @@ class SpeechStream(stt.SpeechStream):
                             self._reconnect_event.set()
                             return
 
-                if resp.speech_event_type in {
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END,
-                    cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END,
-                }:
+                if resp.speech_event_type == (
+                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                    if self._config.version == 2
+                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                ):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
@@ -688,6 +695,18 @@ def _duration_to_seconds(duration: Duration | timedelta) -> float:
     return duration.seconds + duration.nanos / 1e9
 
 
+def _get_start_time(word: cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo) -> float:
+    if hasattr(word, "start_offset"):
+        return _duration_to_seconds(word.start_offset)
+    return _duration_to_seconds(word.start_time)
+
+
+def _get_end_time(word: cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo) -> float:
+    if hasattr(word, "end_offset"):
+        return _duration_to_seconds(word.end_offset)
+    return _duration_to_seconds(word.end_time)
+
+
 def _recognize_response_to_speech_event(
     resp: cloud_speech_v2.RecognizeResponse | cloud_speech_v1.RecognizeResponse,
 ) -> stt.SpeechEvent:
@@ -702,8 +721,8 @@ def _recognize_response_to_speech_event(
     # Google STT may return empty results when spoken_lang != stt_lang
     if resp.results:
         try:
-            start_time = _duration_to_seconds(resp.results[0].alternatives[0].words[0].start_offset)
-            end_time = _duration_to_seconds(resp.results[-1].alternatives[0].words[-1].end_offset)
+            start_time = _get_start_time(resp.results[0].alternatives[0].words[0])
+            end_time = _get_end_time(resp.results[-1].alternatives[0].words[-1])
         except IndexError:
             # When enable_word_time_offsets=False, there are no "words" to access
             start_time = end_time = 0
@@ -721,8 +740,8 @@ def _recognize_response_to_speech_event(
                 words=[
                     TimedString(
                         text=word.word,
-                        start_time=_duration_to_seconds(word.start_offset),
-                        end_time=_duration_to_seconds(word.end_offset),
+                        start_time=_get_start_time(word),
+                        end_time=_get_end_time(word),
                     )
                     for word in resp.results[0].alternatives[0].words
                 ]
@@ -779,16 +798,6 @@ def _streaming_recognize_response_to_speech_data(
             )
             return data
         return None
-
-    def _get_start_time(word: cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo) -> float:
-        if hasattr(word, "start_offset"):
-            return _duration_to_seconds(word.start_offset)
-        return _duration_to_seconds(word.start_time)
-
-    def _get_end_time(word: cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo) -> float:
-        if hasattr(word, "end_offset"):
-            return _duration_to_seconds(word.end_offset)
-        return _duration_to_seconds(word.end_time)
 
     data = stt.SpeechData(
         language=lg,

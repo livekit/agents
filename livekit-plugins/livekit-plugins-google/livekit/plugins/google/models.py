@@ -1,6 +1,6 @@
 from typing import Literal
 
-# Speech to Text v2
+# Speech to Text (v1 and v2)
 
 SpeechModels = Literal[
     "long",
