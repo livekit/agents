@@ -141,7 +141,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[
+            list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+        ] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
@@ -426,7 +428,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._agent
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
         return self._tools
 
     def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:

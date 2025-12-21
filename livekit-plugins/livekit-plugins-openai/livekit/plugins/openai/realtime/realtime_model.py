@@ -1256,8 +1256,6 @@ class RealtimeSession(
 
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")
-        # f = asyncio.Future()
-        # self._response_futures[event_id] = f
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",

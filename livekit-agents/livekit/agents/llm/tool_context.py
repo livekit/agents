@@ -218,7 +218,7 @@ def function_tool(
     return deco_raw if raw_schema is not None else deco_func
 
 
-def is_function_tool(f: Callable[..., Any]) -> TypeGuard[FunctionTool]:
+def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
     return hasattr(f, "__livekit_tool_info")
 
 
@@ -226,7 +226,7 @@ def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
     return cast(_FunctionToolInfo, getattr(f, "__livekit_tool_info"))
 
 
-def is_raw_function_tool(f: Callable[..., Any]) -> TypeGuard[RawFunctionTool]:
+def is_raw_function_tool(f: Any) -> TypeGuard[RawFunctionTool]:
     return hasattr(f, "__livekit_raw_tool_info")
 
 
