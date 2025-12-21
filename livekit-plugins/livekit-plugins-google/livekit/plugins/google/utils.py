@@ -19,6 +19,8 @@ from livekit.agents.llm.tool_context import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .tools import GeminiTool
+
 __all__ = ["create_tools_config"]
 
 
@@ -66,7 +68,8 @@ def create_tools_config(
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
     for tool in tools.provider_tools:
-        gemini_tools.append(tool.to_tool_config())
+        if isinstance(tool, GeminiTool):
+            gemini_tools.append(tool.to_tool_config())
 
     return gemini_tools
 

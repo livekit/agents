@@ -1,4 +1,5 @@
 import os
+from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,8 +32,13 @@ XAI_DEFAULT_TURN_DETECTION = ServerVad(
 )
 
 
+class XAITool(ProviderTool):
+    @abstractmethod
+    def to_dict(self) -> dict[str, Any]: ...
+
+
 @dataclass(slots=True)
-class WebSearch(ProviderTool):
+class WebSearch(XAITool):
     """Enable web search tool for real-time internet searches."""
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,7 +46,7 @@ class WebSearch(ProviderTool):
 
 
 @dataclass(slots=True)
-class XSearch(ProviderTool):
+class XSearch(XAITool):
     """Enable X (Twitter) search tool for searching posts."""
 
     allowed_x_handles: list[str] | None = None
@@ -53,7 +59,7 @@ class XSearch(ProviderTool):
 
 
 @dataclass(slots=True)
-class FileSearch(ProviderTool):
+class FileSearch(XAITool):
     """Enable file search tool for searching uploaded document collections."""
 
     vector_store_ids: list[str] = field(default_factory=list)
@@ -122,8 +128,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         # inject supported Toolset
         xai_tools: list[dict] = []
         for tool in tools:
-            print(tool)
-            if isinstance(tool, (WebSearch, XSearch, FileSearch)):
+            if isinstance(tool, XAITool):
                 xai_tools.append(tool.to_dict())
 
         event["session"]["tools"] += xai_tools

@@ -12,6 +12,7 @@ from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
+    ProviderTool,
     RawFunctionTool,
     RealtimeModel,
     find_function_tools,
@@ -415,7 +416,7 @@ class Agent:
         async def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
-            tools: list[FunctionTool | RawFunctionTool],
+            tools: list[FunctionTool | RawFunctionTool | ProviderTool],
             model_settings: ModelSettings,
         ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""

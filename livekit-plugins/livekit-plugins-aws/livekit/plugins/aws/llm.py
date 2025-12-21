@@ -29,7 +29,6 @@ from livekit.agents.llm import (
     ProviderTool,
     RawFunctionTool,
     ToolChoice,
-    ToolContext,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -154,9 +153,7 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tool_context = ToolContext(tools)
-
-            tools_list = to_fnc_ctx(tool_context.function_tools.values())
+            tools_list = to_fnc_ctx(tools)
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 

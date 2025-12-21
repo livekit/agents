@@ -44,7 +44,7 @@ class GoogleMaps(GeminiTool):
 class URLContext(GeminiTool):
     def to_tool_config(self) -> types.Tool:
         return types.Tool(
-            url_context=types.URLContext(),
+            url_context=types.UrlContext(),
         )
 
 
@@ -67,5 +67,5 @@ class FileSearch(GeminiTool):
 class ToolCodeExecution(GeminiTool):
     def to_tool_config(self) -> types.Tool:
         return types.Tool(
-            tool_code_execution=types.ToolCodeExecution(),
+            code_execution=types.ToolCodeExecution(),
         )

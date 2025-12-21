@@ -117,7 +117,7 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         client: Mistral,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
     ) -> None:
