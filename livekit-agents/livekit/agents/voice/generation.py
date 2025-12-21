@@ -467,12 +467,32 @@ async def _execute_tools_task(
             # TODO(theomonnom): assert other tool_choice values
 
             if (function_tool := tool_ctx.function_tools.get(fnc_call.name)) is None:
+                available_tools = list(tool_ctx.function_tools.keys())
+                tools_list = ", ".join(available_tools) if available_tools else "none"
+
+                error_message = f"Unknown tool '{fnc_call.name}'. Available tools: {tools_list}"
+
                 logger.warning(
                     f"unknown AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
                         "speech_id": speech_handle.id,
                     },
+                )
+
+                _tool_completed(
+                    ToolExecutionOutput(
+                        fnc_call=fnc_call.model_copy(),
+                        fnc_call_out=llm.FunctionCallOutput(
+                            name=fnc_call.name,
+                            call_id=fnc_call.call_id,
+                            output=error_message,
+                            is_error=True,
+                        ),
+                        agent_task=None,
+                        raw_output=None,
+                        raw_exception=None,
+                    )
                 )
                 continue
 
