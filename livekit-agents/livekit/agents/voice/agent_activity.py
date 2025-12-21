@@ -291,7 +291,7 @@ class AgentActivity(RecognitionHooks):
         return self._current_speech
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool | mcp.MCPTool]:
         return self._session.tools + self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
@@ -322,7 +322,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 

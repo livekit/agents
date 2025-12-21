@@ -45,7 +45,7 @@ class Agent:
         instructions: str,
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -111,10 +111,10 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
         """
         Returns:
-            list[llm.FunctionTool | llm.RawFunctionTool]:
+            list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
                 A list of function tools available to the agent.
         """
         return self._tools.copy()
@@ -152,7 +152,7 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]) -> None:
         """
         Updates the agent's available function tools.
 
@@ -160,13 +160,13 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool]):
+            tools (list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]):
                 The new list of function tools available to the agent.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
-        invalid = [t for t in tools if not (is_function_tool(t) or is_raw_function_tool(t))]
+        invalid = [t for t in tools if not (is_function_tool(t) or is_raw_function_tool(t) or isinstance(t, llm.ProviderTool))]
         if invalid:
             kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
             raise TypeError(
