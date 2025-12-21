@@ -207,7 +207,7 @@ LIVEKIT_SOFT_ACKS="okay,yeah,uhhuh,ok,hmm,right,good"
 
 **Example**: Adding "good" to soft-ack list via `.env` - it gets automatically filtered when agent is speaking:
 
-![Adding Custom Soft-Acks via ENV](debug_logs.png)
+![Adding Custom Soft-Acks via ENV](debug_logs.jpeg)
 
 **Key Functions**:
 - **`SOFT_ACK_SET`**: Global set loaded from `LIVEKIT_SOFT_ACKS` env var (default: `{"okay", "yeah", "uhhuh", "ok", "hmm", "right"}`)
