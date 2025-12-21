@@ -364,7 +364,7 @@ LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
 
 # Soft-ack Configuration (Optional)
-LIVEKIT_SOFT_ACKS=okay,yeah,uhhuh,ok,hmm,right,good
+LIVEKIT_SOFT_ACKS="okay,yeah,uhhuh,ok,hmm,right,good"
 ```
 
 ### Step 3: Run the Agent
@@ -391,7 +391,7 @@ cd agents/tests/
 
 # Run this command
 python -m pytest test_interruption_softacks.py -v
-
+```
 ---
 
 
