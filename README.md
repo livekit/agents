@@ -84,7 +84,7 @@ Documentation on the framework and how to use it can be found [here](https://doc
 
 Watch the advanced interruption handling in action:
 
-[![Interruption Handling Demo]](Salescode.AI_Assignment_video.mp4)
+[![Interruption Handling Demo]](https://drive.google.com/file/d/17pmRfW48wyxG8cXvmQnIsIlsIt-WxVDj/view?usp=drivesdk)
 
 *Demo showcasing soft-ack filtering, semantic detection, and real-time interruption handling*
 
@@ -203,11 +203,18 @@ BLOCK interrupt (passive input while agent speaking)
 
 **Purpose**: Centralized soft-ack configuration module
 
+LIVEKIT_SOFT_ACKS="okay,yeah,uhhuh,ok,hmm,right,good"
+
+**Example**: Adding "good" to soft-ack list via `.env` - it gets automatically filtered when agent is speaking:
+
+![Adding Custom Soft-Acks via ENV](debug_logs.png)
+
 **Key Functions**:
 - **`SOFT_ACK_SET`**: Global set loaded from `LIVEKIT_SOFT_ACKS` env var (default: `{"okay", "yeah", "uhhuh", "ok", "hmm", "right"}`)
 - **`is_soft_ack(text)`**: Normalizes input (lowercase, punctuation removed) and checks against SOFT_ACK_SET
 - **`_load_soft_acks_from_env()`**: Loads config from `.env` file with multi-location search (current dir, parent dirs, examples/voice_agents/)
 - **`reload_soft_acks()`**: Allows runtime configuration updates for testing
+
 
 #### 3. **livekit/agents/voice/audio_recognition.py** (Modified)
 
