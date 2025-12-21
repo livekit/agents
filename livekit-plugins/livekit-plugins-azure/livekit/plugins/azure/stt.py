@@ -18,6 +18,7 @@ import os
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
+import json
 from typing import Any, cast
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -58,7 +59,7 @@ class STTOptions:
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
-
+    lexical_output: bool = False
 
 class STT(stt.STT):
     def __init__(
@@ -273,7 +274,15 @@ class SpeechStream(stt.SpeechStream):
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
         text = evt.result.text.strip()
-        if not text:
+        lexical: str | None = None
+        if self._opts.lexical_output:
+            try:
+                detailed_result = json.loads(evt.result.json)
+                lexical = detailed_result.get("NBest", [{}])[0].get("Lexical", None)
+            except Exception as e:
+                pass
+        result = lexical or text
+        if not result:
             return
 
         if not detected_lg and self._opts.language:
@@ -299,7 +308,15 @@ class SpeechStream(stt.SpeechStream):
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
         text = evt.result.text.strip()
-        if not text:
+        lexical: str | None = None
+        if self._opts.lexical_output:
+            try:
+                detailed_result = json.loads(evt.result.json)
+                lexical = detailed_result.get("NBest", [{}])[0].get("Lexical", None)
+            except Exception as e:
+                pass
+        result = lexical or text
+        if not result:
             return
 
         if not detected_lg and self._opts.language:
@@ -402,6 +419,12 @@ def _create_speech_recognizer(
     if config.explicit_punctuation:
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
+        )
+    
+    if config.lexical_output:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.Speech_OutputFormat,
+            "true",
         )
 
     kwargs: dict[str, Any] = {}
