@@ -90,6 +90,23 @@ Watch the advanced interruption handling in action:
 
 ---
 
+## Log Transcript
+
+Complete execution logs and debug output from test runs are available in the log transcript file:
+
+**File**: [agents/Log_Transcript.txt](agents/Log_Transcript.txt)
+
+This file contains:
+- Full VAD interrupt event logs
+- STT transcript processing traces
+- Soft-ack detection and filtering decisions
+- State transitions (speaking → listening → thinking)
+- Grace period timer logs
+
+Use this for debugging, understanding flow behavior, or verifying soft-ack filtering in action.
+
+---
+
 ## 🔧 High-Level Solution Design
 
 ### Architecture Overview
@@ -113,7 +130,7 @@ Is there a semantic interrupt keyword? → YES → INTERRUPT immediately
     ↓ NO
 BLOCK interrupt (passive input while agent speaking)
 ```
-(Note: In some cases, the STT pipeline may transcribe these soft acknowledgements like 'hmm' as a different word. If this occurs, please refer to the logs for the exact recognized transcript.)
+**Note: In some cases, the STT pipeline may transcribe these soft acknowledgements like 'hmm' or 'good' as a different word. If this occurs, please refer to the logs for the exact recognized transcript.**
 
 ### Key Design Principles
 
