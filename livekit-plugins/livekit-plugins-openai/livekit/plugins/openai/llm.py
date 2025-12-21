@@ -25,7 +25,7 @@ import openai
 from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import ToolChoice, utils as llm_utils
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -994,6 +994,16 @@ class LLM(llm.LLM):
 
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
+
+        # Cohere requires at least one user message to generate a response
+        if "api.cohere.ai" in str(self._client.base_url):
+            has_user_message = any(
+                isinstance(item, ChatMessage) and item.role == "user" for item in chat_ctx.items
+            )
+
+            if not has_user_message:
+                placeholder_msg = ChatMessage(role="user", content=["."])
+                chat_ctx.items.append(placeholder_msg)
 
         return LLMStream(
             self,
