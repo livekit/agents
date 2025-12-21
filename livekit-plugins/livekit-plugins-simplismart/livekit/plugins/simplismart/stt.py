@@ -126,8 +126,6 @@ class STT(stt.STT):
         audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
         payload = self._opts.model_dump()
 
-        logger.info(f"payload: {payload}")
-
         payload["audio_data"] = audio_b64
         payload["language"] = language
 
@@ -151,7 +149,6 @@ class STT(stt.STT):
                     )
 
                 response_json = await res.json()
-                self._logger.debug(f"Simplismart API response: {response_json}")
 
                 detected_language = response_json["info"]["language"]
 

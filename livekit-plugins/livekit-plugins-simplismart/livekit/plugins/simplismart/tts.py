@@ -7,7 +7,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.utils import AudioBuffer, rtc
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 # from .log import logger
@@ -39,7 +38,7 @@ class TTS(tts.TTS):
         **kwargs: Any,
     ) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=24000,
             num_channels=1,
         )
@@ -100,8 +99,6 @@ class ChunkedStream(tts.ChunkedStream):
             "Content-Type": "application/json",
         }
 
-        print(payload)
-
         try:
             async with self._tts._ensure_session().post(
                 self._tts._base_url,
@@ -119,9 +116,9 @@ class ChunkedStream(tts.ChunkedStream):
                     num_channels=self._tts.num_channels,
                     mime_type="audio/pcm",
                 )
-                async for audio_data in resp.content.iter_chunks():
-                    print(audio_data)
+                async for audio_data, _ in resp.content.iter_chunks():
                     output_emitter.push(audio_data)
+                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
