@@ -75,6 +75,7 @@ __all__ = [
     "FunctionTool",
     "is_raw_function_tool",
     "RawFunctionTool",
+    "ProviderTool",
     "ToolContext",
     "ToolError",
     "StopResponse",
