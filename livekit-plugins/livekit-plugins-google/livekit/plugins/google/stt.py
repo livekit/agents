@@ -393,7 +393,11 @@ class STT(stt.STT):
         if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(model):
+            old_version = self._config.version
             self._config.model = model
+            if self._config.version != old_version:
+                self._pool.invalidate()
+
         if is_given(location):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
