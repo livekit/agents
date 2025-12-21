@@ -94,6 +94,7 @@ class Serializable:
     wrapped_coroutine: "DurableCoroutine" | None
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
+
     def __init__(
         self,
         g: GeneratorType | CoroutineType,

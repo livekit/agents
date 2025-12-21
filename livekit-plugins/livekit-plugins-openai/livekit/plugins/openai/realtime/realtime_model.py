@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.llm.tool_context import (
-    Toolset,
+    ProviderTool,
     get_function_info,
     get_raw_function_info,
     is_function_tool,
@@ -710,13 +710,13 @@ class RealtimeSession(
                 extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
             )
 
-            events: list[RealtimeClientEvent] = []
+            events: list[RealtimeClientEvent | dict[str, Any]] = []
 
             # options and instructions
             events.append(self._create_session_update_event())
 
             # tools
-            tools = list(self._tools.function_tools.values())
+            tools = self._tools.all_tools
             if tools:
                 events.append(self._create_tools_update_event(tools))
 
@@ -733,6 +733,7 @@ class RealtimeSession(
 
             try:
                 for ev in events:
+                    # certain events could already be in dict format
                     if isinstance(ev, BaseModel):
                         ev = ev.model_dump(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
@@ -1186,14 +1187,12 @@ class RealtimeSession(
         return events
 
     async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Toolset]
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | ProviderTool]
     ) -> None:
         async with self._update_fnc_ctx_lock:
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
-            # assert isinstance(ev.session, RealtimeSessionCreateRequest)
-            # assert ev.session.tools is not None
             retained_tool_names: set[str] = set()
             for t in ev["session"]["tools"]:
                 if name := t.get("name"):
@@ -1212,10 +1211,9 @@ class RealtimeSession(
 
     # this function can be overrided
     def _create_tools_update_event(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Toolset]
-    ) -> dict:
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | ProviderTool]
+    ) -> dict[str, Any]:
         oai_tools: list[RealtimeFunctionTool] = []
-        retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
             if is_function_tool(tool):
@@ -1225,8 +1223,8 @@ class RealtimeSession(
                 tool_desc = tool_info.raw_schema
                 tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
-            elif isinstance(tool, Toolset):
-                continue  # Toolset handled by subclasses (only xAI for now)
+            elif isinstance(tool, ProviderTool):
+                continue  # currently only xAI supports ProviderTools
             else:
                 logger.error(
                     "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
@@ -1236,7 +1234,6 @@ class RealtimeSession(
             try:
                 session_tool = RealtimeFunctionTool.model_validate(tool_desc)
                 oai_tools.append(session_tool)
-                retained_tools.append(tool)
             except ValidationError:
                 logger.error(
                     "OpenAI Realtime API doesn't support this tool",

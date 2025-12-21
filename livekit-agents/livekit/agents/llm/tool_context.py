@@ -34,7 +34,8 @@ from typing import (
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
 
-class Toolset(ABC):  # noqa: B024
+# TODO: refactor Tool inheritance, all tools (FunctionTool, RawFunctionTool, ProviderTool) should inherit from Tool
+class ProviderTool(ABC):  # noqa: B024
     pass
 
 
@@ -244,7 +245,7 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: list[FunctionTool | RawFunctionTool | Toolset]) -> None:
+    def __init__(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -256,10 +257,17 @@ class ToolContext:
         return self._tools_map.copy()
 
     @property
-    def toolsets(self) -> list[Toolset]:
-        return self._toolsets
+    def provider_tools(self) -> list[ProviderTool]:
+        return self._provider_tools
 
-    def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Toolset]) -> None:
+    @property
+    def all_tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] = []
+        tools.extend(list(self._tools_map.values()))
+        tools.extend(self._provider_tools)
+        return tools
+
+    def update_tools(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
         self._tools = tools.copy()
 
         for method in find_function_tools(self):
@@ -267,14 +275,14 @@ class ToolContext:
 
         self._tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         info: _FunctionToolInfo | _RawFunctionToolInfo
-        self._toolsets = []
+        self._provider_tools: list[ProviderTool] = []
         for tool in tools:
             if is_raw_function_tool(tool):
                 info = get_raw_function_info(tool)
             elif is_function_tool(tool):
                 info = get_function_info(tool)
-            elif isinstance(tool, Toolset):
-                self._toolsets.append(tool)
+            elif isinstance(tool, ProviderTool):
+                self._provider_tools.append(tool)
                 continue
             else:
                 # TODO(theomonnom): MCP servers & other tools

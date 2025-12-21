@@ -7,7 +7,7 @@ from openai.types.beta.realtime.session import TurnDetection
 from openai.types.realtime import SessionUpdateEvent
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import Toolset, llm
+from livekit.agents import ProviderTool, llm
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -32,7 +32,7 @@ XAI_DEFAULT_TURN_DETECTION = ServerVad(
 
 
 @dataclass(slots=True)
-class WebSearch(Toolset):
+class WebSearch(ProviderTool):
     """Enable web search tool for real-time internet searches."""
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,7 +40,7 @@ class WebSearch(Toolset):
 
 
 @dataclass(slots=True)
-class XSearch(Toolset):
+class XSearch(ProviderTool):
     """Enable X (Twitter) search tool for searching posts."""
 
     allowed_x_handles: list[str] | None = None
@@ -53,7 +53,7 @@ class XSearch(Toolset):
 
 
 @dataclass(slots=True)
-class FileSearch(Toolset):
+class FileSearch(ProviderTool):
     """Enable file search tool for searching uploaded document collections."""
 
     vector_store_ids: list[str] = field(default_factory=list)
@@ -115,7 +115,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._xai_model: RealtimeModel = realtime_model
 
     def _create_tools_update_event(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Toolset]
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | ProviderTool]
     ) -> SessionUpdateEvent | dict:
         event = super()._create_tools_update_event(tools)
 
