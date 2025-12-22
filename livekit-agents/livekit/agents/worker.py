@@ -817,7 +817,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._update_worker_status()
 
             async def _join_jobs() -> None:
-                for proc in self._proc_pool.processes:
+                for proc in self._proc_pool.processes.copy():
                     if proc.running_job:
                         await proc.join()
 
@@ -1146,13 +1146,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         answered = False
 
-        async def _on_reject() -> None:
+        async def _on_reject(terminate: bool) -> None:
             nonlocal answered
             answered = True
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
             availability_resp.availability.available = False
+            availability_resp.availability.terminate = terminate
             await self._queue_msg(availability_resp)
 
         async def _on_accept(args: JobAcceptArguments) -> None:
@@ -1225,7 +1226,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
                     extra={"job_request": job_req, "agent_name": self._agent_name},
                 )
-                await _on_reject()
+                await _on_reject(terminate=False)
 
         user_task = self._loop.create_task(_job_request_task(), name="job_request")
         self._tasks.add(user_task)

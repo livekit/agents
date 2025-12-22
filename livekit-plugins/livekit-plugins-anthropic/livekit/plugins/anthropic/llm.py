@@ -26,7 +26,7 @@ import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm.tool_context import FunctionTool, ProviderTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -101,7 +101,7 @@ class LLM(llm.LLM):
         if not anthropic_api_key:
             raise ValueError("Anthropic API key is required")
 
-        self._client = anthropic.AsyncClient(
+        self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
             http_client=httpx.AsyncClient(
@@ -150,7 +150,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -251,7 +251,7 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
