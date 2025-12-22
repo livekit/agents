@@ -1,7 +1,6 @@
 import hashlib
 from dataclasses import dataclass
 from types import FunctionType
-from typing import Dict
 
 
 @dataclass
@@ -49,7 +48,7 @@ class RegisteredFunction:
         self.hash = code_hash
 
 
-_REGISTRY: Dict[str, RegisteredFunction] = {}
+_REGISTRY: dict[str, RegisteredFunction] = {}
 
 
 def register_function(fn: FunctionType) -> RegisteredFunction:
