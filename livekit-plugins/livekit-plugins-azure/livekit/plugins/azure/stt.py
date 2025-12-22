@@ -280,8 +280,8 @@ class SpeechStream(stt.SpeechStream):
             try:
                 detailed_result = json.loads(evt.result.json)
                 lexical = detailed_result.get("NBest", [{}])[0].get("Lexical", None)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Error parsing detailed result", extra={"error": str(e)})
         result = lexical or text
         if not result:
             return
@@ -314,8 +314,8 @@ class SpeechStream(stt.SpeechStream):
             try:
                 detailed_result = json.loads(evt.result.json)
                 lexical = detailed_result.get("NBest", [{}])[0].get("Lexical", None)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Error parsing detailed result", extra={"error": str(e)})
         result = lexical or text
         if not result:
             return
