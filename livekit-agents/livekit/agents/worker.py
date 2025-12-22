@@ -71,10 +71,13 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
-def _wrap_entrypoint_fnc(
-    entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None,
-) -> Callable[[JobContext], Awaitable[None]]:
-    async def _wrapped_entrypoint_fnc(ctx: JobContext) -> None:
+class _WrappedEntrypoint:
+    """Pickle-able wrapper for the entrypoint function."""
+
+    def __init__(self, entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None) -> None:
+        self._entrypoint_fnc = entrypoint_fnc
+
+    async def __call__(self, ctx: JobContext) -> None:
         if ctx.is_sms_job():
             # TODO(long): should we add a customizable sms entrypoint?
             from .cli import AgentsConsole
@@ -83,11 +86,11 @@ def _wrap_entrypoint_fnc(
             if c.enabled:
                 c.acquire_io(loop=asyncio.get_running_loop(), session=None)
 
-            if entrypoint_fnc:
+            if self._entrypoint_fnc:
                 logger.info("SMS job detected, skipping RTC entrypoint")
             return
 
-        if not entrypoint_fnc:
+        if not self._entrypoint_fnc:
             raise RuntimeError(
                 "No RTC session entrypoint has been registered.\n"
                 "Define one using the @server.rtc_session() decorator, for example:\n"
@@ -95,9 +98,7 @@ def _wrap_entrypoint_fnc(
                 "    async def my_agent(ctx: JobContext):\n"
                 "        ...\n"
             )
-        await entrypoint_fnc(ctx)
-
-    return _wrapped_entrypoint_fnc
+        await self._entrypoint_fnc(ctx)
 
 
 class ServerType(Enum):
@@ -616,7 +617,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
-                job_entrypoint_fnc=_wrap_entrypoint_fnc(self._entrypoint_fnc),
+                job_entrypoint_fnc=_WrappedEntrypoint(self._entrypoint_fnc),
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
