@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
-import json
 from typing import Any, cast
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -279,7 +279,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 detailed_result = json.loads(evt.result.json)
                 lexical = detailed_result.get("NBest", [{}])[0].get("Lexical", None)
-            except Exception as e:
+            except Exception:
                 pass
         result = lexical or text
         if not result:
@@ -313,7 +313,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 detailed_result = json.loads(evt.result.json)
                 lexical = detailed_result.get("NBest", [{}])[0].get("Lexical", None)
-            except Exception as e:
+            except Exception:
                 pass
         result = lexical or text
         if not result:
@@ -420,7 +420,7 @@ def _create_speech_recognizer(
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
         )
-    
+
     if config.lexical_output:
         speech_config.set_property(
             speechsdk.enums.PropertyId.Speech_OutputFormat,
