@@ -525,8 +525,6 @@ class SpeechStream(stt.RecognizeStream):
             AgentServerMessageType.INFO,
             AgentServerMessageType.ERROR,
             AgentServerMessageType.WARNING,
-            AgentServerMessageType.END_OF_TURN_PREDICTION,
-            AgentServerMessageType.END_OF_UTTERANCE,
         ]:
             self._client.on(event, add_message)
 
