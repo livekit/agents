@@ -324,12 +324,6 @@ async def test_recognize_response_to_speech_event_words():
     ]
 
 
-# VoiceActivityTimeout tests
-
-
-# VoiceActivityTimeout tests
-
-
 async def test_voice_activity_timeout_defaults():
     """Test voice activity timeouts are not set by default."""
     from livekit.agents.types import NOT_GIVEN
