@@ -18,11 +18,11 @@ import asyncio
 import base64
 import json
 import os
+import uuid
 import weakref
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import Union, cast
-import uuid
 
 import aiohttp
 
@@ -40,15 +40,14 @@ from livekit.agents.utils import is_given
 
 from .constants import (
     API_AUTH_HEADER,
-    API_VERSION_HEADER,
     API_VERSION,
+    API_VERSION_HEADER,
 )
-
 from .log import logger
 from .models import (
-    TTSDefaultVoiceId,
     TTSEncoding,
     TTSModels,
+    TTSDefaultVoiceId,
 )
 
 @dataclass
@@ -256,6 +255,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["transcript"] = ""
             end_pkt["context_id"] = asyncai_context_id
             await ws.send_str(json.dumps(end_pkt))
+            input_sent_event.set()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
