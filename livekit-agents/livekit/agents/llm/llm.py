@@ -29,7 +29,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
+from .tool_context import FunctionTool, ProviderTool, RawFunctionTool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -124,7 +124,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -157,7 +157,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -336,7 +336,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool | RawFunctionTool]:
+    def tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
         return self._tools
 
     async def aclose(self) -> None:

@@ -1,4 +1,5 @@
 import os
+from collections.abc import Coroutine, Generator
 from types import (
     AsyncGeneratorType,
     CodeType,
@@ -12,17 +13,13 @@ from types import (
 from typing import (
     Any,
     Callable,
-    Coroutine,
-    Dict,
-    Generator,
     Optional,
-    Tuple,
     TypeVar,
-    Union,
     cast,
 )
 
 import lk_durable as ext
+
 from .registry import (
     RegisteredFunction,
     lookup_function,
@@ -76,9 +73,7 @@ def durable(fn: Callable) -> Callable:
     elif isinstance(fn, FunctionType):
         return DurableFunction(fn)
     else:
-        raise TypeError(
-            f"cannot create a durable function from value of type {fn.__qualname__}"
-        )
+        raise TypeError(f"cannot create a durable function from value of type {fn.__qualname__}")
 
 
 class Serializable:
@@ -94,17 +89,17 @@ class Serializable:
         "__qualname__",
     )
 
-    g: Union[GeneratorType, CoroutineType]
+    g: GeneratorType | CoroutineType
     registered_fn: RegisteredFunction
-    wrapped_coroutine: Union["DurableCoroutine", None]
-    args: Tuple[Any, ...]
-    kwargs: Dict[str, Any]
+    wrapped_coroutine: "DurableCoroutine" | None
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
 
     def __init__(
         self,
-        g: Union[GeneratorType, CoroutineType],
+        g: GeneratorType | CoroutineType,
         registered_fn: RegisteredFunction,
-        wrapped_coroutine: Union["DurableCoroutine", None],
+        wrapped_coroutine: "DurableCoroutine" | None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -145,9 +140,7 @@ class Serializable:
             if frame_state < FRAME_CLEARED:
                 print(f"IP = {ip}")
                 print(f"SP = {sp}")
-                for i, (is_null, value) in enumerate(
-                    stack if stack is not None else []
-                ):
+                for i, (is_null, value) in enumerate(stack if stack is not None else []):
                     if is_null:
                         print(f"stack[{i}] = NULL")
                     else:
@@ -295,7 +288,7 @@ class DurableCoroutine(Serializable, Coroutine[_YieldT, _SendT, _ReturnT]):
         return self.coroutine.cr_await
 
     @property
-    def cr_origin(self) -> Optional[Tuple[Tuple[str, int, str], ...]]:
+    def cr_origin(self) -> Optional[tuple[tuple[str, int, str], ...]]:
         return self.coroutine.cr_origin
 
     def __repr__(self) -> str:
@@ -317,9 +310,7 @@ class DurableGenerator(Serializable, Generator[_YieldT, _SendT, _ReturnT]):
         **kwargs: Any,
     ):
         self.generator = generator
-        Serializable.__init__(
-            self, generator, registered_fn, coroutine, *args, **kwargs
-        )
+        Serializable.__init__(self, generator, registered_fn, coroutine, *args, **kwargs)
 
     def __iter__(self) -> Generator[_YieldT, _SendT, _ReturnT]:
         return self

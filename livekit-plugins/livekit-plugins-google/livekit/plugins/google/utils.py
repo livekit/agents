@@ -19,20 +19,19 @@ from livekit.agents.llm.tool_context import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-from .tools import _LLMTool
+from .tools import GeminiTool
 
-__all__ = ["to_fnc_ctx"]
+__all__ = ["create_tools_config"]
 
 
-def to_fnc_ctx(
-    fncs: list[FunctionTool | RawFunctionTool],
+def _function_tools_to_gemini(
+    fncs: dict[str, FunctionTool | RawFunctionTool],
     *,
     use_parameters_json_schema: bool = True,
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
 ) -> list[types.FunctionDeclaration]:
     tools: list[types.FunctionDeclaration] = []
-    for fnc in fncs:
+    for fnc in fncs.values():
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
             fnc_kwargs = {
@@ -60,39 +59,25 @@ def to_fnc_ctx(
 
 
 def create_tools_config(
+    tools: llm.ToolContext,
     *,
-    function_tools: list[types.FunctionDeclaration] | None = None,
-    gemini_tools: list[_LLMTool] | None = None,
+    _only_single_type: bool = False,
 ) -> list[types.Tool]:
-    tools: list[types.Tool] = []
+    gemini_tools: list[types.Tool] = []
+    function_tools = _function_tools_to_gemini(tools.function_tools)
 
     if function_tools:
-        tools.append(types.Tool(function_declarations=function_tools))
+        gemini_tools.append(types.Tool(function_declarations=function_tools))
 
-    if gemini_tools:
-        for tool in gemini_tools:
-            if isinstance(tool, types.GoogleSearchRetrieval):
-                tools.append(types.Tool(google_search_retrieval=tool))
-            elif isinstance(tool, types.ToolCodeExecution):
-                tools.append(types.Tool(code_execution=tool))
-            elif isinstance(tool, types.GoogleSearch):
-                tools.append(types.Tool(google_search=tool))
-            elif isinstance(tool, types.UrlContext):
-                tools.append(types.Tool(url_context=tool))
-            elif isinstance(tool, types.GoogleMaps):
-                tools.append(types.Tool(google_maps=tool))
-            else:
-                logger.warning(f"Warning: Received unhandled tool type: {type(tool)}")
-                continue
+    # Some Google LLMs do not support multiple tool types (either function tools or builtin tools).
+    if _only_single_type and gemini_tools:
+        return gemini_tools
 
-    if len(tools) > 1:
-        # https://github.com/google/adk-python/issues/53#issuecomment-2799538041
-        logger.warning(
-            "Multiple kinds of tools are not supported in Gemini. Only the first tool will be used."
-        )
-        tools = tools[:1]
+    for tool in tools.provider_tools:
+        if isinstance(tool, GeminiTool):
+            gemini_tools.append(tool.to_tool_config())
 
-    return tools
+    return gemini_tools
 
 
 def get_tool_results_for_realtime(

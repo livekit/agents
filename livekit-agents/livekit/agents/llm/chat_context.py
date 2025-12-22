@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import LLM, FunctionTool, RawFunctionTool
+    from ..llm import LLM, FunctionTool, ProviderTool, RawFunctionTool
 
 
 class ImageContent(BaseModel):
@@ -287,7 +287,9 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
         exclude_handoff: bool = False,
-        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[
+            Sequence[FunctionTool | RawFunctionTool | ProviderTool | str | Any]
+        ] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 

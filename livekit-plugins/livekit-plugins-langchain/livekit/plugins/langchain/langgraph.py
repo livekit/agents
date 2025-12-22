@@ -23,7 +23,7 @@ from langgraph.pregel.protocol import PregelProtocol
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm.tool_context import FunctionTool, ProviderTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -57,7 +57,7 @@ class LLMAdapter(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         # these are unused, since tool execution takes place in langgraph
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -81,7 +81,7 @@ class LangGraphStream(llm.LLMStream):
         llm: LLMAdapter,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
         graph: PregelProtocol,
         config: RunnableConfig | None = None,
