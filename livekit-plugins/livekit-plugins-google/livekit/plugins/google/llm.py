@@ -24,7 +24,13 @@ from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import FunctionTool, RawFunctionTool, ToolChoice, utils as llm_utils
+from livekit.agents.llm import (
+    FunctionTool,
+    ProviderTool,
+    RawFunctionTool,
+    ToolChoice,
+    utils as llm_utils,
+)
 from livekit.agents.llm.tool_context import (
     get_function_info,
     get_raw_function_info,
@@ -41,8 +47,18 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .tools import _LLMTool
-from .utils import create_tools_config, to_fnc_ctx, to_response_format
+from .utils import create_tools_config, to_response_format
+from .version import __version__
+
+
+def _is_gemini_3_model(model: str) -> bool:
+    """Check if model is Gemini 3 series"""
+    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+
+
+def _is_gemini_3_flash_model(model: str) -> bool:
+    """Check if model is Gemini 3 Flash"""
+    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
 
 
 @dataclass
@@ -60,16 +76,26 @@ class _LLMOptions:
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
-    gemini_tools: NotGivenOr[list[_LLMTool]]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
+    safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
+
+
+BLOCKED_REASONS = [
+    types.FinishReason.SAFETY,
+    types.FinishReason.SPII,
+    types.FinishReason.PROHIBITED_CONTENT,
+    types.FinishReason.BLOCKLIST,
+    types.FinishReason.LANGUAGE,
+    types.FinishReason.RECITATION,
+]
 
 
 class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: ChatModels | str = "gemini-2.0-flash-001",
+        model: ChatModels | str = "gemini-2.5-flash",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
@@ -85,9 +111,9 @@ class LLM(llm.LLM):
         automatic_function_calling_config: NotGivenOr[
             types.AutomaticFunctionCallingConfigOrDict
         ] = NOT_GIVEN,
-        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
+        safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -114,8 +140,9 @@ class LLM(llm.LLM):
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
-            gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
+            seed (int, optional): Random seed for reproducible generation. Defaults to None.
+            safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -153,10 +180,13 @@ class LLM(llm.LLM):
         # Validate thinking_config
         if is_given(thinking_config):
             _thinking_budget = None
+            _thinking_level = None
             if isinstance(thinking_config, dict):
                 _thinking_budget = thinking_config.get("thinking_budget")
+                _thinking_level = thinking_config.get("thinking_level")
             elif isinstance(thinking_config, types.ThinkingConfig):
                 _thinking_budget = thinking_config.thinking_budget
+                _thinking_level = getattr(thinking_config, "thinking_level", None)
 
             if _thinking_budget is not None:
                 if not isinstance(_thinking_budget, int):
@@ -176,9 +206,9 @@ class LLM(llm.LLM):
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
             automatic_function_calling_config=automatic_function_calling_config,
-            gemini_tools=gemini_tools,
             http_options=http_options,
             seed=seed,
+            safety_settings=safety_settings,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -186,6 +216,8 @@ class LLM(llm.LLM):
             project=gcp_project,
             location=gcp_location,
         )
+        # Store thought_signatures for Gemini 3 multi-turn function calling
+        self._thought_signatures: dict[str, bytes] = {}
 
     @property
     def model(self) -> str:
@@ -202,7 +234,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -210,7 +242,6 @@ class LLM(llm.LLM):
             types.SchemaUnion | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
 
@@ -279,14 +310,57 @@ class LLM(llm.LLM):
         if is_given(self._opts.seed):
             extra["seed"] = self._opts.seed
 
-        # Add thinking config if thinking_budget is provided
+        # Handle thinking_config based on model version
         if is_given(self._opts.thinking_config):
-            extra["thinking_config"] = self._opts.thinking_config
+            is_gemini_3 = _is_gemini_3_model(self._opts.model)
+            is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
+            thinking_cfg = self._opts.thinking_config
+
+            # Extract both parameters
+            _budget = None
+            _level = None
+            if isinstance(thinking_cfg, dict):
+                _budget = thinking_cfg.get("thinking_budget")
+                _level = thinking_cfg.get("thinking_level")
+            elif isinstance(thinking_cfg, types.ThinkingConfig):
+                _budget = thinking_cfg.thinking_budget
+                _level = getattr(thinking_cfg, "thinking_level", None)
+
+            if is_gemini_3:
+                # Gemini 3: only support thinking_level
+                if _budget is not None and _level is None:
+                    logger.warning(
+                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
+                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
+                    )
+                if _level is None:
+                    # If no thinking_level is provided, use the fastest thinking level
+                    if is_gemini_3_flash:
+                        _level = "minimal"
+                    else:
+                        _level = "low"
+                # Use thinking_level only (pass as dict since SDK may not have this field yet)
+                extra["thinking_config"] = {"thinking_level": _level}
+
+            else:
+                # Gemini 2.5 and earlier: only support thinking_budget
+                if _level is not None and _budget is None:
+                    raise ValueError(
+                        f"Model {self._opts.model} does not support thinking_level. "
+                        "Please use thinking_budget (int) instead for Gemini 2.5 and earlier models."
+                    )
+                if _budget is not None:
+                    # Use thinking_budget only
+                    extra["thinking_config"] = types.ThinkingConfig(thinking_budget=_budget)
+                else:
+                    # Pass through original config if no specific handling needed
+                    extra["thinking_config"] = self._opts.thinking_config
 
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
 
-        gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
+        if is_given(self._opts.safety_settings):
+            extra["safety_settings"] = self._opts.safety_settings
 
         return LLMStream(
             self,
@@ -295,7 +369,6 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
-            gemini_tools=gemini_tools,
             extra_kwargs=extra,
         )
 
@@ -309,42 +382,46 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         extra_kwargs: dict[str, Any],
-        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
         self._extra_kwargs = extra_kwargs
-        self._gemini_tools = gemini_tools
 
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
 
         try:
-            turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
-            turns = [types.Content.model_validate(turn) for turn in turns_dict]
-            function_declarations = to_fnc_ctx(self._tools)
-            tools_config = create_tools_config(
-                function_tools=function_declarations,
-                gemini_tools=self._gemini_tools if is_given(self._gemini_tools) else None,
+            # Pass thought_signatures for Gemini 3 multi-turn function calling
+            thought_sigs = (
+                self._llm._thought_signatures if _is_gemini_3_model(self._model) else None
             )
+            turns_dict, extra_data = self._chat_ctx.to_provider_format(
+                format="google", thought_signatures=thought_sigs
+            )
+
+            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+            tool_context = llm.ToolContext(self._tools)
+            tools_config = create_tools_config(tool_context, _only_single_type=True)
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
-
+            http_options = self._llm._opts.http_options or types.HttpOptions(
+                timeout=int(self._conn_options.timeout * 1000)
+            )
+            if not http_options.headers:
+                http_options.headers = {}
+            http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
             config = types.GenerateContentConfig(
                 system_instruction=(
                     [types.Part(text=content) for content in extra_data.system_messages]
                     if extra_data.system_messages
                     else None
                 ),
-                http_options=(
-                    self._llm._opts.http_options
-                    or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
-                ),
+                http_options=http_options,
                 **self._extra_kwargs,
             )
 
@@ -354,20 +431,17 @@ class LLMStream(llm.LLMStream):
                 config=config,
             )
 
+            response_generated = False
+            finish_reason: types.FinishReason | None = None
             async for response in stream:
                 if response.prompt_feedback:
                     raise APIStatusError(
-                        response.prompt_feedback.json(),
+                        response.prompt_feedback.model_dump_json(),
                         retryable=False,
                         request_id=request_id,
                     )
 
-                if (
-                    not response.candidates
-                    or not response.candidates[0].content
-                    or not response.candidates[0].content.parts
-                ):
-                    logger.warning(f"no candidates in the response: {response}")
+                if not response.candidates:
                     continue
 
                 if len(response.candidates) > 1:
@@ -375,8 +449,23 @@ class LLMStream(llm.LLMStream):
                         "gemini llm: there are multiple candidates in the response, returning response from the first one."  # noqa: E501
                     )
 
-                for part in response.candidates[0].content.parts:
+                candidate = response.candidates[0]
+
+                if not candidate.content or not candidate.content.parts:
+                    continue
+
+                if candidate.finish_reason is not None:
+                    finish_reason = candidate.finish_reason
+                    if candidate.finish_reason in BLOCKED_REASONS:
+                        raise APIStatusError(
+                            f"generation blocked by gemini: {candidate.finish_reason}",
+                            retryable=False,
+                            request_id=request_id,
+                        )
+
+                for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
+                    response_generated = True
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
@@ -394,6 +483,14 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                     )
+
+            if not response_generated:
+                raise APIStatusError(
+                    "no response generated",
+                    retryable=retryable,
+                    request_id=request_id,
+                    body=f"finish reason: {finish_reason}",
+                )
 
         except ClientError as e:
             raise APIStatusError(
@@ -427,21 +524,32 @@ class LLMStream(llm.LLMStream):
 
     def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call:
+            tool_call = llm.FunctionToolCall(
+                arguments=json.dumps(part.function_call.args),
+                name=part.function_call.name,
+                call_id=part.function_call.id or utils.shortuuid("function_call_"),
+            )
+
+            # Store thought_signature for Gemini 3 multi-turn function calling
+            if (
+                _is_gemini_3_model(self._model)
+                and hasattr(part, "thought_signature")
+                and part.thought_signature
+            ):
+                self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
+
             chat_chunk = llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
-                    tool_calls=[
-                        llm.FunctionToolCall(
-                            arguments=json.dumps(part.function_call.args),
-                            name=part.function_call.name,
-                            call_id=part.function_call.id or utils.shortuuid("function_call_"),
-                        )
-                    ],
+                    tool_calls=[tool_call],
                     content=part.text,
                 ),
             )
             return chat_chunk
+
+        if not part.text:
+            return None
 
         return llm.ChatChunk(
             id=id,

@@ -28,6 +28,7 @@ This directory contains a comprehensive collection of voice-based agent examples
 ### 🎯 Pipeline Nodes & Hooks
 
 - [`fast-preresponse.py`](./fast-preresponse.py) - Generating quick responses using the `on_user_turn_completed` node
+- [`flush_llm_node.py`](./flush_llm_node.py) - Flushing partial LLM output to TTS in `llm_node`
 - [`structured_output.py`](./structured_output.py) - Structured data and JSON outputs from agent responses
 - [`speedup_output_audio.py`](./speedup_output_audio.py) - Dynamically adjusting agent audio playback speed
 - [`timed_agent_transcript.py`](./timed_agent_transcript.py) - Reading timestamped transcripts from `transcription_node`

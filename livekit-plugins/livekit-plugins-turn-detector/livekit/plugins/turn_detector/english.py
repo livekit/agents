@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from livekit.agents import Plugin
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .base import EOUModelBase, _EUORunnerBase
+from .base import EOUModelBase, EOUPlugin, _EUORunnerBase
+from .models import EOUModelType
 
 
 class _EUORunnerEn(_EUORunnerBase):
     INFERENCE_METHOD = "lk_end_of_utterance_en"
 
-    def __init__(self) -> None:
-        super().__init__("en")
+    @classmethod
+    def model_type(cls) -> EOUModelType:
+        return "en"
 
     def _normalize_text(self, text: str) -> str:
         """
@@ -30,3 +33,4 @@ class EnglishModel(EOUModelBase):
 
 
 _InferenceRunner.register_runner(_EUORunnerEn)
+Plugin.register_plugin(EOUPlugin(_EUORunnerEn))

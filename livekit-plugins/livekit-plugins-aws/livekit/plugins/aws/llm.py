@@ -26,6 +26,7 @@ from livekit.agents.llm import (
     ChatContext,
     FunctionTool,
     FunctionToolCall,
+    ProviderTool,
     RawFunctionTool,
     ToolChoice,
 )
@@ -40,7 +41,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .utils import to_fnc_ctx
 
-DEFAULT_TEXT_MODEL = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
 
 @dataclass
@@ -82,7 +83,7 @@ class LLM(llm.LLM):
 
         Args:
             model (str, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html).
-                Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
+                Defaults to 'amazon.nova-2-lite-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
@@ -133,7 +134,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -216,7 +217,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -256,10 +257,12 @@ class LLMStream(llm.LLMStream):
 
     def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
-            tool_use = chunk["contentBlockStart"]["start"]["toolUse"]
-            self._tool_call_id = tool_use["toolUseId"]
-            self._fnc_name = tool_use["name"]
-            self._fnc_raw_arguments = ""
+            start = chunk["contentBlockStart"]["start"]
+            if "toolUse" in start:
+                tool_use = start["toolUse"]
+                self._tool_call_id = tool_use["toolUseId"]
+                self._fnc_name = tool_use["name"]
+                self._fnc_raw_arguments = ""
 
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]

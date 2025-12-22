@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
     ModelSettings,
-    WorkerOptions,
     cli,
     utils,
 )
@@ -87,6 +87,9 @@ class MyAgent(Agent):
         )
 
 
+server = AgentServer()
+
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
@@ -94,6 +97,10 @@ def prewarm(proc: JobProcess):
     librosa.effects.time_stretch(np.random.randn(16000).astype(np.float32), rate=1.2)
 
 
+server.setup_fnc = prewarm
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # each log entry will include these fields
     ctx.log_context_fields = {
@@ -112,4 +119,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(server)

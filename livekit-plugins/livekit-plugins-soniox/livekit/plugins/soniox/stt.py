@@ -89,6 +89,7 @@ class STTOptions:
     model: str | None = "stt-rt-preview"
 
     language_hints: list[str] | None = None
+    language_hints_strict: bool = False
     context: ContextObject | str | None = None
 
     num_channels: int = 1
@@ -130,7 +131,11 @@ class STT(stt.STT):
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, aligned_transcript=False
+            )
+        )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
         self._base_url = base_url
@@ -214,6 +219,7 @@ class SpeechStream(stt.SpeechStream):
             "enable_endpoint_detection": enable_endpoint_detection,
             "sample_rate": self._stt._params.sample_rate,
             "language_hints": self._stt._params.language_hints,
+            "language_hints_strict": self._stt._params.language_hints_strict,
             "context": context,
             "enable_speaker_diarization": self._stt._params.enable_speaker_diarization,
             "enable_language_identification": self._stt._params.enable_language_identification,

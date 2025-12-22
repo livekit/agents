@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import inspect
+from abc import ABC
 from collections.abc import Awaitable
 from dataclasses import dataclass
+from enum import Flag, auto
 from typing import (
     Any,
     Callable,
@@ -30,6 +32,11 @@ from typing import (
 )
 
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
+
+
+# TODO: refactor Tool inheritance, all tools (FunctionTool, RawFunctionTool, ProviderTool) should inherit from Tool
+class ProviderTool(ABC):  # noqa: B024
+    pass
 
 
 # Used by ToolChoice
@@ -79,6 +86,7 @@ class StopResponse(Exception):
 class _FunctionToolInfo:
     name: str
     description: str | None
+    flags: ToolFlag
 
 
 @runtime_checkable
@@ -86,6 +94,11 @@ class FunctionTool(Protocol):
     __livekit_tool_info: _FunctionToolInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class ToolFlag(Flag):
+    NONE = 0
+    IGNORE_ON_ENTER = auto()
 
 
 class RawFunctionDescription(TypedDict):
@@ -108,6 +121,7 @@ class RawFunctionDescription(TypedDict):
 class _RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
+    flags: ToolFlag
 
 
 @runtime_checkable
@@ -123,25 +137,39 @@ Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
 
 @overload
 def function_tool(
-    f: Raw_F, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: Raw_F,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> RawFunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: None = None,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
 @overload
 def function_tool(
-    f: F, *, name: str | None = None, description: str | None = None
+    f: F,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> FunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, name: str | None = None, description: str | None = None
+    f: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> Callable[[F], FunctionTool]: ...
 
 
@@ -151,6 +179,7 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+    flags: ToolFlag = ToolFlag.NONE,
 ) -> (
     FunctionTool
     | RawFunctionTool
@@ -167,7 +196,7 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
+        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
         setattr(func, "__livekit_raw_tool_info", info)
         return cast(RawFunctionTool, func)
 
@@ -178,6 +207,7 @@ def function_tool(
         info = _FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
+            flags=flags,
         )
         setattr(func, "__livekit_tool_info", info)
         return cast(FunctionTool, func)
@@ -188,7 +218,7 @@ def function_tool(
     return deco_raw if raw_schema is not None else deco_func
 
 
-def is_function_tool(f: Callable[..., Any]) -> TypeGuard[FunctionTool]:
+def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
     return hasattr(f, "__livekit_tool_info")
 
 
@@ -196,7 +226,7 @@ def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
     return cast(_FunctionToolInfo, getattr(f, "__livekit_tool_info"))
 
 
-def is_raw_function_tool(f: Callable[..., Any]) -> TypeGuard[RawFunctionTool]:
+def is_raw_function_tool(f: Any) -> TypeGuard[RawFunctionTool]:
     return hasattr(f, "__livekit_raw_tool_info")
 
 
@@ -215,7 +245,7 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: list[FunctionTool | RawFunctionTool]) -> None:
+    def __init__(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -226,7 +256,39 @@ class ToolContext:
     def function_tools(self) -> dict[str, FunctionTool | RawFunctionTool]:
         return self._tools_map.copy()
 
-    def update_tools(self, tools: list[FunctionTool | RawFunctionTool]) -> None:
+    @property
+    def provider_tools(self) -> list[ProviderTool]:
+        return self._provider_tools
+
+    @property
+    def all_tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] = []
+        tools.extend(list(self._tools_map.values()))
+        tools.extend(self._provider_tools)
+        return tools
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ToolContext):
+            return False
+
+        if self._tools_map.keys() != other._tools_map.keys():
+            return False
+
+        for name in self._tools_map:
+            if self._tools_map[name] is not other._tools_map[name]:
+                return False
+
+        if len(self._provider_tools) != len(other._provider_tools):
+            return False
+
+        self_provider_ids = {id(tool) for tool in self._provider_tools}
+        other_provider_ids = {id(tool) for tool in other._provider_tools}
+        if self_provider_ids != other_provider_ids:
+            return False
+
+        return True
+
+    def update_tools(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
         self._tools = tools.copy()
 
         for method in find_function_tools(self):
@@ -234,11 +296,15 @@ class ToolContext:
 
         self._tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         info: _FunctionToolInfo | _RawFunctionToolInfo
+        self._provider_tools: list[ProviderTool] = []
         for tool in tools:
             if is_raw_function_tool(tool):
                 info = get_raw_function_info(tool)
             elif is_function_tool(tool):
                 info = get_function_info(tool)
+            elif isinstance(tool, ProviderTool):
+                self._provider_tools.append(tool)
+                continue
             else:
                 # TODO(theomonnom): MCP servers & other tools
                 raise ValueError(f"unknown tool type: {type(tool)}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -11,21 +12,24 @@ from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
+    ProviderTool,
     RawFunctionTool,
     RealtimeModel,
     find_function_tools,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
+from ..llm.tool_context import is_function_tool, is_raw_function_tool
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, TurnDetectionMode
+    from .agent_session import AgentSession
+    from .audio_recognition import TurnDetectionMode
     from .io import TimedString
 
 
@@ -40,8 +44,9 @@ class Agent:
         self,
         *,
         instructions: str,
+        id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -55,6 +60,11 @@ class Agent:
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
+        if type(self) is Agent:
+            self._id = "default_agent"
+        else:
+            self._id = id or misc.camel_to_snake_case(type(self).__name__)
+
         self._instructions = instructions
         self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
@@ -86,12 +96,12 @@ class Agent:
         self._activity: AgentActivity | None = None
 
     @property
+    def id(self) -> str:
+        return self._id
+
+    @property
     def label(self) -> str:
-        """
-        Returns:
-            str: The label of the agent.
-        """
-        return f"{type(self).__module__}.{type(self).__name__}"
+        return self.id
 
     @property
     def instructions(self) -> str:
@@ -102,10 +112,10 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
         """
         Returns:
-            list[llm.FunctionTool | llm.RawFunctionTool]:
+            list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
                 A list of function tools available to the agent.
         """
         return self._tools.copy()
@@ -143,7 +153,9 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         """
         Updates the agent's available function tools.
 
@@ -151,12 +163,25 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool]):
+            tools (list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]):
                 The new list of function tools available to the agent.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
+        invalid = [
+            t
+            for t in tools
+            if not (
+                is_function_tool(t) or is_raw_function_tool(t) or isinstance(t, llm.ProviderTool)
+            )
+        ]
+        if invalid:
+            kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
+            raise TypeError(
+                f"Invalid tool type(s): {kinds}. Expected FunctionTool or RawFunctionTool."
+            )
+
         if self._activity is None:
             self._tools = list(set(tools))
             self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
@@ -243,11 +268,11 @@ class Agent:
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         model_settings: ModelSettings,
     ) -> (
-        AsyncIterable[llm.ChatChunk | str]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel]]
         | Coroutine[Any, Any, str]
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
@@ -365,6 +390,15 @@ class Agent:
 
             conn_options = activity.session.conn_options.stt_conn_options
             async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                _audio_input_started_at: float = (
+                    activity.session._recorder_io.recording_started_at
+                    if activity.session._recorder_io
+                    and activity.session._recorder_io.recording_started_at
+                    else activity.session._started_at
+                    if activity.session._started_at
+                    else time.time()
+                )
+                stream.start_time_offset = time.time() - _audio_input_started_at
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
@@ -382,9 +416,9 @@ class Agent:
         async def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
-            tools: list[FunctionTool | RawFunctionTool],
+            tools: list[FunctionTool | RawFunctionTool | ProviderTool],
             model_settings: ModelSettings,
-        ) -> AsyncGenerator[llm.ChatChunk | str, None]:
+        ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"
@@ -481,6 +515,13 @@ class Agent:
         """  # noqa: E501
         return self._turn_detection
 
+    @turn_detection.setter
+    def turn_detection(self, value: TurnDetectionMode | None) -> None:
+        self._turn_detection = value
+
+        if self._activity is not None:
+            self._activity.update_options(turn_detection=value)
+
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
         """
@@ -562,8 +603,11 @@ class Agent:
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:
         """
-        Minimum time-in-seconds the agent must wait after a potential end-of-utterance signal
-        before it declares the user’s turn complete.
+        Minimum time-in-seconds since the last detected speech before the agent
+        declares the user’s turn complete. In VAD mode this effectively behaves
+        like max(VAD silence, min_endpointing_delay); in STT mode it is applied
+        after the STT end-of-speech signal, so it can be additive with the STT
+        provider’s endpointing delay.
 
         If this property was set at Agent creation, it will be used at runtime instead of the session's value.
         """
@@ -625,7 +669,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -725,6 +769,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_agent = old_activity.agent
         session = old_activity.session
 
+        blocked_tasks = [current_task]
+        if (
+            old_activity._on_enter_task
+            and not old_activity._on_enter_task.done()
+            and current_task is not old_activity._on_enter_task
+        ):
+            blocked_tasks.append(old_activity._on_enter_task)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -736,9 +788,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-        await session._update_activity(
-            self, previous_activity="pause", blocked_tasks=[current_task]
-        )
+        await session._update_activity(self, previous_activity="pause", blocked_tasks=blocked_tasks)
 
         # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
         run_state = session._global_run_state
