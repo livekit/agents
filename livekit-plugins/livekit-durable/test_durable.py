@@ -1,4 +1,5 @@
 # mypy: ignore-errors
+# ruff: noqa
 import asyncio
 import pickle
 from types import coroutine
