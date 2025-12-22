@@ -12,7 +12,7 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext
 from .llm import LLM, ChatChunk, LLMStream
-from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
+from .tool_context import FunctionTool, ProviderTool, RawFunctionTool, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -88,7 +88,7 @@ class FallbackAdapter(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -120,7 +120,7 @@ class FallbackLLMStream(LLMStream):
         llm: FallbackAdapter,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -141,7 +141,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool | RawFunctionTool]:
+    def tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
         if self._current_stream is None:
             return self._tools
         return self._current_stream.tools

@@ -97,7 +97,6 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = list(tool_ctx.function_tools.values())
 
     current_span.set_attribute(
         trace_types.ATTR_CHAT_CTX,
@@ -109,12 +108,12 @@ async def _llm_inference_task(
         trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
     )
 
-    llm_node = node(chat_ctx, tools, model_settings)
+    llm_node = node(chat_ctx, tool_ctx.all_tools, model_settings)
     if asyncio.iscoroutine(llm_node):
         llm_node = await llm_node
 
     # update the tool context after llm node
-    tool_ctx.update_tools(tools)
+    tool_ctx.update_tools(tool_ctx.all_tools)
 
     if isinstance(llm_node, str):
         data.generated_text = llm_node

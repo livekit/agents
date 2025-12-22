@@ -1717,15 +1717,13 @@ class RealtimeSession(  # noqa: F811
             return None
 
     # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)  # noqa: E501
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         """Replace the active tool set with tools and notify Sonic if necessary."""
         logger.debug(f"Updating tools: {tools}")
-        retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
-
-        for tool in tools:
-            retained_tools.append(tool)
-        self._tools = llm.ToolContext(retained_tools)
-        if retained_tools:
+        self._tools = llm.ToolContext(tools)
+        if self._tools.function_tools:
             if self._tools_ready is None:
                 self._tools_ready = asyncio.get_running_loop().create_future()
             if not self._tools_ready.done():

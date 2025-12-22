@@ -1029,9 +1029,13 @@ class RealtimeSessionBeta(
 
         return events
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         async with self._update_fnc_ctx_lock:
-            ev = self._create_tools_update_event(tools)
+            # beta API doesn't support ProviderTools
+            filtered_tools = [t for t in tools if not isinstance(t, llm.ProviderTool)]
+            ev = self._create_tools_update_event(filtered_tools)
             self.send_event(ev)
 
             assert ev.session.tools is not None
@@ -1045,7 +1049,7 @@ class RealtimeSessionBeta(
                     and get_raw_function_info(tool).name in retained_tool_names
                 )
             ]
-            self._tools = llm.ToolContext(retained_tools)
+            self._tools = llm.ToolContext(retained_tools)  # type: ignore
 
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
