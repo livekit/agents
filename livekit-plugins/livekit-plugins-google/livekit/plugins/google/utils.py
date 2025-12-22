@@ -60,12 +60,18 @@ def _function_tools_to_gemini(
 
 def create_tools_config(
     tools: llm.ToolContext,
+    *,
+    _only_single_type: bool = False,
 ) -> list[types.Tool]:
     gemini_tools: list[types.Tool] = []
     function_tools = _function_tools_to_gemini(tools.function_tools)
 
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
+
+    # Some Google LLMs do not support multiple tool types (either function tools or builtin tools).
+    if _only_single_type and gemini_tools:
+        return gemini_tools
 
     for tool in tools.provider_tools:
         if isinstance(tool, GeminiTool):

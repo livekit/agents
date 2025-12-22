@@ -406,7 +406,7 @@ class LLMStream(llm.LLMStream):
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_context = llm.ToolContext(self._tools)
-            tools_config = create_tools_config(tool_context)
+            tools_config = create_tools_config(tool_context, _only_single_type=True)
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
             http_options = self._llm._opts.http_options or types.HttpOptions(
