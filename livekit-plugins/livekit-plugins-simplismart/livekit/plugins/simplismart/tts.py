@@ -30,7 +30,7 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: str,
-        model="simplismart-tts",
+        model: str | None = "Simplismart/orpheus-3b-0.1-ft",
         voice="tara",
         api_key: str | None = None,
         params: dict[str, Any] | SimplismartTTSOptions | None = None,
@@ -87,11 +87,13 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = tts._opts
+        self._model = tts._model
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         payload = self._opts.model_dump()
         payload["prompt"] = self._input_text
         payload["voice"] = self._tts._voice
+        payload["model"] = "Simplismart/orpheus-3b-0.1-ft"
 
         headers = {
             "Authorization": f"Bearer {self._tts._api_key}",

@@ -45,6 +45,7 @@ class SimplismartSTTOptions(BaseModel):
     without_timestamps: bool = True
     vad_model: Literal["silero", "frame"] = "frame"
     vad_filter: bool = True
+    model: str | None = "openai/whisper-large-v3-turbo"
     word_timestamps: bool = False
     vad_onset: float | None = 0.5
     vad_offset: float | None = None
@@ -74,6 +75,7 @@ class STT(stt.STT):
         *,
         base_url: str,
         api_key: str | None = None,
+        model: str | None = None,
         params: dict[str, Any] | SimplismartSTTOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
@@ -94,6 +96,7 @@ class STT(stt.STT):
 
         if isinstance(params, SimplismartSTTOptions):
             self._opts = params
+            self._model = params.model
         else:
             self._opts = SimplismartSTTOptions(**params)
 
@@ -101,9 +104,6 @@ class STT(stt.STT):
         self._logger = logger.getChild(self.__class__.__name__)
         self._session = http_session
 
-    @property
-    def model(self) -> str:
-        return "whisper"
 
     @property
     def provider(self) -> str:
@@ -129,6 +129,7 @@ class STT(stt.STT):
 
         payload["audio_data"] = audio_b64
         payload["language"] = language
+        payload["model"] = self._model
 
         try:
             async with self._ensure_session().post(
