@@ -202,7 +202,7 @@ class SpeechStream(stt.SpeechStream):
                 config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
                     resolvers=(
                         StaticCredentialsResolver(),
-                        EnvironmentCredentialsResolver(),
+                        EnvironmentCredentialsResolver(),  # type: ignore[no-untyped-call]
                         ContainerCredentialsResolver(http_client=self._http_client),
                         IMDSCredentialsResolver(http_client=self._http_client),
                     )
