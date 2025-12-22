@@ -41,7 +41,6 @@ server.setup_fnc = prewarm
 
 @server.rtc_session()
 async def my_agent(ctx: JobContext):
-
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
@@ -67,6 +66,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await ctx.connect()
+
 
 if __name__ == "__main__":
     cli.run_app(server)
