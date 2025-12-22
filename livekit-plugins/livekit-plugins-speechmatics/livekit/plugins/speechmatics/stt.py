@@ -53,7 +53,9 @@ class TurnDetectionMode(str, Enum):
     """Endpoint and turn detection handling mode.
 
     How the STT engine handles the endpointing of speech. If using Pipecat's built-in endpointing,
-    then use `TurnDetectionMode.EXTERNAL` (default).
+    then use `TurnDetectionMode.EXTERNAL`.
+
+    Using LiveKit's own VAD, the default is `TurnDetectionMode.FIXED`.
 
     To use the STT engine's built-in endpointing, then use `TurnDetectionMode.ADAPTIVE` for simple
     voice activity detection or `TurnDetectionMode.SMART_TURN` for more advanced ML-based
@@ -61,6 +63,7 @@ class TurnDetectionMode(str, Enum):
     """
 
     EXTERNAL = "external"
+    FIXED = "fixed"
     ADAPTIVE = "adaptive"
     SMART_TURN = "smart_turn"
 
@@ -75,7 +78,7 @@ class STTOptions:
     domain: str | None = None
 
     # Endpointing mode
-    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL
+    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED
 
     # Output formatting
     speaker_active_format: str | None = None
@@ -118,7 +121,7 @@ class STT(stt.STT):
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.FIXED,
         speaker_active_format: NotGivenOr[str] = NOT_GIVEN,
         speaker_passive_format: NotGivenOr[str] = NOT_GIVEN,
         focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -132,7 +135,7 @@ class STT(stt.STT):
         end_of_utterance_max_delay: NotGivenOr[float] = NOT_GIVEN,
         punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
         include_partials: NotGivenOr[bool] = NOT_GIVEN,
-        enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
+        enable_diarization: bool = True,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
         prefer_current_speaker: NotGivenOr[bool] = NOT_GIVEN,
@@ -229,7 +232,7 @@ class STT(stt.STT):
 
             enable_diarization (bool): Enable speaker diarization. When enabled, the STT
                 engine will determine and attribute words to unique speakers.
-                Overrides preset if provided. Optional.
+                Overrides preset if provided. Defaults to True.
 
             speaker_sensitivity (float): Diarization sensitivity. A higher value increases
                 the sensitivity of diarization and helps when two or more speakers have similar voices.
@@ -504,6 +507,10 @@ class SpeechStream(stt.RecognizeStream):
         """Run the STT stream."""
         logger.debug("Connecting to Speechmatics STT service")
 
+        # Config is required
+        if not self._stt._config:
+            raise ValueError("Config is required")
+
         # Create the Voice Agent client
         self._client = VoiceAgentClient(
             api_key=self._stt._api_key,
@@ -516,25 +523,39 @@ class SpeechStream(stt.RecognizeStream):
         def add_message(message: dict[str, Any]) -> None:
             self._msg_queue.put_nowait(message)
 
-        # Add message handlers
-        self._client.on(AgentServerMessageType.ADD_PARTIAL_SEGMENT, add_message)  # type: ignore[arg-type]
-        self._client.on(AgentServerMessageType.ADD_SEGMENT, add_message)  # type: ignore[arg-type]
-        self._client.on(AgentServerMessageType.START_OF_TURN, add_message)  # type: ignore[arg-type]
-        self._client.on(AgentServerMessageType.END_OF_TURN, add_message)  # type: ignore[arg-type]
-        if (
-            self._stt._config
-            and self._stt._config.enable_diarization is not None
-            and self._stt._config.enable_diarization
-        ):
-            self._client.on(AgentServerMessageType.SPEAKERS_RESULT, add_message)  # type: ignore[arg-type]
-
-        # Other events to handle and log
-        for event in [
+        # Default messages to listen to
+        messages: list[AgentServerMessageType] = [
             AgentServerMessageType.RECOGNITION_STARTED,
             AgentServerMessageType.INFO,
             AgentServerMessageType.ERROR,
             AgentServerMessageType.WARNING,
-        ]:
+            AgentServerMessageType.ADD_PARTIAL_SEGMENT,
+            AgentServerMessageType.ADD_SEGMENT,
+        ]
+
+        # Turn message handlers
+        if self._stt._stt_options.turn_detection_mode in (
+            TurnDetectionMode.ADAPTIVE,
+            TurnDetectionMode.SMART_TURN,
+        ):
+            messages.append(AgentServerMessageType.START_OF_TURN)
+            messages.append(AgentServerMessageType.END_OF_TURN)
+
+        # Speaker IDs message handler
+        if (
+            self._stt._config.enable_diarization is not None
+            and self._stt._config.enable_diarization
+        ):
+            messages.append(AgentServerMessageType.SPEAKERS_RESULT)
+
+        # Optional debug messages to log
+        if True:
+            messages.append(AgentServerMessageType.END_OF_UTTERANCE)
+            messages.append(AgentServerMessageType.END_OF_TURN_PREDICTION)
+            messages.append(AgentServerMessageType.DIAGNOSTICS)
+
+        # Add message handlers
+        for event in messages:
             self._client.on(event, add_message)  # type: ignore[arg-type]
 
         # Connect to the service
@@ -544,12 +565,13 @@ class SpeechStream(stt.RecognizeStream):
         # Start message processing task
         self._msg_task = asyncio.create_task(self._process_messages())
 
-        # Process input audio
+        # Input audio stream
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._stt._sample_rate,
             num_channels=1,
         )
 
+        # Process input audio
         async for data in self._input_ch:
             # Handle flush sentinel
             if isinstance(data, self._FlushSentinel):
@@ -560,6 +582,9 @@ class SpeechStream(stt.RecognizeStream):
             # Send audio frames
             for frame in frames:
                 await self._client.send_audio(frame.data.tobytes())
+
+        # Close the connection
+        await self._client.disconnect()
 
     async def _process_messages(self) -> None:
         """Process messages from the STT client."""
