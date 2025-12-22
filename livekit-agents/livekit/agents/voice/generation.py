@@ -98,7 +98,6 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = list[FunctionTool | RawFunctionTool](tool_ctx.function_tools.values())
 
     current_span.set_attribute(
         trace_types.ATTR_CHAT_CTX,

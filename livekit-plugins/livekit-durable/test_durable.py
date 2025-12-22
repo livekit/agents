@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 import asyncio
 import pickle
 from types import coroutine
