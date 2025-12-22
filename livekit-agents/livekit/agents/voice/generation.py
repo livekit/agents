@@ -13,7 +13,6 @@ from opentelemetry import trace
 from pydantic import ValidationError
 
 from livekit import rtc
-from livekit.agents.llm import FunctionTool, RawFunctionTool
 
 from .. import llm, utils
 from ..llm import (
