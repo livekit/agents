@@ -104,7 +104,7 @@ class TextOutputOptions:
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
     next_in_chain: TextOutput | None = None
-    """The next text output in the chain. If provided, the transcription will be passed to it."""
+    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
 
 
 @dataclass
