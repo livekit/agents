@@ -1,6 +1,6 @@
 from typing import Literal
 
-# Speech to Text v2
+# Speech to Text (v1 and v2)
 
 SpeechModels = Literal[
     "long",
@@ -13,6 +13,13 @@ SpeechModels = Literal[
     "chirp_3",
     "latest_long",
     "latest_short",
+]
+# https://docs.cloud.google.com/speech-to-text/docs/transcription-model
+
+SpeechModelsV2 = Literal[
+    "telephony",
+    "chirp_2",
+    "chirp_3",
 ]
 
 SpeechLanguages = Literal[
