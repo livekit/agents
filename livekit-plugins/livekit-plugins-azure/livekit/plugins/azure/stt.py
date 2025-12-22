@@ -61,6 +61,7 @@ class STTOptions:
     explicit_punctuation: bool = False
     lexical_output: bool = False
 
+
 class STT(stt.STT):
     def __init__(
         self,
