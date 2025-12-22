@@ -531,15 +531,9 @@ class SpeechStream(stt.RecognizeStream):
             AgentServerMessageType.WARNING,
             AgentServerMessageType.ADD_PARTIAL_SEGMENT,
             AgentServerMessageType.ADD_SEGMENT,
+            AgentServerMessageType.START_OF_TURN,
+            AgentServerMessageType.END_OF_TURN,
         ]
-
-        # Turn message handlers
-        if self._stt._stt_options.turn_detection_mode in (
-            TurnDetectionMode.ADAPTIVE,
-            TurnDetectionMode.SMART_TURN,
-        ):
-            messages.append(AgentServerMessageType.START_OF_TURN)
-            messages.append(AgentServerMessageType.END_OF_TURN)
 
         # Speaker IDs message handler
         if (
