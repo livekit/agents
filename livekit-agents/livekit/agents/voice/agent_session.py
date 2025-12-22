@@ -848,7 +848,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_ctx = llm.ToolContext(self.tools)
         return {
             "tools": list(tool_ctx.function_tools.keys()),
-            "chat_ctx": self._chat_ctx.to_dict(),
+            "chat_ctx": self._chat_ctx.to_dict(
+                exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+            ),
             "agent": self._agent,
         }
 
@@ -1060,6 +1062,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._activity_lock:
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
+            is_handoff = self._activity is not None or not agent.is_rehydrated()
 
             if new_activity == "start":
                 previous_agent = self._activity.agent if self._activity else None
@@ -1093,17 +1096,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
-            handoff_item = AgentHandoff(
-                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                new_agent_id=self._activity.agent.id,
-            )
-            if run_state:
-                run_state._agent_handoff(
-                    item=handoff_item,
-                    old_agent=previous_activity_v.agent if previous_activity_v else None,
-                    new_agent=self._activity.agent,
+            if is_handoff:
+                handoff_item = AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
                 )
-            self._chat_ctx.insert(handoff_item)
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item,
+                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        new_agent=self._activity.agent,
+                    )
+                self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()

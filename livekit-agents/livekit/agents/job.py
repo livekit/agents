@@ -144,7 +144,8 @@ class TextMessageContext:
 
     async def save_session(self, session: AgentSession) -> None:
         # simulate saving session
-        self._session_data = pickle.dumps(session.get_state())
+        state = session.get_state()
+        self._session_data = pickle.dumps(state)
 
     @property
     def session_data(self) -> bytes | None:

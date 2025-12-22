@@ -373,7 +373,9 @@ class Agent:
         tool_ctx = llm.ToolContext(self.tools)
         return {
             "tools": list(tool_ctx.function_tools.keys()),
-            "chat_ctx": self.chat_ctx.to_dict(),
+            "chat_ctx": self.chat_ctx.to_dict(
+                exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+            ),
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -398,6 +400,9 @@ class Agent:
         self._tools = valid_tools
         self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
         self._rehydrated = True  # skip on_enter when rehydrating
+
+    def is_rehydrated(self) -> bool:
+        return self._rehydrated
 
     class default:
         @staticmethod
