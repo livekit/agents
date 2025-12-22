@@ -863,7 +863,7 @@ class AgentActivity(RecognitionHooks):
                     elif is_function_tool(tool):
                         info = get_function_info(tool)
 
-                    if not info or (info.flags & ToolFlag.IGNORE_ON_ENTER):
+                    if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
                         continue
 
                     filtered_tools.append(tool)

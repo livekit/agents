@@ -509,15 +509,11 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_tools(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
     ) -> None:
-        if self._tools == tools:
+        tool_ctx = llm.ToolContext(tools)
+        if self._tools == tool_ctx:
             return
 
-        self._tools = llm.ToolContext(tools)
-        logger.info(f"Updated function tools: {self._tools.function_tools}")
-        if len(self._tools.function_tools) > 0:
-            logger.info(
-                f"first function tool: {llm.is_function_tool(list(self._tools.function_tools.values())[0])}"
-            )
+        self._tools = tool_ctx
         self._mark_restart_needed()
 
     @property
