@@ -135,3 +135,16 @@ class TestToolContext:
         ctx2._tools_map["duplicate_name"] = duplicate_name
 
         assert ctx1 != ctx2
+
+    def test_all_tools_returns_combined_list(self):
+        provider1 = DummyProviderTool("provider1")
+        provider2 = DummyProviderTool("provider2")
+
+        ctx = ToolContext([test_tool_1, test_tool_2, provider1, provider2])
+        all_tools = ctx.all_tools
+
+        assert len(all_tools) == 4
+        assert test_tool_1 in all_tools
+        assert test_tool_2 in all_tools
+        assert provider1 in all_tools
+        assert provider2 in all_tools
