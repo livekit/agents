@@ -88,9 +88,7 @@ class STTOptions:
     known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
 
     # Custom dictionary
-    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(
-        default_factory=list
-    )
+    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
 
     # -------------------
     # Advanced features
@@ -293,9 +291,7 @@ class STT(stt.STT):
         )
 
         # Set API key
-        self._api_key: str = (
-            api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
-        )
+        self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
 
         # Set base URL
         self._base_url: str = (
@@ -355,9 +351,7 @@ class STT(stt.STT):
         # Return the new stream
         return self._stream
 
-    def _prepare_config(
-        self, language: NotGivenOr[str] = NOT_GIVEN
-    ) -> VoiceAgentConfig:
+    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> VoiceAgentConfig:
         """Prepare VoiceAgentConfig from STTOptions."""
 
         # Reference to STT options
@@ -459,11 +453,7 @@ class STT(stt.STT):
         """
 
         # Return if diarization is not enabled
-        if (
-            self._stream is None
-            or self._config is None
-            or not self._config.enable_diarization
-        ):
+        if self._stream is None or self._config is None or not self._config.enable_diarization:
             logger.warning("Diarization is not enabled")
             return []
 
@@ -471,9 +461,7 @@ class STT(stt.STT):
         self._stream._speaker_result_event.clear()
 
         # Send message to client
-        await self._stream._client.send_message(
-            {"message": ClientMessageType.GET_SPEAKERS.value}
-        )
+        await self._stream._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
 
         # Wait the result (5 second timeout)
         try:
@@ -629,16 +617,12 @@ class SpeechStream(stt.RecognizeStream):
     async def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-        )
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     async def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-        )
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     async def _handle_speakers_result(self, message: dict[str, Any]) -> None:
         """Handle SpeakersResult events."""
@@ -646,9 +630,7 @@ class SpeechStream(stt.RecognizeStream):
         self._speaker_result = message.get("speakers", [])
         self._speaker_result_event.set()
 
-    async def _send_frames(
-        self, segments: list[dict[str, Any]], is_final: bool
-    ) -> None:
+    async def _send_frames(self, segments: list[dict[str, Any]], is_final: bool) -> None:
         """Send frames to the pipeline."""
 
         # Check for empty segments
@@ -669,9 +651,7 @@ class SpeechStream(stt.RecognizeStream):
         for segment in segments:
             # Format the text based on speaker activity
             is_active = segment.get("is_active", True)
-            format_str = (
-                opts.speaker_active_format if is_active else opts.speaker_passive_format
-            )
+            format_str = opts.speaker_active_format if is_active else opts.speaker_passive_format
             text = format_str.format(
                 speaker_id=segment.get("speaker_id", "UU"),
                 text=segment.get("text", ""),
