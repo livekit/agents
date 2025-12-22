@@ -1,15 +1,15 @@
-# Grok Voice Agent
+# Grok Voice Agent API Example
 
-You can build realtime voice AI agents with xAI's Grok Voice Agent API and LiveKit Agents in a few lines of code.
+This example demonstrates how to integrate xAI's Grok Voice Agents API with LiveKit Agents. It includes:
 
-This example includes:
+- Basic setup with xAI's voice-to-voice model
+- Integration with built-in search tools so Grok can search x.com and the web
 
-- **Grok Realtime API** — Voice-to-voice with xAI's realtime model
-- **Built-in web search** — Grok can search X and the web using the `XSearch()` and `WebSearch()` tools
+## Quickstart
 
-## Quick Start
-
-### 1. Set up your environment variables
+### 1. Set up environment variables
+> [!NOTE]
+> All keys prefixed with `LIVEKIT_` can be obtained from a project created on [LiveKit Cloud](https://cloud.livekit.io) or from a self-hosted [LiveKit server](https://github.com/livekit/livekit) instance.
 
 ```bash
 export LIVEKIT_API_KEY=<your-livekit-api-key>
@@ -26,24 +26,52 @@ pip install "livekit-agents[xai,silero,turn-detector]" livekit-plugins-noise-can
 
 ### 3. Run the agent
 
-**Option A: Console mode** — Talk to Grok directly in your terminal:
+#### Option 1: Console mode
+
+You can talk to Grok directly in your terminal:
 <img width="876" height="250" alt="grok-console" src="https://github.com/user-attachments/assets/d1f0a41d-3f18-4aab-a611-3a626d182f0a" />
-```bash
-python realtime_grok_agents_api.py console
-```
-
-**Option B: Web interface** — Run the agent in development mode and connect via a frontend:
 
 ```bash
-python realtime_grok_agents_api.py dev
+python grok_voice_agent_api.py console
 ```
 
-Then use the [agent-starter-react](https://github.com/livekit-examples/agent-starter-react) template to interact with your agent in a browser. Also available for [Android](https://github.com/livekit-examples/agent-starter-android), [Swift](https://github.com/livekit-examples/agent-starter-swift), [Flutter](https://github.com/livekit-examples/agent-starter-flutter), [React Native](https://github.com/livekit-examples/agent-starter-react-native), [ESP32](https://github.com/livekit/client-sdk-esp32), or [embed](https://github.com/livekit-examples/agent-starter-embed) it directly into your existing website.
+#### Option 2: Agents playground
 
-## Try it out
+LiveKit hosts a playground environment where you can connect to the agent running on your machine. First run the agent:
+
+```bash
+python grok_voice_agent_api.py dev
+```
+
+Then: 
+
+1. Open the playground environment in your browser: [https://agents-playground.livekit.io/](https://agents-playground.livekit.io/)
+2. Select the LiveKit Cloud project that's linked to your agent and click "Connect to <project name>"
+
+#### Option 3: Run your own custom frontend
+
+LiveKit offers a bunch of [agent frontend](https://docs.livekit.io/frontends/) starter templates across languages. Like Option 2, the first step is to run the agent on your machine:
+
+```bash
+python grok_voice_agent_api.py dev
+```
+
+Then:
+
+Clone and run [agent-starter-react](https://github.com/livekit-examples/agent-starter-react) to interact with your agent in a browser (you'll need to link the frontend via environment vars to the same LiveKit project tied to your agent). 
+
+Or alternatively: 
+- [Android](https://github.com/livekit-examples/agent-starter-android)
+- [Swift](https://github.com/livekit-examples/agent-starter-swift)
+- [Flutter](https://github.com/livekit-examples/agent-starter-flutter)
+- [React Native](https://github.com/livekit-examples/agent-starter-react-native)
+- [ESP32](https://github.com/livekit/client-sdk-esp32)
+- [Embed](https://github.com/livekit-examples/agent-starter-embed) your agent directly into your existing website
+
+### Try it out:
 
 Ask Grok something that requires real time information:
 
 > "What is Elon Musk's most recent X post?"
 
-Grok will use its built-in search tools to fetch and summarize the latest content!
+
