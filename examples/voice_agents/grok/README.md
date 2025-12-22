@@ -27,7 +27,7 @@ pip install "livekit-agents[xai,silero,turn-detector]" livekit-plugins-noise-can
 ### 3. Run the agent
 
 **Option A: Console mode** — Talk to Grok directly in your terminal:
-
+<img width="876" height="250" alt="grok-console" src="https://github.com/user-attachments/assets/d1f0a41d-3f18-4aab-a611-3a626d182f0a" />
 ```bash
 python realtime_grok_agents_api.py console
 ```
