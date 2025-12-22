@@ -71,6 +71,35 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
+def _wrap_entrypoint_fnc(
+    entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None,
+) -> Callable[[JobContext], Awaitable[None]]:
+    async def _wrapped_entrypoint_fnc(ctx: JobContext) -> None:
+        if ctx.is_sms_job():
+            # TODO(long): should we add a customizable sms entrypoint?
+            from .cli import AgentsConsole
+
+            c = AgentsConsole.get_instance()
+            if c.enabled:
+                c.acquire_io(loop=asyncio.get_running_loop(), session=None)
+
+            if entrypoint_fnc:
+                logger.info("SMS job detected, skipping RTC entrypoint")
+            return
+
+        if not entrypoint_fnc:
+            raise RuntimeError(
+                "No RTC session entrypoint has been registered.\n"
+                "Define one using the @server.rtc_session() decorator, for example:\n"
+                '    @server.rtc_session(agent_name="my_agent")\n'
+                "    async def my_agent(ctx: JobContext):\n"
+                "        ...\n"
+            )
+        await entrypoint_fnc(ctx)
+
+    return _wrapped_entrypoint_fnc
+
+
 class ServerType(Enum):
     ROOM = agent.JobType.JT_ROOM
     PUBLISHER = agent.JobType.JT_PUBLISHER
@@ -464,6 +493,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         return decorator
 
+    @overload
+    def sms_handler(
+        self,
+        func: Callable[[TextMessageContext], Awaitable[None]],
+    ) -> Callable[[TextMessageContext], Awaitable[None]]: ...
+
+    @overload
+    def sms_handler(
+        self,
+    ) -> Callable[
+        [Callable[[TextMessageContext], Awaitable[None]]],
+        Callable[[TextMessageContext], Awaitable[None]],
+    ]: ...
+
     def sms_handler(
         self,
         func: Callable[[TextMessageContext], Awaitable[None]] | None = None,
@@ -525,15 +568,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if not self._closed:
                 raise Exception("worker is already running")
 
-            if self._entrypoint_fnc is None:
-                raise RuntimeError(
-                    "No RTC session entrypoint has been registered.\n"
-                    "Define one using the @server.rtc_session() decorator, for example:\n"
-                    '    @server.rtc_session(agent_name="my_agent")\n'
-                    "    async def my_agent(ctx: JobContext):\n"
-                    "        ...\n"
-                )
-
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
 
@@ -582,7 +616,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
-                job_entrypoint_fnc=self._entrypoint_fnc,
+                job_entrypoint_fnc=_wrap_entrypoint_fnc(self._entrypoint_fnc),
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
@@ -868,6 +902,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
         token: str | None = None,
+        sms_job: bool = False,
     ) -> None:
         async with self._lock:
             if token is not None:
@@ -911,6 +946,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=fake_job,
+                sms_job=sms_job,
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1149,6 +1185,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=jwt.encode(decoded, self._api_secret, algorithm="HS256"),
                 worker_id=aj.worker_id,
                 fake_job=aj.fake_job,
+                sms_job=aj.sms_job,
             )
             await self._proc_pool.launch_job(running_info)
 
@@ -1222,6 +1259,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=job_assign.token,
                 worker_id=self._id,
                 fake_job=False,
+                sms_job=False,  # SMS jobs are not supported yet
             )
 
             await self._proc_pool.launch_job(running_info)

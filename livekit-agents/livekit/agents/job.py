@@ -97,6 +97,7 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    sms_job: bool
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -132,24 +133,22 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 
 class TextMessageContext:
-    def __init__(self, *, text: str, session: AgentSession, sess_data: bytes | None) -> None:
+    def __init__(self, *, text: str, session_data: bytes | None = None) -> None:
         self._text = text
-        self._session = session
-        self._sess_data = sess_data
         self._result: RunResult | None = None
+        self._session_data = session_data
 
     async def send_result(self, result: RunResult) -> None:
+        # simulate sending result
         self._result = result
 
-    async def rehydrated_session(self) -> AgentSession:
-        # TODO: it should be AgentSession(...).rehydrate(context)
-        if not self._sess_data:
-            return self._session
+    async def save_session(self, session: AgentSession) -> None:
+        # simulate saving session
+        self._session_data = pickle.dumps(session.get_state())
 
-        state = pickle.loads(self._sess_data)
-        await self._session.rehydrate(state)
-        logger.debug("session rehydrated")
-        return self._session
+    @property
+    def session_data(self) -> bytes | None:
+        return self._session_data
 
     @property
     def text(self) -> str:
@@ -270,6 +269,9 @@ class JobContext:
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
+
+    def is_sms_job(self) -> bool:
+        return self._info.sms_job
 
     @property
     def session_directory(self) -> Path:

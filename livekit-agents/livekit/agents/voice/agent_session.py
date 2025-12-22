@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import pickle
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -847,7 +848,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "agent": self._agent,
         }
 
-    async def rehydrate(self, state: dict[str, Any]) -> None:
+    async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
+        if isinstance(state, bytes):
+            state = pickle.loads(state)
+
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
         for name in state["tools"]:

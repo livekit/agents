@@ -10,7 +10,6 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
-    TextMessageContext,
     cli,
     metrics,
     room_io,
@@ -41,7 +40,6 @@ class MyAgent(Agent):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
         # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
-        logger.debug("on_enter called")
         self.session.generate_reply(allow_interruptions=False)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
@@ -74,15 +72,6 @@ def prewarm(proc: JobProcess):
 
 
 server.setup_fnc = prewarm
-
-
-@server.sms_handler()
-async def sms_handler(ctx: TextMessageContext):
-    logger.info(f"SMS received: {ctx.text}")
-
-    session = await ctx.rehydrated_session()
-    result = await session.run(user_input=ctx.text)
-    await ctx.send_result(result)
 
 
 @server.rtc_session()
