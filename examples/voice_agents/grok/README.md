@@ -1,6 +1,6 @@
 # Grok Voice Agent
 
-You can build voice AI agents with xAI's Grok Voice Agent API and LiveKit Agents in a few lines of code.
+You can build realtime voice AI agents with xAI's Grok Voice Agent API and LiveKit Agents in a few lines of code.
 
 This example includes:
 
