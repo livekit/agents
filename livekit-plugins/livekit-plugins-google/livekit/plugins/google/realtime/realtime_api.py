@@ -27,8 +27,7 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
-from ..tools import _LLMTool
-from ..utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
+from ..utils import create_tools_config, get_tool_results_for_realtime
 from ..version import __version__
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
@@ -79,7 +78,6 @@ class _RealtimeOptions:
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
     context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN
     api_version: NotGivenOr[str] = NOT_GIVEN
-    gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
@@ -150,7 +148,6 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
-        _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
     ) -> None:
         """
@@ -191,7 +188,6 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
-            _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -283,7 +279,6 @@ class RealtimeModel(llm.RealtimeModel):
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
             api_version=api_version,
-            gemini_tools=_gemini_tools,
             tool_behavior=tool_behavior,
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
@@ -355,7 +350,6 @@ class RealtimeSession(llm.RealtimeSession):
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._gemini_declarations: list[types.FunctionDeclaration] = []
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -512,17 +506,15 @@ class RealtimeSession(llm.RealtimeSession):
         # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
-        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
-            tools, use_parameters_json_schema=False, tool_behavior=self._opts.tool_behavior
-        )
-        current_tool_names = {f.name for f in self._gemini_declarations}
-        new_tool_names = {f.name for f in new_declarations}
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
+        tool_ctx = llm.ToolContext(tools)
+        if self._tools == tool_ctx:
+            return
 
-        if current_tool_names != new_tool_names:
-            self._gemini_declarations = new_declarations
-            self._tools = llm.ToolContext(tools)
-            self._mark_restart_needed()
+        self._tools = tool_ctx
+        self._mark_restart_needed()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -882,10 +874,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(
-            function_tools=self._gemini_declarations,
-            gemini_tools=self._opts.gemini_tools if is_given(self._opts.gemini_tools) else None,
-        )
+        tools_config = create_tools_config(self._tools)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(

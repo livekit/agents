@@ -97,7 +97,7 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = list(tool_ctx.function_tools.values())
+    tools = tool_ctx.all_tools
 
     current_span.set_attribute(
         trace_types.ATTR_CHAT_CTX,
@@ -113,7 +113,9 @@ async def _llm_inference_task(
     if asyncio.iscoroutine(llm_node):
         llm_node = await llm_node
 
-    # update the tool context after llm node
+    # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
+    # are using the newer tools.
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
 
     if isinstance(llm_node, str):
