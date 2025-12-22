@@ -262,7 +262,7 @@ class STT(stt.STT):
         )
 
         # Set STT options
-        def _set(value: Any):
+        def _set(value: Any) -> Any:
             return value if is_given(value) else None
 
         # Create STT options from parameters
@@ -316,7 +316,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._stt_options.turn_detection_mode.value()
+        return str(self._stt_options.turn_detection_mode) if self._stt_options else "UNKNOWN"
 
     @property
     def provider(self) -> str:
@@ -453,7 +453,12 @@ class STT(stt.STT):
         """
 
         # Return if diarization is not enabled
-        if self._stream is None or self._config is None or not self._config.enable_diarization:
+        if (
+            self._stream is None
+            or self._stream._client is None
+            or self._config is None
+            or not self._config.enable_diarization
+        ):
             logger.warning("Diarization is not enabled")
             return []
 
@@ -474,7 +479,7 @@ class STT(stt.STT):
             return []
 
         # Return the list of speakers
-        return self._stream._speaker_result
+        return self._stream._speaker_result or []
 
 
 class SpeechStream(stt.RecognizeStream):
@@ -508,16 +513,20 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         # Add message handlers
-        def add_message(message: dict[str, Any]):
+        def add_message(message: dict[str, Any]) -> None:
             self._msg_queue.put_nowait(message)
 
         # Add message handlers
-        self._client.on(AgentServerMessageType.ADD_PARTIAL_SEGMENT, add_message)
-        self._client.on(AgentServerMessageType.ADD_SEGMENT, add_message)
-        self._client.on(AgentServerMessageType.START_OF_TURN, add_message)
-        self._client.on(AgentServerMessageType.END_OF_TURN, add_message)
-        if self._stt._config.enable_diarization:
-            self._client.on(AgentServerMessageType.SPEAKERS_RESULT, add_message)
+        self._client.on(AgentServerMessageType.ADD_PARTIAL_SEGMENT, add_message)  # type: ignore[arg-type]
+        self._client.on(AgentServerMessageType.ADD_SEGMENT, add_message)  # type: ignore[arg-type]
+        self._client.on(AgentServerMessageType.START_OF_TURN, add_message)  # type: ignore[arg-type]
+        self._client.on(AgentServerMessageType.END_OF_TURN, add_message)  # type: ignore[arg-type]
+        if (
+            self._stt._config
+            and self._stt._config.enable_diarization is not None
+            and self._stt._config.enable_diarization
+        ):
+            self._client.on(AgentServerMessageType.SPEAKERS_RESULT, add_message)  # type: ignore[arg-type]
 
         # Other events to handle and log
         for event in [
@@ -526,7 +535,7 @@ class SpeechStream(stt.RecognizeStream):
             AgentServerMessageType.ERROR,
             AgentServerMessageType.WARNING,
         ]:
-            self._client.on(event, add_message)
+            self._client.on(event, add_message)  # type: ignore[arg-type]
 
         # Connect to the service
         await self._client.connect()
@@ -649,7 +658,9 @@ class SpeechStream(stt.RecognizeStream):
         for segment in segments:
             # Format the text based on speaker activity
             is_active = segment.get("is_active", True)
-            format_str = opts.speaker_active_format if is_active else opts.speaker_passive_format
+            format_str = (
+                opts.speaker_active_format if is_active else opts.speaker_passive_format
+            ) or "{text}"
             text = format_str.format(
                 speaker_id=segment.get("speaker_id", "UU"),
                 text=segment.get("text", ""),
