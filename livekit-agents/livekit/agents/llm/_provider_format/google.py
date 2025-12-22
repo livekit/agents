@@ -17,7 +17,10 @@ class GoogleFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    thought_signatures: dict[str, bytes] | None = None,
 ) -> tuple[list[dict], GoogleFormatData]:
     turns: list[dict] = []
     system_messages: list[str] = []
@@ -53,15 +56,17 @@ def to_chat_ctx(
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content))
         elif msg.type == "function_call":
-            parts.append(
-                {
-                    "function_call": {
-                        "id": msg.call_id,
-                        "name": msg.name,
-                        "args": json.loads(msg.arguments or "{}"),
-                    }
+            fc_part: dict[str, Any] = {
+                "function_call": {
+                    "id": msg.call_id,
+                    "name": msg.name,
+                    "args": json.loads(msg.arguments or "{}"),
                 }
-            )
+            }
+            # Inject thought_signature if available (Gemini 3 multi-turn function calling)
+            if thought_signatures and (sig := thought_signatures.get(msg.call_id)):
+                fc_part["thought_signature"] = sig
+            parts.append(fc_part)
         elif msg.type == "function_call_output":
             response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
             parts.append(

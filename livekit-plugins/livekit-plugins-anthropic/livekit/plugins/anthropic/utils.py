@@ -2,7 +2,7 @@ from typing import Literal, Optional, Union
 
 import anthropic
 from livekit.agents import llm
-from livekit.agents.llm import FunctionTool, RawFunctionTool
+from livekit.agents.llm import FunctionTool, ProviderTool, RawFunctionTool
 from livekit.agents.llm.tool_context import (
     get_raw_function_info,
     is_function_tool,
@@ -21,11 +21,13 @@ __all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
 
 
 def to_fnc_ctx(
-    fncs: list[Union[FunctionTool, RawFunctionTool]], caching: Optional[Literal["ephemeral"]]
+    fncs: list[Union[FunctionTool, RawFunctionTool, ProviderTool]],
+    caching: Optional[Literal["ephemeral"]],
 ) -> list[anthropic.types.ToolParam]:
     tools: list[anthropic.types.ToolParam] = []
     for fnc in fncs:
-        tools.append(_build_anthropic_schema(fnc))
+        if is_function_tool(fnc) or is_raw_function_tool(fnc):
+            tools.append(_build_anthropic_schema(fnc))
 
     if tools and caching == "ephemeral":
         tools[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL

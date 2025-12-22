@@ -24,9 +24,14 @@ import httpx
 import openai
 from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
-from livekit.agents.llm import ToolChoice, utils as llm_utils
-from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm import (
+    ChatContext,
+    FunctionTool,
+    ProviderTool,
+    RawFunctionTool,
+    ToolChoice,
+    utils as llm_utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -122,7 +127,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model == "gpt-5.1":
+            if model in ["gpt-5.1", "gpt-5.2"]:
                 reasoning_effort = "none"  # type: ignore[assignment]
             else:
                 reasoning_effort = "minimal"
@@ -918,7 +923,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -1028,7 +1033,7 @@ class LLMStream(_LLMStream):
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:

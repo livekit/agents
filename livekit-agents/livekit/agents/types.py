@@ -89,3 +89,28 @@ class APIConnectOptions:
 
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()
+
+
+class TimedString(str):
+    """A string with optional start and end timestamps for word-level alignment."""
+
+    start_time: NotGivenOr[float]
+    end_time: NotGivenOr[float]
+    confidence: NotGivenOr[float]
+    start_time_offset: NotGivenOr[float]
+    # offset relative to the start of the audio input stream or session in seconds, used in STT plugins
+
+    def __new__(
+        cls,
+        text: str,
+        start_time: NotGivenOr[float] = NOT_GIVEN,
+        end_time: NotGivenOr[float] = NOT_GIVEN,
+        confidence: NotGivenOr[float] = NOT_GIVEN,
+        start_time_offset: NotGivenOr[float] = NOT_GIVEN,
+    ) -> "TimedString":
+        obj = super().__new__(cls, text)
+        obj.start_time = start_time
+        obj.end_time = end_time
+        obj.confidence = confidence
+        obj.start_time_offset = start_time_offset
+        return obj
