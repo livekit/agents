@@ -853,25 +853,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         }
 
     async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
-        if isinstance(state, bytes):
-            state = pickle.loads(state)
+        state_dict = pickle.loads(state) if isinstance(state, bytes) else state
 
         tool_ctx = llm.ToolContext(self.tools)
-        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
-        for name in state["tools"]:
+        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
+        for name in state_dict["tools"]:
+            # TODO: support provider tools
             if name in tool_ctx.function_tools:
                 valid_tools.append(tool_ctx.function_tools[name])
             else:
                 logger.warning("tool not found when unpickling", extra={"missing_tool": name})
 
         self._tools = valid_tools
-        self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
+        self._chat_ctx = llm.ChatContext.from_dict(state_dict["chat_ctx"])
 
         if self._started:
             # only allow rehydrate session that not started yet?
-            await self._update_activity(state["agent"])
+            await self._update_activity(state_dict["agent"])
         else:
-            await self.start(agent=state["agent"])
+            await self.start(agent=state_dict["agent"])
 
     def update_options(
         self,

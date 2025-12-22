@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -8,13 +7,9 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
-    MetricsCollectedEvent,
     RunContext,
     TextMessageContext,
     cli,
-    metrics,
-    room_io,
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero

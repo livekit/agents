@@ -378,14 +378,15 @@ class Agent:
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         try:
-            self.__init__()
+            self.__init__()  # type: ignore
         except TypeError as e:
             logger.error("Agent rehydration requires a zero-argument constructor")
             raise e
 
         tool_ctx = llm.ToolContext(self.tools)
-        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
         for name in state["tools"]:
+            # TODO: support provider tools
             if name in tool_ctx.function_tools:
                 valid_tools.append(tool_ctx.function_tools[name])
             else:

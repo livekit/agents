@@ -990,8 +990,8 @@ def live_status(
 def _text_mode(
     c: AgentsConsole,
     *,
-    sms_handler: Callable[[TextMessageContext], Awaitable[None]] | None,
-    sess_data_file: str | None,
+    sms_handler: Callable[[TextMessageContext], Awaitable[None]] | None = None,
+    sess_data_file: str | None = None,
 ) -> None:
     def _key_read(ch: str) -> None:
         if sms_handler:
@@ -1042,7 +1042,7 @@ def _text_mode(
                         logger.warning("result is not set from the sms handler")
                         return []
                 else:
-                    result = await c.io_session.run(user_input=text)  # type: ignore
+                    result = await c.io_session.run(user_input=text)
 
                 return result.events.copy()
 
@@ -1340,9 +1340,8 @@ def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
         console_worker.start()
 
         try:
-            while True:
-                _text_mode(c, sms_handler=sms_handler, sess_data_file=sess_data_file)
-
+            c.wait_for_io_acquisition()
+            _text_mode(c, sms_handler=sms_handler, sess_data_file=sess_data_file)
         except _ExitCli:
             pass
         finally:
