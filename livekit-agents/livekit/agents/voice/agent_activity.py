@@ -320,13 +320,7 @@ class AgentActivity(RecognitionHooks):
         self._agent._tools = tools
 
         if self._rt_session is not None:
-            flat_tools: list[llm.Tool] = []
-            for tool in tools:
-                if isinstance(tool, llm.ToolSet):
-                    flat_tools.extend(tool.get_tools())
-                else:
-                    flat_tools.append(tool)
-            await self._rt_session.update_tools(flat_tools)
+            await self._rt_session.update_tools(llm.ToolContext(self.tools).all_tools)
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
@@ -551,13 +545,7 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the chat_ctx")
 
             try:
-                flat_tools: list[llm.Tool] = []
-                for tool in self.tools:
-                    if isinstance(tool, llm.ToolSet):
-                        flat_tools.extend(tool.get_tools())
-                    else:
-                        flat_tools.append(tool)
-                await self._rt_session.update_tools(flat_tools)
+                await self._rt_session.update_tools(llm.ToolContext(self.tools).all_tools)
             except llm.RealtimeError:
                 logger.exception("failed to update the tools")
 
