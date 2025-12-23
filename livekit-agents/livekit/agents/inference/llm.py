@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Union, cast
 
@@ -25,7 +24,7 @@ from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
-from ..llm.tool_context import FunctionTool, RawFunctionTool, Tool
+from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given

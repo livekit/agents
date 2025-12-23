@@ -23,10 +23,6 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.tool_context import (
-    is_function_tool,
-    is_raw_function_tool,
-)
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
@@ -483,7 +479,7 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+            if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={

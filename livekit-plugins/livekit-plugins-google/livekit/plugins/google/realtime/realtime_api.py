@@ -872,7 +872,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(self._tools)
+        tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(
