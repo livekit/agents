@@ -452,7 +452,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_cohere(
         *,
-        model: str | CohereChatModels = "command-r-plus-08-2024",
+        model: str | CohereChatModels = "command-r-08-2024",
         api_key: str | None = None,
         base_url: str = "https://api.cohere.ai/compatibility/v1",
         client: openai.AsyncClient | None = None,
