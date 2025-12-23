@@ -12,7 +12,11 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.plugins import noise_cancellation, silero, xai
+from livekit.plugins import silero, xai
+
+# uncomment to enable Krisp background voice/noise cancellation
+# from livekit.plugins import noise_cancellation
+
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
