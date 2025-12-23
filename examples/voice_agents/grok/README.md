@@ -29,6 +29,7 @@ uv add "livekit-agents[xai,silero,turn-detector]" livekit-plugins-noise-cancella
 #### Option 1: Console mode
 
 You can talk to Grok directly in your terminal:
+
 <img width="2012" height="626" alt="livekit-grok-voice-agents-api-console" src="https://github.com/user-attachments/assets/44f48804-a8c7-4c83-ade9-6ce9bec502ac" />
 
 ```bash
