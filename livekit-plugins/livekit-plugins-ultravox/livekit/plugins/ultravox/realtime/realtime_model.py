@@ -424,7 +424,9 @@ class RealtimeSession(
         # Update local chat context
         self._chat_ctx = chat_ctx.copy()
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         """Update the available tools."""
         # Get current and new tool names for comparison
         current_tool_names = set(self._tools.function_tools.keys())

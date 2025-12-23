@@ -9,6 +9,11 @@ if current_process().name == "job_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
+    if hasattr(signal, "SIGUSR1"):
+        from .proc_client import _dump_stack_traces
+
+        signal.signal(signal.SIGUSR1, _dump_stack_traces)
+
 import asyncio
 import contextlib
 import socket
@@ -26,8 +31,9 @@ from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
-from .proc_client import _ProcClient
+from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
+    DumpStackTraceRequest,
     Exiting,
     InferenceRequest,
     InferenceResponse,
@@ -42,9 +48,10 @@ class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    user_arguments: Any | None
     mp_cch: socket.socket
     log_cch: socket.socket
-    user_arguments: Any | None = None
+    logger_levels: dict[str, int]
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -54,7 +61,8 @@ def proc_main(args: ProcStartArgs) -> None:
     from .proc_client import _ProcClient
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.NOTSET)
+    for name, level in args.logger_levels.items():
+        logging.getLogger(name).setLevel(level)
 
     log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
     log_handler = LogQueueHandler(log_cch)
@@ -211,6 +219,9 @@ class _JobProc:
 
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
+
+                if isinstance(msg, DumpStackTraceRequest):
+                    _dump_stack_traces_impl()
 
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
 

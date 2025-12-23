@@ -82,14 +82,8 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
-        try:
-            job_ctx = get_job_context()
-            local_participant_identity = job_ctx.token_claims().identity
-        except RuntimeError as e:
-            if not room.isconnected():
-                raise AnamException("failed to get local participant identity") from e
-            local_participant_identity = room.local_participant.identity
-
+        job_ctx = get_job_context()
+        local_participant_identity = job_ctx.local_participant_identity
         livekit_token = (
             api.AccessToken(
                 api_key=livekit_api_key,

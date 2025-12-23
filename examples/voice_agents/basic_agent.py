@@ -50,7 +50,6 @@ class MyAgent(Agent):
         self._gate = InterruptionGate()
 
     async def on_enter(self):
-        self.session.generate_reply()
 
     # ---------------------------
     # TTS lifecycle tracking

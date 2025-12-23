@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import aiofiles
 import aiohttp
+import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, trace
 from opentelemetry._logs import get_logger_provider, set_logger_provider
@@ -16,27 +18,27 @@ from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import (
-    LogData,
     LoggerProvider,
     LoggingHandler,
-    LogRecord,
     LogRecordProcessor,
+    ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, TraceFlags, Tracer
+from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import AttributeValue
+from opentelemetry.util.types import Attributes, AttributeValue
 
 from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
 from ..log import logger
+from . import trace_types
 
 if TYPE_CHECKING:
-    from ..llm import ChatItem
+    from ..llm import ChatContext, ChatItem
     from ..voice.report import SessionReport
 
 
@@ -77,20 +79,16 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
-    def emit(self, log_data: LogData) -> None:
+    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
-            log_data.log_record.attributes.update(  # type: ignore
-                {"logger.name": log_data.instrumentation_scope.name}
-            )
         else:
             log_data.log_record.attributes = self._metadata
 
-    def on_emit(self, log_data: LogData) -> None:
-        if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)  # type: ignore
-        else:
-            log_data.log_record.attributes = self._metadata
+        if log_data.instrumentation_scope:
+            log_data.log_record.attributes.update(  # type: ignore
+                {"logger.name": log_data.instrumentation_scope.name}
+            )
 
     def shutdown(self) -> None:
         pass
@@ -115,16 +113,45 @@ def set_tracer_provider(
 
 
 def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> None:
-    access_token = (
-        api.AccessToken()
-        .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(timedelta(hours=6))
-    )
+    token_ttl = timedelta(hours=6)
+    refresh_margin = timedelta(minutes=5)
 
+    class _AuthRefreshingSession(requests.Session):
+        def __init__(self, header_provider: _AuthHeaderProvider) -> None:
+            super().__init__()
+            self._header_provider = header_provider
+
+        def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+            self.headers.update(self._header_provider())
+            return super().request(*args, **kwargs)
+
+    class _AuthHeaderProvider:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._auth_header = ""
+            self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
+            self._refresh()
+
+        def _refresh(self) -> None:
+            access_token = (
+                api.AccessToken()
+                .with_observability_grants(api.ObservabilityGrants(write=True))
+                .with_ttl(token_ttl)
+            )
+            self._auth_header = f"Bearer {access_token.to_jwt()}"
+            self._expires_at = datetime.now(timezone.utc) + token_ttl
+
+        def __call__(self) -> dict[str, str]:
+            now = datetime.now(timezone.utc)
+            if now >= self._expires_at - refresh_margin:
+                with self._lock:
+                    if now >= self._expires_at - refresh_margin:
+                        self._refresh()
+            return {"Authorization": self._auth_header}
+
+    header_provider = _AuthHeaderProvider()
+    session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
-    headers = {
-        "Authorization": f"Bearer {access_token.to_jwt()}",
-    }
     metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
 
     resource = Resource.create(
@@ -135,25 +162,32 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         }
     )
 
-    tracer_provider = TracerProvider(resource=resource)
-    set_tracer_provider(tracer_provider)
+    if not isinstance(tracer._tracer_provider, TracerProvider):
+        tracer_provider = TracerProvider(resource=resource)
+        set_tracer_provider(tracer_provider)
+    else:
+        # attach the processor to the existing tracer provider
+        tracer_provider = tracer._tracer_provider
+        tracer_provider.resource.merge(resource)
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
-        headers=headers,
         compression=otlp_compression,
+        session=session,
     )
 
     tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    logger_provider = LoggerProvider()
-    set_logger_provider(logger_provider)
+    logger_provider = get_logger_provider()
+    if not isinstance(logger_provider, LoggerProvider):
+        logger_provider = LoggerProvider()
+        set_logger_provider(logger_provider)
 
     log_exporter = OTLPLogExporter(
         endpoint=f"https://{cloud_hostname}/observability/logs/otlp/v0",
-        headers=headers,
         compression=otlp_compression,
+        session=session,
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
@@ -161,6 +195,46 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
 
     root = logging.getLogger()
     root.addHandler(handler)
+
+
+def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
+    role_to_event = {
+        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
+        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+    }
+
+    events: list[tuple[str, Attributes]] = []
+    for item in chat_ctx.items:
+        if item.type == "message" and (event_name := role_to_event.get(item.role)):
+            # only support text content for now
+            events.append((event_name, {"content": item.text_content or ""}))
+        elif item.type == "function_call":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            json.dumps(
+                                {
+                                    "function": {"name": item.name, "arguments": item.arguments},
+                                    "id": item.call_id,
+                                    "type": "function",
+                                }
+                            )
+                        ],
+                    },
+                )
+            )
+        elif item.type == "function_call_output":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
+                    {"content": item.output, "name": item.name, "id": item.call_id},
+                )
+            )
+    return events
 
 
 def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
@@ -239,30 +313,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    item_dict = MessageToDict(item_pb)
-
-    # patch `arguments` & `output` to make them indexable attributes
-    try:
-        if item.type == "function_call":
-            item_dict["arguments"] = json.loads(item_dict["arguments"])
-        elif item.type == "function_call_output":
-            item_dict["output"] = json.loads(item_dict["output"])
-    except Exception:
-        pass  # ignore
-
-    return item_dict
-
-
-def _to_rfc3339(value: int | float | datetime) -> str:
-    if isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(value, tz=timezone.utc)
-    elif isinstance(value, datetime):
-        dt = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    else:
-        raise TypeError(f"Unsupported type for RFC3339 conversion: {type(value)!r}")
-
-    dt = dt.replace(microsecond=(dt.microsecond // 1000) * 1000)
-    return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return MessageToDict(item_pb)
 
 
 async def _upload_session_report(
@@ -289,16 +340,11 @@ async def _upload_session_report(
         severity_text: str = "unspecified",
     ) -> None:
         chat_logger.emit(
-            LogRecord(
-                body=body,
-                timestamp=timestamp,
-                attributes=attributes,
-                trace_id=0,
-                span_id=0,
-                severity_number=severity,
-                severity_text=severity_text,
-                trace_flags=TraceFlags.get_default(),
-            )
+            body=body,
+            timestamp=timestamp,
+            attributes=attributes,
+            severity_number=severity,
+            severity_text=severity_text,
         )
 
     _log(
@@ -338,7 +384,6 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
-        duration=int((report.duration or 0) * 1000),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
@@ -368,7 +413,6 @@ async def _upload_session_report(
             part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
-            part.headers["Created-At"] = _to_rfc3339(report.audio_recording_started_at)
 
     url = f"https://{cloud_hostname}/observability/recordings/v0"
     headers = {
@@ -381,3 +425,16 @@ async def _upload_session_report(
         resp.raise_for_status()
 
     logger.debug("finished uploading")
+
+
+def _shutdown_telemetry() -> None:
+    if isinstance(tracer_provider := tracer._tracer_provider, TracerProvider):
+        logger.debug("shutting down telemetry tracer provider")
+        tracer_provider.force_flush()
+        tracer_provider.shutdown()
+
+    if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
+        # force_flush will cause deadlock when new logs from OTLPLogExporter are emitted
+        # logger_provider.force_flush()
+        logger.debug("shutting down telemetry logger provider")
+        logger_provider.shutdown()  # type: ignore

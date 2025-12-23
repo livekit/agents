@@ -39,7 +39,7 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, tracer
-from .telemetry.traces import _setup_cloud_tracer
+from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
@@ -103,6 +103,32 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
 ]
 
 
+class _ContextLogFieldsFilter(logging.Filter):
+    """Filter that adds job context fields to log records without overwriting."""
+
+    def __init__(self, job_ctx: JobContext) -> None:
+        super().__init__()
+        self.job_ctx = job_ctx
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # only add fields for the current job context
+        if self.job_ctx.proc.executor_type != JobExecutorType.PROCESS:
+            try:
+                ctx = get_job_context()
+            except RuntimeError:
+                return True
+            else:
+                if ctx != self.job_ctx:
+                    return True
+
+        # add context fields only if they don't already exist in the record
+        for key, value in self.job_ctx._log_fields.items():
+            if not hasattr(record, key):
+                setattr(record, key, value)
+
+        return True
+
+
 class JobContext:
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
@@ -138,8 +164,9 @@ class JobContext:
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
-        self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
+        self._log_filter = _ContextLogFieldsFilter(self)
+        self._handlers_with_filter: list[logging.Handler] = []
 
         self._primary_agent_session: AgentSession | None = None
 
@@ -157,7 +184,10 @@ class JobContext:
         self._lock = asyncio.Lock()
 
     def _on_setup(self) -> None:
-        pass
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers:
+            handler.addFilter(self._log_filter)
+            self._handlers_with_filter.append(handler)
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -201,28 +231,11 @@ class JobContext:
 
     def _on_cleanup(self) -> None:
         self._tempdir.cleanup()
+        _shutdown_telemetry()
 
-    def _init_log_factory(self) -> None:
-        old_factory = logging.getLogRecordFactory()
-
-        def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-            record = old_factory(*args, **kwargs)
-
-            if self.proc.executor_type != JobExecutorType.PROCESS:
-                try:
-                    ctx = get_job_context()
-                except RuntimeError:
-                    return record
-                else:
-                    if ctx != self:
-                        return record
-
-            for key, value in self._log_fields.items():
-                setattr(record, key, value)
-
-            return record
-
-        logging.setLogRecordFactory(record_factory)
+        for handler in self._handlers_with_filter:
+            handler.removeFilter(self._log_filter)
+        self._handlers_with_filter.clear()
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
@@ -309,6 +322,13 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    @property
+    def local_participant_identity(self) -> str:
+        if identity := self.token_claims().identity:
+            return identity
+
+        return self._room.local_participant.identity
 
     @property
     def log_context_fields(self) -> dict[str, Any]:
@@ -400,7 +420,7 @@ class JobContext:
             _apply_auto_subscribe_opts(self._room, auto_subscribe)
             self._connected = True
 
-    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
+    def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
         if self.is_fake_job():
             logger.warning("job_ctx.delete_room() is not executed while in console mode")
@@ -410,7 +430,9 @@ class JobContext:
 
         async def _delete_room() -> None:
             try:
-                await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+                await self.api.room.delete_room(
+                    api.DeleteRoomRequest(room=room_name or self._room.name)
+                )
             except aiohttp.ServerDisconnectedError:
                 logger.warning("server disconnected while deleting room")
             except api.TwirpError as e:
@@ -635,7 +657,7 @@ class JobRequest:
         self,
         *,
         job: agent.Job,
-        on_reject: Callable[[], Coroutine[None, None, None]],
+        on_reject: Callable[[bool], Coroutine[None, None, None]],
         on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
@@ -663,9 +685,9 @@ class JobRequest:
     def agent_name(self) -> str:
         return self._job.agent_name
 
-    async def reject(self) -> None:
-        """Reject the job request. The job may be assigned to another worker"""
-        await self._on_reject()
+    async def reject(self, *, terminate: bool = True) -> None:
+        """Reject the job request. The job will not be assigned to another worker"""
+        await self._on_reject(terminate)
 
     async def accept(
         self,

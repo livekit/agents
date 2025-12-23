@@ -97,7 +97,7 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = list(tool_ctx.function_tools.values())
+    tools = tool_ctx.all_tools
 
     current_span.set_attribute(
         trace_types.ATTR_CHAT_CTX,
@@ -113,7 +113,9 @@ async def _llm_inference_task(
     if asyncio.iscoroutine(llm_node):
         llm_node = await llm_node
 
-    # update the tool context after llm node
+    # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
+    # are using the newer tools.
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
 
     if isinstance(llm_node, str):
@@ -150,6 +152,7 @@ async def _llm_inference_task(
                             call_id=tool.call_id,
                             name=tool.name,
                             arguments=tool.arguments,
+                            extra=tool.extra or {},
                         )
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
@@ -582,9 +585,12 @@ async def _execute_tools_task(
                     function_callable: Callable, fnc_call: llm.FunctionCall
                 ) -> None:
                     current_span = trace.get_current_span()
-                    current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, fnc_call.name)
-                    current_span.set_attribute(
-                        trace_types.ATTR_FUNCTION_TOOL_ARGS, fnc_call.arguments
+                    current_span.set_attributes(
+                        {
+                            trace_types.ATTR_FUNCTION_TOOL_ID: fnc_call.call_id,
+                            trace_types.ATTR_FUNCTION_TOOL_NAME: fnc_call.name,
+                            trace_types.ATTR_FUNCTION_TOOL_ARGS: fnc_call.arguments,
+                        }
                     )
 
                     try:

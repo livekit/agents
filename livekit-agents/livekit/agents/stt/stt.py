@@ -17,7 +17,13 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import STTMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
@@ -52,6 +58,7 @@ class SpeechData:
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
     is_primary_speaker: bool | None = None
+    words: list[TimedString] | None = None
 
 
 @dataclass
@@ -72,6 +79,7 @@ class STTCapabilities:
     streaming: bool
     interim_results: bool
     diarization: bool = False
+    aligned_transcript: Literal["word", "chunk", False] = False
 
 
 class STTError(BaseModel):
@@ -278,14 +286,31 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
+        self._start_time_offset: float = 0.0
+
+    @property
+    def start_time_offset(self) -> float:
+        return self._start_time_offset
+
+    @start_time_offset.setter
+    def start_time_offset(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("start_time_offset must be non-negative")
+        self._start_time_offset = value
+
     @abstractmethod
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
         max_retries = self._conn_options.max_retry
+        # we need to record last start time for each run/connection
+        # so that returned transcripts can have linear timestamps
+        last_start_time = time.time()
 
         while self._num_retries <= max_retries:
             try:
+                self._start_time_offset += time.time() - last_start_time
+                last_start_time = time.time()
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:

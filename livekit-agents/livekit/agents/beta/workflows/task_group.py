@@ -41,12 +41,20 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         self,
         *,
         summarize_chat_ctx: bool = True,
+        return_exceptions: bool = False,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
     ):
-        """Creates a TaskGroup instance."""
+        """TaskGroup orchestrates a sequence of multiple AgentTasks. It also allows for users to regress to previous tasks if requested.
+
+        Args:
+            summarize_chat_ctx (bool): Whether or not to summarize the interactions within the TaskGroup into one message and merge the context. Defaults to True.
+            return_exceptions (bool): Whether or not to directly propagate an error. When set to True, the exception is added to the results dictionary and the sequence continues. Defaults to False.
+
+        """
         super().__init__(instructions="*empty*", chat_ctx=chat_ctx, llm=None)
 
         self._summarize_chat_ctx = summarize_chat_ctx
+        self._return_exceptions = return_exceptions
         self._visited_tasks = set[str]()
         self._registered_factories: OrderedDict[str, _FactoryInfo] = OrderedDict()
 
@@ -84,8 +92,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     task_stack.insert(0, task_id)
                 continue
             except Exception as e:
-                self.complete(e)
-                break
+                if self._return_exceptions:
+                    task_results[task_id] = e
+                    continue
+                else:
+                    self.complete(e)
+                    return
 
         try:
             if self._summarize_chat_ctx:
@@ -93,9 +105,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 # when a task is done, the chat_ctx is going to be merged with the "caller" chat_ctx
                 # enabling summarization will result on only one ChatMessage added.
-                summarized_chat_ctx = await self.chat_ctx.copy(exclude_instructions=True).summarize(
-                    llm_v=self.session.llm, keep_last_turns=0
-                )
+                summarized_chat_ctx = await self.chat_ctx.copy(
+                    exclude_instructions=True,
+                    exclude_handoff=True,
+                    exclude_empty_message=True,
+                    exclude_function_call=True,
+                )._summarize(llm_v=self.session.llm, keep_last_turns=0)
                 await self.update_chat_ctx(summarized_chat_ctx)
         except Exception as e:
             self.complete(RuntimeError(f"failed to summarize the chat_ctx: {e}"))

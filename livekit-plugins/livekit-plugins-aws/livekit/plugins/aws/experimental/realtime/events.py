@@ -7,22 +7,10 @@ from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 from livekit.agents import llm
 
 from ...log import logger
+from .types import TURN_DETECTION
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
-VOICE_ID = Literal[
-    "matthew",
-    "tiffany",
-    "amy",
-    "ambre",
-    "florian",
-    "beatrice",
-    "lorenzo",
-    "greta",
-    "lennart",
-    "lupe",
-    "carlos",
-]
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
 GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
 STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
@@ -56,7 +44,7 @@ class AudioOutputConfiguration(BaseModel):
     sampleRateHertz: SAMPLE_RATE_HERTZ = Field(default=24_000)
     sampleSizeBits: SAMPLE_SIZE_BITS = 16
     channelCount: CHANNEL_COUNT = 1
-    voiceId: VOICE_ID = Field(...)
+    voiceId: str = Field(...)
     encoding: AUDIO_ENCODING = "base64"
     audioType: str = "SPEECH"
 
@@ -109,6 +97,7 @@ class ToolConfiguration(BaseModel):
 
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
+    endpointingSensitivity: Optional[TURN_DETECTION] = "MEDIUM"
 
 
 class InputTextContentStart(BaseModel):
@@ -307,7 +296,7 @@ class SonicEventBuilder:
 
     def create_prompt_start_block(
         self,
-        voice_id: VOICE_ID,
+        voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
         system_content: str,
         chat_ctx: llm.ChatContext,
@@ -315,10 +304,13 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: Optional[TURN_DETECTION] = "MEDIUM",
     ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
-            self.create_session_start_event(max_tokens, top_p, temperature),
+            self.create_session_start_event(
+                max_tokens, top_p, temperature, endpointing_sensitivity
+            ),
             self.create_prompt_start_event(voice_id, sample_rate, tool_configuration),
             *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
         ]
@@ -349,6 +341,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
+        endpointing_sensitivity: Optional[TURN_DETECTION] = "MEDIUM",
     ) -> str:
         event = Event(
             event=SessionStartEvent(
@@ -357,7 +350,8 @@ class SonicEventBuilder:
                         maxTokens=max_tokens,
                         topP=top_p,
                         temperature=temperature,
-                    )
+                    ),
+                    endpointingSensitivity=endpointing_sensitivity,
                 )
             )
         )
@@ -391,6 +385,25 @@ class SonicEventBuilder:
                     promptName=self.prompt_name,
                     contentName=content_name,
                     role=role,
+                    textInputConfiguration=TextInputConfiguration(),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True, by_alias=True)
+
+    def create_text_content_start_event_interactive(
+        self,
+        content_name: str,
+        role: ROLE,
+    ) -> str:
+        """Create text content start event with interactive=True for Nova Sonic 2.0."""
+        event = Event(
+            event=InputTextContentStartEvent(
+                contentStart=InputTextContentStart(
+                    promptName=self.prompt_name,
+                    contentName=content_name,
+                    role=role,
+                    interactive=True,
                     textInputConfiguration=TextInputConfiguration(),
                 )
             )
@@ -499,7 +512,7 @@ class SonicEventBuilder:
 
     def create_prompt_start_event(
         self,
-        voice_id: VOICE_ID,
+        voice_id: str,
         sample_rate: SAMPLE_RATE_HERTZ,
         tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
     ) -> str:
