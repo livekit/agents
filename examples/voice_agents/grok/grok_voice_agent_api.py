@@ -2,7 +2,6 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -13,11 +12,10 @@ from livekit.agents import (
     room_io,
 )
 from livekit.plugins import silero, xai
-
-# uncomment to enable Krisp background voice/noise cancellation
-# from livekit.plugins import noise_cancellation
-
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+# uncomment lines 18 and 66-68 to enable Krisp background voice/noise cancellation
+# from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("agent")
 
@@ -63,9 +61,9 @@ async def my_agent(ctx: JobContext):
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                noise_cancellation=lambda params: noise_cancellation.BVCTelephony()
-                if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-                else noise_cancellation.BVC(),
+                #noise_cancellation=lambda params: noise_cancellation.BVCTelephony()
+                #if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                #else noise_cancellation.BVC(),
             ),
         ),
     )
