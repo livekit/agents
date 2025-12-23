@@ -15,28 +15,28 @@
 See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
 """
 
-from .stt import STT, SpeechStream
-from .tts import TTS
-from .types import (
+from speechmatics.voice import (
     AdditionalVocabEntry,
-    AudioSettings,
-    DiarizationFocusMode,
-    DiarizationKnownSpeaker,
-    EndOfUtteranceMode,
-    TranscriptionConfig,
+    AudioEncoding,
+    OperatingPoint,
+    SpeakerFocusMode,
+    SpeakerIdentifier,
 )
+
+from .stt import STT, SpeechStream, TurnDetectionMode
+from .tts import TTS
 from .version import __version__
 
 __all__ = [
     "STT",
     "TTS",
+    "TurnDetectionMode",
     "SpeechStream",
     "AdditionalVocabEntry",
-    "AudioSettings",
-    "DiarizationFocusMode",
-    "DiarizationKnownSpeaker",
-    "EndOfUtteranceMode",
-    "TranscriptionConfig",
+    "AudioEncoding",
+    "OperatingPoint",
+    "SpeakerFocusMode",
+    "SpeakerIdentifier",
     "logger",
     "__version__",
 ]
