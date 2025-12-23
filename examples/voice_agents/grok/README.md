@@ -58,7 +58,10 @@ python grok_voice_agent_api.py dev
 
 Then:
 
-Clone and run [agent-starter-react](https://github.com/livekit-examples/agent-starter-react) to interact with your agent in a browser (you'll need to link the frontend via environment vars to the same LiveKit project tied to your agent). 
+> [!NOTE]
+> Whichever client platform you choose, to ensure your agent frontend and backend can connect to one another, use the same values for `LIVEKIT_` environment variables with both your frontend and agent.
+
+Clone and run [agent-starter-react](https://github.com/livekit-examples/agent-starter-react) to interact with your agent in a browser 
 
 Or alternatively: 
 - [Android](https://github.com/livekit-examples/agent-starter-android)
@@ -68,7 +71,7 @@ Or alternatively:
 - [ESP32](https://github.com/livekit/client-sdk-esp32)
 - [Embed](https://github.com/livekit-examples/agent-starter-embed) your agent directly into your existing website
 
-### Try it out:
+### 4. Try it out
 
 Ask Grok something that requires real time information:
 
