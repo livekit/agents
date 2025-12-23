@@ -28,7 +28,13 @@ import numpy as np
 
 from livekit import rtc
 
-from .krisp_instance import KrispSDKManager
+from .krisp_instance import (
+    KRISP_FRAME_DURATIONS,
+    KRISP_SAMPLE_RATES,
+    KrispSDKManager,
+    int_to_krisp_frame_duration,
+    int_to_krisp_sample_rate,
+)
 from .log import logger
 
 try:
@@ -46,23 +52,6 @@ class KrispVivaFilter:
     proprietary noise suppression algorithms. It's designed to be used as a processing
     node in the LiveKit Agents audio pipeline.
     """
-
-    SAMPLE_RATES = {
-        8000: krisp_audio.SamplingRate.Sr8000Hz,
-        16000: krisp_audio.SamplingRate.Sr16000Hz,
-        24000: krisp_audio.SamplingRate.Sr24000Hz,
-        32000: krisp_audio.SamplingRate.Sr32000Hz,
-        44100: krisp_audio.SamplingRate.Sr44100Hz,
-        48000: krisp_audio.SamplingRate.Sr48000Hz,
-    }
-
-    FRAME_DURATIONS = {
-        10: krisp_audio.FrameDuration.Fd10ms,
-        15: krisp_audio.FrameDuration.Fd15ms,
-        20: krisp_audio.FrameDuration.Fd20ms,
-        30: krisp_audio.FrameDuration.Fd30ms,
-        32: krisp_audio.FrameDuration.Fd32ms,
-    }
 
     def __init__(
         self,
@@ -118,10 +107,10 @@ class KrispVivaFilter:
                 raise FileNotFoundError(f"Model file not found: {self._model_path}")
 
             # Validate frame duration
-            if frame_duration_ms not in self.FRAME_DURATIONS:
+            if frame_duration_ms not in KRISP_FRAME_DURATIONS:
                 raise ValueError(
                     f"Unsupported frame duration: {frame_duration_ms}ms. "
-                    f"Supported durations: {list(self.FRAME_DURATIONS.keys())}"
+                    f"Supported durations: {list(KRISP_FRAME_DURATIONS.keys())}"
                 )
 
             # Always create session to pre-load the model
@@ -139,25 +128,6 @@ class KrispVivaFilter:
                 self._sdk_acquired = False
             raise
 
-    def _int_to_sample_rate(self, sample_rate: int) -> Any:
-        """Convert integer sample rate to krisp_audio SamplingRate enum.
-
-        Args:
-            sample_rate: Sample rate as integer
-
-        Returns:
-            krisp_audio.SamplingRate enum value
-
-        Raises:
-            ValueError: If sample rate is not supported
-        """
-        if sample_rate not in self.SAMPLE_RATES:
-            raise ValueError(
-                f"Unsupported sample rate: {sample_rate}. "
-                f"Supported rates: {list(self.SAMPLE_RATES.keys())}"
-            )
-        return self.SAMPLE_RATES[sample_rate]
-
     def _create_session(self, sample_rate: int) -> None:
         """Create a new Krisp session with the correct sample rate.
 
@@ -174,8 +144,8 @@ class KrispVivaFilter:
         model_info.path = self._model_path
 
         nc_cfg = krisp_audio.NcSessionConfig()
-        nc_cfg.inputSampleRate = self._int_to_sample_rate(sample_rate)
-        nc_cfg.inputFrameDuration = self.FRAME_DURATIONS[self._frame_duration_ms]
+        nc_cfg.inputSampleRate = int_to_krisp_sample_rate(sample_rate)
+        nc_cfg.inputFrameDuration = int_to_krisp_frame_duration(self._frame_duration_ms)
         nc_cfg.outputSampleRate = nc_cfg.inputSampleRate
         nc_cfg.modelInfo = model_info
 

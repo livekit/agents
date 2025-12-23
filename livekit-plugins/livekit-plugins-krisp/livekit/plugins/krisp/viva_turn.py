@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -107,8 +108,8 @@ class KrispVivaTurn:
         self._sdk_acquired = False
         self._threshold = threshold
         self._frame_duration_ms = frame_duration_ms
-        self._tt_session: any | None = None
-        self._pre_load_turn_session: any | None = None
+        self._tt_session: Any | None = None
+        self._pre_load_turn_session: Any | None = None
         self._sample_rate: int | None = None
         self._samples_per_frame: int | None = None
 
@@ -159,7 +160,7 @@ class KrispVivaTurn:
             raise
 
 
-    def _create_session(self, sample_rate: int) -> any:
+    def _create_session(self, sample_rate: int) -> Any:
         """Create or recreate Krisp turn detection session.
         
         Returns:
@@ -365,6 +366,16 @@ class KrispVivaTurn:
         return False
 
     def __del__(self):
+        """Destructor to ensure cleanup of session resources.
+        
+        Note: During Python shutdown, we avoid calling C extensions to prevent GIL errors.
+        Always call close() explicitly for proper cleanup.
+        """
+        # Check if we're in Python shutdown (modules being cleaned up)
+        # If KrispSDKManager is None, we're in shutdown - don't do anything
+        if KrispSDKManager is None:
+            return
+            
         # Use getattr for safe access during shutdown
         if getattr(self, "_sdk_acquired", False):
             try:
