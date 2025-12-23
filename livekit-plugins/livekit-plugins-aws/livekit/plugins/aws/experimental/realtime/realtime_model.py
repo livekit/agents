@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import base64
 import concurrent.futures
@@ -1795,12 +1794,12 @@ class RealtimeSession(  # noqa: F811
                                 tool_result = json.dumps(tool_result)
                             else:
                                 try:
-                                    json.loads(tool_result)
+                                    tool_result = json.loads(tool_result)
                                 except json.JSONDecodeError:
                                     try:
-                                        tool_result = json.dumps(ast.literal_eval(tool_result))
+                                        tool_result = json.dumps({"tool_result": tool_result})
                                     except Exception:
-                                        pass
+                                        logger.exception("Failed to parse tool result")
 
                             logger.debug(f"Sending tool result: {tool_result}")
                             await self._send_tool_events(tool_use_id, tool_result)

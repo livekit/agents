@@ -362,7 +362,11 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
         api_version = self._opts.api_version
-        if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
+        if (
+            not api_version
+            and (self._opts.enable_affective_dialog or self._opts.proactivity)
+            and not self._opts.vertexai
+        ):
             api_version = "v1alpha"
 
         http_options = self._opts.http_options or types.HttpOptions(
