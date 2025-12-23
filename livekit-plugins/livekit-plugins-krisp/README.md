@@ -121,60 +121,6 @@ async def entrypoint(ctx):
 
 8000, 16000, 24000, 32000, 44100, 48000 Hz
 
-### Frame Duration Trade-offs
-
-| Duration | Latency | CPU Usage | Use Case |
-|----------|---------|-----------|----------|
-| 10ms | Lowest | Highest | Real-time voice (default) |
-| 20ms | Low | Medium | Balanced (recommended) |
-| 32ms | Higher | Lowest | CPU-constrained systems |
-
-## Usage Patterns
-
-### Pattern 1: Reuse Filter (Recommended)
-
-```python
-class MyAgent(Agent):
-    def __init__(self):
-        super().__init__(...)
-        # Create once, reuse for entire session
-        self.krisp_filter = krisp.KrispVivaFilter(
-            frame_duration_ms=20,
-            sample_rate=16000,
-        )
-    
-    async def realtime_audio_output_node(self, audio, model_settings):
-        async for frame in self.krisp_filter.process_stream(audio):
-            yield frame
-    
-    async def aclose(self):
-        self.krisp_filter.close()
-        await super().aclose()
-```
-
-### Pattern 2: Context Manager
-
-```python
-async def realtime_audio_output_node(self, audio, model_settings):
-    with krisp.KrispVivaFilter(frame_duration_ms=20) as filter:
-        async for frame in filter.process_stream(audio):
-            yield frame
-```
-
-### Pattern 3: Filter Input Audio
-
-```python
-async def stt_node(self, audio, model_settings):
-    krisp_filter = krisp.KrispVivaFilter(noise_suppression_level=80)
-    
-    async def filtered_audio():
-        async for frame in audio:
-            yield await krisp_filter.filter(frame)
-    
-    async for event in Agent.default.stt_node(self, filtered_audio(), model_settings):
-        yield event
-```
-
 ## Testing
 
 ### Test with Audio Files
@@ -191,16 +137,6 @@ python test_audio_filtering.py input.wav output.wav \
   --level 80 \
   --frame-duration 20 \
   --visualize
-```
-
-### Test with Microphone (Real-time)
-
-```bash
-# Basic test (use headphones!)
-python test_realtime_microphone.py
-
-# Custom: sample_rate noise_level frame_duration
-python test_realtime_microphone.py 16000 80 20
 ```
 
 ## Important Notes
@@ -228,7 +164,6 @@ The plugin uses `KrispSDKManager` to manage the Krisp SDK instance:
 - **Singleton Pattern**: SDK initialized only once, shared across all components
 - **Reference Counting**: Tracks active users (filters, turn detectors)
 - **Automatic Cleanup**: SDK destroyed when last component releases its reference
-- **Thread-Safe**: All operations protected by locks
 
 **Using Multiple Components Together:**
 
@@ -266,7 +201,7 @@ KrispSDKManager.release()  # Decrement reference
 
 ### "Model path must be provided"
 ```bash
-export KRISP_VIVA_MODEL_PATH=/path/to/model.kef
+export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/model.kef
 ```
 
 ### "Unsupported sample rate"
@@ -283,7 +218,6 @@ Ensure your audio frames match the configured `frame_duration_ms`.
 For 20ms @ 16kHz, each frame must have exactly 320 samples.
 
 ### Silent output
-- Check `noise_suppression_level` (0 = no reduction, 100 = maximum)
 - Verify model file is valid
 - Test with known noisy audio
 
@@ -339,10 +273,3 @@ with KrispVivaTurn() as detector:
 - LiveKit's built-in turn detector works on chat context (text)
 - Both implement the same protocol and can be used interchangeably
 - Audio-based detection has lower latency (no STT required for detection)
-- Audio-based detection is language-agnostic
-
-**Threshold Tuning:**
-- `0.3-0.4`: Very sensitive, may interrupt mid-sentence
-- `0.5-0.6`: Balanced, recommended for most cases
-- `0.7-0.8`: Conservative, waits for clear turn completion
-- `0.9+`: Very conservative, may feel slow

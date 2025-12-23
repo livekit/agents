@@ -25,30 +25,6 @@ python test_audio_filtering.py noisy_input.wav clean_output.wav --visualize
 
 ---
 
-## 2. Real-Time Microphone Test
-
-Test with live audio (use headphones!):
-
-```bash
-# Install dependencies
-pip install sounddevice
-
-# Run test
-python test_realtime_microphone.py
-```
-
-**What it does:**
-- Captures from your microphone
-- Filters in real-time
-- Plays back through speakers
-- You hear the noise reduction live!
-
-**Tips:**
-- Speak into the mic
-- Make background noise (keyboard, fan)
-- Notice how noise is reduced while voice stays clear
-
----
 
 ## Quick Example
 
@@ -62,10 +38,6 @@ python test_audio_filtering.py input.wav output.wav --visualize
 # 3. Listen to results
 # Compare input.wav and output.wav
 
-# 4. Check the spectrogram
-# Open krisp_comparison.png to see visual proof
-```
-
 ---
 
 ## Expected Results
@@ -77,7 +49,6 @@ python test_audio_filtering.py input.wav output.wav --visualize
 - Spectrograms show cleaner frequency content
 
 ❌ **Issues to watch for:**
-- Voice sounds muffled → Try lower suppression level (`--level 80`)
 - No noise reduction → Check model path, verify audio has noise
 - Artifacts/distortion → Try different frame duration
 
@@ -89,26 +60,9 @@ python test_audio_filtering.py input.wav output.wav --visualize
 # Less aggressive (preserves more ambient sound)
 python test_audio_filtering.py input.wav output.wav --level 70
 
-# Lower CPU usage
+# Different frame duration
 python test_audio_filtering.py input.wav output.wav --frame-duration 20
 
 # Both
 python test_audio_filtering.py input.wav output.wav --level 80 --frame-duration 20
 ```
-
----
-
-## Need Test Audio?
-
-Record yourself with background noise:
-```bash
-# Mac (if ffmpeg installed)
-ffmpeg -f avfoundation -i ":0" -t 10 -ar 16000 test.wav
-
-# Or just use any WAV file with speech + noise
-```
-
----
-
-See [TESTING.md](TESTING.md) for comprehensive testing guide.
-
