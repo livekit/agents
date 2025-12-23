@@ -21,7 +21,7 @@ export XAI_API_KEY=<your-xai-api-key>
 ### 2. Install dependencies
 
 ```bash
-pip install "livekit-agents[xai,silero,turn-detector]" livekit-plugins-noise-cancellation
+uv add "livekit-agents[xai,silero,turn-detector]" livekit-plugins-noise-cancellation
 ```
 
 ### 3. Run the agent
@@ -32,7 +32,7 @@ You can talk to Grok directly in your terminal:
 <img width="876" height="250" alt="grok-console" src="https://github.com/user-attachments/assets/d1f0a41d-3f18-4aab-a611-3a626d182f0a" />
 
 ```bash
-python grok_voice_agent_api.py console
+uv run grok_voice_agent_api.py console
 ```
 
 #### Option 2: Agents playground
@@ -40,7 +40,7 @@ python grok_voice_agent_api.py console
 LiveKit hosts a playground environment where you can connect to the agent running on your machine. First run the agent:
 
 ```bash
-python grok_voice_agent_api.py dev
+uv run grok_voice_agent_api.py dev
 ```
 
 Then: 
@@ -53,7 +53,7 @@ Then:
 LiveKit offers a bunch of [agent frontend](https://docs.livekit.io/frontends/) starter templates across languages. Like Option 2, the first step is to run the agent on your machine:
 
 ```bash
-python grok_voice_agent_api.py dev
+uv run grok_voice_agent_api.py dev
 ```
 
 Then:
