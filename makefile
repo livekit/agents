@@ -72,6 +72,7 @@ type-check: ## Run mypy type checker
 	@echo "$(BOLD)$(CYAN)Running type checker...$(RESET)"
 	@uv pip install pip 2>/dev/null || true
 	@if uv run mypy --install-types --non-interactive \
+		--untyped-calls-exclude=smithy_aws_core \
 		-p livekit.agents \
 		-p livekit.plugins.openai \
 		-p livekit.plugins.anthropic \

@@ -34,9 +34,9 @@ from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
-    from aws_sdk_transcribe_streaming.config import Config  # type: ignore
-    from aws_sdk_transcribe_streaming.models import (  # type: ignore
+    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
+    from aws_sdk_transcribe_streaming.config import Config
+    from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
         AudioStreamAudioEvent,
@@ -46,11 +46,15 @@ try:
         TranscriptEvent,
         TranscriptResultStream,
     )
-    from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
-    from smithy_core.aio.interfaces.eventstream import (
-        EventPublisher,
-        EventReceiver,
+    from smithy_aws_core.identity import (
+        ContainerCredentialsResolver,
+        EnvironmentCredentialsResolver,
+        IMDSCredentialsResolver,
+        StaticCredentialsResolver,
     )
+    from smithy_core.aio.identity import ChainedIdentityResolver
+    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+    from smithy_http.aio.crt import AWSCRTHTTPClient
 
     _AWS_SDK_AVAILABLE = True
 except ImportError:
@@ -185,6 +189,7 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
+        self._http_client = AWSCRTHTTPClient()
 
     async def _run(self) -> None:
         while True:
@@ -194,8 +199,13 @@ class SpeechStream(stt.SpeechStream):
                 config_kwargs["aws_secret_access_key"] = self._credentials.secret_access_key
                 config_kwargs["aws_session_token"] = self._credentials.session_token
             else:
-                config_kwargs["aws_credentials_identity_resolver"] = (
-                    EnvironmentCredentialsResolver()
+                config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
+                    resolvers=(
+                        StaticCredentialsResolver(),
+                        EnvironmentCredentialsResolver(),
+                        ContainerCredentialsResolver(http_client=self._http_client),
+                        IMDSCredentialsResolver(http_client=self._http_client),
+                    )
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
