@@ -12,7 +12,7 @@ import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, trace
-from opentelemetry._logs import get_logger_provider, set_logger_provider
+from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -34,7 +34,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
-from ..log import logger
+from ..log import TRACE_LEVEL, logger
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -95,6 +95,30 @@ class _MetadataLogProcessor(LogRecordProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
+
+
+class _TraceLevelLoggingHandler(LoggingHandler):
+    """Custom LoggingHandler that properly maps TRACE_LEVEL to OTel TRACE severity.
+
+    The default OTel LoggingHandler maps any log level < 10 to UNSPECIFIED,
+    but we want TRACE_LEVEL (5) to map to TRACE for proper severity in exports.
+    """
+
+    def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
+        log_record = super()._translate(record)
+        # OTel's std_to_otel returns UNSPECIFIED for levels < 10
+        # Map our TRACE_LEVEL to OTel's TRACE
+        if record.levelno == TRACE_LEVEL:
+            return OTelLogRecord(
+                timestamp=log_record.timestamp,
+                observed_timestamp=log_record.observed_timestamp,
+                context=log_record.context,
+                severity_number=SeverityNumber.TRACE,
+                severity_text=log_record.severity_text,
+                body=log_record.body,
+                attributes=log_record.attributes,
+            )
+        return log_record
 
 
 def set_tracer_provider(
@@ -191,7 +215,7 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     )
     logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
-    handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
     root = logging.getLogger()
     root.addHandler(handler)

@@ -481,6 +481,7 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                closing_ws = False
                 ws = await self._connect_ws()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -504,11 +505,19 @@ class SpeechStream(stt.SpeechStream):
 
                     self._reconnect_event.clear()
                 finally:
+                    closing_ws = True
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                    try:
+                        tasks_group.exception()  # retrieve the exception
+                    except asyncio.CancelledError:
+                        pass
             finally:
-                if ws is not None:
+                closing_ws = True
+                if ws is not None and not ws.closed:
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
@@ -551,8 +560,6 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(f"{base_url}/stt", headers=headers),
                 self._conn_options.timeout,
             )
-            params["type"] = "session.create"
-            await ws.send_str(json.dumps(params))
         except (
             aiohttp.ClientConnectorError,
             asyncio.TimeoutError,
@@ -561,6 +568,14 @@ class SpeechStream(stt.SpeechStream):
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit STT quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit STT") from e
+
+        try:
+            params["type"] = "session.create"
+            await ws.send_str(json.dumps(params))
+        except Exception as e:
+            await ws.close()
+            raise APIConnectionError("failed to send session.create message to LiveKit STT") from e
+
         return ws
 
     def _process_transcript(self, data: dict, is_final: bool) -> None:

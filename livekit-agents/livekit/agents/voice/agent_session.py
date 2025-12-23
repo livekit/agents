@@ -139,6 +139,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
+        bargein_detection: NotGivenOr[inference.BargeinDetector | bool] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         tools: NotGivenOr[
@@ -193,6 +194,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 automatically falls back if the necessary model is missing.
             stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
+            bargein_detection (inference.BargeinDetector | bool, optional): Barge-in detector. Requires
+                VAD, non-realtime LLM, and STT supporting aligned transcript. Set to ``False`` to disable.
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
@@ -314,6 +317,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []
+
+        self._bargein_detection: NotGivenOr[inference.BargeinDetector | bool] = bargein_detection
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
@@ -1261,6 +1266,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
+
+    @property
+    def bargein_detection(self) -> NotGivenOr[inference.BargeinDetector | bool]:
+        return self._bargein_detection
 
     # -- User changed input/output streams/sinks --
 

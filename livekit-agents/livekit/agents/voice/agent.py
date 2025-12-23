@@ -25,7 +25,7 @@ from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from ..inference import LLMModels, STTModels, TTSModels
+    from ..inference import BargeinDetector, LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
@@ -50,6 +50,7 @@ class Agent:
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        bargein_detection: NotGivenOr[BargeinDetector | bool] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
@@ -88,6 +89,7 @@ class Agent:
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
         self._max_endpointing_delay = max_endpointing_delay
+        self._bargein_detection: NotGivenOr[inference.BargeinDetector | bool] = bargein_detection
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -673,6 +675,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        bargein_detection: NotGivenOr[BargeinDetector | bool] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
@@ -688,6 +691,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             turn_detection=turn_detection,
             stt=stt,
             vad=vad,
+            bargein_detection=bargein_detection,
             llm=llm,
             tts=tts,
             mcp_servers=mcp_servers,
