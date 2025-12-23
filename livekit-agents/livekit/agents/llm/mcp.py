@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
