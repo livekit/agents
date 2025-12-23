@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -181,7 +181,7 @@ class MCPServerHTTP(MCPServer):
     def __init__(
         self,
         url: str,
-        transport_type: str | None = None,
+        transport_type: Literal["sse", "streamable_http"] | None = None,
         allowed_tools: list[str] | None = None,
         headers: dict[str, Any] | None = None,
         timeout: float = 5,
