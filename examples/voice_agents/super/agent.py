@@ -14,10 +14,11 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
+    UserInputTranscribedEvent,
+    AgentStateChangedEvent,
     cli,
     metrics,
     room_io,
-    stt,
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
@@ -25,13 +26,12 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.plugins import noise_cancellation
 
 from interrupt_gate import InterruptionGate
-from config import TTS_DRAIN_SECONDS
 
 logger = logging.getLogger("basic-agent")
 load_dotenv()
 
 # -------------------------------------------------
-# INTELLIGENT AGENT
+# AGENT
 # -------------------------------------------------
 
 class MyAgent(Agent):
@@ -46,71 +46,11 @@ class MyAgent(Agent):
             allow_interruptions=True,
         )
 
-        self._is_speaking = False
         self._gate = InterruptionGate()
 
     async def on_enter(self):
         self.session.generate_reply()
 
-    # ---------------------------
-    # TTS lifecycle tracking
-    # ---------------------------
-    def tts_node(self, text: AsyncIterable[str], model_settings):
-        async def _wrapped():
-            stream = super().tts_node(text, model_settings)
-            try:
-                async for frame in stream:
-                    self._is_speaking = True
-                    yield frame
-            finally:
-                await asyncio.sleep(TTS_DRAIN_SECONDS)
-                self._is_speaking = False
-
-        return _wrapped()
-
-    # ---------------------------
-    # STT interception
-    # ---------------------------
-    def stt_node(self, audio: AsyncIterable[rtc.AudioFrame], model_settings):
-        async def _logic():
-            upstream = super().stt_node(audio, model_settings)
-
-            async for event in upstream:
-
-                # VAD start → advisory only
-                if event.type == stt.SpeechEventType.START_OF_SPEECH:
-                    if self._is_speaking:
-                        continue
-                    yield event
-                    continue
-
-                # Transcript events
-                if event.type in (
-                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    stt.SpeechEventType.FINAL_TRANSCRIPT,
-                ):
-                    text = event.alternatives[0].text
-                    decision = self._gate.classify(text, self._is_speaking)
-
-                    if decision == "IGNORE":
-                        continue
-
-                    if decision == "INTERRUPT":
-                        if self._activity:
-                            await self._activity.interrupt()
-                        yield event
-                        continue
-
-                    yield event
-                    continue
-
-                yield event
-
-        return _logic()
-
-    # ---------------------------
-    # Example tool (unchanged)
-    # ---------------------------
     @function_tool
     async def lookup_weather(
         self, context: RunContext, location: str, latitude: str, longitude: str
@@ -118,8 +58,9 @@ class MyAgent(Agent):
         logger.info(f"Looking up weather for {location}")
         return "sunny with a temperature of 70 degrees."
 
+
 # -------------------------------------------------
-# SERVER BOOTSTRAP 
+# SERVER
 # -------------------------------------------------
 
 server = AgentServer()
@@ -140,14 +81,21 @@ async def entrypoint(ctx: JobContext):
         stt="deepgram/nova-2-phonecall",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        turn_detection=MultilingualModel(unlikely_threshold=0.3),
+        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        preemptive_generation=False,
-        resume_false_interruption=True,
-        false_interruption_timeout=0.4,
+
+        # ⚠️ IMPORTANT: these eliminate lag
+        preemptive_generation=True,
+        allow_interruptions=True,
+        discard_audio_if_uninterruptible=True,
+        min_interruption_duration=0.6,
+        min_interruption_words=2,
     )
 
-    # ---- metrics (kept exactly) ----
+    # -------------------
+    # METRICS (unchanged)
+    # -------------------
+
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
@@ -159,6 +107,39 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: {usage_collector.get_summary()}")
 
     ctx.add_shutdown_callback(log_usage)
+
+    # -------------------------------------------------
+    # 🔥 FAST INTERRUPTION LAYER (NEW)
+    # -------------------------------------------------
+
+    agent_is_speaking = {"value": False}
+    gate = InterruptionGate()
+
+    @session.on("agent_state_changed")
+    def _on_agent_state_changed(ev: AgentStateChangedEvent):
+        agent_is_speaking["value"] = ev.new_state == "speaking"
+
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
+        text = (ev.transcript or "").strip()
+        if not text or not ev.is_final:
+            return
+
+        if not agent_is_speaking["value"]:
+            return
+
+        decision = gate.classify(text,True)
+
+        if decision == "IGNORE":
+            # instant ignore, zero lag
+            session.clear_user_turn()
+            return
+
+        if decision == "INTERRUPT":
+            session.interrupt(force=True)
+            return
+
+    # -------------------------------------------------
 
     await session.start(
         agent=MyAgent(),
