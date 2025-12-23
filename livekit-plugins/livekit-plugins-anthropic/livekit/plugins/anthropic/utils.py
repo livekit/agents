@@ -2,12 +2,6 @@ from typing import Literal, Optional, Union
 
 import anthropic
 from livekit.agents import llm
-from livekit.agents.llm import FunctionTool, ProviderTool, RawFunctionTool
-from livekit.agents.llm.tool_context import (
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 
 # We can define up to 4 cache breakpoints, we will add them at:
 # - the last tool definition
@@ -21,12 +15,12 @@ __all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
 
 
 def to_fnc_ctx(
-    fncs: list[Union[FunctionTool, RawFunctionTool, ProviderTool]],
+    fncs: list[llm.Tool],
     caching: Optional[Literal["ephemeral"]],
 ) -> list[anthropic.types.ToolParam]:
     tools: list[anthropic.types.ToolParam] = []
     for fnc in fncs:
-        if is_function_tool(fnc) or is_raw_function_tool(fnc):
+        if isinstance(fnc, (llm.FunctionTool, llm.RawFunctionTool)):
             tools.append(_build_anthropic_schema(fnc))
 
     if tools and caching == "ephemeral":
@@ -36,17 +30,17 @@ def to_fnc_ctx(
 
 
 def _build_anthropic_schema(
-    function_tool: Union[FunctionTool, RawFunctionTool],
+    function_tool: Union[llm.FunctionTool, llm.RawFunctionTool],
 ) -> anthropic.types.ToolParam:
-    if is_function_tool(function_tool):
+    if isinstance(function_tool, llm.FunctionTool):
         fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
         return anthropic.types.ToolParam(
             name=fnc["name"],
             description=fnc["description"] or "",
             input_schema=fnc["parameters"],
         )
-    elif is_raw_function_tool(function_tool):
-        info = get_raw_function_info(function_tool)
+    elif isinstance(function_tool, llm.RawFunctionTool):
+        info = function_tool.info
         return anthropic.types.ToolParam(
             name=info.name,
             description=info.raw_schema.get("description", ""),

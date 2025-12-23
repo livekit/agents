@@ -3,24 +3,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from livekit.agents import llm
-from livekit.agents.llm import FunctionTool, ProviderTool, RawFunctionTool
-from livekit.agents.llm.tool_context import (
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from livekit.agents.llm.tool_context import get_raw_function_info
 
 __all__ = ["to_fnc_ctx"]
 DEFAULT_REGION = "us-east-1"
 
 
-def to_fnc_ctx(fncs: Sequence[FunctionTool | RawFunctionTool | ProviderTool]) -> list[dict]:
-    function_tools = [fnc for fnc in fncs if is_function_tool(fnc) or is_raw_function_tool(fnc)]
+def to_fnc_ctx(fncs: Sequence[llm.Tool]) -> list[dict]:
+    function_tools = [
+        fnc for fnc in fncs if isinstance(fnc, (llm.FunctionTool, llm.RawFunctionTool))
+    ]
     return [_build_tool_spec(fnc) for fnc in function_tools]
 
 
-def _build_tool_spec(function: FunctionTool | RawFunctionTool) -> dict:
-    if is_function_tool(function):
+def _build_tool_spec(function: llm.FunctionTool | llm.RawFunctionTool) -> dict:
+    if isinstance(function, llm.FunctionTool):
         fnc = llm.utils.build_legacy_openai_schema(function, internally_tagged=True)
         return {
             "toolSpec": _strip_nones(
@@ -31,7 +28,7 @@ def _build_tool_spec(function: FunctionTool | RawFunctionTool) -> dict:
                 }
             )
         }
-    elif is_raw_function_tool(function):
+    elif isinstance(function, llm.RawFunctionTool):
         info = get_raw_function_info(function)
         return {
             "toolSpec": _strip_nones(

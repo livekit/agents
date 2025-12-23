@@ -506,9 +506,7 @@ class RealtimeSession(llm.RealtimeSession):
         # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_ctx = llm.ToolContext(tools)
         if self._tools == tool_ctx:
             return

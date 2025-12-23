@@ -14,29 +14,31 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
-from abc import ABC
-from collections.abc import Awaitable
+from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import (
-    Any,
-    Callable,
-    Literal,
-    Protocol,
-    TypeVar,
-    Union,
-    cast,
-    overload,
-    runtime_checkable,
-)
+from typing import Any, Callable, Literal, TypeVar, Union, cast, overload
 
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
 
-# TODO: refactor Tool inheritance, all tools (FunctionTool, RawFunctionTool, ProviderTool) should inherit from Tool
-class ProviderTool(ABC):  # noqa: B024
+class Tool(ABC):  # noqa: B024
     pass
+
+
+class ProviderTool(Tool):
+    """Tool that provided by the LLM provider."""
+
+    pass
+
+
+class ToolSet(ABC):
+    @abstractmethod
+    def get_tools(self) -> list[Tool]:
+        pass
 
 
 # Used by ToolChoice
@@ -82,6 +84,11 @@ class StopResponse(Exception):
         super().__init__()
 
 
+class ToolFlag(Flag):
+    NONE = 0
+    IGNORE_ON_ENTER = auto()
+
+
 @dataclass
 class _FunctionToolInfo:
     name: str
@@ -89,16 +96,20 @@ class _FunctionToolInfo:
     flags: ToolFlag
 
 
-@runtime_checkable
-class FunctionTool(Protocol):
-    __livekit_tool_info: _FunctionToolInfo
+class FunctionTool(Tool):
+    """Wrapper for a function decorated with @function_tool"""
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def __init__(self, func: Callable[..., Any], info: _FunctionToolInfo) -> None:
+        self._func = func
+        self._info = info
+        functools.update_wrapper(self, func)
 
+    @property
+    def info(self) -> _FunctionToolInfo:
+        return self._info
 
-class ToolFlag(Flag):
-    NONE = 0
-    IGNORE_ON_ENTER = auto()
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._func(*args, **kwargs)
 
 
 class RawFunctionDescription(TypedDict):
@@ -124,11 +135,20 @@ class _RawFunctionToolInfo:
     flags: ToolFlag
 
 
-@runtime_checkable
-class RawFunctionTool(Protocol):
-    __livekit_raw_tool_info: _RawFunctionToolInfo
+class RawFunctionTool(Tool):
+    """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def __init__(self, func: Callable[..., Any], info: _RawFunctionToolInfo) -> None:
+        self._func = func
+        self._info = info
+        functools.update_wrapper(self, func)
+
+    @property
+    def info(self) -> _RawFunctionToolInfo:
+        return self._info
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._func(*args, **kwargs)
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
@@ -197,8 +217,7 @@ def function_tool(
             raise ValueError("raw function description must contain a parameters key")
 
         info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
-        setattr(func, "__livekit_raw_tool_info", info)
-        return cast(RawFunctionTool, func)
+        return RawFunctionTool(func, info)
 
     def deco_func(func: F) -> FunctionTool:
         from docstring_parser import parse_from_object
@@ -209,8 +228,7 @@ def function_tool(
             description=description or docstring.description,
             flags=flags,
         )
-        setattr(func, "__livekit_tool_info", info)
-        return cast(FunctionTool, func)
+        return FunctionTool(func, info)
 
     if f is not None:
         return deco_raw(cast(Raw_F, f)) if raw_schema is not None else deco_func(cast(F, f))
@@ -219,33 +237,46 @@ def function_tool(
 
 
 def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
-    return hasattr(f, "__livekit_tool_info")
+    # TODO(long): for backward compatibility, deprecate in future versions?
+    return isinstance(f, FunctionTool)
 
 
 def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
-    return cast(_FunctionToolInfo, getattr(f, "__livekit_tool_info"))
+    return f.info
 
 
 def is_raw_function_tool(f: Any) -> TypeGuard[RawFunctionTool]:
-    return hasattr(f, "__livekit_raw_tool_info")
+    return isinstance(f, RawFunctionTool)
 
 
 def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
-    return cast(_RawFunctionToolInfo, getattr(f, "__livekit_raw_tool_info"))
+    return f.info
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
     methods: list[FunctionTool | RawFunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
-        if is_function_tool(member) or is_raw_function_tool(member):
+        if isinstance(member, (FunctionTool, RawFunctionTool)):
             methods.append(member)
     return methods
+
+
+def get_fnc_tool_names(tools: Sequence[Tool | ToolSet]) -> list[str]:
+    """Get names of all function and raw function tools in the list, unwrapping tool sets."""
+    names = []
+    for tool in tools:
+        if isinstance(tool, (FunctionTool, RawFunctionTool)):
+            names.append(tool.info.name)
+        elif isinstance(tool, ToolSet):
+            names.extend(get_fnc_tool_names(tool.get_tools()))
+
+    return names
 
 
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
+    def __init__(self, tools: list[Tool | ToolSet]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -261,9 +292,15 @@ class ToolContext:
         return self._provider_tools
 
     @property
-    def all_tools(self) -> list[FunctionTool | RawFunctionTool | ProviderTool]:
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] = []
+    def tool_sets(self) -> list[ToolSet]:
+        return self._tool_sets
+
+    @property
+    def all_tools(self) -> list[Tool]:
+        tools: list[Tool] = []
         tools.extend(list(self._tools_map.values()))
+        for tool_set in self._tool_sets:
+            tools.extend(tool_set.get_tools())
         tools.extend(self._provider_tools)
         return tools
 
@@ -286,33 +323,49 @@ class ToolContext:
         if self_provider_ids != other_provider_ids:
             return False
 
+        self_tool_set_ids = {id(tool_set) for tool_set in self._tool_sets}
+        other_tool_set_ids = {id(tool_set) for tool_set in other._tool_sets}
+        if self_tool_set_ids != other_tool_set_ids:
+            return False
+
         return True
 
-    def update_tools(self, tools: list[FunctionTool | RawFunctionTool | ProviderTool]) -> None:
+    def update_tools(self, tools: Sequence[Tool | ToolSet]) -> None:
+        tools = list(tools)
         self._tools = tools.copy()
 
         for method in find_function_tools(self):
             tools.append(method)
 
         self._tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
-        info: _FunctionToolInfo | _RawFunctionToolInfo
         self._provider_tools: list[ProviderTool] = []
-        for tool in tools:
-            if is_raw_function_tool(tool):
-                info = get_raw_function_info(tool)
-            elif is_function_tool(tool):
-                info = get_function_info(tool)
-            elif isinstance(tool, ProviderTool):
+        self._tool_sets: list[ToolSet] = []
+
+        visited_names = set[str]()
+
+        def add_tool(tool: Tool, add_to_map: bool) -> None:
+            if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
-                continue
+                return
+
+            if isinstance(tool, (FunctionTool, RawFunctionTool)):
+                if tool.info.name in visited_names:
+                    raise ValueError(f"duplicate function name: {tool.info.name}")
+                visited_names.add(tool.info.name)
+
+                if add_to_map:
+                    self._tools_map[tool.info.name] = tool
+
+        for tool in tools:
+            if isinstance(tool, Tool):
+                add_tool(tool, add_to_map=True)
+            elif isinstance(tool, ToolSet):
+                for t in tool.get_tools():
+                    add_tool(t, add_to_map=False)
+                self._tool_sets.append(tool)
             else:
                 # TODO(theomonnom): MCP servers & other tools
                 raise ValueError(f"unknown tool type: {type(tool)}")
-
-            if info.name in self._tools_map:
-                raise ValueError(f"duplicate function name: {info.name}")
-
-            self._tools_map[info.name] = tool
 
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())

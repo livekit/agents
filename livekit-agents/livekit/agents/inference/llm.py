@@ -25,14 +25,7 @@ from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
-from ..llm.tool_context import (
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from ..llm.tool_context import FunctionTool, RawFunctionTool, Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -190,7 +183,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -254,7 +247,7 @@ class LLMStream(llm.LLMStream):
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
@@ -438,21 +431,20 @@ class LLMStream(llm.LLMStream):
 
 
 def to_fnc_ctx(
-    fnc_ctx: Sequence[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
+    fnc_ctx: Sequence[Tool],
     *,
     strict: bool = True,
 ) -> list[ChatCompletionToolParam]:
     tools: list[ChatCompletionToolParam] = []
     for fnc in fnc_ctx:
-        if is_raw_function_tool(fnc):
-            info = get_raw_function_info(fnc)
+        if isinstance(fnc, RawFunctionTool):
             tools.append(
                 {
                     "type": "function",
-                    "function": info.raw_schema,  # type: ignore
+                    "function": fnc.info.raw_schema,  # type: ignore
                 }
             )
-        elif is_function_tool(fnc):
+        elif isinstance(fnc, FunctionTool):
             schema = (
                 llm.utils.build_strict_openai_schema(fnc)
                 if strict

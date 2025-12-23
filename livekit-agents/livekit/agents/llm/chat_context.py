@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import LLM, FunctionTool, ProviderTool, RawFunctionTool
+    from ..llm import LLM, Tool, ToolSet
 
 
 class ImageContent(BaseModel):
@@ -287,30 +287,29 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
         exclude_handoff: bool = False,
-        tools: NotGivenOr[
-            Sequence[FunctionTool | RawFunctionTool | ProviderTool | str | Any]
-        ] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[Tool | ToolSet | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import (
-            get_function_info,
-            get_raw_function_info,
-            is_function_tool,
-            is_raw_function_tool,
-        )
+        from .tool_context import FunctionTool, RawFunctionTool, ToolSet
 
-        valid_tools = set[str]()
-        if is_given(tools):
+        def get_tool_names(
+            tools: Sequence[Tool | ToolSet | str | Any],
+        ) -> Generator[str, None, None]:
             for tool in tools:
                 if isinstance(tool, str):
-                    valid_tools.add(tool)
-                elif is_function_tool(tool):
-                    valid_tools.add(get_function_info(tool).name)
-                elif is_raw_function_tool(tool):
-                    valid_tools.add(get_raw_function_info(tool).name)
-                # TODO(theomonnom): other tools
+                    yield tool
+                elif isinstance(tool, FunctionTool):
+                    yield tool.info.name
+                elif isinstance(tool, RawFunctionTool):
+                    yield tool.info.name
+                elif isinstance(tool, ToolSet):
+                    yield from get_tool_names(tool.get_tools())
+                else:
+                    # TODO(theomonnom): other tools
+                    continue
 
+        valid_tools = set(get_tool_names(tools)) if tools else set()
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",

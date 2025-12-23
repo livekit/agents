@@ -11,9 +11,6 @@ from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, 
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
     ToolChoice,
     utils as llm_utils,
 )
@@ -73,7 +70,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -117,7 +114,7 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         client: Mistral,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[llm.Tool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
     ) -> None:

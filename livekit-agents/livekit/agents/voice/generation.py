@@ -99,14 +99,19 @@ async def _llm_inference_task(
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = tool_ctx.all_tools
 
-    current_span.set_attribute(
-        trace_types.ATTR_CHAT_CTX,
-        json.dumps(
-            chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
-        ),
-    )
-    current_span.set_attribute(
-        trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
+    current_span.set_attributes(
+        {
+            trace_types.ATTR_CHAT_CTX: json.dumps(
+                chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
+            ),
+            trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+            trace_types.ATTR_PROVIDER_TOOLS: [
+                type(tool).__name__ for tool in tool_ctx.provider_tools
+            ],
+            trace_types.ATTR_TOOL_SETS: [
+                type(tool_set).__name__ for tool_set in tool_ctx.tool_sets
+            ],
+        }
     )
 
     llm_node = node(chat_ctx, tools, model_settings)

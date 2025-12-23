@@ -318,6 +318,9 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     fields: dict[str, Any] = {}
 
     for param_name, param in signature.parameters.items():
+        if param_name == "self":
+            continue
+
         type_hint = type_hints[param_name]
 
         if is_context_type(type_hint):
@@ -386,6 +389,9 @@ def prepare_function_arguments(
         # The following make sure to use the default value when we receive None.
         # (Only if the type can't be Optional)
         for param_name, param in signature.parameters.items():
+            if param_name == "self":
+                continue
+
             type_hint = type_hints[param_name]
             if param_name in args_dict and args_dict[param_name] is None:
                 if not _is_optional_type(type_hint):
@@ -409,8 +415,12 @@ def prepare_function_arguments(
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
     # inject RunContext if needed
-    context_dict = {}
+    context_dict: dict[str, Any] = {}
     for param_name, _ in signature.parameters.items():
+        if param_name == "self":
+            context_dict["self"] = fnc
+            continue
+
         type_hint = type_hints[param_name]
         if is_context_type(type_hint) and call_ctx is not None:
             context_dict[param_name] = call_ctx

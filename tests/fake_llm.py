@@ -12,11 +12,9 @@ from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
     ChoiceDelta,
-    FunctionTool,
     FunctionToolCall,
     LLMStream,
-    ProviderTool,
-    RawFunctionTool,
+    Tool,
     ToolChoice,
 )
 from livekit.agents.types import (
@@ -60,7 +58,7 @@ class FakeLLM(LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -75,7 +73,7 @@ class FakeLLMStream(LLMStream):
         llm: FakeLLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
