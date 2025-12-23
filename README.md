@@ -1,3 +1,158 @@
+
+
+# Intelligent Interruption Handling for LiveKit Voice Agents
+
+
+## Problem Context
+
+In real conversations, users often speak while listening.
+Short acknowledgements like “yeah” or “okay” are common and are not intended to interrupt.
+
+However, audio-based interruption systems cannot distinguish between:
+
+* passive acknowledgements, and
+* intentional interruptions.
+
+As a result, agents frequently stop mid-sentence, repeat content, or respond too late.
+
+This project addresses that gap using transcript-level logic rather than audio heuristics.
+
+---
+
+## Approach
+
+The solution introduces a lightweight decision layer that operates **after speech is transcribed**, not when audio is merely detected.
+
+The agent evaluates user speech using two signals:
+
+1. whether the agent is currently speaking, and
+2. the finalized transcript of the user’s utterance.
+
+Only finalized transcripts are considered, which avoids jitter and false positives from partial speech.
+
+The decision logic is deterministic and word-based, making behavior predictable and easy to reason about.
+
+---
+
+## Interruption Behavior
+
+**When the agent is speaking:**
+
+* Pure acknowledgement or filler input is ignored.
+* Explicit stop or control words immediately interrupt the agent.
+* Mixed or command-like input interrupts the agent.
+
+**When the agent is not speaking:**
+
+* All input is treated as normal conversational input.
+
+This ensures:
+
+* uninterrupted long explanations,
+* immediate response to real corrections,
+* no delayed or accidental cut-offs.
+
+---
+
+## Why This Design Works Well
+
+* Interruption decisions are based on **meaning**, not sound.
+* The agent never pauses or stutters on ignored input.
+* The system avoids timing-based thresholds that vary across environments.
+* All behavior is explainable and consistent across runs.
+
+The logic remains simple, transparent, and easy to extend.
+
+---
+
+## Project Structure
+IN root/examples/voice_agents/super
+```
+.
+├── agent.py
+│   LiveKit agent and session integration
+│
+├── interrupt_gate.py
+│   Language-based interruption classifier
+│
+├── config.py
+│   Backchannel words, interrupt words, timing values
+│
+└── README.md
+```
+
+The interruption gate is isolated from the agent so it can be reused or modified independently.
+
+---
+
+## How to Run
+
+### 1. Install dependencies
+
+Create and activate a virtual environment, then install requirements:
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+### 2. Configure environment variables
+
+Create a `.env` file with the required LiveKit and model credentials:
+
+```env
+LIVEKIT_API_KEY=your_key
+LIVEKIT_API_SECRET=your_secret
+LIVEKIT_URL=wss://your-project.livekit.cloud
+```
+
+Optional customization:
+
+```env
+BACKCHANNEL_WORDS=yeah,ok,okay,hmm,uh-huh
+INTERRUPT_WORDS=stop,wait,no,cancel
+```
+
+---
+
+### 3. Run the agent
+
+From the project directory(root/examples/voice_agents/super):
+
+```bash
+python agent.py dev
+```
+
+The agent will register with LiveKit and be available in the configured room.
+
+---
+
+## Demonstration
+
+A short video demonstration is included showing:
+
+* uninterrupted long responses despite backchannel input,
+* immediate interruption on explicit commands,
+* smooth continuation without repetition or latency.
+
+**Demo video:**
+https://drive.google.com/file/d/1G7EQVE2JKzR5hZF04FUk-wd61kBKE_6b/view?usp=sharing
+
+---
+
+## Notes
+
+* No internal LiveKit components were modified.
+* The solution relies only on documented agent hooks and events.
+* The logic is intentionally conservative and deterministic.
+
+---
+
+
+
 <!--BEGIN_BANNER_IMAGE-->
 
 <picture>
@@ -77,7 +232,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import deepgram, elevenlabs, openai, silero
+from livekit.plugins import silero
 
 @function_tool
 async def lookup_weather(
@@ -99,9 +254,9 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
         # any combination of STT, LLM, TTS, or realtime API can be used
-        stt=deepgram.STT(model="nova-3"),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=elevenlabs.TTS(),
+        stt="assemblyai/universal-streaming:en",
+        llm="openai/gpt-4.1-mini",
+        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
     )
 
     await session.start(agent=agent, room=ctx.room)
@@ -177,9 +332,9 @@ async def entrypoint(ctx: JobContext):
     userdata = StoryData()
     session = AgentSession[StoryData](
         vad=silero.VAD.load(),
-        stt=deepgram.STT(model="nova-3"),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(voice="echo"),
+        stt="deepgram/nova-3",
+        llm="openai/gpt-4o",
+        tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         userdata=userdata,
     )
 
