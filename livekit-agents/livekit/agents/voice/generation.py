@@ -476,6 +476,13 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=RuntimeError(f"unknown AI function `{fnc_call.name}`"),
+                    )
+                )
                 continue
 
             if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
