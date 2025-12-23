@@ -1181,7 +1181,7 @@ def _run_console(
     c.record = record
 
     _configure_logger(c, logging.DEBUG)
-    c.print("Starting console mode 🚀", tag="Agents")
+    c.print("Starting console mode", tag="Agents")
 
     if c.record:
         c.print(

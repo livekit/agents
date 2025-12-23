@@ -14,8 +14,9 @@ from livekit.agents import (
     metrics,
     room_io,
 )
+from livekit.agents.voice.interruption_policy import InterruptionPolicy
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
+from livekit.plugins import google, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -23,7 +24,9 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
-load_dotenv()
+import os
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.env"))
 
 
 class MyAgent(Agent):
@@ -33,7 +36,9 @@ class MyAgent(Agent):
             "with that in mind keep your responses concise and to the point."
             "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor."
+
             "you will speak english to the user",
+            interruption_policy=InterruptionPolicy(),
         )
 
     async def on_enter(self):
@@ -85,7 +90,7 @@ async def entrypoint(ctx: JobContext):
         stt="deepgram/nova-3",
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm="openai/gpt-4.1-mini",
+        llm=google.LLM(model="gemini-2.5-flash-lite"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",

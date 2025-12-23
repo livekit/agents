@@ -46,6 +46,7 @@ from .agent import (
     _get_activity_task_info,
     _set_activity_task_info,
 )
+from .interruption_policy import InterruptionPolicy
 from .audio_recognition import (
     AudioRecognition,
     RecognitionHooks,
@@ -163,6 +164,11 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
+        self._interruption_policy = (
+            self._agent.interruption_policy
+            if is_given(self._agent.interruption_policy) and self._agent.interruption_policy is not None
+            else InterruptionPolicy()
+        )
 
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
@@ -1241,7 +1247,10 @@ class AgentActivity(RecognitionHooks):
             return
 
         if ev.speech_duration >= self._session.options.min_interruption_duration:
-            self._interrupt_by_audio_activity()
+            # [MODIFIED] Disable pure VAD interruption to support ignoring "yeah/ok".
+            # We defer interruption to STT (on_interim_transcript).
+            #self._interrupt_by_audio_activity()
+            pass
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1261,7 +1270,10 @@ class AgentActivity(RecognitionHooks):
             "manual",
             "realtime_llm",
         ):
-            self._interrupt_by_audio_activity()
+            # [MODIFIED] Check policy before interrupting
+            transcript = ev.alternatives[0].text
+            if self._interruption_policy.should_interrupt(transcript):
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False
@@ -1292,7 +1304,10 @@ class AgentActivity(RecognitionHooks):
             "manual",
             "realtime_llm",
         ):
-            self._interrupt_by_audio_activity()
+            # [MODIFIED] Check policy before interrupting
+            transcript = ev.alternatives[0].text
+            if self._interruption_policy.should_interrupt(transcript):
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False

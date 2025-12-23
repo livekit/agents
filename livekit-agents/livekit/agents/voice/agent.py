@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .audio_recognition import TurnDetectionMode
+    from .interruption_policy import InterruptionPolicy
     from .io import TimedString
 
 
@@ -56,6 +57,7 @@ class Agent:
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        interruption_policy: NotGivenOr[InterruptionPolicy | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         if type(self) is Agent:
@@ -86,6 +88,7 @@ class Agent:
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
         self._max_endpointing_delay = max_endpointing_delay
+        self._interruption_policy = interruption_policy
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -626,6 +629,13 @@ class Agent:
             NotGivenOr[bool]: Whether to use TTS-aligned transcript.
         """
         return self._use_tts_aligned_transcript
+
+    @property
+    def interruption_policy(self) -> NotGivenOr[InterruptionPolicy | None]:
+        """
+        Retrieves the interruption policy.
+        """
+        return self._interruption_policy
 
     @property
     def session(self) -> AgentSession:
