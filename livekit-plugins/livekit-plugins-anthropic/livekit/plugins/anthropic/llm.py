@@ -35,7 +35,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import ChatModels
-from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
+from .utils import CACHE_CONTROL_EPHEMERAL
 
 
 @dataclass
@@ -149,7 +149,7 @@ class LLM(llm.LLM):
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
         if tools:
-            extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
+            extra["tools"] = llm.ToolContext(tools).to_provider_format("anthropic")
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -188,6 +188,9 @@ class LLM(llm.LLM):
         if self._opts.caching == "ephemeral":
             if extra.get("system"):
                 extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+            if extra.get("tools"):
+                extra["tools"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
             seen_assistant = False
             for msg in reversed(messages):

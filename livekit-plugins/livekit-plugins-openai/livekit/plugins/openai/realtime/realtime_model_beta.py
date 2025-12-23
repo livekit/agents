@@ -1043,13 +1043,12 @@ class RealtimeSessionBeta(
             retained_tools = [
                 tool
                 for tool in tools
-                if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
-                or (
-                    is_raw_function_tool(tool)
-                    and get_raw_function_info(tool).name in retained_tool_names
+                if (
+                    isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool))
+                    and tool.info.name in retained_tool_names
                 )
             ]
-            self._tools = llm.ToolContext(retained_tools)  # type: ignore
+            self._tools = llm.ToolContext(retained_tools)
 
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]

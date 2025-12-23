@@ -32,7 +32,6 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import to_fnc_ctx
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
@@ -146,7 +145,7 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tools_list = to_fnc_ctx(tools)
+            tools_list = llm.ToolContext(tools).to_provider_format("aws")
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 

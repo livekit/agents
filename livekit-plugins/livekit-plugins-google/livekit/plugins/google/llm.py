@@ -362,7 +362,7 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM,
+        llm_v: LLM,
         *,
         client: Client,
         model: str | ChatModels,
@@ -371,11 +371,12 @@ class LLMStream(llm.LLMStream):
         tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
-        self._llm: LLM = llm
+        self._llm: LLM = llm_v
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         retryable = True

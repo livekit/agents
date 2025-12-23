@@ -124,7 +124,7 @@ class TestToolContext:
             return "second"
 
         ctx1 = ToolContext([test_tool_1])
-        ctx1._tools_map["duplicate_name"] = duplicate_name
+        ctx1._fnc_tools_map["duplicate_name"] = duplicate_name
 
         @function_tool
         async def duplicate_name() -> str:  # noqa: F811
@@ -132,7 +132,7 @@ class TestToolContext:
             return "third"
 
         ctx2 = ToolContext([test_tool_1])
-        ctx2._tools_map["duplicate_name"] = duplicate_name
+        ctx2._fnc_tools_map["duplicate_name"] = duplicate_name
 
         assert ctx1 != ctx2
 

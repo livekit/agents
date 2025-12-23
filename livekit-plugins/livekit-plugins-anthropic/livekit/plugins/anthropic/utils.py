@@ -11,40 +11,40 @@ from livekit.agents import llm
 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#structuring-your-prompt
 CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephemeral")
 
-__all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
+__all__ = ["CACHE_CONTROL_EPHEMERAL"]
 
 
-def to_fnc_ctx(
-    fncs: list[llm.Tool],
-    caching: Optional[Literal["ephemeral"]],
-) -> list[anthropic.types.ToolParam]:
-    tools: list[anthropic.types.ToolParam] = []
-    for fnc in fncs:
-        if isinstance(fnc, (llm.FunctionTool, llm.RawFunctionTool)):
-            tools.append(_build_anthropic_schema(fnc))
+# def to_fnc_ctx(
+#     fncs: list[llm.Tool],
+#     caching: Optional[Literal["ephemeral"]],
+# ) -> list[anthropic.types.ToolParam]:
+#     tools: list[anthropic.types.ToolParam] = []
+#     for fnc in fncs:
+#         if isinstance(fnc, (llm.FunctionTool, llm.RawFunctionTool)):
+#             tools.append(_build_anthropic_schema(fnc))
 
-    if tools and caching == "ephemeral":
-        tools[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+#     if tools and caching == "ephemeral":
+#         tools[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
-    return tools
+#     return tools
 
 
-def _build_anthropic_schema(
-    function_tool: Union[llm.FunctionTool, llm.RawFunctionTool],
-) -> anthropic.types.ToolParam:
-    if isinstance(function_tool, llm.FunctionTool):
-        fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
-        return anthropic.types.ToolParam(
-            name=fnc["name"],
-            description=fnc["description"] or "",
-            input_schema=fnc["parameters"],
-        )
-    elif isinstance(function_tool, llm.RawFunctionTool):
-        info = function_tool.info
-        return anthropic.types.ToolParam(
-            name=info.name,
-            description=info.raw_schema.get("description", ""),
-            input_schema=info.raw_schema.get("parameters", {}),
-        )
-    else:
-        raise ValueError("Invalid function tool")
+# def _build_anthropic_schema(
+#     function_tool: Union[llm.FunctionTool, llm.RawFunctionTool],
+# ) -> anthropic.types.ToolParam:
+#     if isinstance(function_tool, llm.FunctionTool):
+#         fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
+#         return anthropic.types.ToolParam(
+#             name=fnc["name"],
+#             description=fnc["description"] or "",
+#             input_schema=fnc["parameters"],
+#         )
+#     elif isinstance(function_tool, llm.RawFunctionTool):
+#         info = function_tool.info
+#         return anthropic.types.ToolParam(
+#             name=info.name,
+#             description=info.raw_schema.get("description", ""),
+#             input_schema=info.raw_schema.get("parameters", {}),
+#         )
+#     else:
+#         raise ValueError("Invalid function tool")

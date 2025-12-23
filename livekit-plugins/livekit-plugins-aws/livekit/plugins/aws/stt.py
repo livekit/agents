@@ -195,7 +195,7 @@ class SpeechStream(stt.SpeechStream):
                 config_kwargs["aws_session_token"] = self._credentials.session_token
             else:
                 config_kwargs["aws_credentials_identity_resolver"] = (
-                    EnvironmentCredentialsResolver()
+                    EnvironmentCredentialsResolver()  # type: ignore
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(

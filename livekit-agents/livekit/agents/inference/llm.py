@@ -240,7 +240,7 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM | llm.LLM,
+        llm_v: LLM | llm.LLM,
         *,
         model: LLMModels | str,
         provider: str | None = None,
@@ -252,14 +252,15 @@ class LLMStream(llm.LLMStream):
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._provider_fmt = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
-        self._llm = llm
+        self._llm = llm_v
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         # current function call that we're waiting for full completion (args are streamed)
@@ -274,17 +275,16 @@ class LLMStream(llm.LLMStream):
 
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
-            fnc_ctx = (
-                to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
-                if self._tools
-                else openai.NOT_GIVEN
+            tool_schemas = cast(
+                list[ChatCompletionToolParam],
+                self._tool_ctx.to_provider_format("openai", strict=self._strict_tool_schema),
             )
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
                 logger.debug(
                     "chat.completions.create",
                     extra={
-                        "fnc_ctx": fnc_ctx,
+                        "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
                         "chat_ctx": chat_ctx,
                     },
@@ -299,7 +299,7 @@ class LLMStream(llm.LLMStream):
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
-                tools=fnc_ctx,
+                tools=tool_schemas or openai.NOT_GIVEN,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
@@ -430,26 +430,26 @@ class LLMStream(llm.LLMStream):
         )
 
 
-def to_fnc_ctx(
-    fnc_ctx: Sequence[Tool],
-    *,
-    strict: bool = True,
-) -> list[ChatCompletionToolParam]:
-    tools: list[ChatCompletionToolParam] = []
-    for fnc in fnc_ctx:
-        if isinstance(fnc, RawFunctionTool):
-            tools.append(
-                {
-                    "type": "function",
-                    "function": fnc.info.raw_schema,  # type: ignore
-                }
-            )
-        elif isinstance(fnc, FunctionTool):
-            schema = (
-                llm.utils.build_strict_openai_schema(fnc)
-                if strict
-                else llm.utils.build_legacy_openai_schema(fnc)
-            )
-            tools.append(schema)  # type: ignore
+# def to_fnc_ctx(
+#     fnc_ctx: Sequence[Tool],
+#     *,
+#     strict: bool = True,
+# ) -> list[ChatCompletionToolParam]:
+#     tools: list[ChatCompletionToolParam] = []
+#     for fnc in fnc_ctx:
+#         if isinstance(fnc, RawFunctionTool):
+#             tools.append(
+#                 {
+#                     "type": "function",
+#                     "function": fnc.info.raw_schema,  # type: ignore
+#                 }
+#             )
+#         elif isinstance(fnc, FunctionTool):
+#             schema = (
+#                 llm.utils.build_strict_openai_schema(fnc)
+#                 if strict
+#                 else llm.utils.build_legacy_openai_schema(fnc)
+#             )
+#             tools.append(schema)  # type: ignore
 
-    return tools
+#     return tools

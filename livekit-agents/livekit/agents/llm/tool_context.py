@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from enum import Flag, auto
 from typing import Any, Callable, Literal, TypeVar, Union, cast, overload
 
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
+
+from . import _provider_format
 
 
 class Tool(ABC):  # noqa: B024
@@ -276,7 +279,7 @@ def get_fnc_tool_names(tools: Sequence[Tool | ToolSet]) -> list[str]:
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: list[Tool | ToolSet]) -> None:
+    def __init__(self, tools: Sequence[Tool | ToolSet]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -285,22 +288,23 @@ class ToolContext:
 
     @property
     def function_tools(self) -> dict[str, FunctionTool | RawFunctionTool]:
-        return self._tools_map.copy()
+        """A copy of all function tools in the tool context, including those in tool sets."""
+        return self._fnc_tools_map.copy()
 
     @property
     def provider_tools(self) -> list[ProviderTool]:
+        """A copy of all provider tools in the tool context."""
         return self._provider_tools
 
     @property
     def tool_sets(self) -> list[ToolSet]:
+        """A copy of all tool sets in the tool context."""
         return self._tool_sets
 
     @property
     def all_tools(self) -> list[Tool]:
         tools: list[Tool] = []
-        tools.extend(list(self._tools_map.values()))
-        for tool_set in self._tool_sets:
-            tools.extend(tool_set.get_tools())
+        tools.extend(list(self._fnc_tools_map.values()))
         tools.extend(self._provider_tools)
         return tools
 
@@ -308,11 +312,11 @@ class ToolContext:
         if not isinstance(other, ToolContext):
             return False
 
-        if self._tools_map.keys() != other._tools_map.keys():
+        if self._fnc_tools_map.keys() != other._fnc_tools_map.keys():
             return False
 
-        for name in self._tools_map:
-            if self._tools_map[name] is not other._tools_map[name]:
+        for name in self._fnc_tools_map:
+            if self._fnc_tools_map[name] is not other._fnc_tools_map[name]:
                 return False
 
         if len(self._provider_tools) != len(other._provider_tools):
@@ -331,41 +335,65 @@ class ToolContext:
         return True
 
     def update_tools(self, tools: Sequence[Tool | ToolSet]) -> None:
-        tools = list(tools)
-        self._tools = tools.copy()
-
-        for method in find_function_tools(self):
-            tools.append(method)
-
-        self._tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
+        self._tools = list(tools)
+        self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         self._provider_tools: list[ProviderTool] = []
         self._tool_sets: list[ToolSet] = []
 
-        visited_names = set[str]()
-
-        def add_tool(tool: Tool, add_to_map: bool) -> None:
+        def add_tool(tool: Tool | ToolSet) -> None:
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
-                return
 
-            if isinstance(tool, (FunctionTool, RawFunctionTool)):
-                if tool.info.name in visited_names:
+            elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+                if tool.info.name in self._fnc_tools_map:
                     raise ValueError(f"duplicate function name: {tool.info.name}")
-                visited_names.add(tool.info.name)
+                self._fnc_tools_map[tool.info.name] = tool
 
-                if add_to_map:
-                    self._tools_map[tool.info.name] = tool
-
-        for tool in tools:
-            if isinstance(tool, Tool):
-                add_tool(tool, add_to_map=True)
             elif isinstance(tool, ToolSet):
                 for t in tool.get_tools():
-                    add_tool(t, add_to_map=False)
+                    add_tool(t)
                 self._tool_sets.append(tool)
+
             else:
-                # TODO(theomonnom): MCP servers & other tools
                 raise ValueError(f"unknown tool type: {type(tool)}")
+
+        for tool in itertools.chain(tools, find_function_tools(self)):
+            add_tool(tool)
 
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["openai"], *, strict: bool = True
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def to_provider_format(
+        self,
+        format: Literal["google"],
+        *,
+        tool_behavior: _provider_format.google.TOOL_BEHAVIOR | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def to_provider_format(self, format: Literal["aws"]) -> list[dict[str, Any]]: ...
+
+    @overload
+    def to_provider_format(self, format: Literal["anthropic"]) -> list[dict[str, Any]]: ...
+
+    def to_provider_format(
+        self,
+        format: Literal["openai", "google", "aws", "anthropic"] | str,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        if format == "openai":
+            return _provider_format.openai.to_fnc_ctx(self, **kwargs)
+        elif format == "google":
+            return _provider_format.google.to_fnc_ctx(self, **kwargs)
+        elif format == "anthropic":
+            return _provider_format.anthropic.to_fnc_ctx(self, **kwargs)
+        elif format == "aws":
+            return _provider_format.aws.to_fnc_ctx(self, **kwargs)
+
+        raise ValueError(f"Unsupported provider format: {format}")
