@@ -1,0 +1,338 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Krisp VIVA noise reduction audio filter for LiveKit Agents.
+
+This module provides an audio filter implementation using Krisp VIVA SDK
+for real-time noise suppression in LiveKit voice agents.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import AsyncIterable
+from typing import Any
+
+import numpy as np
+
+from livekit import rtc
+
+from .krisp_instance import KrispSDKManager
+from .log import logger
+
+try:
+    import krisp_audio
+except ModuleNotFoundError as e:
+    logger.error(f"Exception: {e}")
+    logger.error("In order to use the Krisp filter, you need to install krisp_audio.")
+    raise Exception(f"Missing module: {e}") from e
+
+
+class KrispVivaFilter:
+    """Audio filter using the Krisp VIVA SDK for noise reduction and voice isolation.
+
+    This filter provides real-time noise reduction and voice isolation for audio streams using Krisp's
+    proprietary noise suppression algorithms. It's designed to be used as a processing
+    node in the LiveKit Agents audio pipeline.
+    """
+
+    SAMPLE_RATES = {
+        8000: krisp_audio.SamplingRate.Sr8000Hz,
+        16000: krisp_audio.SamplingRate.Sr16000Hz,
+        24000: krisp_audio.SamplingRate.Sr24000Hz,
+        32000: krisp_audio.SamplingRate.Sr32000Hz,
+        44100: krisp_audio.SamplingRate.Sr44100Hz,
+        48000: krisp_audio.SamplingRate.Sr48000Hz,
+    }
+
+    FRAME_DURATIONS = {
+        10: krisp_audio.FrameDuration.Fd10ms,
+        15: krisp_audio.FrameDuration.Fd15ms,
+        20: krisp_audio.FrameDuration.Fd20ms,
+        30: krisp_audio.FrameDuration.Fd30ms,
+        32: krisp_audio.FrameDuration.Fd32ms,
+    }
+
+    def __init__(
+        self,
+        model_path: str | None = None,
+        noise_suppression_level: int = 100,
+        frame_duration_ms: int = 10,
+        sample_rate: int | None = None,
+    ) -> None:
+        """Initialize the Krisp noise reduction and voice isolation filter.
+
+        Args:
+            model_path: Path to the Krisp model file (.kef extension).
+                If None, uses KRISP_VIVA_MODEL_PATH environment variable.
+            noise_suppression_level: Noise suppression level (0-100, default: 100).
+            frame_duration_ms: Frame duration in milliseconds (10, 15, 20, 30, or 32, default: 10).
+            sample_rate: Optional sample rate in Hz. If provided, the session will be
+                created immediately. If None, the session will be created on the first frame.
+
+        Raises:
+            ValueError: If model_path is not provided and KRISP_VIVA_MODEL_PATH is not set,
+                or if frame_duration_ms is not supported.
+            Exception: If model file doesn't have .kef extension.
+            FileNotFoundError: If model file doesn't exist.
+        """
+
+        # Initialize state variables first
+        self._sdk_acquired = False
+        self._filtering_enabled = True
+        self._session: Any | None = None
+        self._noise_suppression_level = noise_suppression_level
+        self._sample_rate: int | None = None
+        self._frame_duration_ms = frame_duration_ms
+
+        # Acquire SDK reference (initializes on first call)
+        try:
+            KrispSDKManager.acquire()
+            self._sdk_acquired = True
+        except Exception as e:
+            logger.error(f"Failed to acquire Krisp SDK: {e}")
+            raise RuntimeError(f"Failed to acquire Krisp SDK: {e}") from e
+
+        try:
+            # Set model path, checking environment if not specified
+            self._model_path = model_path or os.getenv("KRISP_VIVA_MODEL_PATH")
+            if not self._model_path:
+                logger.error("Model path is not provided and KRISP_VIVA_MODEL_PATH is not set.")
+                raise ValueError("Model path for KrispVivaFilter must be provided.")
+
+            if not self._model_path.endswith(".kef"):
+                raise Exception("Model is expected with .kef extension")
+
+            if not os.path.isfile(self._model_path):
+                raise FileNotFoundError(f"Model file not found: {self._model_path}")
+
+            # Validate frame duration
+            if frame_duration_ms not in self.FRAME_DURATIONS:
+                raise ValueError(
+                    f"Unsupported frame duration: {frame_duration_ms}ms. "
+                    f"Supported durations: {list(self.FRAME_DURATIONS.keys())}"
+                )
+
+            # Always create session to pre-load the model
+            # Use provided sample rate, or default to 16kHz (most common)
+            init_sample_rate = sample_rate if sample_rate is not None else 16000
+            self._create_session(init_sample_rate)
+            logger.info(
+                f"Krisp filter initialized with {init_sample_rate}Hz session "
+                f"(model pre-loaded, will recreate session if different sample rate)"
+            )
+        except Exception:
+            # If initialization fails after acquiring SDK, release it
+            if self._sdk_acquired:
+                KrispSDKManager.release()
+                self._sdk_acquired = False
+            raise
+
+    def _int_to_sample_rate(self, sample_rate: int) -> Any:
+        """Convert integer sample rate to krisp_audio SamplingRate enum.
+
+        Args:
+            sample_rate: Sample rate as integer
+
+        Returns:
+            krisp_audio.SamplingRate enum value
+
+        Raises:
+            ValueError: If sample rate is not supported
+        """
+        if sample_rate not in self.SAMPLE_RATES:
+            raise ValueError(
+                f"Unsupported sample rate: {sample_rate}. "
+                f"Supported rates: {list(self.SAMPLE_RATES.keys())}"
+            )
+        return self.SAMPLE_RATES[sample_rate]
+
+    def _create_session(self, sample_rate: int) -> None:
+        """Create a new Krisp session with the correct sample rate.
+
+        Args:
+            sample_rate: The sample rate of the audio frames in Hz.
+        """
+        # If session already exists for this sample rate, don't recreate
+        if self._session is not None and self._sample_rate == sample_rate:
+            return
+
+        logger.info(f"Creating Krisp session for sample rate: {sample_rate}Hz")
+
+        model_info = krisp_audio.ModelInfo()
+        model_info.path = self._model_path
+
+        nc_cfg = krisp_audio.NcSessionConfig()
+        nc_cfg.inputSampleRate = self._int_to_sample_rate(sample_rate)
+        nc_cfg.inputFrameDuration = self.FRAME_DURATIONS[self._frame_duration_ms]
+        nc_cfg.outputSampleRate = nc_cfg.inputSampleRate
+        nc_cfg.modelInfo = model_info
+
+        try:
+            self._session = krisp_audio.NcInt16.create(nc_cfg)
+            self._sample_rate = sample_rate
+
+            logger.info("✅ Krisp session created successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to create Krisp session: {e}")
+            raise
+
+    def enable(self) -> None:
+        """Enable noise filtering."""
+        self._filtering_enabled = True
+
+    def disable(self) -> None:
+        """Disable noise filtering (audio will pass through unmodified)."""
+        self._filtering_enabled = False
+
+    @property
+    def is_enabled(self) -> bool:
+        """Check if filtering is currently enabled."""
+        return self._filtering_enabled
+
+    async def filter(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Apply Krisp noise reduction to an audio frame.
+
+        Args:
+            frame: Input audio frame. Must contain exactly the number of samples
+                   matching the configured frame_duration_ms at the frame's sample_rate.
+                   For example: 10ms @ 16kHz = 160 samples, 20ms @ 32kHz = 640 samples.
+
+        Returns:
+            Filtered audio frame with noise reduction applied.
+            If filtering is disabled, returns the original frame.
+
+        Raises:
+            ValueError: If frame size doesn't match the expected frame duration.
+        """
+        if not self._filtering_enabled:
+            return frame
+
+        # Create a new session for the input sample rate
+        self._create_session(frame.sample_rate)
+
+        # Verify frame size matches expected duration
+        expected_samples = int((frame.sample_rate * self._frame_duration_ms) / 1000)
+        if frame.samples_per_channel != expected_samples:
+            raise ValueError(
+                f"Frame size mismatch: expected {expected_samples} samples "
+                f"({self._frame_duration_ms}ms @ {frame.sample_rate}Hz), "
+                f"got {frame.samples_per_channel} samples"
+            )
+
+        # Convert frame to numpy array
+        audio_samples = np.frombuffer(frame.data, dtype=np.int16)
+
+        try:
+            # Process through Krisp
+            filtered_samples = self._session.process(audio_samples, self._noise_suppression_level)
+
+            # Validate output
+            if filtered_samples is None or len(filtered_samples) == 0:
+                logger.warning("Krisp returned empty output, using original audio")
+                filtered_samples = audio_samples
+            elif len(filtered_samples) != len(audio_samples):
+                logger.warning(
+                    f"Krisp output size mismatch: expected {len(audio_samples)}, "
+                    f"got {len(filtered_samples)}, using original audio"
+                )
+                filtered_samples = audio_samples
+
+            # Return filtered frame
+            return rtc.AudioFrame(
+                data=filtered_samples.tobytes(),
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+                samples_per_channel=len(filtered_samples),
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing frame: {e}")
+            # Return original frame on error
+            return frame
+
+    async def process_stream(
+        self, audio_stream: AsyncIterable[rtc.AudioFrame]
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        """Process a stream of audio frames with noise reduction.
+
+        This is a convenience method for processing an entire audio stream.
+        All frames in the stream must have the correct size for the configured
+        frame_duration_ms.
+
+        Args:
+            audio_stream: An async iterable of audio frames to process.
+
+        Yields:
+            Filtered audio frames with noise reduction applied.
+
+        Example:
+            ```python
+            async def realtime_audio_output_node(
+                self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+            ) -> AsyncIterable[rtc.AudioFrame]:
+                krisp_filter = krisp.KrispVivaFilter(frame_duration_ms=20)
+                async for frame in krisp_filter.process_stream(audio):
+                    yield frame
+            ```
+        """
+        async for frame in audio_stream:
+            filtered_frame = await self.filter(frame)
+            yield filtered_frame
+
+    def close(self) -> None:
+        """Clean up filter session resources.
+
+        Call this when you're done with the filter to free session resources.
+        """
+        if self._session is not None:
+            self._session = None
+
+        # Release SDK reference (only if not already released)
+        if getattr(self, "_sdk_acquired", False):
+            KrispSDKManager.release()
+            self._sdk_acquired = False
+
+        logger.debug("Krisp filter session closed")
+
+    def __del__(self) -> None:
+        """Destructor to ensure cleanup of session resources.
+        
+        Note: During Python shutdown, we avoid calling C extensions to prevent GIL errors.
+        Always call close() explicitly for proper cleanup.
+        """
+        # Check if we're in Python shutdown (modules being cleaned up)
+        # If KrispSDKManager is None, we're in shutdown - don't do anything
+        if KrispSDKManager is None:
+            return
+            
+        if getattr(self, "_sdk_acquired", False):
+            try:
+                if getattr(self, "_session", None) is not None:
+                    self._session = None
+                # Release SDK reference only if we still have it
+                KrispSDKManager.release()
+                self._sdk_acquired = False
+            except Exception:
+                # Silently ignore errors during shutdown
+                pass
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - clean up session."""
+        self.close()
+        return False
