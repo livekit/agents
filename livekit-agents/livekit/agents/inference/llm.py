@@ -427,28 +427,3 @@ class LLMStream(llm.LLMStream):
                 extra=delta_extra,
             ),
         )
-
-
-# def to_fnc_ctx(
-#     fnc_ctx: Sequence[Tool],
-#     *,
-#     strict: bool = True,
-# ) -> list[ChatCompletionToolParam]:
-#     tools: list[ChatCompletionToolParam] = []
-#     for fnc in fnc_ctx:
-#         if isinstance(fnc, RawFunctionTool):
-#             tools.append(
-#                 {
-#                     "type": "function",
-#                     "function": fnc.info.raw_schema,  # type: ignore
-#                 }
-#             )
-#         elif isinstance(fnc, FunctionTool):
-#             schema = (
-#                 llm.utils.build_strict_openai_schema(fnc)
-#                 if strict
-#                 else llm.utils.build_legacy_openai_schema(fnc)
-#             )
-#             tools.append(schema)  # type: ignore
-
-#     return tools
