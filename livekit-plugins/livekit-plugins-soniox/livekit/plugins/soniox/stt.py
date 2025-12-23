@@ -356,8 +356,10 @@ class SpeechStream(stt.SpeechStream):
         # Language code sent by Soniox if language detection is enabled (e.g. "en", "de", "fr")
         final_transcript_language: str = ""
 
+        is_speaking = False
+
         def send_endpoint_transcript():
-            nonlocal final_transcript_buffer, final_transcript_language
+            nonlocal final_transcript_buffer, final_transcript_language, is_speaking
             if final_transcript_buffer:
                 event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -371,8 +373,12 @@ class SpeechStream(stt.SpeechStream):
 
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
+                # Reset buffers.
                 final_transcript_buffer = ""
                 final_transcript_language = ""
+
+                # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
+                is_speaking = False
 
         # Method handles receiving messages from the Soniox Speech-to-Text API.
         while self._ws:
@@ -414,6 +420,15 @@ class SpeechStream(stt.SpeechStream):
                                         non_final_transcription_language = token.get("language")
 
                             if final_transcript_buffer or non_final_transcription:
+                                if not is_speaking:
+                                    # Send START_OF_SPEECH if this is the first transcript.
+                                    is_speaking = True
+                                    self._event_ch.send_nowait(
+                                        stt.SpeechEvent(
+                                            type=SpeechEventType.START_OF_SPEECH,
+                                        )
+                                    )
+
                                 event = stt.SpeechEvent(
                                     type=SpeechEventType.INTERIM_TRANSCRIPT,
                                     alternatives=[
