@@ -15,7 +15,9 @@ ATTR_AGENT_NAME = "lk.agent_name"
 ATTR_ROOM_NAME = "lk.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
 
-# assistant turn
+# agent turn
+ATTR_AGENT_TURN_ID = "lk.generation_id"
+ATTR_AGENT_PARENT_TURN_ID = "lk.parent_generation_id"
 ATTR_USER_INPUT = "lk.user_input"
 ATTR_INSTRUCTIONS = "lk.instructions"
 ATTR_SPEECH_INTERRUPTED = "lk.interrupted"
@@ -27,6 +29,7 @@ ATTR_RESPONSE_TEXT = "lk.response.text"
 ATTR_RESPONSE_FUNCTION_CALLS = "lk.response.function_calls"
 
 # function tool
+ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"
 ATTR_FUNCTION_TOOL_NAME = "lk.function_tool.name"
 ATTR_FUNCTION_TOOL_ARGS = "lk.function_tool.arguments"
 ATTR_FUNCTION_TOOL_IS_ERROR = "lk.function_tool.is_error"

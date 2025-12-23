@@ -30,6 +30,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 from mistralai import Mistral
 from mistralai.models.sdkerror import SDKError
 
@@ -61,7 +62,14 @@ class STT(stt.STT):
             client: Optional pre-configured MistralAI client instance.
         """
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=False,
+                interim_results=False,
+                # timestamp granularity doesn't seem to work
+                aligned_transcript=False,
+            )
+        )
         self._opts = _STTOptions(
             language=language,
             model=model,
@@ -115,12 +123,29 @@ class STT(stt.STT):
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
                 language=self._opts.language if self._opts.language else None,
+                # for some reason, it doesn't return any segments even if we ask for them
+                timestamp_granularities=["segment"],
             )
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[
-                    stt.SpeechData(text=resp.text, language=self._opts.language),
+                    stt.SpeechData(
+                        text=resp.text,
+                        language=self._opts.language,
+                        start_time=resp.segments[0].start if resp.segments else 0,
+                        end_time=resp.segments[-1].end if resp.segments else 0,
+                        words=[
+                            TimedString(
+                                text=segment.text,
+                                start_time=segment.start,
+                                end_time=segment.end,
+                            )
+                            for segment in resp.segments
+                        ]
+                        if resp.segments
+                        else None,
+                    ),
                 ],
             )
 

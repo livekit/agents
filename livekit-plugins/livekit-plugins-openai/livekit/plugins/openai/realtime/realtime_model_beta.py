@@ -582,6 +582,7 @@ class RealtimeSessionBeta(
                 exclude_function_call=True,
                 exclude_instructions=True,
                 exclude_empty_message=True,
+                exclude_handoff=True,
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -1028,9 +1029,13 @@ class RealtimeSessionBeta(
 
         return events
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         async with self._update_fnc_ctx_lock:
-            ev = self._create_tools_update_event(tools)
+            # beta API doesn't support ProviderTools
+            filtered_tools = [t for t in tools if not isinstance(t, llm.ProviderTool)]
+            ev = self._create_tools_update_event(filtered_tools)
             self.send_event(ev)
 
             assert ev.session.tools is not None
@@ -1044,7 +1049,7 @@ class RealtimeSessionBeta(
                     and get_raw_function_info(tool).name in retained_tool_names
                 )
             ]
-            self._tools = llm.ToolContext(retained_tools)
+            self._tools = llm.ToolContext(retained_tools)  # type: ignore
 
     def _create_tools_update_event(
         self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
@@ -1170,7 +1175,9 @@ class RealtimeSessionBeta(
             )
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
-            chat_ctx = self.chat_ctx.copy()
+            chat_ctx = self.chat_ctx.copy(
+                exclude_handoff=True,
+            )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
                 assert new_item.type == "message"
@@ -1485,12 +1492,12 @@ class RealtimeSessionBeta(
                     .get("cached_tokens_details", {})
                     .get("image_tokens", 0),
                 ),
-                image_tokens=0,
+                image_tokens=usage.get("input_token_details", {}).get("image_tokens", 0),
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
-                image_tokens=0,
+                image_tokens=usage.get("output_token_details", {}).get("image_tokens", 0),
             ),
             metadata=Metadata(
                 model_name=self._realtime_model.model,

@@ -24,9 +24,14 @@ import httpx
 import openai
 from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
-from livekit.agents.llm import ToolChoice, utils as llm_utils
-from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm import (
+    ChatContext,
+    FunctionTool,
+    ProviderTool,
+    RawFunctionTool,
+    ToolChoice,
+    utils as llm_utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -57,6 +62,7 @@ from .utils import AsyncAzureADTokenProvider
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
+PromptCacheRetention = Literal["in_memory", "24h"]
 
 
 @dataclass
@@ -75,6 +81,7 @@ class _LLMOptions:
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
+    prompt_cache_retention: NotGivenOr[PromptCacheRetention]
     extra_body: NotGivenOr[dict[str, Any]]
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
@@ -103,6 +110,7 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
@@ -118,7 +126,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model == "gpt-5.1":
+            if model in ["gpt-5.1", "gpt-5.2"]:
                 reasoning_effort = "none"  # type: ignore[assignment]
             else:
                 reasoning_effort = "minimal"
@@ -138,6 +146,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            prompt_cache_retention=prompt_cache_retention,
             extra_body=extra_body,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -191,6 +200,7 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -229,6 +239,7 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            verbosity=verbosity,
         )
 
     @staticmethod
@@ -873,7 +884,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -925,6 +936,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.verbosity):
             extra["verbosity"] = self._opts.verbosity
 
+        if is_given(self._opts.prompt_cache_retention):
+            extra["prompt_cache_retention"] = self._opts.prompt_cache_retention
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -970,7 +984,7 @@ class LLMStream(_LLMStream):
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:

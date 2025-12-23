@@ -21,13 +21,11 @@ TTSEncoding = Literal[
     "mp3_44100_192",
 ]
 
-STTModels = Literal["scribe_v2_realtime",]
-
-STTAudioFormat = Literal[
-    "pcm_8000",
-    "pcm_16000",
-    "pcm_22050",
-    "pcm_24000",
-    "pcm_44100",
-    "pcm_48000",
+STTRealtimeSampleRates = Literal[
+    8000,
+    16000,
+    22050,
+    24000,
+    44100,
+    48000,
 ]

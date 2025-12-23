@@ -69,6 +69,12 @@ class Voice:
     category: str
 
 
+@dataclass
+class PronunciationDictionaryLocator:
+    pronunciation_dictionary_id: str
+    version_id: str
+
+
 DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
@@ -97,6 +103,9 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
         preferred_alignment: Literal["normalized", "original"] = "normalized",
+        pronunciation_dictionary_locators: NotGivenOr[
+            list[PronunciationDictionaryLocator]
+        ] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -118,6 +127,7 @@ class TTS(tts.TTS):
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
+            pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators to use for pronunciation control.
         """  # noqa: E501
 
         if not is_given(encoding):
@@ -171,6 +181,7 @@ class TTS(tts.TTS):
             auto_mode=auto_mode,
             apply_text_normalization=apply_text_normalization,
             preferred_alignment=preferred_alignment,
+            pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -205,6 +216,9 @@ class TTS(tts.TTS):
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        pronunciation_dictionary_locators: NotGivenOr[
+            list[PronunciationDictionaryLocator]
+        ] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -212,6 +226,7 @@ class TTS(tts.TTS):
             voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (NotGivenOr[TTSModels | str]): TTS model to use.
             language (NotGivenOr[str]): Language code for the TTS model.
+            pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators.
         """
         changed = False
 
@@ -229,6 +244,10 @@ class TTS(tts.TTS):
 
         if is_given(language) and language != self._opts.language:
             self._opts.language = language
+            changed = True
+
+        if is_given(pronunciation_dictionary_locators):
+            self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
         if changed and self._current_connection:
@@ -464,6 +483,7 @@ class _TTSOptions:
     apply_text_normalization: Literal["auto", "on", "off"]
     preferred_alignment: Literal["normalized", "original"]
     auto_mode: NotGivenOr[bool]
+    pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
 
 
 @dataclass
@@ -573,11 +593,19 @@ class _Connection:
                             if is_given(self._opts.voice_settings)
                             else {}
                         )
-                        init_pkt = {
+                        init_pkt: dict[str, Any] = {
                             "text": " ",
                             "voice_settings": voice_settings,
                             "context_id": msg.context_id,
                         }
+                        if is_given(self._opts.pronunciation_dictionary_locators):
+                            init_pkt["pronunciation_dictionary_locators"] = [
+                                {
+                                    "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
+                                    "version_id": locator.version_id,
+                                }
+                                for locator in self._opts.pronunciation_dictionary_locators
+                            ]
                         await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
@@ -618,7 +646,8 @@ class _Connection:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._closed:
+                    if not self._closed and len(self._context_data) > 0:
+                        # websocket will be closed after all contexts are closed
                         logger.warning("websocket closed unexpectedly")
                     break
 
@@ -628,20 +657,23 @@ class _Connection:
 
                 data = json.loads(msg.data)
                 context_id = data.get("contextId")
-
-                if not context_id or context_id not in self._context_data:
-                    continue
-
-                ctx = self._context_data[context_id]
+                ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
                     logger.error(
                         "elevenlabs tts returned error",
-                        extra={"context_id": context_id, "error": error},
+                        extra={"context_id": context_id, "error": error, "data": data},
                     )
-                    if not ctx.waiter.done():
-                        ctx.waiter.set_exception(APIError(message=error))
-                    self._cleanup_context(context_id)
+                    if context_id is not None:
+                        if ctx and not ctx.waiter.done():
+                            ctx.waiter.set_exception(APIError(message=error))
+                        self._cleanup_context(context_id)
+                    continue
+
+                if ctx is None:
+                    logger.warning(
+                        "unexpected message received from elevenlabs tts", extra={"data": data}
+                    )
                     continue
 
                 emitter = ctx.emitter

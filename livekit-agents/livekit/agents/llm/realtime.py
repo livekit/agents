@@ -13,7 +13,7 @@ from livekit import rtc
 
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
-from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
+from .tool_context import FunctionTool, ProviderTool, RawFunctionTool, ToolChoice, ToolContext
 
 
 @dataclass
@@ -160,7 +160,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
-    async def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Any]) -> None: ...
+    async def update_tools(
+        self, tools: list[FunctionTool | RawFunctionTool | ProviderTool | Any]
+    ) -> None: ...
 
     @abstractmethod
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...

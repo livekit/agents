@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Union, cast
 
@@ -26,6 +27,7 @@ from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import (
     FunctionTool,
+    ProviderTool,
     RawFunctionTool,
     get_raw_function_info,
     is_function_tool,
@@ -188,7 +190,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -252,7 +254,7 @@ class LLMStream(llm.LLMStream):
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
@@ -273,6 +275,7 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        self._tool_extra: dict[str, Any] | None = None
         self._tool_index: int | None = None
         retryable = True
 
@@ -375,17 +378,21 @@ class LLMStream(llm.LLMStream):
                                     arguments=self._fnc_raw_arguments or "",
                                     name=self._fnc_name or "",
                                     call_id=self._tool_call_id or "",
+                                    extra=self._tool_extra,
                                 )
                             ],
                         ),
                     )
                     self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+                    self._tool_extra = None
 
                 if tool.function.name:
                     self._tool_index = tool.index
                     self._tool_call_id = tool.id
                     self._fnc_name = tool.function.name
                     self._fnc_raw_arguments = tool.function.arguments or ""
+                    # Extract extra from tool call (e.g., Google thought signatures)
+                    self._tool_extra = getattr(tool, "extra_content", None)
                 elif tool.function.arguments:
                     self._fnc_raw_arguments += tool.function.arguments  # type: ignore
 
@@ -403,26 +410,37 @@ class LLMStream(llm.LLMStream):
                             arguments=self._fnc_raw_arguments or "",
                             name=self._fnc_name or "",
                             call_id=self._tool_call_id or "",
+                            extra=self._tool_extra,
                         )
                     ],
                 ),
             )
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+            self._tool_extra = None
             return call_chunk
 
         delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
 
-        if not delta.content:
+        # Extract extra from delta (e.g., Google thought signatures on text parts)
+        delta_extra = getattr(delta, "extra_content", None)
+
+        if not delta.content and not delta_extra:
             return None
 
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(content=delta.content, role="assistant"),
+            delta=llm.ChoiceDelta(
+                content=delta.content,
+                role="assistant",
+                extra=delta_extra,
+            ),
         )
 
 
 def to_fnc_ctx(
-    fnc_ctx: list[llm.FunctionTool | llm.RawFunctionTool], *, strict: bool = True
+    fnc_ctx: Sequence[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
+    *,
+    strict: bool = True,
 ) -> list[ChatCompletionToolParam]:
     tools: list[ChatCompletionToolParam] = []
     for fnc in fnc_ctx:
