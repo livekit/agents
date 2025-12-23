@@ -99,7 +99,7 @@ class _PreemptiveGeneration:
     user_message: llm.ChatMessage
     info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
-    tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
     tool_choice: llm.ToolChoice | None
     created_at: float
 
@@ -291,7 +291,9 @@ class AgentActivity(RecognitionHooks):
         return self._current_speech
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
+    def tools(
+        self,
+    ) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool | mcp.MCPTool]:
         return self._session.tools + self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
@@ -322,7 +324,9 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    ) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 
@@ -851,15 +855,15 @@ class AgentActivity(RecognitionHooks):
         # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
         if on_enter_data := _OnEnterContextVar.get(None):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
-                filtered_tools = []
+                filtered_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
                 for tool in tools:
-                    info: _RawFunctionToolInfo | _FunctionToolInfo
+                    info: _RawFunctionToolInfo | _FunctionToolInfo | None = None
                     if is_raw_function_tool(tool):
                         info = get_raw_function_info(tool)
                     elif is_function_tool(tool):
                         info = get_function_info(tool)
 
-                    if not info or (info.flags & ToolFlag.IGNORE_ON_ENTER):
+                    if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
                         continue
 
                     filtered_tools.append(tool)
@@ -1763,7 +1767,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -1794,7 +1798,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
