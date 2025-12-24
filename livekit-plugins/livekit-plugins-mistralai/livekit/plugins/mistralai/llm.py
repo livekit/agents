@@ -131,7 +131,7 @@ class LLMStream(llm.LLMStream):
 
         try:
             messages, _ = self._chat_ctx.to_provider_format(format="mistralai")
-            tools = self._tool_ctx.to_provider_format("openai", strict=True)
+            tools = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             async_response = await self._client.chat.stream_async(
                 messages=cast(list[ChatCompletionStreamRequestMessagesTypedDict], messages),

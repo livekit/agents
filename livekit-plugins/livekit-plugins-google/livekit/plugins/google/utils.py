@@ -27,7 +27,7 @@ def create_tools_config(
 
     function_tools = [
         types.FunctionDeclaration.model_validate(schema)
-        for schema in tool_ctx.to_provider_format(
+        for schema in tool_ctx.parse_function_tools(
             "google", tool_behavior=tool_behavior.value if tool_behavior else None
         )
     ]

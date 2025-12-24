@@ -93,7 +93,7 @@ async def _llm_inference_task(
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = tool_ctx.all_tools
+    tools = tool_ctx.flatten()
 
     current_span.set_attributes(
         {
@@ -104,9 +104,7 @@ async def _llm_inference_task(
             trace_types.ATTR_PROVIDER_TOOLS: [
                 type(tool).__name__ for tool in tool_ctx.provider_tools
             ],
-            trace_types.ATTR_TOOL_SETS: [
-                type(tool_set).__name__ for tool_set in tool_ctx.tool_sets
-            ],
+            trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
         }
     )
 

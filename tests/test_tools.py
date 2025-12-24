@@ -141,7 +141,7 @@ class TestToolContext:
         provider2 = DummyProviderTool("provider2")
 
         ctx = ToolContext([test_tool_1, test_tool_2, provider1, provider2])
-        all_tools = ctx.all_tools
+        all_tools = ctx.flatten()
 
         assert len(all_tools) == 4
         assert test_tool_1 in all_tools

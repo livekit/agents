@@ -38,9 +38,11 @@ class ProviderTool(Tool):
     pass
 
 
-class ToolSet(ABC):
+class Toolset(ABC):
+    @property
     @abstractmethod
-    def get_tools(self) -> list[Tool]:
+    def tools(self) -> list[Tool]:
+        """Tools exposed by the toolset."""
         pass
 
 
@@ -93,7 +95,7 @@ class ToolFlag(Flag):
 
 
 @dataclass
-class _FunctionToolInfo:
+class FunctionToolInfo:
     name: str
     description: str | None
     flags: ToolFlag
@@ -102,13 +104,13 @@ class _FunctionToolInfo:
 class FunctionTool(Tool):
     """Wrapper for a function decorated with @function_tool"""
 
-    def __init__(self, func: Callable[..., Any], info: _FunctionToolInfo) -> None:
+    def __init__(self, func: Callable[..., Any], info: FunctionToolInfo) -> None:
         self._func = func
         self._info = info
         functools.update_wrapper(self, func)
 
     @property
-    def info(self) -> _FunctionToolInfo:
+    def info(self) -> FunctionToolInfo:
         return self._info
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -132,7 +134,7 @@ class RawFunctionDescription(TypedDict):
 
 
 @dataclass
-class _RawFunctionToolInfo:
+class RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
     flags: ToolFlag
@@ -141,13 +143,13 @@ class _RawFunctionToolInfo:
 class RawFunctionTool(Tool):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
 
-    def __init__(self, func: Callable[..., Any], info: _RawFunctionToolInfo) -> None:
+    def __init__(self, func: Callable[..., Any], info: RawFunctionToolInfo) -> None:
         self._func = func
         self._info = info
         functools.update_wrapper(self, func)
 
     @property
-    def info(self) -> _RawFunctionToolInfo:
+    def info(self) -> RawFunctionToolInfo:
         return self._info
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -219,14 +221,14 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
+        info = RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
         return RawFunctionTool(func, info)
 
     def deco_func(func: F) -> FunctionTool:
         from docstring_parser import parse_from_object
 
         docstring = parse_from_object(func)
-        info = _FunctionToolInfo(
+        info = FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
             flags=flags,
@@ -244,7 +246,7 @@ def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
     return isinstance(f, FunctionTool)
 
 
-def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
+def get_function_info(f: FunctionTool) -> FunctionToolInfo:
     return f.info
 
 
@@ -252,7 +254,7 @@ def is_raw_function_tool(f: Any) -> TypeGuard[RawFunctionTool]:
     return isinstance(f, RawFunctionTool)
 
 
-def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
+def get_raw_function_info(f: RawFunctionTool) -> RawFunctionToolInfo:
     return f.info
 
 
@@ -264,14 +266,14 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
     return methods
 
 
-def get_fnc_tool_names(tools: Sequence[Tool | ToolSet]) -> list[str]:
+def get_fnc_tool_names(tools: Sequence[Tool | Toolset]) -> list[str]:
     """Get names of all function and raw function tools in the list, unwrapping tool sets."""
     names = []
     for tool in tools:
         if isinstance(tool, (FunctionTool, RawFunctionTool)):
             names.append(tool.info.name)
-        elif isinstance(tool, ToolSet):
-            names.extend(get_fnc_tool_names(tool.get_tools()))
+        elif isinstance(tool, Toolset):
+            names.extend(get_fnc_tool_names(tool.tools))
 
     return names
 
@@ -279,7 +281,7 @@ def get_fnc_tool_names(tools: Sequence[Tool | ToolSet]) -> list[str]:
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: Sequence[Tool | ToolSet]) -> None:
+    def __init__(self, tools: Sequence[Tool | Toolset]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -293,16 +295,16 @@ class ToolContext:
 
     @property
     def provider_tools(self) -> list[ProviderTool]:
-        """A copy of all provider tools in the tool context."""
+        """A copy of all provider tools in the tool context, including those in tool sets."""
         return self._provider_tools
 
     @property
-    def tool_sets(self) -> list[ToolSet]:
+    def toolsets(self) -> list[Toolset]:
         """A copy of all tool sets in the tool context."""
         return self._tool_sets
 
-    @property
-    def all_tools(self) -> list[Tool]:
+    def flatten(self) -> list[Tool]:
+        """Flatten the tool context to a list of tools."""
         tools: list[Tool] = []
         tools.extend(list(self._fnc_tools_map.values()))
         tools.extend(self._provider_tools)
@@ -334,13 +336,13 @@ class ToolContext:
 
         return True
 
-    def update_tools(self, tools: Sequence[Tool | ToolSet]) -> None:
+    def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
         self._tools = list(tools)
         self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         self._provider_tools: list[ProviderTool] = []
-        self._tool_sets: list[ToolSet] = []
+        self._tool_sets: list[Toolset] = []
 
-        def add_tool(tool: Tool | ToolSet) -> None:
+        def add_tool(tool: Tool | Toolset) -> None:
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
 
@@ -349,8 +351,8 @@ class ToolContext:
                     raise ValueError(f"duplicate function name: {tool.info.name}")
                 self._fnc_tools_map[tool.info.name] = tool
 
-            elif isinstance(tool, ToolSet):
-                for t in tool.get_tools():
+            elif isinstance(tool, Toolset):
+                for t in tool.tools:
                     add_tool(t)
                 self._tool_sets.append(tool)
 
@@ -364,12 +366,12 @@ class ToolContext:
         return ToolContext(self._tools.copy())
 
     @overload
-    def to_provider_format(
+    def parse_function_tools(
         self, format: Literal["openai"], *, strict: bool = True
     ) -> list[dict[str, Any]]: ...
 
     @overload
-    def to_provider_format(
+    def parse_function_tools(
         self,
         format: Literal["google"],
         *,
@@ -377,16 +379,17 @@ class ToolContext:
     ) -> list[dict[str, Any]]: ...
 
     @overload
-    def to_provider_format(self, format: Literal["aws"]) -> list[dict[str, Any]]: ...
+    def parse_function_tools(self, format: Literal["aws"]) -> list[dict[str, Any]]: ...
 
     @overload
-    def to_provider_format(self, format: Literal["anthropic"]) -> list[dict[str, Any]]: ...
+    def parse_function_tools(self, format: Literal["anthropic"]) -> list[dict[str, Any]]: ...
 
-    def to_provider_format(
+    def parse_function_tools(
         self,
         format: Literal["openai", "google", "aws", "anthropic"] | str,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
+        """Parse the function tools to a provider-specific schema."""
         if format == "openai":
             return _provider_format.openai.to_fnc_ctx(self, **kwargs)
         elif format == "google":

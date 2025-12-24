@@ -145,7 +145,7 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tools_list = llm.ToolContext(tools).to_provider_format("aws")
+            tools_list = llm.ToolContext(tools).parse_function_tools("aws")
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 

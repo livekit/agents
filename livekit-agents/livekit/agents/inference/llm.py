@@ -276,7 +276,7 @@ class LLMStream(llm.LLMStream):
             chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             tool_schemas = cast(
                 list[ChatCompletionToolParam],
-                self._tool_ctx.to_provider_format("openai", strict=self._strict_tool_schema),
+                self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),
             )
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)

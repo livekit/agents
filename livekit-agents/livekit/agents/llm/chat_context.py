@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import LLM, Tool, ToolSet
+    from ..llm import LLM, Tool, Toolset
 
 
 class ImageContent(BaseModel):
@@ -287,14 +287,14 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
         exclude_handoff: bool = False,
-        tools: NotGivenOr[Sequence[Tool | ToolSet | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[Tool | Toolset | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import FunctionTool, RawFunctionTool, ToolSet
+        from .tool_context import FunctionTool, RawFunctionTool, Toolset
 
         def get_tool_names(
-            tools: Sequence[Tool | ToolSet | str | Any],
+            tools: Sequence[Tool | Toolset | str | Any],
         ) -> Generator[str, None, None]:
             for tool in tools:
                 if isinstance(tool, str):
@@ -303,8 +303,8 @@ class ChatContext:
                     yield tool.info.name
                 elif isinstance(tool, RawFunctionTool):
                     yield tool.info.name
-                elif isinstance(tool, ToolSet):
-                    yield from get_tool_names(tool.get_tools())
+                elif isinstance(tool, Toolset):
+                    yield from get_tool_names(tool.tools)
                 else:
                     # TODO(theomonnom): other tools
                     continue

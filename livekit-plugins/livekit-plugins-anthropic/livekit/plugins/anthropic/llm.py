@@ -149,7 +149,7 @@ class LLM(llm.LLM):
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
         if tools:
-            extra["tools"] = llm.ToolContext(tools).to_provider_format("anthropic")
+            extra["tools"] = llm.ToolContext(tools).parse_function_tools("anthropic")
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )

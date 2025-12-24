@@ -709,7 +709,7 @@ class RealtimeSession(
             events.append(self._create_session_update_event())
 
             # tools
-            tools = self._tools.all_tools
+            tools = self._tools.flatten()
             if tools:
                 events.append(self._create_tools_update_event(tools))
 
