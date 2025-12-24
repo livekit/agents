@@ -287,21 +287,19 @@ class ChatContext:
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
         exclude_handoff: bool = False,
-        tools: NotGivenOr[Sequence[Tool | Toolset | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[Tool | Toolset | str]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
         from .tool_context import FunctionTool, RawFunctionTool, Toolset
 
         def get_tool_names(
-            tools: Sequence[Tool | Toolset | str | Any],
+            tools: Sequence[Tool | Toolset | str],
         ) -> Generator[str, None, None]:
             for tool in tools:
                 if isinstance(tool, str):
                     yield tool
-                elif isinstance(tool, FunctionTool):
-                    yield tool.info.name
-                elif isinstance(tool, RawFunctionTool):
+                elif isinstance(tool, (FunctionTool, RawFunctionTool)):
                     yield tool.info.name
                 elif isinstance(tool, Toolset):
                     yield from get_tool_names(tool.tools)
