@@ -9,16 +9,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import (
-    ChatContext,
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
-    RealtimeModel,
-    find_function_tools,
-)
+from ..llm import ChatContext, RealtimeModel, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
-from ..llm.tool_context import is_function_tool, is_raw_function_tool
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -46,7 +38,7 @@ class Agent:
         instructions: str,
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -112,10 +104,10 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
+    def tools(self) -> list[llm.Tool | llm.Toolset]:
         """
         Returns:
-            list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]:
+            list[llm.Tool | llm.ToolSet]:
                 A list of function tools available to the agent.
         """
         return self._tools.copy()
@@ -153,9 +145,7 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
         """
         Updates the agent's available function tools.
 
@@ -163,24 +153,16 @@ class Agent:
         the tools for the ongoing realtime session.
 
         Args:
-            tools (list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]):
+            tools (list[llm.Tool | llm.ToolSet]):
                 The new list of function tools available to the agent.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
-        invalid = [
-            t
-            for t in tools
-            if not (
-                is_function_tool(t) or is_raw_function_tool(t) or isinstance(t, llm.ProviderTool)
-            )
-        ]
+        invalid = [t for t in tools if not isinstance(t, (llm.Tool, llm.Toolset))]
         if invalid:
             kinds = ", ".join(sorted({type(t).__name__ for t in invalid}))
-            raise TypeError(
-                f"Invalid tool type(s): {kinds}. Expected FunctionTool or RawFunctionTool."
-            )
+            raise TypeError(f"Invalid tool type(s): {kinds}. Expected Tool or ToolSet.")
 
         if self._activity is None:
             self._tools = list(set(tools))
@@ -268,7 +250,7 @@ class Agent:
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[llm.Tool],
         model_settings: ModelSettings,
     ) -> (
         AsyncIterable[llm.ChatChunk | str | FlushSentinel]
@@ -416,7 +398,7 @@ class Agent:
         async def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
-            tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+            tools: list[llm.Tool],
             model_settings: ModelSettings,
         ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
@@ -669,7 +651,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,

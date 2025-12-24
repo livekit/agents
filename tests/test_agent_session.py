@@ -527,7 +527,7 @@ async def test_generate_reply() -> None:
     ],
 )
 async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
-    speed = 5.0
+    speed = 2.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)

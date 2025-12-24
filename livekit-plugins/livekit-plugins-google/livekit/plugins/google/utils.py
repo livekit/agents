@@ -9,13 +9,6 @@ from pydantic import TypeAdapter
 from google.genai import types
 from livekit.agents import llm
 from livekit.agents.llm import utils as llm_utils
-from livekit.agents.llm.tool_context import (
-    FunctionTool,
-    RawFunctionTool,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -24,48 +17,20 @@ from .tools import GeminiTool
 __all__ = ["create_tools_config"]
 
 
-def _function_tools_to_gemini(
-    fncs: dict[str, FunctionTool | RawFunctionTool],
-    *,
-    use_parameters_json_schema: bool = True,
-    tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
-) -> list[types.FunctionDeclaration]:
-    tools: list[types.FunctionDeclaration] = []
-    for fnc in fncs.values():
-        if is_raw_function_tool(fnc):
-            info = get_raw_function_info(fnc)
-            fnc_kwargs = {
-                "name": info.name,
-                "description": info.raw_schema.get("description", ""),
-            }
-            if use_parameters_json_schema:
-                fnc_kwargs["parameters_json_schema"] = info.raw_schema.get("parameters", {})
-            else:
-                # https://github.com/googleapis/python-genai/issues/1147
-                fnc_kwargs["parameters"] = types.Schema.from_json_schema(
-                    json_schema=types.JSONSchema.model_validate(
-                        info.raw_schema.get("parameters", {})
-                    )
-                )
-
-            if is_given(tool_behavior):
-                fnc_kwargs["behavior"] = tool_behavior
-            tools.append(types.FunctionDeclaration(**fnc_kwargs))
-
-        elif is_function_tool(fnc):
-            tools.append(_build_gemini_fnc(fnc, tool_behavior=tool_behavior))
-
-    return tools
-
-
 def create_tools_config(
-    tools: llm.ToolContext,
+    tool_ctx: llm.ToolContext,
     *,
+    tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
     _only_single_type: bool = False,
 ) -> list[types.Tool]:
     gemini_tools: list[types.Tool] = []
-    function_tools = _function_tools_to_gemini(tools.function_tools)
 
+    function_tools = [
+        types.FunctionDeclaration.model_validate(schema)
+        for schema in tool_ctx.parse_function_tools(
+            "google", tool_behavior=tool_behavior.value if tool_behavior else None
+        )
+    ]
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
@@ -73,7 +38,7 @@ def create_tools_config(
     if _only_single_type and gemini_tools:
         return gemini_tools
 
-    for tool in tools.provider_tools:
+    for tool in tool_ctx.provider_tools:
         if isinstance(tool, GeminiTool):
             gemini_tools.append(tool.to_tool_config())
 
@@ -107,22 +72,6 @@ def get_tool_results_for_realtime(
         if function_responses
         else None
     )
-
-
-def _build_gemini_fnc(
-    function_tool: FunctionTool, *, tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
-) -> types.FunctionDeclaration:
-    fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
-    json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
-
-    kwargs = {
-        "name": fnc["name"],
-        "description": fnc["description"],
-        "parameters": types.Schema.model_validate(json_schema) if json_schema else None,
-    }
-    if is_given(tool_behavior):
-        kwargs["behavior"] = tool_behavior
-    return types.FunctionDeclaration(**kwargs)
 
 
 def to_response_format(response_format: type | dict) -> types.SchemaUnion:
