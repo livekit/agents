@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from livekit.agents import llm
 from livekit.agents.log import logger
@@ -110,3 +110,42 @@ def _to_image_part(image: llm.ImageContent) -> dict[str, Any]:
         return {"file_data": {"file_uri": img.external_url, "mime_type": mime_type}}
 
     return {"inline_data": {"data": img.data_bytes, "mime_type": img.mime_type}}
+
+
+TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
+
+
+def to_fnc_ctx(
+    tool_ctx: llm.ToolContext,
+    *,
+    tool_behavior: TOOL_BEHAVIOR | None = None,
+) -> list[dict[str, Any]]:
+    tools: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.RawFunctionTool):
+            info = tool.info
+            schema = {
+                "name": info.name,
+                "description": info.raw_schema.get("description", ""),
+                "parameters_json_schema": info.raw_schema.get("parameters", {}),
+            }
+            if tool_behavior is not None:
+                schema["behavior"] = tool_behavior
+            tools.append(schema)
+
+        elif isinstance(tool, llm.FunctionTool):
+            from livekit.plugins.google.utils import _GeminiJsonSchema
+
+            fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
+
+            schema = {
+                "name": fnc["name"],
+                "description": fnc["description"],
+                "parameters": json_schema or None,
+            }
+            if tool_behavior is not None:
+                schema["behavior"] = tool_behavior
+            tools.append(schema)
+
+    return tools

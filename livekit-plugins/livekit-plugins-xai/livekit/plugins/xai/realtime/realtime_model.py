@@ -120,9 +120,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super().__init__(realtime_model)
         self._xai_model: RealtimeModel = realtime_model
 
-    def _create_tools_update_event(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | ProviderTool]
-    ) -> SessionUpdateEvent | dict:
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> SessionUpdateEvent | dict:
         event = super()._create_tools_update_event(tools)
 
         # inject supported Toolset

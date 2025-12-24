@@ -29,13 +29,7 @@ from ..log import logger
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
-from .tool_context import (
-    FunctionTool,
-    RawFunctionTool,
-    get_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from .tool_context import FunctionTool, RawFunctionTool
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -201,7 +195,7 @@ def build_legacy_openai_schema(
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
     model = function_arguments_to_pydantic_model(function_tool)
-    info = get_function_info(function_tool)
+    info = function_tool.info
     schema = model.model_json_schema()
 
     if internally_tagged:
@@ -227,7 +221,7 @@ def build_strict_openai_schema(
 ) -> dict[str, Any]:
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
-    info = get_function_info(function_tool)
+    info = function_tool.info
     schema = _strict.to_strict_json_schema(model)
 
     return {
@@ -377,7 +371,7 @@ def prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
     args_dict = from_json(json_arguments)
 
-    if is_function_tool(fnc):
+    if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
 
         # Function arguments with default values are treated as optional
@@ -399,7 +393,7 @@ def prepare_function_arguments(
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
-    elif is_raw_function_tool(fnc):
+    elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
         raw_fields = {

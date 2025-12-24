@@ -798,16 +798,15 @@ class RealtimeSession(  # noqa: F811
         if self.tools.function_tools:
             tools = []
             for name, f in self.tools.function_tools.items():
-                if llm.tool_context.is_function_tool(f):
-                    description = llm.tool_context.get_function_info(f).description
+                if isinstance(f, llm.FunctionTool):
+                    description = f.info.description
                     input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
                         "parameters"
                     ]
-                elif llm.tool_context.is_raw_function_tool(f):
-                    description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
-                        "description"
-                    )
-                    raw_schema = llm.tool_context.get_raw_function_info(f).raw_schema
+                elif isinstance(f, llm.RawFunctionTool):
+                    info = f.info
+                    description = info.raw_schema.get("description")
+                    raw_schema = info.raw_schema
                     # Safely access parameters with fallback
                     input_schema = raw_schema.get(
                         "parameters",
@@ -1716,9 +1715,7 @@ class RealtimeSession(  # noqa: F811
             return None
 
     # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)  # noqa: E501
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         """Replace the active tool set with tools and notify Sonic if necessary."""
         logger.debug(f"Updating tools: {tools}")
         self._tools = llm.ToolContext(tools)

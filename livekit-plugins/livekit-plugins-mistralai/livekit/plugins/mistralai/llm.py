@@ -11,9 +11,6 @@ from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, 
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
     ToolChoice,
     utils as llm_utils,
 )
@@ -24,7 +21,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given, shortuuid
-from livekit.plugins.openai.utils import to_fnc_ctx
 from mistralai import (
     ChatCompletionStreamRequestMessagesTypedDict,
     CompletionResponseStreamChoice,
@@ -73,7 +69,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -112,20 +108,21 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM,
+        llm_v: LLM,
         *,
         model: str | ChatModels,
         client: Mistral,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[llm.Tool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._client = client
-        self._llm = llm
+        self._llm = llm_v
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         # current function call that we're waiting for full completion (args are streamed)
@@ -134,7 +131,7 @@ class LLMStream(llm.LLMStream):
 
         try:
             messages, _ = self._chat_ctx.to_provider_format(format="mistralai")
-            tools = to_fnc_ctx(self._tools, strict=True)
+            tools = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             async_response = await self._client.chat.stream_async(
                 messages=cast(list[ChatCompletionStreamRequestMessagesTypedDict], messages),
