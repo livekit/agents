@@ -21,9 +21,9 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import Any, Callable, Literal, TypeVar, Union, cast, overload
+from typing import Any, Callable, Generic, Literal, TypeVar, Union, cast, overload
 
-from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
+from typing_extensions import NotRequired, Required, Self, TypedDict, TypeGuard
 
 from . import _provider_format
 
@@ -101,22 +101,6 @@ class FunctionToolInfo:
     flags: ToolFlag
 
 
-class FunctionTool(Tool):
-    """Wrapper for a function decorated with @function_tool"""
-
-    def __init__(self, func: Callable[..., Any], info: FunctionToolInfo) -> None:
-        self._func = func
-        self._info = info
-        functools.update_wrapper(self, func)
-
-    @property
-    def info(self) -> FunctionToolInfo:
-        return self._info
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self._func(*args, **kwargs)
-
-
 class RawFunctionDescription(TypedDict):
     """
     Represents the raw function schema format used in LLM function calling APIs.
@@ -140,20 +124,50 @@ class RawFunctionToolInfo:
     flags: ToolFlag
 
 
-class RawFunctionTool(Tool):
-    """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
+_InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
 
-    def __init__(self, func: Callable[..., Any], info: RawFunctionToolInfo) -> None:
+
+class _BaseFunctionTool(Tool, Generic[_InfoT]):
+    """Base class for function tool wrappers with descriptor support."""
+
+    def __init__(self, func: Callable[..., Any], info: _InfoT, instance: Any = None) -> None:
         self._func = func
-        self._info = info
+        self._info: _InfoT = info
+        self._instance = instance
         functools.update_wrapper(self, func)
 
     @property
-    def info(self) -> RawFunctionToolInfo:
+    def info(self) -> _InfoT:
         return self._info
 
+    def __get__(self, obj: Any, objtype: type | None = None) -> Self:
+        if obj is None:
+            return self
+
+        # bind the tool to an instance
+        bound_tool = self.__class__(self._func, self._info, instance=obj)
+        sig = inspect.signature(self._func)
+        # skip the instance parameter (e.g. usually the 'self')
+        params = list(sig.parameters.values())[1:]
+        bound_tool.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
+        return bound_tool
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self._instance is not None:
+            return self._func(self._instance, *args, **kwargs)
         return self._func(*args, **kwargs)
+
+
+class FunctionTool(_BaseFunctionTool[FunctionToolInfo]):
+    """Wrapper for a function decorated with @function_tool"""
+
+    pass
+
+
+class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo]):
+    """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
+
+    pass
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
