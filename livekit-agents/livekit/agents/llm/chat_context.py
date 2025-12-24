@@ -466,11 +466,16 @@ class ChatContext:
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
+    def to_provider_format(
+        self, format: Literal["vllm"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
 
     def to_provider_format(
         self,
-        format: Literal["openai", "google", "aws", "anthropic", "mistralai"] | str,
+        format: Literal["openai", "google", "aws", "anthropic", "mistralai", "vllm"] | str,
         *,
         inject_dummy_user_message: bool = True,
         **kwargs: Any,
@@ -495,6 +500,8 @@ class ChatContext:
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
             return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
+        elif format == "vllm":
+            return _provider_format.vllm.to_chat_ctx(self, **kwargs)
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
