@@ -16,16 +16,7 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
-from ..llm.tool_context import (
-    StopResponse,
-    ToolFlag,
-    _FunctionToolInfo,
-    _RawFunctionToolInfo,
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from ..llm.tool_context import FunctionToolInfo, RawFunctionToolInfo, StopResponse, ToolFlag
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -99,7 +90,7 @@ class _PreemptiveGeneration:
     user_message: llm.ChatMessage
     info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
-    tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
+    tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
 
@@ -293,7 +284,7 @@ class AgentActivity(RecognitionHooks):
     @property
     def tools(
         self,
-    ) -> list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool | mcp.MCPTool]:
+    ) -> list[llm.Tool | llm.Toolset]:
         return self._session.tools + self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
@@ -324,14 +315,12 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 
         if self._rt_session is not None:
-            await self._rt_session.update_tools(tools)
+            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
@@ -556,7 +545,7 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the chat_ctx")
 
             try:
-                await self._rt_session.update_tools(self.tools)
+                await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
             except llm.RealtimeError:
                 logger.exception("failed to update the tools")
 
@@ -855,17 +844,16 @@ class AgentActivity(RecognitionHooks):
         # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
         if on_enter_data := _OnEnterContextVar.get(None):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
-                filtered_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
+                filtered_tools: list[llm.Tool | llm.Toolset] = []
                 for tool in tools:
-                    info: _RawFunctionToolInfo | _FunctionToolInfo | None = None
-                    if is_raw_function_tool(tool):
-                        info = get_raw_function_info(tool)
-                    elif is_function_tool(tool):
-                        info = get_function_info(tool)
+                    info: RawFunctionToolInfo | FunctionToolInfo | None = None
+                    if isinstance(tool, (llm.RawFunctionTool, llm.FunctionTool)):
+                        info = tool.info
 
                     if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
                         continue
 
+                    # TODO(long): add IGNORE_ON_ENTER to ToolSet?
                     filtered_tools.append(tool)
 
                 tools = filtered_tools
@@ -1767,7 +1755,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
+        tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -1798,7 +1786,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool],
+        tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,

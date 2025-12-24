@@ -24,7 +24,7 @@ STTNode = Callable[
 LLMNode = Callable[
     [
         llm.ChatContext,
-        list[Union[llm.FunctionTool, llm.RawFunctionTool, llm.ProviderTool]],
+        list[llm.Tool],
         ModelSettings,
     ],
     Union[

@@ -24,7 +24,6 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.3.10",
-    "livekit-plugins-openai>=1.2.5",
     "mistralai>=1.9.11",
 ]
 
