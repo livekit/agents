@@ -362,7 +362,11 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
         api_version = self._opts.api_version
-        if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
+        if (
+            not api_version
+            and (self._opts.enable_affective_dialog or self._opts.proactivity)
+            and not self._opts.vertexai
+        ):
             api_version = "v1alpha"
 
         http_options = self._opts.http_options or types.HttpOptions(
@@ -506,9 +510,7 @@ class RealtimeSession(llm.RealtimeSession):
         # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool]
-    ) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_ctx = llm.ToolContext(tools)
         if self._tools == tool_ctx:
             return
@@ -874,7 +876,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(self._tools)
+        tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(

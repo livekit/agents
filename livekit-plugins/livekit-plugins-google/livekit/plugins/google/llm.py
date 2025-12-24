@@ -25,19 +25,7 @@ from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import (
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
-    ToolChoice,
-    utils as llm_utils,
-)
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -262,7 +250,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -292,10 +280,8 @@ class LLM(llm.LLM):
             elif tool_choice == "required":
                 tool_names = []
                 for tool in tools or []:
-                    if is_function_tool(tool):
-                        tool_names.append(get_function_info(tool).name)
-                    elif is_raw_function_tool(tool):
-                        tool_names.append(get_raw_function_info(tool).name)
+                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
+                        tool_names.append(tool.info.name)
 
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
@@ -404,20 +390,21 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM,
+        llm_v: LLM,
         *,
         client: Client,
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool | ProviderTool],
+        tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
-        self._llm: LLM = llm
+        self._llm: LLM = llm_v
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         retryable = True
