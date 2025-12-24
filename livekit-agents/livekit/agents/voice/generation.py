@@ -336,7 +336,8 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut: asyncio.Future[None]
+    first_frame_fut: asyncio.Future[float]
+    """Future that will be set with the timestamp of the first frame's capture"""
 
 
 def perform_audio_forwarding(
@@ -356,6 +357,7 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
+
     try:
         audio_output.resume()
         async for frame in tts_output:
@@ -379,10 +381,8 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
-            # set the first frame future if not already set
-            # (after completing the first frame)
             if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(None)
+                out.first_frame_fut.set_result(time.time())
 
         if resampler:
             for frame in resampler.flush():
