@@ -1257,7 +1257,7 @@ def _run_console(
 
 def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False) -> None:
     c: AgentsConsole | None = None
-    if args.devmode:
+    if args.devmode or not args.json_logs:
         c = AgentsConsole.get_instance()  # colored logs
 
     exit_triggered = False
@@ -1400,6 +1400,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             LogLevel,
             typer.Option(help="Set the log level", case_sensitive=False),
         ] = LogLevel.info,
+        json_logs: Annotated[bool, typer.Option(help="Use JSON logs in production mode")] = True,
         url: Annotated[
             Optional[str],  # noqa: UP007
             typer.Option(
@@ -1434,7 +1435,11 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _run_worker(
             server=server,
             args=proto.CliArgs(
-                log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
+                log_level=log_level.value,
+                json_logs=json_logs,
+                url=url,
+                api_key=api_key,
+                api_secret=api_secret,
             ),
         )
 
