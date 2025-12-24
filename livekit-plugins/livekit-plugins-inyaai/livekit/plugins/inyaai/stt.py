@@ -74,22 +74,27 @@ class STT(stt.STT):
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
 
         # Get API credentials from parameters or environment variables
-        self._api_key = api_key or os.environ.get("INYAAI_API_KEY")
-        self._organization_id = organization_id or os.environ.get("INYAAI_ORG_ID")
-        self._user_id = user_id or os.environ.get("INYAAI_USER_ID")
+        api_key_value = api_key or os.environ.get("INYAAI_API_KEY")
+        organization_id_value = organization_id or os.environ.get("INYAAI_ORG_ID")
+        user_id_value = user_id or os.environ.get("INYAAI_USER_ID")
 
-        if not self._api_key:
+        if not api_key_value:
             raise ValueError(
                 "InyaAI API key is required. Set it via api_key parameter or INYAAI_API_KEY environment variable."
             )
-        if not self._organization_id:
+        if not organization_id_value:
             raise ValueError(
                 "InyaAI Organization ID is required. Set it via organization_id parameter or INYAAI_ORG_ID environment variable."
             )
-        if not self._user_id:
+        if not user_id_value:
             raise ValueError(
                 "InyaAI User ID is required. Set it via user_id parameter or INYAAI_USER_ID environment variable."
             )
+
+        # After validation, we know these are strings
+        self._api_key: str = api_key_value
+        self._organization_id: str = organization_id_value
+        self._user_id: str = user_id_value
 
         self._base_url = base_url
         self._opts = _STTOptions(language=language)
