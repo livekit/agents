@@ -53,9 +53,11 @@ class _AsyncDuplex:
 
     async def aclose(self) -> None:
         try:
-            self._writer.close()
-            await self._writer.wait_closed()
-            self._sock.close()
+            if hasattr(self, "_writer") and self._writer is not None:
+                self._writer.close()
+                await self._writer.wait_closed()
+            if hasattr(self, "_sock") and self._sock is not None:
+                self._sock.close()
         except OSError as e:
             raise DuplexClosed() from e
 
