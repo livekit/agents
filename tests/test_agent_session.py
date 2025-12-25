@@ -69,7 +69,7 @@ SESSION_TIMEOUT = 60.0
 
 
 async def test_events_and_metrics() -> None:
-    speed = 5.0
+    speed = 2.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
