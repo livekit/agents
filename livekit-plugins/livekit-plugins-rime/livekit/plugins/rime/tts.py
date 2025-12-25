@@ -38,6 +38,7 @@ from typing import Literal
 from .langs import TTSLangs
 from .log import logger
 from .models import ArcanaVoices, TTSModels
+from urllib.parse import urlencode
 
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
@@ -170,6 +171,11 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> JSONSynthesizeStream:
+        return JSONSynthesizeStream(tts=self, conn_options=conn_options)
 
     def update_options(
         self,
@@ -321,3 +327,63 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
+
+
+class JSONSynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+        
+    def _build_ws_url(self) -> str:
+        params={
+            "modelId": self._opts.model,
+            "speaker": self._opts.speaker,
+            "audioFormat": "pcm",
+        }
+        if self._opts.model == "arcana":
+            arcana_opts = self._opts.arcana_options
+            assert arcana_opts is not None
+            if is_given(arcana_opts.repetition_penalty):
+                params["repetition_penalty"] = arcana_opts.repetition_penalty
+            if is_given(arcana_opts.temperature):
+                params["temperature"] = arcana_opts.temperature
+            if is_given(arcana_opts.top_p):
+                params["top_p"] = arcana_opts.top_p
+            if is_given(arcana_opts.max_tokens):
+                params["max_tokens"] = arcana_opts.max_tokens
+            if is_given(arcana_opts.lang):
+                params["lang"] = arcana_opts.lang
+            if is_given(arcana_opts.sample_rate):
+                params["samplingRate"] = arcana_opts.sample_rate
+        elif self._opts.model == "mistv2":
+            mistv2_opts = self._opts.mistv2_options
+            assert mistv2_opts is not None
+            if is_given(mistv2_opts.lang):
+                params["lang"] = mistv2_opts.lang
+            if is_given(mistv2_opts.sample_rate):
+                params["samplingRate"] = mistv2_opts.sample_rate
+            if is_given(mistv2_opts.speed_alpha):
+                params["speedAlpha"] = mistv2_opts.speed_alpha
+            if is_given(mistv2_opts.reduce_latency):
+                params["reduceLatency"] = mistv2_opts.reduce_latency
+            if is_given(mistv2_opts.pause_between_brackets):
+                params["pauseBetweenBrackets"] = mistv2_opts.pause_between_brackets
+            if is_given(mistv2_opts.phonemize_between_brackets):
+                params["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
+        return f"{self._tts._ws_json_url}?{urlencode(params)}"
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        format = "pcm"
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._tts.sample_rate,
+            num_channels=NUM_CHANNELS,
+            mime_type=f"audio/{format}",
+        )
+
+        async with self._tts._ensure_session().ws_connect(self._tts._ws_json_url) as ws:
+            self._ws = ws
+            send_task = asyncio.create_task(self._send_task(ws))
+            recv_task = asyncio.create_task(self._recv_task(ws, output_emitter))
