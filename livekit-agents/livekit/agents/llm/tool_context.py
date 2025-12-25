@@ -21,9 +21,9 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import Any, Callable, Generic, Literal, TypeVar, Union, cast, overload
+from typing import Any, Callable, Generic, Literal, TypeVar, Union, overload
 
-from typing_extensions import NotRequired, Required, Self, TypedDict, TypeGuard
+from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeGuard
 
 from . import _provider_format
 
@@ -125,12 +125,14 @@ class RawFunctionToolInfo:
 
 
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
+_P = ParamSpec("_P")
+_R = TypeVar("_R", bound=Awaitable[Any])
 
 
-class _BaseFunctionTool(Tool, Generic[_InfoT]):
+class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     """Base class for function tool wrappers with descriptor support."""
 
-    def __init__(self, func: Callable[..., Any], info: _InfoT, instance: Any = None) -> None:
+    def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
         self._func = func
         self._info: _InfoT = info
         self._instance = instance
@@ -152,35 +154,31 @@ class _BaseFunctionTool(Tool, Generic[_InfoT]):
         bound_tool.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
         return bound_tool
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         if self._instance is not None:
             return self._func(self._instance, *args, **kwargs)
         return self._func(*args, **kwargs)
 
 
-class FunctionTool(_BaseFunctionTool[FunctionToolInfo]):
+class FunctionTool(_BaseFunctionTool[FunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool"""
 
     pass
 
 
-class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo]):
+class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
 
     pass
 
 
-F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
-Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
-
-
 @overload
 def function_tool(
-    f: Raw_F,
+    f: Callable[_P, _R],
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
-) -> RawFunctionTool: ...
+) -> RawFunctionTool[_P, _R]: ...
 
 
 @overload
@@ -189,17 +187,17 @@ def function_tool(
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
-) -> Callable[[Raw_F], RawFunctionTool]: ...
+) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
 @overload
 def function_tool(
-    f: F,
+    f: Callable[_P, _R],
     *,
     name: str | None = None,
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
-) -> FunctionTool: ...
+) -> FunctionTool[_P, _R]: ...
 
 
 @overload
@@ -209,23 +207,25 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
-) -> Callable[[F], FunctionTool]: ...
+) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
 def function_tool(
-    f: F | Raw_F | None = None,
+    f: Callable[_P, _R] | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
     flags: ToolFlag = ToolFlag.NONE,
 ) -> (
-    FunctionTool
-    | RawFunctionTool
-    | Callable[[F], FunctionTool]
-    | Callable[[Raw_F], RawFunctionTool]
+    FunctionTool[_P, _R]
+    | RawFunctionTool[_P, _R]
+    | Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]
+    | Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]
 ):
-    def deco_raw(func: Raw_F) -> RawFunctionTool:
+    def deco_raw(
+        func: Callable[_P, _R],
+    ) -> RawFunctionTool[_P, _R]:
         assert raw_schema is not None
 
         if not raw_schema.get("name"):
@@ -238,7 +238,7 @@ def function_tool(
         info = RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"], flags=flags)
         return RawFunctionTool(func, info)
 
-    def deco_func(func: F) -> FunctionTool:
+    def deco_func(func: Callable[_P, _R]) -> FunctionTool[_P, _R]:
         from docstring_parser import parse_from_object
 
         docstring = parse_from_object(func)
@@ -250,7 +250,7 @@ def function_tool(
         return FunctionTool(func, info)
 
     if f is not None:
-        return deco_raw(cast(Raw_F, f)) if raw_schema is not None else deco_func(cast(F, f))
+        return deco_raw(f) if raw_schema is not None else deco_func(f)
 
     return deco_raw if raw_schema is not None else deco_func
 
