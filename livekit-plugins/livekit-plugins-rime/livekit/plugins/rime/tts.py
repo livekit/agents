@@ -52,6 +52,7 @@ RIME_WS_TEXT_URL = "wss://users.rime.ai/ws"  # ws_text
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
+    segment: NotGivenOr[str] = NOT_GIVEN 
     arcana_options: _ArcanaOptions | None = None
     mistv2_options: _Mistv2Options | None = None
 
@@ -74,6 +75,12 @@ class _Mistv2Options:
     reduce_latency: NotGivenOr[bool] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    # websocket specific
+    no_text_normalization: NotGivenOr[bool] = NOT_GIVEN 
+    inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN
+    save_oovs: NotGivenOr[bool] = NOT_GIVEN
+    
+    
 
 
 NUM_CHANNELS = 1
@@ -90,6 +97,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
+        segment: NotGivenOr[str] = NOT_GIVEN,
         # Arcana options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -101,6 +109,9 @@ class TTS(tts.TTS):
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN,
+        save_oovs: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -126,6 +137,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             speaker=speaker,
+            segment=segment,
         )
         if model == "arcana":
             self._opts.arcana_options = _ArcanaOptions(
@@ -144,6 +156,9 @@ class TTS(tts.TTS):
                 reduce_latency=reduce_latency,
                 pause_between_brackets=pause_between_brackets,
                 phonemize_between_brackets=phonemize_between_brackets,
+                no_text_normalization=no_text_normalization,
+                inline_speed_alpha=inline_speed_alpha,
+                save_oovs=save_oovs,
             )
         self._session = http_session
         self._base_url = base_url
@@ -197,6 +212,10 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         ws_text_url: NotGivenOr[str] = NOT_GIVEN,
         ws_json_url: NotGivenOr[str] = NOT_GIVEN,
+        segment: NotGivenOr[str] = NOT_GIVEN,
+        no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        save_oovs: NotGivenOr[bool] = NOT_GIVEN,
+        inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(base_url):
             self._base_url = base_url
@@ -204,6 +223,8 @@ class TTS(tts.TTS):
             self._ws_text_url = ws_text_url
         if is_given(ws_json_url):
             self._ws_json_url = ws_json_url
+        if is_given(segment):
+            self._opts.segment = segment
         if is_given(model):
             self._opts.model = model
             if model == "arcana" and self._opts.arcana_options is None:
@@ -241,6 +262,12 @@ class TTS(tts.TTS):
                 self._opts.mistv2_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
                 self._opts.mistv2_options.phonemize_between_brackets = phonemize_between_brackets
+            if is_given(no_text_normalization):
+                self._opts.mistv2_options.no_text_normalization = no_text_normalization
+            if is_given(inline_speed_alpha):
+                self._opts.mistv2_options.inline_speed_alpha = inline_speed_alpha
+            if is_given(save_oovs):
+                self._opts.mistv2_options.save_oovs = save_oovs
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -341,6 +368,8 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             "speaker": self._opts.speaker,
             "audioFormat": "pcm",
         }
+        if is_given(self._opts.segment):
+            params["segment"] = self._opts.segment
         if self._opts.model == "arcana":
             arcana_opts = self._opts.arcana_options
             assert arcana_opts is not None
@@ -371,6 +400,12 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
                 params["pauseBetweenBrackets"] = mistv2_opts.pause_between_brackets
             if is_given(mistv2_opts.phonemize_between_brackets):
                 params["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
+            if is_given(mistv2_opts.no_text_normalization):
+                params["noTextNormalization"] = mistv2_opts.no_text_normalization
+            if is_given(mistv2_opts.inline_speed_alpha):
+                params["inlineSpeedAlpha"] = mistv2_opts.inline_speed_alpha
+            if is_given(mistv2_opts.save_oovs):
+                params["saveOovs"] = mistv2_opts.save_oovs
         return f"{self._tts._ws_json_url}?{urlencode(params)}"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -382,8 +417,8 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             num_channels=NUM_CHANNELS,
             mime_type=f"audio/{format}",
         )
-
-        async with self._tts._ensure_session().ws_connect(self._tts._ws_json_url) as ws:
+        ws_url = self._build_ws_url()
+        async with self._tts._ensure_session().ws_connect(ws_url) as ws:
             self._ws = ws
             send_task = asyncio.create_task(self._send_task(ws))
             recv_task = asyncio.create_task(self._recv_task(ws, output_emitter))
