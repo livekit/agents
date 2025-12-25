@@ -34,7 +34,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-
+from typing import Literal
 from .langs import TTSLangs
 from .log import logger
 from .models import ArcanaVoices, TTSModels
@@ -42,7 +42,9 @@ from .models import ArcanaVoices, TTSModels
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
 MISTV2_MODEL_TIMEOUT = 30
-RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
+RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"  # http
+RIME_WS_JSON_URL = "wss://users.rime.ai/ws2"  # ws_json
+RIME_WS_TEXT_URL = "wss://users.rime.ai/ws"  # ws_text
 
 
 @dataclass
@@ -81,6 +83,9 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: str = RIME_BASE_URL,
+        ws_text_url: str = RIME_WS_TEXT_URL,
+        ws_json_url: str = RIME_WS_JSON_URL,
+        protocol: Literal["http", "ws_json", "ws_text"] = "http",
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
@@ -100,7 +105,7 @@ class TTS(tts.TTS):
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=False,
+                streaming=protocol != "http",
             ),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
@@ -141,6 +146,9 @@ class TTS(tts.TTS):
             )
         self._session = http_session
         self._base_url = base_url
+        self._ws_text_url = ws_text_url
+        self._ws_json_url = ws_json_url
+        self._protocol = protocol
 
         self._total_timeout = ARCANA_MODEL_TIMEOUT if model == "arcana" else MISTV2_MODEL_TIMEOUT
 
@@ -181,12 +189,17 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
+        ws_text_url: NotGivenOr[str] = NOT_GIVEN,
+        ws_json_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(base_url):
             self._base_url = base_url
+        if is_given(ws_text_url):
+            self._ws_text_url = ws_text_url
+        if is_given(ws_json_url):
+            self._ws_json_url = ws_json_url
         if is_given(model):
             self._opts.model = model
-
             if model == "arcana" and self._opts.arcana_options is None:
                 self._opts.arcana_options = _ArcanaOptions()
             elif model == "mistv2" and self._opts.mistv2_options is None:
