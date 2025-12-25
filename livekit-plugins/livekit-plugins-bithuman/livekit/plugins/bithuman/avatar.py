@@ -451,9 +451,18 @@ class AvatarSession:
         if utils.is_given(self._avatar_id):
             form_data.add_field("avatar_id", self._avatar_id)
 
-        # Authorization header - support both Bearer token and api-secret formats
+        # Authorization header for custom endpoints uses api_token (Bearer token format)
+        # Note: api_token is different from api_secret - token is for direct API access,
+        # while secret is for BitHuman's authentication service
+        auth_token = self._api_token or self._api_secret
+        if auth_token is None:
+            raise BitHumanException(
+                "api_token or api_secret is required for custom endpoint requests. "
+                "Set BITHUMAN_API_TOKEN or BITHUMAN_API_SECRET environment variable."
+            )
+
         headers = {
-            "Authorization": f"Bearer {self._api_secret}",
+            "Authorization": f"Bearer {auth_token}",
         }
 
         await self._send_request_with_retry(
