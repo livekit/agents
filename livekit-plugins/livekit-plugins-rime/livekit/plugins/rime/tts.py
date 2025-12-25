@@ -52,7 +52,7 @@ RIME_WS_TEXT_URL = "wss://users.rime.ai/ws"  # ws_text
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
-    segment: NotGivenOr[str] = NOT_GIVEN 
+    segment: NotGivenOr[str] = NOT_GIVEN
     arcana_options: _ArcanaOptions | None = None
     mistv2_options: _Mistv2Options | None = None
 
@@ -76,11 +76,9 @@ class _Mistv2Options:
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     # websocket specific
-    no_text_normalization: NotGivenOr[bool] = NOT_GIVEN 
+    no_text_normalization: NotGivenOr[bool] = NOT_GIVEN
     inline_speed_alpha: NotGivenOr[str] = NOT_GIVEN
     save_oovs: NotGivenOr[bool] = NOT_GIVEN
-    
-    
 
 
 NUM_CHANNELS = 1
@@ -361,9 +359,9 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        
+
     def _build_ws_url(self) -> str:
-        params={
+        params = {
             "modelId": self._opts.model,
             "speaker": self._opts.speaker,
             "audioFormat": "pcm",
