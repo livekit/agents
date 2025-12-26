@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 
 from .log import logger
 from .models import ChatModels
@@ -204,6 +205,7 @@ class LLM(llm.LLM):
             project=gcp_project,
             location=gcp_location,
         )
+        self._prewarm_task: asyncio.Task[None] | None = None
         # Store thought_signatures for Gemini 3 multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
 
@@ -217,6 +219,32 @@ class LLM(llm.LLM):
             return "Vertex AI"
         else:
             return "Gemini"
+
+    def prewarm(self) -> None:
+        if self._prewarm_task and self._prewarm_task.done() is False:
+            self._prewarm_task.cancel()
+
+        async def _prewarm() -> None:
+            try:
+                chat_ctx = llm.ChatContext()
+                chat_ctx.add_message(role="user", content=["hi"])
+                turns_dict, _ = chat_ctx.to_provider_format(format="google")
+                turns = [types.Content.model_validate(turn) for turn in turns_dict]
+
+                stream = await self._client.aio.models.generate_content_stream(
+                    model=self._opts.model,
+                    contents=cast(types.ContentListUnion, turns),
+                )
+                async for _ in stream:
+                    pass
+            except Exception:
+                pass
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        if self._prewarm_task:
+            await aio.gracefully_cancel(self._prewarm_task)
 
     def chat(
         self,
