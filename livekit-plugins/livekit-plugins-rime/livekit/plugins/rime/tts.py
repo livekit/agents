@@ -19,6 +19,7 @@ import os
 import json
 import base64
 from dataclasses import dataclass, replace
+from livekit.agents.voice.io import TimedString
 
 import aiohttp
 
@@ -183,7 +184,10 @@ class TTS(tts.TTS):
         return self._session
 
     def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
@@ -326,7 +330,8 @@ class ChunkedStream(tts.ChunkedStream):
                 },
                 json=payload,
                 timeout=aiohttp.ClientTimeout(
-                    total=self._tts._total_timeout, sock_connect=self._conn_options.timeout
+                    total=self._tts._total_timeout,
+                    sock_connect=self._conn_options.timeout,
                 ),
             ) as resp:
                 resp.raise_for_status()
@@ -362,6 +367,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._input_complete = asyncio.Event()
 
     def _build_ws_url(self) -> str:
         params = {
@@ -408,19 +414,18 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             if is_given(mistv2_opts.save_oovs):
                 params["saveOovs"] = mistv2_opts.save_oovs
         return f"{self._tts._ws_json_url}?{urlencode(params)}"
-    
-    
-    async def clear_buffer(self) -> None:  
-        """Send clear operation to discard buffered text"""  
-        if self._ws and not self._ws.closed:  
-            await self._ws.send_str(json.dumps({"operation": "clear"})) 
-            
-    async def aclose(self) -> None:  
-        """Close the stream and send EOS if needed"""  
-        if self._ws and not self._ws.closed:  
-            await self._ws.send_str(json.dumps({"operation": "eos"}))  
-        await super().aclose() 
-    
+
+    async def clear_buffer(self) -> None:
+        """Send clear operation to discard buffered text"""
+        if self._ws and not self._ws.closed:
+            await self._ws.send_str(json.dumps({"operation": "clear"}))
+
+    async def aclose(self) -> None:
+        """Close the stream and send EOS if needed"""
+        if self._ws and not self._ws.closed:
+            await self._ws.send_str(json.dumps({"operation": "eos"}))
+        await super().aclose()
+
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
             async for input_data in self._input_ch:
@@ -431,56 +436,85 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             logger.error("Rime WebSocket send task failed: %s", e)
             raise APIConnectionError(f"Send task failed: {e}") from e
-        
-        
-    async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse, output_emitter: tts.AudioEmitter) -> None:
+        finally:
+            self._input_complete.set()
+
+    async def _recv_task(
+        self, ws: aiohttp.ClientWebSocketResponse, output_emitter: tts.AudioEmitter
+    ) -> None:
+        segment_started = False
+
         while True:
-            msg = await ws.receive()
+            try:
+                # Use timeout to detect completion - 2 seconds after input is complete
+                if self._input_complete.is_set():
+                    timeout = 2.0
+                else:
+                    timeout = self._conn_options.timeout
+
+                msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
+            except asyncio.TimeoutError:
+                # If input is complete and we get timeout, synthesis is done
+                if self._input_complete.is_set():
+                    if segment_started:
+                        output_emitter.end_segment()
+                    output_emitter.end_input()
+                    break
+                continue
+
             if msg.type in (
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                raise APIStatusError("Rime WebSocket connection closed unexpectedly")
+                if segment_started:
+                    output_emitter.end_segment()
+                output_emitter.end_input()
+                return
+
             if msg.type != aiohttp.WSMsgType.TEXT:
                 logger.warning("Unexpected Rime message type: %s", msg.type)
                 continue
-            
+
             try:
                 data = json.loads(msg.data)
             except json.JSONDecodeError:
                 logger.warning("Invalid JSON from Rime: %s", msg.data)
                 continue
+
             if data.get("type") == "chunk":
+                if not segment_started:
+                    segment_id = data.get("contextId") or utils.shortuuid()
+                    output_emitter.start_segment(segment_id=segment_id)
+                    segment_started = True
                 audio_data = base64.b64decode(data["data"])
                 output_emitter.push(audio_data)
             elif data.get("type") == "timestamps":
-                word_timestamps = data.get("word_timestamps", {})  
-                words = word_timestamps.get("words", [])  
-                starts = word_timestamps.get("start", [])  
-                ends = word_timestamps.get("end", []) 
-                
+                word_timestamps = data.get("word_timestamps", {})
+                words = word_timestamps.get("words", [])
+                starts = word_timestamps.get("start", [])
+                ends = word_timestamps.get("end", [])
+
                 timed_words = []
                 for word, start, end in zip(words, starts, ends):
-                    timed_words.append(tts.TimedString(  
-                        text=word,  
-                        start_time=start,  
-                        end_time=end  
-                    ))
-                if timed_words:  
-                    output_emitter.push_timed_transcript(timed_words) 
-            elif data.get("type") == "error":  
-                logger.error(f"Rime error: {data.get('message')}")  
-                
- 
+                    timed_words.append(TimedString(text=word, start_time=start, end_time=end))
+                if timed_words:
+                    output_emitter.push_timed_transcript(timed_words)
+            elif data.get("type") == "error":
+                logger.error(f"Rime error: {data.get('message')}")
+                if segment_started:
+                    output_emitter.end_segment()
+                output_emitter.end_input()
+                raise APIStatusError(f"Rime error: {data.get('message')}")
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
-        format = "pcm"
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=NUM_CHANNELS,
-            mime_type=f"audio/{format}",
+            mime_type="audio/pcm",
+            stream=True,
         )
         ws_url = self._build_ws_url()
 
