@@ -371,8 +371,8 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         self._model_timeout = tts._total_timeout
         if self._opts.model == "arcana":
             raise ValueError(
-                "Arcana model is not supported for WebSocket streaming. "
-                "Use protocol='http' for Arcana model or switch to 'mistv2' model."
+                "The Arcana model is not supported for JSON WebSocket streaming. Please switch to the 'mistv2' model."
+
             )
 
     def _build_ws_url(self) -> str:
@@ -440,6 +440,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
                 # Use timeout to detect completion - 2 seconds after input is complete
                 if self._input_complete.is_set():
                     timeout = self._model_timeout
+                else:
                     timeout = self._conn_options.timeout
 
                 msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
