@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import json
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -406,6 +407,28 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
                 params["saveOovs"] = mistv2_opts.save_oovs
         return f"{self._tts._ws_json_url}?{urlencode(params)}"
 
+    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        try:
+            async for input_data in self._input_ch:
+                if isinstance(input_data, str):
+                    await ws.send_str(json.dumps({"text": input_data}))
+                elif isinstance(input_data, self._FlushSentinel):
+                    await ws.send_str(json.dumps({"operation": "flush"}))
+        except Exception as e:
+            logger.error("Rime WebSocket send task failed: %s", e)
+            raise APIConnectionError(f"Send task failed: {e}") from e
+        
+    async def clear_buffer(self) -> None:  
+        """Send clear operation to discard buffered text"""  
+        if self._ws and not self._ws.closed:  
+            await self._ws.send_str(json.dumps({"operation": "clear"})) 
+            
+    async def aclose(self) -> None:  
+        """Close the stream and send EOS if needed"""  
+        if self._ws and not self._ws.closed:  
+            await self._ws.send_str(json.dumps({"operation": "eos"}))  
+        await super().aclose() 
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         format = "pcm"
@@ -416,7 +439,26 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             mime_type=f"audio/{format}",
         )
         ws_url = self._build_ws_url()
-        async with self._tts._ensure_session().ws_connect(ws_url) as ws:
-            self._ws = ws
-            send_task = asyncio.create_task(self._send_task(ws))
-            recv_task = asyncio.create_task(self._recv_task(ws, output_emitter))
+
+        send_task = None
+        recv_task = None
+
+        try:
+            async with self._tts._ensure_session().ws_connect(
+                ws_url,
+                headers={"Authorization": f"Bearer {self._tts._api_key}"},
+                timeout=aiohttp.ClientTimeout(total=self._tts._total_timeout),
+            ) as ws:
+                self._ws = ws
+                send_task = asyncio.create_task(self._send_task(ws))
+                recv_task = asyncio.create_task(self._recv_task(ws, output_emitter))
+                await asyncio.gather(send_task, recv_task)
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientError as e:
+            raise APIConnectionError() from e
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            if send_task is not None or recv_task is not None:
+                await utils.aio.gracefully_cancel(send_task, recv_task)
