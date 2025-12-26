@@ -48,6 +48,7 @@ from .events import (
     AgentFalseInterruptionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
+    FunctionToolsExecutingEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -1933,6 +1934,10 @@ class AgentActivity(RecognitionHooks):
         # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
+            self._session.emit(
+                "function_tools_executing",
+                FunctionToolsExecutingEvent(function_call=fnc_call),
+            )
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
@@ -2405,6 +2410,10 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx.items.append(fnc_call)
             self._session._tool_items_added([fnc_call])
+            self._session.emit(
+                "function_tools_executing",
+                FunctionToolsExecutingEvent(function_call=fnc_call),
+            )
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
