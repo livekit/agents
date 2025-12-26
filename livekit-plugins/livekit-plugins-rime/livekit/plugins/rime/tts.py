@@ -369,6 +369,11 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._input_complete = asyncio.Event()
         self._model_timeout = tts._total_timeout
+        if self._opts.model == "arcana":
+            raise ValueError(
+                "Arcana model is not supported for WebSocket streaming. "
+                "Use protocol='http' for Arcana model or switch to 'mistv2' model."
+            )
 
     def _build_ws_url(self) -> str:
         params = {
@@ -378,21 +383,6 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         }
         if is_given(self._opts.segment):
             params["segment"] = self._opts.segment
-        if self._opts.model == "arcana":
-            arcana_opts = self._opts.arcana_options
-            assert arcana_opts is not None
-            if is_given(arcana_opts.repetition_penalty):
-                params["repetition_penalty"] = arcana_opts.repetition_penalty
-            if is_given(arcana_opts.temperature):
-                params["temperature"] = arcana_opts.temperature
-            if is_given(arcana_opts.top_p):
-                params["top_p"] = arcana_opts.top_p
-            if is_given(arcana_opts.max_tokens):
-                params["max_tokens"] = arcana_opts.max_tokens
-            if is_given(arcana_opts.lang):
-                params["lang"] = arcana_opts.lang
-            if is_given(arcana_opts.sample_rate):
-                params["samplingRate"] = arcana_opts.sample_rate
         elif self._opts.model == "mistv2":
             mistv2_opts = self._opts.mistv2_options
             assert mistv2_opts is not None
