@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+import base64
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -406,7 +407,19 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             if is_given(mistv2_opts.save_oovs):
                 params["saveOovs"] = mistv2_opts.save_oovs
         return f"{self._tts._ws_json_url}?{urlencode(params)}"
-
+    
+    
+    async def clear_buffer(self) -> None:  
+        """Send clear operation to discard buffered text"""  
+        if self._ws and not self._ws.closed:  
+            await self._ws.send_str(json.dumps({"operation": "clear"})) 
+            
+    async def aclose(self) -> None:  
+        """Close the stream and send EOS if needed"""  
+        if self._ws and not self._ws.closed:  
+            await self._ws.send_str(json.dumps({"operation": "eos"}))  
+        await super().aclose() 
+    
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
             async for input_data in self._input_ch:
@@ -418,17 +431,47 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             logger.error("Rime WebSocket send task failed: %s", e)
             raise APIConnectionError(f"Send task failed: {e}") from e
         
-    async def clear_buffer(self) -> None:  
-        """Send clear operation to discard buffered text"""  
-        if self._ws and not self._ws.closed:  
-            await self._ws.send_str(json.dumps({"operation": "clear"})) 
+        
+    async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse, output_emitter: tts.AudioEmitter) -> None:
+        while True:
+            msg = await ws.receive()
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                raise APIStatusError("Rime WebSocket connection closed unexpectedly")
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                logger.warning("Unexpected Rime message type: %s", msg.type)
+                continue
             
-    async def aclose(self) -> None:  
-        """Close the stream and send EOS if needed"""  
-        if self._ws and not self._ws.closed:  
-            await self._ws.send_str(json.dumps({"operation": "eos"}))  
-        await super().aclose() 
-
+            try:
+                data = json.loads(msg.data)
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON from Rime: %s", msg.data)
+                continue
+            if data.get("type") == "audio":
+                audio_data = base64.b64decode(data["data"])
+                output_emitter.push(audio_data)
+            elif data.get("type") == "timestamps":
+                word_timestamps = data.get("word_timestamps", {})  
+                words = word_timestamps.get("words", [])  
+                starts = word_timestamps.get("start", [])  
+                ends = word_timestamps.get("end", []) 
+                
+                timed_words = []
+                for word, start, end in zip(words, starts, ends):
+                    timed_words.append(tts.TimedString(  
+                        text=word,  
+                        start_time=start,  
+                        end_time=end  
+                    ))
+                if timed_words:  
+                    output_emitter.push_timed_transcript(timed_words) 
+            elif data.get("type") == "error":  
+                logger.error(f"Rime error: {data.get('message')}")  
+                
+ 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         format = "pcm"
