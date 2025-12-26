@@ -3,7 +3,15 @@ from __future__ import annotations
 import logging
 
 from ..log import logger as default_logger
-from .base import AgentMetrics, EOUMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
+from .base import (
+    AgentMetrics,
+    EOUMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+    VideoAvatarMetrics,
+)
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:
@@ -81,5 +89,15 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             extra=metadata
             | {
                 "audio_duration": round(metrics.audio_duration, 2),
+            },
+        )
+    elif isinstance(metrics, VideoAvatarMetrics):
+        logger.info(
+            "VideoAvatar metrics",
+            extra=metadata
+            | {
+                "full_latency_ms": round(metrics.full_latency * 1000, 2),
+                "server_latency_ms": round(metrics.server_latency * 1000, 2),
+                "pipeline_latency_ms": round(metrics.video_pipeline_latency * 1000, 2),
             },
         )
