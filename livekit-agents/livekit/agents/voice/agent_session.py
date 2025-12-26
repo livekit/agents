@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import pickle
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Literal,
     Optional,
@@ -840,6 +842,37 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
+    def get_state(self) -> dict[str, Any]:
+        tool_ctx = llm.ToolContext(self.tools)
+        return {
+            "tools": list(tool_ctx.function_tools.keys()),
+            "chat_ctx": self._chat_ctx.to_dict(
+                exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+            ),
+            "agent": self._agent,
+        }
+
+    async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
+        state_dict = pickle.loads(state) if isinstance(state, bytes) else state
+
+        tool_ctx = llm.ToolContext(self.tools)
+        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
+        for name in state_dict["tools"]:
+            # TODO: support provider tools
+            if name in tool_ctx.function_tools:
+                valid_tools.append(tool_ctx.function_tools[name])
+            else:
+                logger.warning("tool not found when unpickling", extra={"missing_tool": name})
+
+        self._tools = valid_tools
+        self._chat_ctx = llm.ChatContext.from_dict(state_dict["chat_ctx"])
+
+        if self._started:
+            # only allow rehydrate session that not started yet?
+            await self._update_activity(state_dict["agent"])
+        else:
+            await self.start(agent=state_dict["agent"])
+
     def update_options(
         self,
         *,
@@ -1027,6 +1060,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._activity_lock:
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
+            is_handoff = self._activity is not None or not agent.is_rehydrated()
 
             if new_activity == "start":
                 previous_agent = self._activity.agent if self._activity else None
@@ -1060,17 +1094,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._next_activity = None
 
             run_state = self._global_run_state
-            handoff_item = AgentHandoff(
-                old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
-                new_agent_id=self._activity.agent.id,
-            )
-            if run_state:
-                run_state._agent_handoff(
-                    item=handoff_item,
-                    old_agent=previous_activity_v.agent if previous_activity_v else None,
-                    new_agent=self._activity.agent,
+            if is_handoff:
+                handoff_item = AgentHandoff(
+                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    new_agent_id=self._activity.agent.id,
                 )
-            self._chat_ctx.insert(handoff_item)
+                if run_state:
+                    run_state._agent_handoff(
+                        item=handoff_item,
+                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        new_agent=self._activity.agent,
+                    )
+                self._chat_ctx.insert(handoff_item)
 
             if new_activity == "start":
                 await self._activity.start()
@@ -1078,8 +1113,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._activity.resume()
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
-        if wait_on_enter:
-            assert self._activity._on_enter_task is not None
+        if wait_on_enter and self._activity._on_enter_task:
             await asyncio.shield(self._activity._on_enter_task)
 
     @utils.log_exceptions(logger=logger)

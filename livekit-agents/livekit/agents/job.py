@@ -22,6 +22,7 @@ import inspect
 import json
 import logging
 import multiprocessing as mp
+import pickle
 import tempfile
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .voice.agent_session import AgentSession
     from .voice.report import SessionReport
+    from .voice.run_result import RunResult
 
 
 def get_job_context() -> JobContext:
@@ -95,6 +97,7 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    sms_job: bool
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -127,6 +130,34 @@ class _ContextLogFieldsFilter(logging.Filter):
                 setattr(record, key, value)
 
         return True
+
+
+class TextMessageContext:
+    def __init__(self, *, text: str, session_data: bytes | None = None) -> None:
+        self._text = text
+        self._result: RunResult | None = None
+        self._session_data = session_data
+
+    async def send_result(self, result: RunResult) -> None:
+        # simulate sending result
+        self._result = result
+
+    async def save_session(self, session: AgentSession) -> None:
+        # simulate saving session
+        state = session.get_state()
+        self._session_data = pickle.dumps(state)
+
+    @property
+    def session_data(self) -> bytes | None:
+        return self._session_data
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def result(self) -> RunResult | None:
+        return self._result
 
 
 class JobContext:
@@ -239,6 +270,9 @@ class JobContext:
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
+
+    def is_sms_job(self) -> bool:
+        return self._info.sms_job
 
     @property
     def session_directory(self) -> Path:

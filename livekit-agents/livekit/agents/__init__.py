@@ -34,6 +34,7 @@ from .job import (
     JobExecutorType,
     JobProcess,
     JobRequest,
+    TextMessageContext,
     get_job_context,
 )
 from .llm.chat_context import (
@@ -121,6 +122,7 @@ __all__ = [
     "JobProcess",
     "JobContext",
     "JobRequest",
+    "TextMessageContext",
     "get_job_context",
     "JobExecutorType",
     "AutoSubscribe",
