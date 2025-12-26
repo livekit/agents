@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import math
 import time
 from collections.abc import AsyncIterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -29,6 +30,7 @@ from ..job import JobContext, get_job_context
 from ..llm import AgentHandoff, ChatContext
 from ..log import logger
 from ..telemetry import trace_types, tracer
+from ..tokenize.basic import split_words
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -83,6 +85,9 @@ class AgentSessionOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
+    backoff_seconds: float
+    dynamic_interruption_sensitivity: bool
+    interruption_reset_window: float
     false_interruption_timeout: float | None
     resume_false_interruption: bool
     min_consecutive_speech_delay: float
@@ -90,6 +95,10 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    min_interruption_duration_steps: tuple[float, ...]
+    backoff_seconds_steps: tuple[float, ...]
+    ignored_interrupt_transcripts: tuple[tuple[str, ...], ...]
+    cancel_pending_speeches_on_new_turn: bool
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -153,6 +162,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
+        backoff_seconds: float = 0.0,
+        dynamic_interruption_sensitivity: bool = False,
+        interruption_reset_window: float = 30.0,
+        min_interruption_duration_steps: Sequence[float] | None = None,
+        backoff_seconds_steps: Sequence[float] | None = None,
+        ignored_interrupt_phrases: Sequence[str] | None = None,
+        cancel_pending_speeches_on_new_turn: bool = False,
         false_interruption_timeout: float | None = 2.0,
         resume_false_interruption: bool = True,
         min_consecutive_speech_delay: float = 0.0,
@@ -225,6 +241,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
+            backoff_seconds (float): Duration to block assistant speech after a user interruption.
+                Default ``0.0`` (disabled).
+            dynamic_interruption_sensitivity (bool): When ``True``, dynamically adjust interruption
+                sensitivity based on recent interruptions. Default ``False``.
+            interruption_reset_window (float): Time window in seconds used to reset the dynamic
+                interruption sensitivity counters. Default ``30.0`` s.
+            min_interruption_duration_steps (Sequence[float] | None): Optional step schedule for
+                ``min_interruption_duration`` when dynamic sensitivity is enabled.
+            backoff_seconds_steps (Sequence[float] | None): Optional step schedule for ``backoff_seconds``
+                when dynamic sensitivity is enabled.
+            ignored_interrupt_phrases (Sequence[str] | None): Phrases that should be ignored when they
+                interrupt the agent mid-speech in false-interruption mode. Default ``None``.
+            cancel_pending_speeches_on_new_turn (bool): When ``True``, cancel queued speeches when a new
+                user turn is detected. Default ``False``.
             false_interruption_timeout (float, optional): If set, emit an
                 `agent_false_interruption` event after this amount of time if
                 the user is silent and no user transcript is detected after
@@ -268,6 +298,40 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._video_sampler = video_sampler
 
+        min_interruption_duration = max(0.0, float(min_interruption_duration))
+        backoff_seconds = max(0.0, float(backoff_seconds))
+        interruption_reset_window = max(0.0, float(interruption_reset_window))
+
+        def _normalize_steps(
+            steps: Sequence[float] | None, *, fallback: float
+        ) -> tuple[float, ...]:
+            if steps is None:
+                return (max(0.0, float(fallback)),)
+
+            normalized: list[float] = []
+            for step in steps:
+                try:
+                    numeric = float(step)
+                except (TypeError, ValueError):
+                    continue
+                if math.isnan(numeric):
+                    continue
+                normalized.append(max(0.0, numeric))
+
+            if not normalized:
+                normalized = [max(0.0, float(fallback))]
+
+            return tuple(normalized)
+
+        mid_steps = _normalize_steps(
+            min_interruption_duration_steps, fallback=min_interruption_duration
+        )
+        bos_steps = _normalize_steps(backoff_seconds_steps, fallback=backoff_seconds)
+
+        normalized_ignored_transcripts = self._normalize_ignored_transcripts(
+            ignored_interrupt_phrases
+        )
+
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
@@ -279,6 +343,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            backoff_seconds=backoff_seconds,
+            dynamic_interruption_sensitivity=dynamic_interruption_sensitivity,
+            interruption_reset_window=interruption_reset_window,
             false_interruption_timeout=false_interruption_timeout,
             resume_false_interruption=resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
@@ -292,6 +359,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            min_interruption_duration_steps=mid_steps,
+            backoff_seconds_steps=bos_steps,
+            ignored_interrupt_transcripts=normalized_ignored_transcripts,
+            cancel_pending_speeches_on_new_turn=cancel_pending_speeches_on_new_turn,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -428,6 +499,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
+
+    @staticmethod
+    def _normalize_ignored_transcripts(
+        phrases: Sequence[str] | None,
+    ) -> tuple[tuple[str, ...], ...]:
+        if not phrases:
+            return ()
+
+        normalized: list[tuple[str, ...]] = []
+        for phrase in phrases:
+            if not phrase:
+                continue
+
+            tokens = tuple(
+                word.lower()
+                for word, _, _ in split_words(
+                    phrase, ignore_punctuation=True, split_character=True
+                )
+                if word
+            )
+            if tokens:
+                normalized.append(tokens)
+
+        return tuple(normalized)
 
     def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():

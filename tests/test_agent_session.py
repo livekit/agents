@@ -370,6 +370,174 @@ async def test_interruption_by_text_input() -> None:
     assert chat_ctx_items[4].text_content == "Ok, I'll stop now."
 
 
+async def test_interruption_backoff_delays_next_speech() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.", ttft=0.0, duration=0.0)
+    actions.add_tts(10.0, ttfb=0.0, duration=0.0)  # playout starts at 3.0s
+    actions.add_user_speech(5.0, 6.0, "Stop!", stt_delay=0.2)
+    actions.add_llm("Ok.", ttft=0.0, duration=0.0)
+    actions.add_tts(1.0, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"backoff_seconds": 2.0 / speed},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    speaking_events = [ev for ev in agent_state_events if ev.new_state == "speaking"]
+    assert len(speaking_events) >= 2
+    check_timestamp(speaking_events[-1].created_at - t_origin, 7.5, speed_factor=speed)
+
+
+async def test_dynamic_min_interruption_duration_steps_prevent_repeat_interruptions() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.", ttft=0.0, duration=0.0)
+    actions.add_tts(10.0, ttfb=0.0, duration=0.0)  # playout starts at 3.0s
+    actions.add_user_speech(5.0, 5.6, "Stop!", stt_delay=0.2)
+    actions.add_llm("Ok.", ttft=0.0, duration=0.0)
+    actions.add_tts(10.0, ttfb=0.0, duration=0.0)
+    actions.add_user_speech(8.0, 8.6, "Wait", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={
+            "dynamic_interruption_sensitivity": True,
+            "min_interruption_duration_steps": [0.2 / speed, 1.0 / speed],
+        },
+    )
+    agent = MyAgent()
+
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 2
+    assert playback_finished_events[0].interrupted is True
+    assert playback_finished_events[1].interrupted is False
+    check_timestamp(playback_finished_events[1].playback_position, 10.0, speed_factor=speed)
+
+
+async def test_dynamic_backoff_seconds_steps_increase_delay() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.", ttft=0.0, duration=0.0)
+    actions.add_tts(10.0, ttfb=0.0, duration=0.0)  # playout starts at 3.0s
+    actions.add_user_speech(5.0, 6.0, "Stop!", stt_delay=0.2)
+    actions.add_llm("Ok.", ttft=0.0, duration=0.0)
+    actions.add_tts(10.0, ttfb=0.0, duration=0.0)
+    actions.add_user_speech(10.0, 11.0, "Stop again!", stt_delay=0.2)
+    actions.add_llm("Ok again.", ttft=0.0, duration=0.0)
+    actions.add_tts(1.0, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={
+            "dynamic_interruption_sensitivity": True,
+            "backoff_seconds_steps": [2.0 / speed, 4.0 / speed],
+        },
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    speaking_events = [ev for ev in agent_state_events if ev.new_state == "speaking"]
+    assert len(speaking_events) >= 3
+    check_timestamp(speaking_events[0].created_at - t_origin, 3.0, speed_factor=speed)
+    check_timestamp(speaking_events[1].created_at - t_origin, 7.5, speed_factor=speed)
+    check_timestamp(speaking_events[2].created_at - t_origin, 14.5, speed_factor=speed)
+
+
+async def test_ignored_interrupt_phrases_do_not_create_new_turn() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(4.0)  # playout starts at 3.5s, ends at 7.5s
+    actions.add_user_speech(5.0, 5.6, "hello", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"ignored_interrupt_phrases": ["hello"]},
+        pausable_audio_output=True,
+    )
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # Ensure the "hello" interruption doesn't create a new user turn.
+    assert len(conversation_events) == 2
+    assert conversation_events[0].item.role == "user"
+    assert conversation_events[0].item.text_content == "Tell me a story."
+    assert conversation_events[1].item.role == "assistant"
+
+    chat_ctx_items = agent.chat_ctx.items
+    assert len(chat_ctx_items) == 3
+    assert chat_ctx_items[1].role == "user"
+    assert chat_ctx_items[1].text_content == "Tell me a story."
+    assert chat_ctx_items[2].role == "assistant"
+    assert chat_ctx_items[2].interrupted is False
+
+
+async def test_short_user_speech_does_not_interrupt_agent() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(10.0)  # playout starts at 3.5s, ends at 13.5s
+    actions.add_user_speech(5.0, 5.3, "uh", stt_delay=0.2)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is False
+    check_timestamp(playback_finished_events[0].playback_position, 10.0, speed_factor=speed)
+
+    # Ensure the short user speech doesn't interrupt the agent or trigger a reply.
+    # The session will still flush any pending transcript into the chat context on shutdown.
+    assert len(conversation_events) == 3
+    assert conversation_events[0].item.role == "user"
+    assert conversation_events[0].item.text_content == "Tell me a story."
+    assert conversation_events[1].item.role == "assistant"
+    assert conversation_events[2].item.role == "user"
+    assert conversation_events[2].item.text_content == "uh"
+
+    chat_ctx_items = agent.chat_ctx.items
+    assert len(chat_ctx_items) == 4
+    assert chat_ctx_items[2].role == "assistant"
+    assert chat_ctx_items[2].interrupted is False
+    assert chat_ctx_items[3].role == "user"
+    assert chat_ctx_items[3].text_content == "uh"
+
+
 @pytest.mark.parametrize(
     "resume_false_interruption, expected_interruption_time",
     [

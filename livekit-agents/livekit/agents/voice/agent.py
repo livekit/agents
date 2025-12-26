@@ -46,6 +46,8 @@ class Agent:
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        backoff_seconds: NotGivenOr[float] = NOT_GIVEN,
+        dynamic_interruption_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -76,6 +78,8 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
+        self._backoff_seconds = backoff_seconds
+        self._dynamic_interruption_sensitivity = dynamic_interruption_sensitivity
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
@@ -581,6 +585,26 @@ class Agent:
             NotGivenOr[bool]: Whether interruptions are permitted.
         """
         return self._allow_interruptions
+
+    @property
+    def backoff_seconds(self) -> NotGivenOr[float]:
+        """
+        Duration to block assistant speech after an interruption.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a value,
+        the session's value will be used at runtime instead.
+        """
+        return self._backoff_seconds
+
+    @property
+    def dynamic_interruption_sensitivity(self) -> NotGivenOr[bool]:
+        """
+        When enabled, dynamically adjust interruption thresholds based on recent interruptions.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a value,
+        the session's value will be used at runtime instead.
+        """
+        return self._dynamic_interruption_sensitivity
 
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:

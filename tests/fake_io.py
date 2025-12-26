@@ -34,13 +34,17 @@ class FakeAudioInput(AudioInput):
 
 class FakeAudioOutput(AudioOutput):
     def __init__(
-        self, *, next_in_chain: AudioOutput | None = None, sample_rate: int | None = None
+        self,
+        *,
+        next_in_chain: AudioOutput | None = None,
+        sample_rate: int | None = None,
+        pause: bool = False,
     ) -> None:
         super().__init__(
             label="FakeIO",
             next_in_chain=next_in_chain,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=False),
+            capabilities=AudioOutputCapabilities(pause=pause),
         )
         self._start_time = 0.0
         self._pushed_duration = 0.0

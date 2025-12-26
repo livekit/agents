@@ -86,7 +86,10 @@ EventTypes = Literal[
     "agent_state_changed",
     "user_input_transcribed",
     "conversation_item_added",
+    "agent_false_interruption_started",
     "agent_false_interruption",
+    "agent_interruption_backoff",
+    "function_tool_started",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
@@ -121,6 +124,12 @@ class UserInputTranscribedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class AgentFalseInterruptionStartedEvent(BaseModel):
+    type: Literal["agent_false_interruption_started"] = "agent_false_interruption_started"
+    speech_id: str | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
 class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     resumed: bool
@@ -139,6 +148,14 @@ class AgentFalseInterruptionEvent(BaseModel):
         return super().__getattribute__(name)
 
 
+class AgentInterruptionBackoffEvent(BaseModel):
+    type: Literal["agent_interruption_backoff"] = "agent_interruption_backoff"
+    active: bool
+    duration: float
+    """Total backoff duration that was requested."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class MetricsCollectedEvent(BaseModel):
     type: Literal["metrics_collected"] = "metrics_collected"
     metrics: AgentMetrics
@@ -152,6 +169,16 @@ class _TypeDiscriminator(BaseModel):
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
     item: ChatMessage | _TypeDiscriminator
+    created_at: float = Field(default_factory=time.time)
+
+
+class FunctionToolStartedEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["function_tool_started"] = "function_tool_started"
+    function_call: FunctionCall
+    speech_id: str
+    speech_handle: SpeechHandle = Field(..., exclude=True)
     created_at: float = Field(default_factory=time.time)
 
 
@@ -230,9 +257,12 @@ AgentEvent = Annotated[
         UserInputTranscribedEvent,
         UserStateChangedEvent,
         AgentStateChangedEvent,
+        AgentFalseInterruptionStartedEvent,
         AgentFalseInterruptionEvent,
+        AgentInterruptionBackoffEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
+        FunctionToolStartedEvent,
         FunctionToolsExecutedEvent,
         SpeechCreatedEvent,
         ErrorEvent,
