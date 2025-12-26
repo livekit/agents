@@ -361,6 +361,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def _build_ws_url(self) -> str:
         params = {
