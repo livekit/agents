@@ -22,7 +22,6 @@ class CliArgs:
 
     devmode: bool = False
     reload: bool = False
-    json_logs: bool = True  # use json logs in production mode
 
     # simulate_job: str | None = None
 
