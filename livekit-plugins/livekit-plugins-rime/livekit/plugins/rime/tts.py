@@ -450,7 +450,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             except json.JSONDecodeError:
                 logger.warning("Invalid JSON from Rime: %s", msg.data)
                 continue
-            if data.get("type") == "audio":
+            if data.get("type") == "chunk":
                 audio_data = base64.b64decode(data["data"])
                 output_emitter.push(audio_data)
             elif data.get("type") == "timestamps":
