@@ -1262,12 +1262,7 @@ def _run_console(
         raise typer.Exit(code=1) from None
 
 
-def _run_worker(
-    server: AgentServer,
-    args: proto.CliArgs,
-    jupyter: bool = False,
-    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None,
-) -> None:
+def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False) -> None:
     c: AgentsConsole | None = None
     if args.devmode:
         c = AgentsConsole.get_instance()  # colored logs
@@ -1285,7 +1280,7 @@ def _run_worker(
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)
 
-    _configure_logger(c, args.log_level, log_setup_fnc)
+    _configure_logger(c, args.log_level, args.log_setup_fnc)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1450,9 +1445,12 @@ def _build_cli(
         _run_worker(
             server=server,
             args=proto.CliArgs(
-                log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
+                log_level=log_level.value,
+                url=url,
+                api_key=api_key,
+                api_secret=api_secret,
+                log_setup_fnc=log_setup_fnc,
             ),
-            log_setup_fnc=log_setup_fnc,
         )
 
     @app.command()
@@ -1495,20 +1493,21 @@ def _build_cli(
             api_secret=api_secret,
             devmode=True,
             reload=reload,
+            log_setup_fnc=log_setup_fnc,
         )
 
         c = AgentsConsole.get_instance()
-        _configure_logger(c, log_level.value, log_setup_fnc)
 
         term_program = os.environ.get("TERM_PROGRAM")
-
         if term_program == "iTerm.app" and args.reload:
             c.print("[error]Auto-reload is not supported on the iTerm2 terminal, disabling...")
             args.reload = False
 
         if not args.reload:
-            _run_worker(server=server, args=args, log_setup_fnc=log_setup_fnc)
+            _run_worker(server=server, args=args)
             return
+
+        _configure_logger(c, log_level.value, args.log_setup_fnc)
 
         from .watcher import WatchServer
 
