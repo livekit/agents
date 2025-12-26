@@ -1299,6 +1299,21 @@ class AgentActivity(RecognitionHooks):
         ):
             self._interrupt_by_audio_activity()
 
+            # Check if we're in pause mode (false interruption handling)
+            # When in pause mode, we should NOT immediately interrupt the paused speech
+            # Instead, let the false interruption timer decide whether to resume or not
+            opt = self._session.options
+            use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
+            can_pause = self._session.output.audio and self._session.output.audio.can_pause
+
+            if use_pause and can_pause and self._paused_speech:
+                if speaking is False and (timeout := opt.false_interruption_timeout) is not None:
+                    # schedule a resume timer if interrupted after end_of_speech
+                    self._start_false_interruption_timer(timeout)
+                # In pause mode, let the timer decide whether to resume (false interruption)
+                # or let the next real end-of-turn event handle the actual interruption
+                return
+
             if (
                 speaking is False
                 and self._paused_speech
