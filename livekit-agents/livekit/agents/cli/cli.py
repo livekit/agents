@@ -839,18 +839,24 @@ class RichLoggingHandler(logging.Handler):
             self.handleError(record)
 
 
-def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
+def _configure_logger(
+    c: AgentsConsole | None,
+    log_level: int | str,
+    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None,
+) -> None:
     logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
 
     root = logging.getLogger()
-    if c:
-        root.addHandler(c._log_handler)
+    if log_setup_fnc is not None:
+        log_setup_fnc(root, log_level)
     else:
-        handler = logging.StreamHandler(sys.stdout)
-        root.addHandler(handler)
-        handler.setFormatter(JsonFormatter())
-
-    root.setLevel(log_level)
+        if c:
+            root.addHandler(c._log_handler)
+        else:
+            handler = logging.StreamHandler(sys.stdout)
+            root.addHandler(handler)
+            handler.setFormatter(JsonFormatter())
+        root.setLevel(log_level)
 
     _silence_noisy_loggers()
 
@@ -1176,13 +1182,14 @@ def _run_console(
     output_device: str | None,
     mode: ConsoleMode,
     record: bool,
+    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None,
 ) -> None:
     c = AgentsConsole.get_instance()
     c.console_mode = mode
     c.enabled = True
     c.record = record
 
-    _configure_logger(c, logging.DEBUG)
+    _configure_logger(c, logging.DEBUG, log_setup_fnc)
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
@@ -1255,7 +1262,12 @@ def _run_console(
         raise typer.Exit(code=1) from None
 
 
-def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False) -> None:
+def _run_worker(
+    server: AgentServer,
+    args: proto.CliArgs,
+    jupyter: bool = False,
+    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None,
+) -> None:
     c: AgentsConsole | None = None
     if args.devmode:
         c = AgentsConsole.get_instance()  # colored logs
@@ -1273,7 +1285,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)
 
-    _configure_logger(c, args.log_level)
+    _configure_logger(c, args.log_level, log_setup_fnc)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1342,7 +1354,10 @@ class LogLevel(str, enum.Enum):
     critical = "CRITICAL"
 
 
-def _build_cli(server: AgentServer) -> typer.Typer:
+def _build_cli(
+    server: AgentServer,
+    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None,
+) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
     @app.command()
@@ -1391,6 +1406,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             output_device=output_device,
             mode="text" if text else "audio",
             record=record,
+            log_setup_fnc=log_setup_fnc,
         )
 
     @app.command()
@@ -1436,6 +1452,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             args=proto.CliArgs(
                 log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
             ),
+            log_setup_fnc=log_setup_fnc,
         )
 
     @app.command()
@@ -1481,7 +1498,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         )
 
         c = AgentsConsole.get_instance()
-        _configure_logger(c, log_level.value)
+        _configure_logger(c, log_level.value, log_setup_fnc)
 
         term_program = os.environ.get("TERM_PROGRAM")
 
@@ -1490,7 +1507,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             args.reload = False
 
         if not args.reload:
-            _run_worker(server=server, args=args)
+            _run_worker(server=server, args=args, log_setup_fnc=log_setup_fnc)
             return
 
         from .watcher import WatchServer
@@ -1527,7 +1544,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         c = AgentsConsole.get_instance()
         c.enabled = True
 
-        _configure_logger(c, logging.DEBUG)
+        _configure_logger(c, logging.DEBUG, log_setup_fnc)
 
         try:
             # import_data = get_import_data(path=path)
@@ -1548,8 +1565,12 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     return app
 
 
-def run_app(server: AgentServer | WorkerOptions) -> None:
+def run_app(
+    server: AgentServer | WorkerOptions,
+    *,
+    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None,
+) -> None:
     if isinstance(server, WorkerOptions):
         server = AgentServer.from_server_options(server)
 
-    _build_cli(server)()
+    _build_cli(server, log_setup_fnc=log_setup_fnc)()
