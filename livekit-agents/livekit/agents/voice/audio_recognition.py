@@ -373,7 +373,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = ""
             self._final_transcript_received.set()
 
-            if not self._vad or self._last_speaking_time == 0:
+            if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
                 # TODO: this would screw up transcription latency metrics
                 # but we'll live with it for now.
@@ -425,7 +425,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._vad or self._last_speaking_time == 0:
+            if not self._vad or self._last_speaking_time is None:
                 # vad disabled, use stt timestamp
                 self._last_speaking_time = time.time()
 
@@ -449,7 +449,8 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            self._last_speaking_time = time.time()
+            if not self._vad or self._last_speaking_time is None:
+                self._last_speaking_time = time.time()
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
