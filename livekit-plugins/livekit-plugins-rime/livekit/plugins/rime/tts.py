@@ -368,6 +368,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._input_complete = asyncio.Event()
+        self._model_timeout = tts._total_timeout
 
     def _build_ws_url(self) -> str:
         params = {
@@ -448,8 +449,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             try:
                 # Use timeout to detect completion - 2 seconds after input is complete
                 if self._input_complete.is_set():
-                    timeout = 2.0
-                else:
+                    timeout = self._model_timeout
                     timeout = self._conn_options.timeout
 
                 msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
