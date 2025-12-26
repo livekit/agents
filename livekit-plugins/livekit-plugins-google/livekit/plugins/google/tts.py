@@ -35,7 +35,6 @@ from .log import logger
 from .models import Gender, SpeechLanguages
 
 NUM_CHANNELS = 1
-DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_GENDER = "neutral"
 
@@ -73,7 +72,7 @@ class TTS(tts.TTS):
         speaking_rate: float = 1.0,
         volume_gain_db: float = 0.0,
         location: str = "global",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.OGG_OPUS,  # type: ignore
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -141,7 +140,13 @@ class TTS(tts.TTS):
                 voice_cloning_key=voice_cloning_key,
             )
         else:
-            voice_params.name = voice_name if is_given(voice_name) else DEFAULT_VOICE_NAME
+            voice_params.name = (
+                voice_name
+                if is_given(voice_name)
+                else "Charon"
+                if voice_params.model_name
+                else "en-US-Chirp3-HD-Charon"
+            )
 
         if not is_given(tokenizer):
             tokenizer = tokenize.blingfire.SentenceTokenizer()
