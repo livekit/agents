@@ -40,7 +40,7 @@ from .models import STTModels
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    language: str
+    language: str | None
 
 
 class STT(stt.STT):
@@ -66,7 +66,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=False,
                 interim_results=False,
-                aligned_transcript=False if language else "chunk",
+                aligned_transcript=False,
             )
         )
         self._opts = _STTOptions(
