@@ -130,7 +130,7 @@ class STT(stt.STT):
                 alternatives=[
                     stt.SpeechData(
                         text=resp.text,
-                        language=self._opts.language,
+                        language=self._opts.language if self._opts.language else "",
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[
