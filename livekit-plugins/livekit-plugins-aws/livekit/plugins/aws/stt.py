@@ -268,8 +268,6 @@ class SpeechStream(stt.SpeechStream):
                         await audio_stream.send(
                             AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
                         )
-                        # Small delay to ensure empty frame is sent before close
-                        await asyncio.sleep(0.4)
                     finally:
                         with contextlib.suppress(Exception):
                             await audio_stream.close()
