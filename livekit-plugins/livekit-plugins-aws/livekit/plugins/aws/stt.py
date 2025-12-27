@@ -34,9 +34,9 @@ from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient  # type: ignore
-    from aws_sdk_transcribe_streaming.config import Config  # type: ignore
-    from aws_sdk_transcribe_streaming.models import (  # type: ignore
+    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
+    from aws_sdk_transcribe_streaming.config import Config
+    from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
         AudioStreamAudioEvent,
@@ -46,11 +46,16 @@ try:
         TranscriptEvent,
         TranscriptResultStream,
     )
-    from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
-    from smithy_core.aio.interfaces.eventstream import (
-        EventPublisher,
-        EventReceiver,
+    from smithy_aws_core.identity import (
+        AWSCredentialsIdentity,
+        ContainerCredentialsResolver,
+        EnvironmentCredentialsResolver,
+        IMDSCredentialsResolver,
+        StaticCredentialsResolver,
     )
+    from smithy_core.aio.identity import ChainedIdentityResolver
+    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+    from smithy_http.aio.crt import AWSCRTHTTPClient
 
     _AWS_SDK_AVAILABLE = True
 except ImportError:
@@ -185,17 +190,36 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
+        self._http_client = AWSCRTHTTPClient()
 
     async def _run(self) -> None:
         while True:
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
-                config_kwargs["aws_access_key_id"] = self._credentials.access_key_id
-                config_kwargs["aws_secret_access_key"] = self._credentials.secret_access_key
-                config_kwargs["aws_session_token"] = self._credentials.session_token
+                # Use a credentials resolver for explicit credentials
+                # for some reason, Config with direct values doesn't work
+                class StaticCredsResolver:
+                    def __init__(self, creds: Credentials):
+                        self._identity = AWSCredentialsIdentity(
+                            access_key_id=creds.access_key_id,
+                            secret_access_key=creds.secret_access_key,
+                            session_token=creds.session_token,
+                        )
+
+                    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
+                        return self._identity
+
+                config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
+                    self._credentials
+                )
             else:
-                config_kwargs["aws_credentials_identity_resolver"] = (
-                    EnvironmentCredentialsResolver()
+                config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
+                    resolvers=(
+                        StaticCredentialsResolver(),
+                        EnvironmentCredentialsResolver(),
+                        ContainerCredentialsResolver(http_client=self._http_client),
+                        IMDSCredentialsResolver(http_client=self._http_client),
+                    )
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
@@ -218,6 +242,8 @@ class SpeechStream(stt.SpeechStream):
                 "language_model_name": self._opts.language_model_name,
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
+
+            tasks: list[asyncio.Task[Any]] = []
 
             try:
                 stream = await client.start_stream_transcription(
@@ -276,14 +302,15 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     raise e
             finally:
-                # Close input stream first
-                await utils.aio.gracefully_cancel(tasks[0])
+                if tasks:
+                    # Close input stream first
+                    await utils.aio.gracefully_cancel(tasks[0])
 
-                # Wait for output stream to close cleanly
-                try:
-                    await asyncio.wait_for(tasks[1], timeout=3.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    await utils.aio.gracefully_cancel(tasks[1])
+                    # Wait for output stream to close cleanly
+                    try:
+                        await asyncio.wait_for(tasks[1], timeout=3.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        await utils.aio.gracefully_cancel(tasks[1])
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):

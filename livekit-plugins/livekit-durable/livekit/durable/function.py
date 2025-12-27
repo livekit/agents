@@ -13,11 +13,8 @@ from types import (
 from typing import (
     Any,
     Callable,
-    Dict,
     Optional,
-    Tuple,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -92,17 +89,17 @@ class Serializable:
         "__qualname__",
     )
 
-    g: Union[GeneratorType, CoroutineType]
+    g: GeneratorType | CoroutineType
     registered_fn: RegisteredFunction
-    wrapped_coroutine: Union["DurableCoroutine", None]
-    args: Tuple[Any, ...]
-    kwargs: Dict[str, Any]
+    wrapped_coroutine: "DurableCoroutine" | None
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
 
     def __init__(
         self,
-        g: Union[GeneratorType, CoroutineType],
+        g: GeneratorType | CoroutineType,
         registered_fn: RegisteredFunction,
-        wrapped_coroutine: Union["DurableCoroutine", None],
+        wrapped_coroutine: "DurableCoroutine" | None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -291,7 +288,7 @@ class DurableCoroutine(Serializable, Coroutine[_YieldT, _SendT, _ReturnT]):
         return self.coroutine.cr_await
 
     @property
-    def cr_origin(self) -> Optional[Tuple[Tuple[str, int, str], ...]]:
+    def cr_origin(self) -> Optional[tuple[tuple[str, int, str], ...]]:
         return self.coroutine.cr_origin
 
     def __repr__(self) -> str:
