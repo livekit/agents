@@ -61,6 +61,7 @@ members = [
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
     "livekit-plugins-simli",
+    "livekit-plugins-simplismart",
     "livekit-plugins-smallestai",
     "livekit-plugins-soniox",
     "livekit-plugins-speechify",
@@ -2503,6 +2504,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-simplismart"
+source = { editable = "livekit-plugins/livekit-plugins-simplismart" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
+]
 
 [[package]]
 name = "livekit-plugins-smallestai"
