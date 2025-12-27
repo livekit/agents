@@ -328,7 +328,10 @@ class LLM(llm.LLM):
                     else:
                         _level = "low"
                 # Use thinking_level only (pass as dict since SDK may not have this field yet)
-                extra["thinking_config"] = {"thinking_level": _level, "include_thoughts":_include_thoughts}
+                extra["thinking_config"] = {
+                    "thinking_level": _level,
+                    "include_thoughts": _include_thoughts,
+                }
 
             else:
                 # Gemini 2.5 and earlier: only support thinking_budget
@@ -339,7 +342,9 @@ class LLM(llm.LLM):
                     )
                 if _budget is not None:
                     # Use thinking_budget only
-                    extra["thinking_config"] = types.ThinkingConfig(thinking_budget=_budget, include_thoughts=_include_thoughts)
+                    extra["thinking_config"] = types.ThinkingConfig(
+                        thinking_budget=_budget, include_thoughts=_include_thoughts
+                    )
                 else:
                     # Pass through original config if no specific handling needed
                     extra["thinking_config"] = self._opts.thinking_config
@@ -539,17 +544,14 @@ class LLMStream(llm.LLMStream):
 
         # Strip thinking tokens
         content = part.text if not part.thought else None
-        delta_extra= None
+        delta_extra = None
         if part.thought:
-            delta_extra = { "google": { "thinking": part.text }}
+            delta_extra = {"google": {"thinking": part.text}}
 
         if not content and not delta_extra:
             return None
 
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(
-                content=content,
-                role="assistant",
-                extra=delta_extra),
+            delta=llm.ChoiceDelta(content=content, role="assistant", extra=delta_extra),
         )
