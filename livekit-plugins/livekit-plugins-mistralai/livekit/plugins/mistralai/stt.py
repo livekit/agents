@@ -47,7 +47,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: str = "en",
+        language: str | None = "en",
         model: STTModels | str = "voxtral-mini-latest",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: Mistral | None = None,
@@ -56,7 +56,7 @@ class STT(stt.STT):
         Create a new instance of MistralAI STT.
 
         Args:
-            language: The language code to use for transcription (e.g., "en" for English).
+            language: The language code to use for transcription (e.g., "en" for English). Segment timestamps will only be available if set to None.
             model: The MistralAI model to use for transcription, default is voxtral-mini-latest.
             api_key: Your MistralAI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
             client: Optional pre-configured MistralAI client instance.
@@ -66,8 +66,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=False,
                 interim_results=False,
-                # timestamp granularity doesn't seem to work
-                aligned_transcript=False,
+                aligned_transcript=False if language else "chunk",
             )
         )
         self._opts = _STTOptions(
@@ -123,8 +122,7 @@ class STT(stt.STT):
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
                 language=self._opts.language if self._opts.language else None,
-                # for some reason, it doesn't return any segments even if we ask for them
-                timestamp_granularities=["segment"],
+                timestamp_granularities=None if self._opts.language else ["segment"],
             )
 
             return stt.SpeechEvent(
