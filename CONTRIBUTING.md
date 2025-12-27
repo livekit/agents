@@ -76,6 +76,7 @@ uv pip install pip && uv run mypy --install-types --non-interactive \
     -p livekit.plugins.google \
     -p livekit.plugins.groq \
     -p livekit.plugins.hume \
+    -p livekit.plugins.inyaai \
     -p livekit.plugins.minimal \
     -p livekit.plugins.neuphonic \
     -p livekit.plugins.nltk \
