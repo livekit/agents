@@ -47,6 +47,7 @@ try:
         TranscriptResultStream,
     )
     from smithy_aws_core.identity import (
+        AWSCredentialsIdentity,
         ContainerCredentialsResolver,
         EnvironmentCredentialsResolver,
         IMDSCredentialsResolver,
@@ -195,9 +196,22 @@ class SpeechStream(stt.SpeechStream):
         while True:
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
-                config_kwargs["aws_access_key_id"] = self._credentials.access_key_id
-                config_kwargs["aws_secret_access_key"] = self._credentials.secret_access_key
-                config_kwargs["aws_session_token"] = self._credentials.session_token
+                # Use a credentials resolver for explicit credentials
+                # for some reason, Config with direct values doesn't work
+                class StaticCredsResolver:
+                    def __init__(self, creds: Credentials):
+                        self._identity = AWSCredentialsIdentity(
+                            access_key_id=creds.access_key_id,
+                            secret_access_key=creds.secret_access_key,
+                            session_token=creds.session_token,
+                        )
+
+                    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
+                        return self._identity
+
+                config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
+                    self._credentials
+                )
             else:
                 config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
                     resolvers=(
@@ -229,6 +243,8 @@ class SpeechStream(stt.SpeechStream):
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
 
+            tasks: list[asyncio.Task[Any]] = []
+
             try:
                 stream = await client.start_stream_transcription(
                     input=StartStreamTranscriptionInput(**filtered_config)
@@ -252,6 +268,8 @@ class SpeechStream(stt.SpeechStream):
                         await audio_stream.send(
                             AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
                         )
+                        # Small delay to ensure empty frame is sent before close
+                        await asyncio.sleep(0.4)
                     finally:
                         with contextlib.suppress(Exception):
                             await audio_stream.close()
@@ -286,14 +304,15 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     raise e
             finally:
-                # Close input stream first
-                await utils.aio.gracefully_cancel(tasks[0])
+                if tasks:
+                    # Close input stream first
+                    await utils.aio.gracefully_cancel(tasks[0])
 
-                # Wait for output stream to close cleanly
-                try:
-                    await asyncio.wait_for(tasks[1], timeout=3.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    await utils.aio.gracefully_cancel(tasks[1])
+                    # Wait for output stream to close cleanly
+                    try:
+                        await asyncio.wait_for(tasks[1], timeout=3.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        await utils.aio.gracefully_cancel(tasks[1])
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):
