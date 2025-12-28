@@ -53,6 +53,7 @@ class _STTOptions:
     noise_threshold: float = 0.60
     active_threshold: float = 0.80
     use_punctuation: bool = False
+    keywords: list[str] | list[tuple[str, float]] | None = None
 
 
 class STT(stt.STT):
@@ -75,6 +76,7 @@ class STT(stt.STT):
         noise_threshold: float = 0.60,
         active_threshold: float = 0.80,
         use_punctuation: bool = False,
+        keywords: list[str] | list[tuple[str, float]] | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -95,7 +97,10 @@ class STT(stt.STT):
             noise_threshold=noise_threshold,
             active_threshold=active_threshold,
             use_punctuation=use_punctuation,
+            keywords=keywords,
         )
+        if keywords and model != "sommers_ko":
+            logger.warning("RTZR keyword boosting is only supported with sommers_ko model")
         self._client = RTZROpenAPIClient(http_session=http_session)
 
     async def aclose(self) -> None:
@@ -139,6 +144,7 @@ class SpeechStream(stt.SpeechStream):
             noise_threshold=self._stt._params.noise_threshold,
             active_threshold=self._stt._params.active_threshold,
             use_punctuation=self._stt._params.use_punctuation,
+            keywords=self._stt._params.keywords,
         )
 
         try:
