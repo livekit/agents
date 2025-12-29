@@ -38,13 +38,10 @@ dependencies = [
     "numpy>=1.20.0",
 ]
 
-[project.optional-dependencies]
-# krisp-audio is a proprietary SDK not available on PyPI
-# Install separately: pip install krisp-audio
-# Or use the full feature set: pip install livekit-plugins-krisp[krisp]
-krisp = [
-    "krisp-audio",
-]
+# Note: krisp-audio is a proprietary SDK not available on PyPI.
+# It must be obtained and installed separately from Krisp.
+# Install with: pip install krisp-audio
+# This plugin will raise helpful errors if krisp-audio is not installed.
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
