@@ -560,13 +560,6 @@ class SynthesizeStream(ABC):
         self._input_ch.close()
 
     def _reset_for_retry(self) -> None:
-        """
-        Prepare this stream instance for a retry attempt.
-
-        Streaming retries re-run `_run()` on the same `SynthesizeStream` instance. Since the input
-        channel is consumed during an attempt, we rebuild it from buffered events.
-        """
-
         # Reset per-attempt timing used for metrics; without this, retries can produce incorrect
         # durations/TTFB because `_mark_started` only sets the first time.
         self._started_time = 0

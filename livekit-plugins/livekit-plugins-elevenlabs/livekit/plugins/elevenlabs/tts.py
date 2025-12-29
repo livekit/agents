@@ -362,8 +362,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        # Streaming retries re-invoke `_run` on the same stream instance, so we must recreate any
-        # one-shot state (tokenizer streams, context IDs) per attempt.
         self._context_id = utils.shortuuid()
         self._text_buffer = ""
         self._start_times_ms: list[int] = []
@@ -374,8 +372,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        # Use a fresh context ID per attempt; the ElevenLabs multi-stream API treats context IDs
-        # as identifiers for a single synthesis lifecycle.
         self._context_id = utils.shortuuid()
         self._text_buffer = ""
         self._start_times_ms.clear()
