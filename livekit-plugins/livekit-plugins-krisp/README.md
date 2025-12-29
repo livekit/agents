@@ -11,8 +11,15 @@ Real-time noise reduction and audio-based turn detection for LiveKit voice agent
 ## Installation
 
 ```bash
+# Install the plugin
 pip install livekit-plugins-krisp
+
+# Install krisp-audio SDK separately (required for actual usage)
+pip install krisp-audio
 ```
+
+**Note:** The `krisp-audio` package is a proprietary SDK not available on public PyPI. 
+It must be obtained and installed separately from Krisp.
 
 ## Prerequisites
 

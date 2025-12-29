@@ -37,10 +37,13 @@ from .log import logger
 
 try:
     import krisp_audio
+    KRISP_AUDIO_AVAILABLE = True
 except ModuleNotFoundError as e:
-    logger.error(f"Exception: {e}")
-    logger.error("In order to use Krisp VIVA turn detection, you need to install krisp_audio.")
-    raise Exception(f"Missing module: {e}") from e
+    KRISP_AUDIO_AVAILABLE = False
+    logger.warning(
+        "krisp-audio package not found. "
+        "Install it to use Krisp turn detection: pip install krisp-audio"
+    )
 
 
 @dataclass
@@ -99,11 +102,20 @@ class KrispVivaTurn:
                 model will be loaded immediately. If None, loaded on first audio.
 
         Raises:
+            RuntimeError: If krisp-audio package is not installed.
             ValueError: If model_path not provided and env var not set, or if
                 frame_duration_ms is invalid.
             FileNotFoundError: If model file doesn't exist.
             RuntimeError: If Krisp SDK initialization fails.
         """
+        
+        # Check if krisp-audio is available
+        if not KRISP_AUDIO_AVAILABLE:
+            raise RuntimeError(
+                "krisp-audio package is not installed. "
+                "Install it with: pip install krisp-audio"
+            )
+        
         # Initialize state variables first
         self._sdk_acquired = False
         self._threshold = threshold

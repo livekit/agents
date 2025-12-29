@@ -35,8 +35,15 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.3.6",
-    "krisp-audio",
     "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+# krisp-audio is a proprietary SDK not available on PyPI
+# Install separately: pip install krisp-audio
+# Or use the full feature set: pip install livekit-plugins-krisp[krisp]
+krisp = [
+    "krisp-audio",
 ]
 
 [project.urls]

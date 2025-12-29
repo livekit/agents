@@ -28,29 +28,33 @@ from .log import logger
 
 try:
     import krisp_audio
+    KRISP_AUDIO_AVAILABLE = True
+    
+    # Mapping of sample rates (Hz) to Krisp SDK SamplingRate enums
+    KRISP_SAMPLE_RATES = {
+        8000: krisp_audio.SamplingRate.Sr8000Hz,
+        16000: krisp_audio.SamplingRate.Sr16000Hz,
+        24000: krisp_audio.SamplingRate.Sr24000Hz,
+        32000: krisp_audio.SamplingRate.Sr32000Hz,
+        44100: krisp_audio.SamplingRate.Sr44100Hz,
+        48000: krisp_audio.SamplingRate.Sr48000Hz,
+    }
+
+    KRISP_FRAME_DURATIONS = {
+        10: krisp_audio.FrameDuration.Fd10ms,
+        15: krisp_audio.FrameDuration.Fd15ms,
+        20: krisp_audio.FrameDuration.Fd20ms,
+        30: krisp_audio.FrameDuration.Fd30ms,
+        32: krisp_audio.FrameDuration.Fd32ms,
+    }
 except ModuleNotFoundError as e:
-    logger.error(f"Exception: {e}")
-    logger.error("In order to use Krisp SDK, you need to install krisp_audio.")
-    raise Exception(f"Missing module: {e}") from e
-
-
-# Mapping of sample rates (Hz) to Krisp SDK SamplingRate enums
-KRISP_SAMPLE_RATES = {
-    8000: krisp_audio.SamplingRate.Sr8000Hz,
-    16000: krisp_audio.SamplingRate.Sr16000Hz,
-    24000: krisp_audio.SamplingRate.Sr24000Hz,
-    32000: krisp_audio.SamplingRate.Sr32000Hz,
-    44100: krisp_audio.SamplingRate.Sr44100Hz,
-    48000: krisp_audio.SamplingRate.Sr48000Hz,
-}
-
-KRISP_FRAME_DURATIONS = {
-    10: krisp_audio.FrameDuration.Fd10ms,
-    15: krisp_audio.FrameDuration.Fd15ms,
-    20: krisp_audio.FrameDuration.Fd20ms,
-    30: krisp_audio.FrameDuration.Fd30ms,
-    32: krisp_audio.FrameDuration.Fd32ms,
-}
+    KRISP_AUDIO_AVAILABLE = False
+    KRISP_SAMPLE_RATES = {}
+    KRISP_FRAME_DURATIONS = {}
+    logger.warning(
+        "krisp-audio package not found. "
+        "Install it to use Krisp SDK features: pip install krisp-audio"
+    )
 
 def int_to_krisp_frame_duration(frame_duration_ms: int) -> Any:
     if frame_duration_ms not in KRISP_FRAME_DURATIONS:
