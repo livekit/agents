@@ -37,6 +37,7 @@ from .log import logger
 
 try:
     import krisp_audio
+
     KRISP_AUDIO_AVAILABLE = True
 except ModuleNotFoundError:
     KRISP_AUDIO_AVAILABLE = False
@@ -69,9 +70,9 @@ class KrispVivaTurn:
     Example:
         ```python
         from livekit.plugins import krisp
-        
+
         turn_detector = krisp.KrispVivaTurn(threshold=0.6)
-        
+
         session = AgentSession(
             turn_detection=turn_detector,
             vad=silero.VAD.load(),
@@ -112,8 +113,7 @@ class KrispVivaTurn:
         # Check if krisp-audio is available
         if not KRISP_AUDIO_AVAILABLE:
             raise RuntimeError(
-                "krisp-audio package is not installed. "
-                "Install it with: pip install krisp-audio"
+                "krisp-audio package is not installed. Install it with: pip install krisp-audio"
             )
 
         # Initialize state variables first
@@ -171,10 +171,9 @@ class KrispVivaTurn:
                 self._sdk_acquired = False
             raise
 
-
     def _create_session(self, sample_rate: int) -> Any:
         """Create or recreate Krisp turn detection session.
-        
+
         Returns:
             krisp_audio.TtFloat instance
         """
@@ -196,7 +195,9 @@ class KrispVivaTurn:
             self._sample_rate = sample_rate
             self._samples_per_frame = int((sample_rate * self._frame_duration_ms) / 1000)
 
-            logger.debug(f"Created Krisp turn session for {sample_rate}Hz ({self._samples_per_frame} samples/frame)")
+            logger.debug(
+                f"Created Krisp turn session for {sample_rate}Hz ({self._samples_per_frame} samples/frame)"
+            )
 
             return turn_session
 
@@ -322,10 +323,10 @@ class KrispVivaTurn:
         """Check if language is supported.
 
         Currently only English is supported.
-        
+
         Args:
             language: Language code (e.g., "en", "en-US") or None for default
-            
+
         Returns:
             True if language is English or None, False otherwise
         """
@@ -379,7 +380,7 @@ class KrispVivaTurn:
 
     def __del__(self):
         """Destructor to ensure cleanup of session resources.
-        
+
         Note: During Python shutdown, we avoid calling C extensions to prevent GIL errors.
         Always call close() explicitly for proper cleanup.
         """
@@ -402,4 +403,3 @@ class KrispVivaTurn:
             except Exception:
                 # Silently ignore all errors during shutdown
                 pass
-

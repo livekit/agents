@@ -356,4 +356,3 @@ Note: Set KRISP_VIVA_TURN_MODEL_PATH environment variable to point to your .kef 
 
 if __name__ == "__main__":
     main()
-

@@ -292,4 +292,3 @@ class TestKrispVivaTurnIntegration:
             assert isinstance(prob, float)
 
         detector.close()
-

@@ -87,7 +87,7 @@ async def test_krisp_filter():
         logger.info("\n5. Processing multiple frames...")
         for i in range(10):
             filtered = await krisp_filter.filter(test_frame)
-            logger.info(f"   Frame {i+1}/10 processed")
+            logger.info(f"   Frame {i + 1}/10 processed")
         logger.info("✅ Multiple frames processed successfully")
 
         # Test stream processing
@@ -172,7 +172,9 @@ async def test_krisp_audio_input():
         frame_count = 0
         async for frame in krisp_input:
             frame_count += 1
-            logger.info(f"   Frame {frame_count}: {frame.samples_per_channel} samples @ {frame.sample_rate}Hz")
+            logger.info(
+                f"   Frame {frame_count}: {frame.samples_per_channel} samples @ {frame.sample_rate}Hz"
+            )
 
         logger.info(f"✅ Processed {frame_count} frames through wrapper")
 
@@ -198,4 +200,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

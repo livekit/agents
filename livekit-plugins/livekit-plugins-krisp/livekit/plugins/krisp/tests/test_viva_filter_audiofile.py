@@ -298,7 +298,7 @@ Note: Set KRISP_VIVA_FILTER_MODEL_PATH environment variable to point to your .ke
     # Check if output file already exists
     if os.path.exists(args.output):
         response = input(f"Warning: Output file '{args.output}' already exists. Overwrite? (y/N): ")
-        if response.lower() != 'y':
+        if response.lower() != "y":
             print("Aborted.")
             sys.exit(0)
 
@@ -317,4 +317,3 @@ Note: Set KRISP_VIVA_FILTER_MODEL_PATH environment variable to point to your .ke
 
 if __name__ == "__main__":
     main()
-

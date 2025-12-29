@@ -29,21 +29,21 @@ from .viva_filter import KrispVivaFilter
 
 class KrispAudioInput(io.AudioInput):
     """AudioInput wrapper that applies Krisp noise cancellation to incoming audio.
-    
+
     This class wraps an existing AudioInput (typically from RoomIO) and applies
     Krisp VIVA noise cancellation to each audio frame before passing it downstream
     to STT, VAD, or other audio processing components.
-    
+
     The audio pipeline becomes:
         Room → RoomIO → KrispAudioInput (NC applied here) → VAD/STT → LLM
-    
+
     Example:
         ```python
         from livekit.agents import AgentSession, room_io
         from livekit.plugins.krisp import KrispAudioInput
-        
+
         session = AgentSession(...)
-        
+
         await session.start(
             agent=MyAgent(),
             room=ctx.room,
@@ -54,7 +54,7 @@ class KrispAudioInput(io.AudioInput):
                 ),
             ),
         )
-        
+
         # Wrap the audio input with Krisp filtering
         if session.input.audio:
             session.input.audio = KrispAudioInput(
@@ -76,7 +76,7 @@ class KrispAudioInput(io.AudioInput):
         sample_rate: int | None = None,
     ) -> None:
         """Initialize the Krisp-filtered audio input.
-        
+
         Args:
             source: The upstream AudioInput to wrap (e.g., from RoomIO).
             model_path: Path to the Krisp model file (.kef extension).
@@ -86,7 +86,7 @@ class KrispAudioInput(io.AudioInput):
                 Must match the frame_size_ms in AudioInputOptions.
             sample_rate: Optional sample rate in Hz. If provided, the Krisp session
                 will be created immediately. If None, it will be created on the first frame.
-        
+
         Raises:
             ValueError: If model_path is not provided and KRISP_VIVA_FILTER_MODEL_PATH is not set,
                 or if frame_duration_ms is not supported.
@@ -109,10 +109,10 @@ class KrispAudioInput(io.AudioInput):
 
     async def __anext__(self) -> rtc.AudioFrame:
         """Get next audio frame from source and apply Krisp noise cancellation.
-        
+
         Returns:
             Filtered audio frame with noise reduction applied.
-        
+
         Raises:
             ValueError: If frame size doesn't match the expected frame duration.
         """
@@ -144,4 +144,3 @@ class KrispAudioInput(io.AudioInput):
     def is_filtering_enabled(self) -> bool:
         """Check if Krisp filtering is currently enabled."""
         return self._filter.is_enabled
-

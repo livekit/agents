@@ -38,6 +38,7 @@ from .log import logger
 
 try:
     import krisp_audio
+
     KRISP_AUDIO_AVAILABLE = True
 except ModuleNotFoundError:
     KRISP_AUDIO_AVAILABLE = False
@@ -83,8 +84,7 @@ class KrispVivaFilter:
         # Check if krisp-audio is available
         if not KRISP_AUDIO_AVAILABLE:
             raise RuntimeError(
-                "krisp-audio package is not installed. "
-                "Install it with: pip install krisp-audio"
+                "krisp-audio package is not installed. Install it with: pip install krisp-audio"
             )
 
         # Initialize state variables first
@@ -107,7 +107,9 @@ class KrispVivaFilter:
             # Set model path, checking environment if not specified
             self._model_path = model_path or os.getenv("KRISP_VIVA_FILTER_MODEL_PATH")
             if not self._model_path:
-                logger.error("Model path is not provided and KRISP_VIVA_FILTER_MODEL_PATH is not set.")
+                logger.error(
+                    "Model path is not provided and KRISP_VIVA_FILTER_MODEL_PATH is not set."
+                )
                 raise ValueError("Model path for KrispVivaFilter must be provided.")
 
             if not self._model_path.endswith(".kef"):
@@ -288,7 +290,7 @@ class KrispVivaFilter:
 
     def __del__(self) -> None:
         """Destructor to ensure cleanup of session resources.
-        
+
         Note: During Python shutdown, we avoid calling C extensions to prevent GIL errors.
         Always call close() explicitly for proper cleanup.
         """

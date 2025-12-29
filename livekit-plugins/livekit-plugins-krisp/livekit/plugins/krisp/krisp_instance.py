@@ -28,6 +28,7 @@ from .log import logger
 
 try:
     import krisp_audio
+
     KRISP_AUDIO_AVAILABLE = True
 
     # Mapping of sample rates (Hz) to Krisp SDK SamplingRate enums
@@ -56,21 +57,24 @@ except ModuleNotFoundError:
         "Install it to use Krisp SDK features: pip install krisp-audio"
     )
 
+
 def int_to_krisp_frame_duration(frame_duration_ms: int) -> Any:
     if frame_duration_ms not in KRISP_FRAME_DURATIONS:
-        supported_durations = ", ".join(str(duration) for duration in sorted(KRISP_FRAME_DURATIONS.keys()))
+        supported_durations = ", ".join(
+            str(duration) for duration in sorted(KRISP_FRAME_DURATIONS.keys())
+        )
         raise ValueError(
             f"Unsupported frame duration: {frame_duration_ms} ms. "
             f"Supported durations: {supported_durations} ms"
         )
     return KRISP_FRAME_DURATIONS[frame_duration_ms]
 
+
 def int_to_krisp_sample_rate(sample_rate: int) -> Any:
     if sample_rate not in KRISP_SAMPLE_RATES:
         supported_rates = ", ".join(str(rate) for rate in sorted(KRISP_SAMPLE_RATES.keys()))
         raise ValueError(
-            f"Unsupported sample rate: {sample_rate} Hz. "
-            f"Supported rates: {supported_rates} Hz"
+            f"Unsupported sample rate: {sample_rate} Hz. Supported rates: {supported_rates} Hz"
         )
     return KRISP_SAMPLE_RATES[sample_rate]
 
@@ -147,7 +151,6 @@ class KrispSDKManager:
                         logger.error(f"Error during Krisp SDK cleanup: {e}")
                         cls._initialized = False
 
-
     @classmethod
     def is_initialized(cls) -> bool:
         """Check if the SDK is currently initialized.
@@ -167,4 +170,3 @@ class KrispSDKManager:
         """
         with cls._lock:
             return cls._reference_count
-

@@ -84,9 +84,9 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                sample_rate=16000,      # Krisp supports: 8k, 16k, 24k, 32k, 44.1k, 48k
+                sample_rate=16000,  # Krisp supports: 8k, 16k, 24k, 32k, 44.1k, 48k
                 num_channels=1,
-                frame_size_ms=10,       # Must match Krisp frame_duration_ms (10, 15, 20, 30, or 32)
+                frame_size_ms=10,  # Must match Krisp frame_duration_ms (10, 15, 20, 30, or 32)
             ),
         ),
     )
@@ -99,8 +99,8 @@ async def entrypoint(ctx: JobContext):
             source=session.input.audio,
             # model_path=None,  # Uses KRISP_VIVA_FILTER_MODEL_PATH env var
             noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
-            frame_duration_ms=10,         # Must match frame_size_ms above
-            sample_rate=16000,            # Pre-load model at this sample rate
+            frame_duration_ms=10,  # Must match frame_size_ms above
+            sample_rate=16000,  # Pre-load model at this sample rate
         )
 
         # Notify the input chain that it's been attached
@@ -113,4 +113,3 @@ async def entrypoint(ctx: JobContext):
 
 if __name__ == "__main__":
     cli.run_app(server)
-
