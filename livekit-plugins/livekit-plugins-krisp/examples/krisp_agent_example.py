@@ -21,6 +21,7 @@ Usage:
 """
 
 import logging
+
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -31,7 +32,7 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.plugins import krisp, silero, openai
+from livekit.plugins import krisp, openai, silero
 
 logger = logging.getLogger("krisp-agent-example")
 load_dotenv()
@@ -39,7 +40,7 @@ load_dotenv()
 
 class KrispAgent(Agent):
     """Voice agent that uses Krisp for noise cancellation."""
-    
+
     def __init__(self) -> None:
         super().__init__(
             instructions=(
@@ -48,7 +49,7 @@ class KrispAgent(Agent):
                 "Do not use emojis or special characters in your responses."
             ),
         )
-    
+
     async def on_enter(self):
         """Called when the agent enters the session."""
         logger.info("Krisp agent entered session")
@@ -62,7 +63,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     """Main entrypoint for the agent session."""
-    
+
     # Configure the agent session
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -73,9 +74,9 @@ async def entrypoint(ctx: JobContext):
         min_endpointing_delay=0.5,
         max_endpointing_delay=3.0,
     )
-    
+
     logger.info("Starting agent session with RoomIO")
-    
+
     # Start the session with RoomIO configuration
     # IMPORTANT: frame_size_ms must match Krisp's frame_duration_ms
     await session.start(
@@ -89,11 +90,11 @@ async def entrypoint(ctx: JobContext):
             ),
         ),
     )
-    
+
     # ⭐ INTEGRATION POINT: Wrap audio input with Krisp noise cancellation
     if session.input.audio:
         logger.info("Wrapping audio input with Krisp noise cancellation")
-        
+
         session.input.audio = krisp.KrispAudioInput(
             source=session.input.audio,
             # model_path=None,  # Uses KRISP_VIVA_FILTER_MODEL_PATH env var
@@ -101,10 +102,10 @@ async def entrypoint(ctx: JobContext):
             frame_duration_ms=10,         # Must match frame_size_ms above
             sample_rate=16000,            # Pre-load model at this sample rate
         )
-        
+
         # Notify the input chain that it's been attached
         session.input.audio.on_attached()
-        
+
         logger.info("✅ Krisp noise cancellation active")
     else:
         logger.warning("No audio input available, Krisp not applied")

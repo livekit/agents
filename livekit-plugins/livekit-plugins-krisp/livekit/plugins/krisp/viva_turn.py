@@ -32,7 +32,7 @@ import numpy as np
 from livekit import rtc
 from livekit.agents import llm
 
-from .krisp_instance import KrispSDKManager, int_to_krisp_sample_rate, int_to_krisp_frame_duration
+from .krisp_instance import KrispSDKManager, int_to_krisp_frame_duration, int_to_krisp_sample_rate
 from .log import logger
 
 try:
@@ -108,14 +108,14 @@ class KrispVivaTurn:
             FileNotFoundError: If model file doesn't exist.
             RuntimeError: If Krisp SDK initialization fails.
         """
-        
+
         # Check if krisp-audio is available
         if not KRISP_AUDIO_AVAILABLE:
             raise RuntimeError(
                 "krisp-audio package is not installed. "
                 "Install it with: pip install krisp-audio"
             )
-        
+
         # Initialize state variables first
         self._sdk_acquired = False
         self._threshold = threshold
@@ -191,13 +191,13 @@ class KrispVivaTurn:
             tt_cfg.modelInfo = model_info
 
             turn_session = krisp_audio.TtFloat.create(tt_cfg)
-            
+
             # Update state when creating a new session
             self._sample_rate = sample_rate
             self._samples_per_frame = int((sample_rate * self._frame_duration_ms) / 1000)
-            
+
             logger.debug(f"Created Krisp turn session for {sample_rate}Hz ({self._samples_per_frame} samples/frame)")
-            
+
             return turn_session
 
         except Exception as e:
@@ -331,7 +331,7 @@ class KrispVivaTurn:
         """
         if language is None:
             return True  # Default to English
-        
+
         # Check if language starts with "en" (covers "en", "en-US", "en-GB", etc.)
         return language.lower().startswith("en")
 
@@ -387,7 +387,7 @@ class KrispVivaTurn:
         # If KrispSDKManager is None, we're in shutdown - don't do anything
         if KrispSDKManager is None:
             return
-            
+
         # Use getattr for safe access during shutdown
         if getattr(self, "_sdk_acquired", False):
             try:

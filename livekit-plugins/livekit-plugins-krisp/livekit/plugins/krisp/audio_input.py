@@ -94,19 +94,19 @@ class KrispAudioInput(io.AudioInput):
             FileNotFoundError: If model file doesn't exist.
         """
         super().__init__(label="KrispNC", source=source)
-        
+
         self._filter = KrispVivaFilter(
             model_path=model_path,
             noise_suppression_level=noise_suppression_level,
             frame_duration_ms=frame_duration_ms,
             sample_rate=sample_rate,
         )
-        
+
         logger.info(
             f"KrispAudioInput initialized: suppression={noise_suppression_level}, "
             f"frame_duration={frame_duration_ms}ms"
         )
-    
+
     async def __anext__(self) -> rtc.AudioFrame:
         """Get next audio frame from source and apply Krisp noise cancellation.
         
@@ -118,28 +118,28 @@ class KrispAudioInput(io.AudioInput):
         """
         # Get frame from upstream source (RoomIO)
         frame = await self.source.__anext__()
-        
+
         # Apply Krisp noise cancellation
         filtered_frame = await self._filter.filter(frame)
-        
+
         return filtered_frame
-    
+
     def on_detached(self) -> None:
         """Clean up Krisp filter resources when input is detached."""
         logger.info("KrispAudioInput detached, cleaning up filter resources")
         self._filter.close()
         super().on_detached()
-    
+
     def enable_filtering(self) -> None:
         """Enable Krisp noise filtering."""
         self._filter.enable()
         logger.info("Krisp filtering enabled")
-    
+
     def disable_filtering(self) -> None:
         """Disable Krisp noise filtering (audio passes through unmodified)."""
         self._filter.disable()
         logger.info("Krisp filtering disabled")
-    
+
     @property
     def is_filtering_enabled(self) -> bool:
         """Check if Krisp filtering is currently enabled."""

@@ -30,7 +30,6 @@ from livekit import rtc
 
 from .krisp_instance import (
     KRISP_FRAME_DURATIONS,
-    KRISP_SAMPLE_RATES,
     KrispSDKManager,
     int_to_krisp_frame_duration,
     int_to_krisp_sample_rate,
@@ -80,7 +79,7 @@ class KrispVivaFilter:
             Exception: If model file doesn't have .kef extension.
             FileNotFoundError: If model file doesn't exist.
         """
-        
+
         # Check if krisp-audio is available
         if not KRISP_AUDIO_AVAILABLE:
             raise RuntimeError(
@@ -297,7 +296,7 @@ class KrispVivaFilter:
         # If KrispSDKManager is None, we're in shutdown - don't do anything
         if KrispSDKManager is None:
             return
-            
+
         if getattr(self, "_sdk_acquired", False):
             try:
                 if getattr(self, "_session", None) is not None:

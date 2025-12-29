@@ -33,12 +33,12 @@ def read_audio_file(input_path: str, verbose: bool = False) -> Tuple[np.ndarray,
     """
     if verbose:
         print(f"Loading audio from: {input_path}")
-    
+
     # Get audio file info to determine the format
     info = sf.info(input_path)
     if verbose:
         print(f"Audio file format: {info.subtype}, {info.channels} channel(s), {info.samplerate} Hz")
-    
+
     # Read audio data based on the source format
     if info.subtype in ['PCM_16', 'PCM_S16']:
         # File is already int16, read directly to avoid unnecessary conversion
@@ -54,9 +54,9 @@ def read_audio_file(input_path: str, verbose: bool = False) -> Tuple[np.ndarray,
             print("Read as float32 and scaled to int16")
     else:
         print(f"Error: Unsupported audio format: {info.subtype}")
-        print(f"Supported formats: PCM_16, PCM_S16, FLOAT, DOUBLE")
+        print("Supported formats: PCM_16, PCM_S16, FLOAT, DOUBLE")
         sys.exit(1)
-    
+
     # Convert stereo to mono if needed
     if len(audio_data.shape) > 1:
         if verbose:
@@ -66,22 +66,22 @@ def read_audio_file(input_path: str, verbose: bool = False) -> Tuple[np.ndarray,
             audio_data = audio_data.astype(np.int32).mean(axis=1).astype(np.int16)
         else:
             audio_data = audio_data.mean(axis=1).astype(np.int16)
-    
+
     # Verify the audio has proper range
     audio_max = abs(audio_data.max())
     audio_min = abs(audio_data.min())
     audio_range = max(audio_max, audio_min)
-    
+
     if audio_range < 100:
         print(f"⚠️  WARNING: Audio values are very small (max: {audio_data.max()}, min: {audio_data.min()})")
-        print(f"   Expected int16 range: -32768 to 32767")
-        print(f"   This may indicate a format conversion issue.")
+        print("   Expected int16 range: -32768 to 32767")
+        print("   This may indicate a format conversion issue.")
     elif verbose:
         print(f"Audio range: {audio_data.min()} to {audio_data.max()} ✓")
-    
+
     if verbose:
         print(f"Audio info: {len(audio_data)} samples, {sample_rate} Hz, {len(audio_data) / sample_rate:.2f} seconds")
-    
+
     return audio_data, sample_rate
 
 
@@ -100,24 +100,24 @@ def write_audio_file(output_path: str, audio_data: np.ndarray, sample_rate: int,
     # Validate output file extension
     valid_extensions = ['.wav', '.flac', '.ogg']
     output_ext = output_path[output_path.rfind('.'):].lower() if '.' in output_path else ''
-    
+
     if output_ext not in valid_extensions:
         raise ValueError(
             f"Invalid output file extension: '{output_ext}'. "
             f"Supported formats: {', '.join(valid_extensions)}"
         )
-    
+
     if verbose:
         print(f"Saving audio to: {output_path}")
         print(f"  - Format: {output_ext[1:].upper()}")
         print(f"  - Samples: {len(audio_data)}")
         print(f"  - Sample rate: {sample_rate} Hz")
-    
+
     # Write the audio file
     sf.write(output_path, audio_data, sample_rate)
-    
+
     if verbose:
-        print(f"✓ Audio saved successfully")
+        print("✓ Audio saved successfully")
 
 
 def calculate_audio_stats(audio_data: np.ndarray) -> dict:

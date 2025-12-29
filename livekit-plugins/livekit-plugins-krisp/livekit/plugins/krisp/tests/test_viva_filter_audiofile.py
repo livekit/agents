@@ -21,7 +21,6 @@ import asyncio
 import os
 import sys
 import time
-from pathlib import Path
 
 # This is a standalone script, not a pytest test file
 # Handle missing dependencies gracefully during pytest collection
@@ -110,7 +109,7 @@ async def process_audio_file(
         print(f"Warning: Sample rate {sample_rate} not in supported rates {supported_rates}")
         print("Resampling may be required. Continuing anyway...")
 
-    print(f"\nInitializing VIVA filter:")
+    print("\nInitializing VIVA filter:")
     print(f"  - Model path: {model_path}")
     print(f"  - Noise suppression level: {noise_level}")
     print(f"  - Frame duration: {frame_duration_ms}ms")
@@ -130,7 +129,7 @@ async def process_audio_file(
     print(f"Filter initialized in {init_duration * 1000:.2f}ms")
 
     try:
-        print(f"\nFilter info:")
+        print("\nFilter info:")
         print(f"  - Status: {('Enabled' if audio_filter.is_enabled else 'Disabled')}")
 
         print("\nProcessing audio through noise reduction filter...")
@@ -197,7 +196,7 @@ async def process_audio_file(
                 )
             filtered_audio.append(audio_buffer)
 
-        print(f"  Progress: 100.0%")
+        print("  Progress: 100.0%")
 
         process_duration = time.time() - process_start_time
 
@@ -211,19 +210,19 @@ async def process_audio_file(
         print("\n" + "=" * 60)
         print("Processing Results:")
         print("=" * 60)
-        print(f"\nInput:")
+        print("\nInput:")
         print(f"  - Samples: {input_stats['samples']}")
         print(f"  - Duration: {input_stats['samples'] / sample_rate:.2f}s")
         print(f"  - RMS level: {input_stats['rms']:.2f}")
         print(f"  - Range: {input_stats['min']} to {input_stats['max']}")
 
-        print(f"\nOutput:")
+        print("\nOutput:")
         print(f"  - Samples: {output_stats['samples']}")
         print(f"  - Duration: {output_stats['samples'] / sample_rate:.2f}s")
         print(f"  - RMS level: {output_stats['rms']:.2f}")
         print(f"  - Range: {output_stats['min']} to {output_stats['max']}")
 
-        print(f"\nPerformance:")
+        print("\nPerformance:")
         print(f"  - Frames processed: {frames_processed}")
         print(f"  - Processing time: {process_duration:.2f}s")
         print(f"  - Real-time factor: {(len(audio_data) / sample_rate) / process_duration:.2f}x")

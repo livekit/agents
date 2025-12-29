@@ -20,7 +20,6 @@ import argparse
 import os
 import sys
 import time
-from pathlib import Path
 
 # This is a standalone script, not a pytest test file
 # Handle missing dependencies gracefully during pytest collection
@@ -109,7 +108,7 @@ def analyze_audio_file(
         print(f"Warning: Sample rate {sample_rate} not in supported rates {supported_rates}")
         print("Resampling may be required. Continuing anyway...")
 
-    print(f"\nInitializing VIVA turn detector:")
+    print("\nInitializing VIVA turn detector:")
     print(f"  - Model path: {model_path}")
     print(f"  - Threshold: {threshold}")
     print(f"  - Frame duration: {frame_duration_ms}ms")
@@ -129,7 +128,7 @@ def analyze_audio_file(
     print(f"Turn detector initialized in {init_duration * 1000:.2f}ms")
 
     try:
-        print(f"\nDetector info:")
+        print("\nDetector info:")
         print(f"  - Model: {turn_detector.model}")
         print(f"  - Provider: {turn_detector.provider}")
         print(f"  - Threshold: {turn_detector.threshold}")
@@ -202,7 +201,7 @@ def analyze_audio_file(
                         speech_segments.append((current_speech_start, timestamp))
                         current_speech_start = None
 
-                # Track turn completion events  
+                # Track turn completion events
                 # Check both the returned probability and speech_triggered flag
                 if turn_detector.speech_triggered and probability >= threshold:
                     turn_events.append(
@@ -230,7 +229,7 @@ def analyze_audio_file(
                     f"(incomplete frame, will be discarded)"
                 )
 
-        print(f"  Progress: 100.0%")
+        print("  Progress: 100.0%")
 
         # Final speech segment if still speaking
         if current_speech_start is not None:
@@ -253,7 +252,7 @@ def analyze_audio_file(
                 f"(probability: {event['probability']:.3f})"
             )
 
-        print(f"\nFinal State:")
+        print("\nFinal State:")
         print(f"  Speech triggered: {turn_detector.speech_triggered}")
         print(f"  Last probability: {turn_detector.last_probability}")
         print(f"  Total probabilities collected: {len(all_probabilities)}")
