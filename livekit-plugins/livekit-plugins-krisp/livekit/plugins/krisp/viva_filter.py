@@ -40,7 +40,7 @@ from .log import logger
 try:
     import krisp_audio
     KRISP_AUDIO_AVAILABLE = True
-except ModuleNotFoundError as e:
+except ModuleNotFoundError:
     KRISP_AUDIO_AVAILABLE = False
     logger.warning(
         "krisp-audio package not found. "

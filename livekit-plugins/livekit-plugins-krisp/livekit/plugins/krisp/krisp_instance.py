@@ -29,7 +29,7 @@ from .log import logger
 try:
     import krisp_audio
     KRISP_AUDIO_AVAILABLE = True
-    
+
     # Mapping of sample rates (Hz) to Krisp SDK SamplingRate enums
     KRISP_SAMPLE_RATES = {
         8000: krisp_audio.SamplingRate.Sr8000Hz,
@@ -47,7 +47,7 @@ try:
         30: krisp_audio.FrameDuration.Fd30ms,
         32: krisp_audio.FrameDuration.Fd32ms,
     }
-except ModuleNotFoundError as e:
+except ModuleNotFoundError:
     KRISP_AUDIO_AVAILABLE = False
     KRISP_SAMPLE_RATES = {}
     KRISP_FRAME_DURATIONS = {}
