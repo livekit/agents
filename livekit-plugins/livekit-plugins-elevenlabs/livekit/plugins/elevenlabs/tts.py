@@ -260,7 +260,7 @@ class TTS(tts.TTS):
             if (
                 self._current_connection
                 and self._current_connection.is_current
-                and not self._current_connection._closed
+                and self._current_connection.is_open
             ):
                 return self._current_connection
 
@@ -362,18 +362,25 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        # Streaming retries re-invoke `_run` on the same stream instance, so we must recreate any
+        # one-shot state (tokenizer streams, context IDs) per attempt.
         self._context_id = utils.shortuuid()
-        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
         self._text_buffer = ""
         self._start_times_ms: list[int] = []
         self._durations_ms: list[int] = []
         self._connection: _Connection | None = None
 
     async def aclose(self) -> None:
-        await self._sent_tokenizer_stream.aclose()
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        # Use a fresh context ID per attempt; the ElevenLabs multi-stream API treats context IDs
+        # as identifiers for a single synthesis lifecycle.
+        self._context_id = utils.shortuuid()
+        self._text_buffer = ""
+        self._start_times_ms.clear()
+        self._durations_ms.clear()
+
         output_emitter.initialize(
             request_id=self._context_id,
             sample_rate=self._opts.sample_rate,
@@ -382,6 +389,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/mp3",
         )
         output_emitter.start_segment(segment_id=self._context_id)
+
+        sent_tokenizer_stream = self._opts.word_tokenizer.stream()
 
         connection: _Connection
         try:
@@ -399,10 +408,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    sent_tokenizer_stream.flush()
                     continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task() -> None:
             flush_on_chunk = (
@@ -411,7 +420,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 and self._opts.auto_mode
             )
             xml_content: list[str] = []
-            async for data in self._sent_tokenizer_stream:
+            async for data in sent_tokenizer_stream:
                 text = data.token
                 # send xml tags fully formed
                 xml_start_tokens = ["<phoneme", "<break"]
@@ -455,12 +464,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except Exception as e:
-            if isinstance(e, APIStatusError):
+            if isinstance(e, (APIStatusError, APIError, APIConnectionError, APITimeoutError)):
                 raise e
             raise APIStatusError("Could not synthesize") from e
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
+            await sent_tokenizer_stream.aclose()
 
 
 @dataclass
@@ -504,6 +514,7 @@ class _StreamData:
     stream: SynthesizeStream
     waiter: asyncio.Future[None]
     timeout_timer: asyncio.TimerHandle | None = None
+    received_audio: bool = False
 
 
 class _Connection:
@@ -530,6 +541,10 @@ class _Connection:
     @property
     def is_current(self) -> bool:
         return self._is_current
+
+    @property
+    def is_open(self) -> bool:
+        return bool(self._ws) and not self._ws.closed and not self._closed
 
     def mark_non_current(self) -> None:
         """Mark this connection as no longer current - it will shut down when drained"""
@@ -709,10 +724,24 @@ class _Connection:
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     emitter.push(b64data)
+                    ctx.received_audio = True
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
 
                 if data.get("isFinal"):
+                    if not ctx.received_audio and not ctx.waiter.done():
+                        # ElevenLabs sometimes returns `isFinal` with an empty `audio` payload.
+                        # Treat that as a retryable failure and force a reconnect for the next attempt.
+                        ctx.waiter.set_exception(
+                            APIError("11labs stream ended without audio", retryable=True)
+                        )
+                        self.mark_non_current()
+                        self._cleanup_context(context_id)
+                        if not self._is_current and not self._active_contexts:
+                            logger.debug("no active contexts, shutting down connection")
+                            break
+                        continue
+
                     if stream is not None:
                         timed_words, _ = _to_timed_words(
                             stream._text_buffer,
