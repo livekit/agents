@@ -63,6 +63,7 @@ class _LLMOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    retrieval_config: NotGivenOr[types.RetrievalConfigOrDict]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
@@ -96,6 +97,7 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
+        retrieval_config: NotGivenOr[types.RetrievalConfigOrDict] = NOT_GIVEN,
         automatic_function_calling_config: NotGivenOr[
             types.AutomaticFunctionCallingConfigOrDict
         ] = NOT_GIVEN,
@@ -127,6 +129,7 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
+            retrieval_config (RetrievalConfigOrDict, optional): The retrieval configuration for response generation. Defaults to None.
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
@@ -193,6 +196,7 @@ class LLM(llm.LLM):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
+            retrieval_config=retrieval_config,
             automatic_function_calling_config=automatic_function_calling_config,
             http_options=http_options,
             seed=seed,
@@ -239,6 +243,12 @@ class LLM(llm.LLM):
         tool_choice = (
             cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
         )
+        retrieval_config = (
+            self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
+        )
+        if isinstance(retrieval_config, dict):
+            retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
             if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -246,7 +256,8 @@ class LLM(llm.LLM):
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=[tool_choice["function"]["name"]],
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "required":
@@ -259,23 +270,30 @@ class LLM(llm.LLM):
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=tool_names or None,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "auto":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.AUTO,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "none":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.NONE,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
+        elif retrieval_config:
+            extra["tool_config"] = types.ToolConfig(
+                retrieval_config=retrieval_config,
+            )
 
         if is_given(response_format):
             extra["response_schema"] = to_response_format(response_format)  # type: ignore
