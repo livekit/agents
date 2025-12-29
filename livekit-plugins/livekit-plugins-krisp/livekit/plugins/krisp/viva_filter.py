@@ -64,14 +64,14 @@ class KrispVivaFilter:
 
         Args:
             model_path: Path to the Krisp model file (.kef extension).
-                If None, uses KRISP_VIVA_MODEL_PATH environment variable.
+                If None, uses KRISP_VIVA_FILTER_MODEL_PATH environment variable.
             noise_suppression_level: Noise suppression level (0-100, default: 100).
             frame_duration_ms: Frame duration in milliseconds (10, 15, 20, 30, or 32, default: 10).
             sample_rate: Optional sample rate in Hz. If provided, the session will be
                 created immediately. If None, the session will be created on the first frame.
 
         Raises:
-            ValueError: If model_path is not provided and KRISP_VIVA_MODEL_PATH is not set,
+            ValueError: If model_path is not provided and KRISP_VIVA_FILTER_MODEL_PATH is not set,
                 or if frame_duration_ms is not supported.
             Exception: If model file doesn't have .kef extension.
             FileNotFoundError: If model file doesn't exist.
@@ -95,9 +95,9 @@ class KrispVivaFilter:
 
         try:
             # Set model path, checking environment if not specified
-            self._model_path = model_path or os.getenv("KRISP_VIVA_MODEL_PATH")
+            self._model_path = model_path or os.getenv("KRISP_VIVA_FILTER_MODEL_PATH")
             if not self._model_path:
-                logger.error("Model path is not provided and KRISP_VIVA_MODEL_PATH is not set.")
+                logger.error("Model path is not provided and KRISP_VIVA_FILTER_MODEL_PATH is not set.")
                 raise ValueError("Model path for KrispVivaFilter must be provided.")
 
             if not self._model_path.endswith(".kef"):

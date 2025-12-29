@@ -328,9 +328,9 @@ Supported sample rates: 8000, 16000, 24000, 32000, 44100, 48000 Hz
         sys.exit(1)
 
     # Check model path is set
-    if not os.getenv("KRISP_VIVA_MODEL_PATH"):
-        print("Error: KRISP_VIVA_MODEL_PATH environment variable not set")
-        print("Set it with: export KRISP_VIVA_MODEL_PATH=/path/to/model.kef")
+    if not os.getenv("KRISP_VIVA_FILTER_MODEL_PATH"):
+        print("Error: KRISP_VIVA_FILTER_MODEL_PATH environment variable not set")
+        print("Set it with: export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/model.kef")
         sys.exit(1)
 
     # Create output directory if needed

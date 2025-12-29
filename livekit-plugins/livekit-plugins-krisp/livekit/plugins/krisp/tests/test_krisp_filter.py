@@ -1,7 +1,7 @@
 """Unit tests for Krisp VIVA filter.
 
 Note: These tests require the krisp_audio package and a valid model file.
-Set KRISP_VIVA_MODEL_PATH environment variable before running tests.
+Set KRISP_VIVA_FILTER_MODEL_PATH environment variable before running tests.
 """
 
 import os
@@ -64,8 +64,8 @@ def sample_audio_frame():
 
 
 @pytest.mark.skipif(
-    not os.getenv("KRISP_VIVA_MODEL_PATH"),
-    reason="KRISP_VIVA_MODEL_PATH not set",
+    not os.getenv("KRISP_VIVA_FILTER_MODEL_PATH"),
+    reason="KRISP_VIVA_FILTER_MODEL_PATH not set",
 )
 class TestKrispVivaFilterIntegration:
     """Integration tests requiring actual Krisp SDK and model."""
@@ -148,7 +148,7 @@ class TestKrispVivaFilterUnit:
         model_file = tmp_path / "test_model.kef"
         model_file.write_text("dummy model")
 
-        with patch.dict(os.environ, {"KRISP_VIVA_MODEL_PATH": str(model_file)}):
+        with patch.dict(os.environ, {"KRISP_VIVA_FILTER_MODEL_PATH": str(model_file)}):
             filter = KrispVivaFilter()
             assert filter._model_path == str(model_file)
 

@@ -4,7 +4,8 @@ Real-time noise reduction and audio-based turn detection for LiveKit voice agent
 
 ## Features
 
-- **`KrispVivaFilter`**: Real-time noise reduction for cleaner audio output
+- **`KrispAudioInput`**: Noise cancellation for incoming user audio (human-to-bot)
+- **`KrispVivaFilter`**: Real-time noise reduction for audio processing
 - **`KrispVivaTurn`**: Audio-based turn detection for accurate end-of-turn detection
 
 ## Installation
@@ -37,38 +38,47 @@ Note: Noise reduction and turn detection use different model files.
 
 ## Quick Start
 
-### Noise Reduction
+### Human-to-Bot Noise Cancellation (Recommended)
+
+For cleaning up user audio before STT/VAD processing:
 
 ```python
-from livekit.agents import Agent
-from livekit.plugins import krisp
-from collections.abc import AsyncIterable
-from livekit import rtc
+from livekit.agents import AgentSession, Agent, JobContext, room_io
+from livekit.plugins import krisp, silero, openai
 
-class MyAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="You are a helpful voice assistant.",
-            llm=openai.realtime.RealtimeModel(),
-        )
-        # Create filter once, reuse for all audio
-        self.krisp_filter = krisp.KrispVivaFilter(
-            noise_suppression_level=100,  # 0-100
-            frame_duration_ms=20,  # 10, 15, 20, 30, or 32
-            sample_rate=16000,  # Optional: pre-load model
-        )
-
-    async def realtime_audio_output_node(
-        self, audio: AsyncIterable[rtc.AudioFrame], model_settings
-    ) -> AsyncIterable[rtc.AudioFrame]:
-        # Filter output audio through Krisp
-        async for frame in self.krisp_filter.process_stream(audio):
-            yield frame
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        stt=openai.STT(),
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=openai.TTS(),
+    )
     
-    async def aclose(self):
-        self.krisp_filter.close()
-        await super().aclose()
+    # Start session with RoomIO
+    await session.start(
+        agent=MyAgent(),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                sample_rate=16000,
+                frame_size_ms=10,  # Must match Krisp frame_duration_ms
+            ),
+        ),
+    )
+    
+    # ⭐ Apply Krisp to incoming user audio
+    if session.input.audio:
+        session.input.audio = krisp.KrispAudioInput(
+            source=session.input.audio,
+            noise_suppression_level=100,  # 0-100
+            frame_duration_ms=10,
+            sample_rate=16000,
+        )
+        session.input.audio.on_attached()
 ```
+
+**Audio Pipeline:** `Room → RoomIO → KrispAudioInput → VAD → STT → LLM`
 
 ### Turn Detection
 
@@ -98,6 +108,16 @@ async def entrypoint(ctx):
 ```
 
 ## Configuration
+
+### KrispAudioInput Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | AudioInput | required | Upstream audio input to wrap (from RoomIO) |
+| `model_path` | str | env var | Path to noise reduction `.kef` model |
+| `noise_suppression_level` | int | 100 | Noise reduction intensity (0-100) |
+| `frame_duration_ms` | int | 10 | Frame size: 10, 15, 20, 30, or 32ms |
+| `sample_rate` | int | None | Optional: pre-initialize with sample rate |
 
 ### KrispVivaFilter Parameters
 
@@ -222,6 +242,44 @@ For 20ms @ 16kHz, each frame must have exactly 320 samples.
 - Test with known noisy audio
 
 ## API Reference
+
+### `KrispAudioInput`
+
+**Purpose:** Wrap RoomIO audio input to apply noise cancellation to incoming user audio (human-to-bot).
+
+**Constructor:**
+```python
+KrispAudioInput(
+    source: AudioInput,
+    *,
+    model_path: str | None = None,
+    noise_suppression_level: int = 100,
+    frame_duration_ms: int = 10,
+    sample_rate: int | None = None,
+)
+```
+
+**Methods:**
+- `async __anext__() -> AudioFrame` - Get next filtered frame (called automatically)
+- `on_attached()` - Called when attached to session (call explicitly after wrapping)
+- `on_detached()` - Called when detached (cleanup happens automatically)
+- `enable_filtering()` - Enable noise filtering
+- `disable_filtering()` - Disable noise filtering (passthrough)
+
+**Properties:**
+- `is_filtering_enabled: bool` - Check if filtering is active
+- `label: str` - Audio input label ("KrispNC")
+- `source: AudioInput` - Upstream audio source
+
+**Usage:**
+```python
+if session.input.audio:
+    session.input.audio = krisp.KrispAudioInput(
+        source=session.input.audio,
+        noise_suppression_level=100,
+    )
+    session.input.audio.on_attached()
+```
 
 ### `KrispVivaFilter`
 

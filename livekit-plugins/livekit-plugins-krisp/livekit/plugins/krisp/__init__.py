@@ -24,6 +24,7 @@ Features:
 
 from livekit.agents import Plugin
 
+from .audio_input import KrispAudioInput
 from .krisp_instance import (
     KRISP_FRAME_DURATIONS,
     KRISP_SAMPLE_RATES,
@@ -37,6 +38,7 @@ from .viva_filter import KrispVivaFilter
 from .viva_turn import KrispVivaTurn
 
 __all__ = [
+    "KrispAudioInput",
     "KrispVivaFilter",
     "KrispVivaTurn",
     "KrispSDKManager",
