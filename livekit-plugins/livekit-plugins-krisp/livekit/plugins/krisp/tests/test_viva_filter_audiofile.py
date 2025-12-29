@@ -26,7 +26,11 @@ import time
 # Handle missing dependencies gracefully during pytest collection
 try:
     import numpy as np
-    import soundfile as sf
+
+    try:
+        import soundfile as sf  # noqa: F401
+    except ImportError:
+        sf = None  # Will be checked later if needed
 except ImportError as e:
     # Check if we're being imported by pytest
     if "pytest" in sys.modules or "_pytest" in sys.modules:

@@ -86,7 +86,7 @@ async def test_krisp_filter():
         # Test multiple frames
         logger.info("\n5. Processing multiple frames...")
         for i in range(10):
-            filtered = await krisp_filter.filter(test_frame)
+            _ = await krisp_filter.filter(test_frame)
             logger.info(f"   Frame {i + 1}/10 processed")
         logger.info("✅ Multiple frames processed successfully")
 
@@ -95,11 +95,11 @@ async def test_krisp_filter():
 
         async def generate_frames():
             """Generate test audio frames."""
-            for i in range(5):
+            for _ in range(5):
                 yield test_frame
 
         frame_count = 0
-        async for filtered_frame in krisp_filter.process_stream(generate_frames()):
+        async for _ in krisp_filter.process_stream(generate_frames()):
             frame_count += 1
 
         logger.info(f"✅ Stream processing completed: {frame_count} frames")
