@@ -735,7 +735,7 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = (
+        should_discard = bool(
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
