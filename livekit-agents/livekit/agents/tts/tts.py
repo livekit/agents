@@ -278,17 +278,22 @@ class ChunkedStream(ABC):
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                should_retry = (
+                    e.retryable
+                    and not output_emitter.has_pushed_audio()
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                    )
 
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    f"failed to synthesize speech, retrying in {retry_interval}s",
+                    exc_info=e,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                )
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
@@ -422,17 +427,22 @@ class SynthesizeStream(ABC):
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                should_retry = (
+                    e.retryable
+                    and not output_emitter.has_pushed_audio()
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
-                    )
 
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    f"failed to synthesize speech, retrying in {retry_interval}s",
+                    exc_info=e,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                )
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
@@ -649,6 +659,9 @@ class AudioEmitter:
             if -len(self._audio_durations) <= idx < len(self._audio_durations)
             else 0.0
         )
+
+    def has_pushed_audio(self) -> bool:
+        return any(d > 0.0 for d in self._audio_durations)
 
     @property
     def num_segments(self) -> int:
