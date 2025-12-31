@@ -275,7 +275,8 @@ class RecognizeStream(ABC):
         self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
         )
@@ -429,6 +430,8 @@ class RecognizeStream(ABC):
 
         if self._metrics_task is not None:
             await self._metrics_task
+
+        await self._tee.aclose()
 
     async def __anext__(self) -> SpeechEvent:
         try:
