@@ -50,48 +50,29 @@ jobs:
 
       - name: Run STT tests
         env:
-          # LiveKit (for inference module)
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
-          # Deepgram
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
-          # AssemblyAI
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
-          # Speechmatics
           SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
-          # ElevenLabs
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-          # FireworksAI
           FIREWORKSAI_API_KEY: ${{ secrets.FIREWORKSAI_API_KEY }}
-          # Gladia
           GLADIA_API_KEY: ${{ secrets.GLADIA_API_KEY }}
-          # RTZR
           RTZR_API_KEY: ${{ secrets.RTZR_API_KEY }}
-          # FAL
           FAL_KEY: ${{ secrets.FAL_KEY }}
-          # MistralAI
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-          # NVIDIA
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          # OpenAI
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Cartesia
           CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
-          # Gradium
           GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
-          # Soniox
           SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
-          # Google
           GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
           GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
-          # Azure
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
-          # AWS
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
-          # Sarvam
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
         run: |
           uv run pytest -n 3 -v tests/test_stt.py --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
@@ -100,7 +81,6 @@ jobs:
         if: always()
         id: test-summary
         run: |
-          # Parse JUnit XML and generate markdown summary
           python3 << 'EOF' > test-summary.md
           import xml.etree.ElementTree as ET
           import os
@@ -121,25 +101,23 @@ jobs:
               
               passed = tests - failures - errors - skipped
               
-              # Determine status emoji
               if failures == 0 and errors == 0:
-                  status = "✅ All tests passed"
+                  status = "✓ All tests passed"
               else:
-                  status = "❌ Some tests failed"
+                  status = "✗ Some tests failed"
               
               print(f"## STT Test Results\n")
               print(f"**Status:** {status}\n")
               print(f"| Metric | Count |")
               print(f"|--------|-------|")
-              print(f"| ✅ Passed | {passed} |")
-              print(f"| ❌ Failed | {failures} |")
-              print(f"| 💥 Errors | {errors} |")
-              print(f"| ⏭️ Skipped | {skipped} |")
-              print(f"| 📊 Total | {tests} |")
-              print(f"| ⏱️ Duration | {time_taken:.1f}s |")
+              print(f"| ✓ Passed | {passed} |")
+              print(f"| ✗ Failed | {failures} |")
+              print(f"| × Errors | {errors} |")
+              print(f"| → Skipped | {skipped} |")
+              print(f"| ▣ Total | {tests} |")
+              print(f"| ⏱ Duration | {time_taken:.1f}s |")
               print()
               
-              # List failures if any
               if failures > 0 or errors > 0:
                   print("<details>")
                   print("<summary>Failed Tests</summary>\n")
@@ -150,13 +128,13 @@ jobs:
                           name = testcase.get('name', 'unknown')
                           classname = testcase.get('classname', '')
                           msg = (failure if failure is not None else error).get('message', '')[:200]
+                          indented_msg = '\n'.join(f'  {line}' for line in msg.strip().split('\n'))
                           print(f"- **{classname}::{name}**")
                           print(f"  ```")
-                          print(f"  {msg}")
+                          print(indented_msg)
                           print(f"  ```")
                   print("</details>")
               
-              # List skipped tests
               skipped_tests = [tc for tc in testsuite.iter('testcase') if tc.find('skipped') is not None]
               if skipped_tests:
                   print("<details>")
@@ -172,7 +150,7 @@ jobs:
                   
           except Exception as e:
               print(f"## STT Test Results\n")
-              print(f"⚠️ Could not parse test results: {e}")
+              print(f"⚠ Could not parse test results: {e}")
           EOF
 
       - name: Post results to PR
@@ -183,7 +161,6 @@ jobs:
             const fs = require('fs');
             const summary = fs.readFileSync('test-summary.md', 'utf8');
 
-            // Get PR number from event context or input
             let prNumber;
             if ('${{ github.event_name }}' === 'pull_request') {
               prNumber = ${{ github.event.pull_request.number || 0 }};
@@ -198,7 +175,6 @@ jobs:
 
             const body = `${summary}\n\n---\n*Triggered by workflow run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*`;
 
-            // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -211,7 +187,6 @@ jobs:
             );
 
             if (botComment) {
-              // Update existing comment
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -220,7 +195,6 @@ jobs:
               });
               console.log('Updated existing comment');
             } else {
-              // Create new comment
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
