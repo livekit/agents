@@ -14,9 +14,7 @@ LiveAPIModels = Literal[
     "gemini-live-2.5-flash-preview-native-audio-09-2025",
     # Gemini API models
     "gemini-2.5-flash-native-audio-preview-12-2025",
-    "gemini-live-2.5-flash-preview",
     # deprecated Gemini API models
-    "gemini-2.0-flash-live-001",
     "gemini-2.5-flash-native-audio-preview-09-2025",
 ]
 
