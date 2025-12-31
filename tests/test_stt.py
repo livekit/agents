@@ -23,7 +23,7 @@ from livekit.plugins import (
     fal,
     fireworksai,
     gladia,
-    google,
+    # google,
     gradium,
     mistralai,
     nvidia,
@@ -60,10 +60,11 @@ STTs: list[Callable[[], stt.STT]] = [
         openai,
         cartesia,
         gradium,
-        # soniox,
+        soniox,
+        # TODO: Google STT permissions
         # google,
         inference,
-        # azure,
+        azure,
         aws,
         sarvam,
         # TODO: only Business account allowed outside South Korea
