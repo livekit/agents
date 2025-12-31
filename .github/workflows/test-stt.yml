@@ -75,7 +75,7 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
         run: |
-          uv run pytest -n 3 -v tests/test_stt.py --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+          uv run pytest -n 3 -v tests/test_stt.py --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
 
       - name: Generate test summary
         if: always()
@@ -84,6 +84,7 @@ jobs:
           python3 << 'EOF' > test-summary.md
           import xml.etree.ElementTree as ET
           import os
+          import textwrap
 
           try:
               tree = ET.parse('test-results.xml')
@@ -127,8 +128,12 @@ jobs:
                       if failure is not None or error is not None:
                           name = testcase.get('name', 'unknown')
                           classname = testcase.get('classname', '')
-                          msg = (failure if failure is not None else error).get('message', '')[:200]
-                          indented_msg = '\n'.join(f'  {line}' for line in msg.strip().split('\n'))
+                          elem = failure if failure is not None else error
+                          # Get the full error text (contains traceback) or fallback to message attribute
+                          msg = elem.text if elem.text else elem.get('message', '')
+                          # Show more of the error (up to 2000 chars to catch underlying issues)
+                          msg = msg[:2000]
+                          indented_msg = textwrap.indent(msg.strip(), '  ')
                           print(f"- **{classname}::{name}**")
                           print(f"  ```")
                           print(indented_msg)
@@ -139,13 +144,19 @@ jobs:
               if skipped_tests:
                   print("<details>")
                   print("<summary>Skipped Tests</summary>\n")
+                  print("| Test | Reason |")
+                  print("|------|--------|")
                   for testcase in skipped_tests[:20]:  # Limit to 20
                       name = testcase.get('name', 'unknown')
+                      classname = testcase.get('classname', '')
                       skip = testcase.find('skipped')
                       reason = skip.get('message', '') if skip is not None else ''
-                      print(f"- {name}: {reason[:100]}")
+                      # Escape pipe characters in markdown tables
+                      test_name = f"{classname}::{name}".replace('|', '\\|')
+                      reason_escaped = reason.strip().replace('|', '\\|').replace('\n', ' ')
+                      print(f"| `{test_name}` | {reason_escaped} |")
                   if len(skipped_tests) > 20:
-                      print(f"- ... and {len(skipped_tests) - 20} more")
+                      print(f"| ... | ... and {len(skipped_tests) - 20} more |")
                   print("</details>")
                   
           except Exception as e:
