@@ -205,5 +205,25 @@ async def test_stream(stt_factory: Callable[[], STT], sample_rate: int, request)
         else:
             assert wer(text, transcript) <= WER_THRESHOLD
 
-    await asyncio.wait_for(asyncio.gather(_stream_input(), _stream_output()), timeout=120)
-    await stream.aclose()
+    timed_out = False
+
+    async def _timeout_task():
+        nonlocal timed_out
+        await asyncio.sleep(120)
+        timed_out = True
+        await stream.aclose()
+
+    timeout_task = asyncio.create_task(_timeout_task())
+    try:
+        await asyncio.gather(_stream_input(), _stream_output())
+    finally:
+        if not timeout_task.done():
+            timeout_task.cancel()
+            try:
+                await timeout_task
+            except asyncio.CancelledError:
+                pass
+            await stream.aclose()
+
+    if timed_out:
+        pytest.fail(f"{label} streaming timed out after 120 seconds")
