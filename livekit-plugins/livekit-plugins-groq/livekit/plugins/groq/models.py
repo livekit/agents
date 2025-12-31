@@ -30,15 +30,15 @@ TTSModels = Literal[
 
 TTSVoices = Literal[
     # english voices
-    "Autumn",
-    "Diana",
-    "Hannah",
-    "Austin",
-    "Daniel",
-    "Troy",
+    "autumn",
+    "diana",
+    "hannah",
+    "austin",
+    "daniel",
+    "troy",
     # arabic voices
-    "Fahad",
-    "Sultan",
-    "Lulwa",
-    "Noura",
+    "fahad",
+    "sultan",
+    "lulwa",
+    "noura",
 ]

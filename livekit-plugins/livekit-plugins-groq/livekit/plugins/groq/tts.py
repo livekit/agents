@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "canopylabs/orpheus-v1-english",
-        voice: TTSVoices | str = "Autumn",
+        voice: TTSVoices | str = "autumn",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -69,7 +69,7 @@ class TTS(tts.TTS):
 
         Args:
             model (SpeechModels | str, optional): Model to use. Default is "canopylabs/orpheus-v1-english".
-            voice (SpeechVoices | str, optional): Voice to use. Default is "Autumn".
+            voice (SpeechVoices | str, optional): Voice to use. Default is "autumn".
             api_key (str | None, optional): API key to use. Default is None.
         """
 
