@@ -245,6 +245,7 @@ class STT(stt.STT):
                 interim_results=True,
                 diarization=enable_diarization,
                 aligned_transcript="chunk",
+                batch_recognition=False,
             ),
         )
 

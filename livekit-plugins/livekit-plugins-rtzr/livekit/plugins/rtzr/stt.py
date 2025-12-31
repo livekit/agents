@@ -83,6 +83,7 @@ class STT(stt.STT):
                 interim_results=True,
                 # word timestamps don't seem to work despite the docs saying they do
                 aligned_transcript="chunk",
+                batch_recognition=False,
             )
         )
 
@@ -97,6 +98,14 @@ class STT(stt.STT):
             use_punctuation=use_punctuation,
         )
         self._client = RTZROpenAPIClient(http_session=http_session)
+
+    @property
+    def model(self) -> str:
+        return self._params.model_name
+
+    @property
+    def provider(self) -> str:
+        return "RTZR"
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""

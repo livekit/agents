@@ -128,7 +128,10 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=False
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                batch_recognition=False,
             )
         )
 

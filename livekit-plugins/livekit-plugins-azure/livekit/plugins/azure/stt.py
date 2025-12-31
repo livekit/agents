@@ -101,7 +101,10 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="chunk"
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="chunk",
+                batch_recognition=False,
             )
         )
         if not language or not is_given(language):

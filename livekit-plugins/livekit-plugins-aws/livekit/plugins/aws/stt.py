@@ -109,7 +109,10 @@ class STT(stt.STT):
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="word"
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                batch_recognition=False,
             )
         )
 

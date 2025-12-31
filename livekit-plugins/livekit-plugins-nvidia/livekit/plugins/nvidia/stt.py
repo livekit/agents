@@ -52,6 +52,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 aligned_transcript="word",
+                batch_recognition=False,
             ),
         )
 

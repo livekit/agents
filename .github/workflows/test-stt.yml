@@ -1,0 +1,224 @@
+name: Test STT
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch or revision to test"
+        required: false
+        type: string
+        default: "main"
+      pr_number:
+        description: "PR number to post results to (optional)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  test-stt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch != '' && inputs.branch || github.ref }}
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras --dev
+
+      - name: Run STT tests
+        env:
+          # LiveKit (for inference module)
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+          # Deepgram
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          # AssemblyAI
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          # Speechmatics
+          SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
+          # ElevenLabs
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          # FireworksAI
+          FIREWORKSAI_API_KEY: ${{ secrets.FIREWORKSAI_API_KEY }}
+          # Gladia
+          GLADIA_API_KEY: ${{ secrets.GLADIA_API_KEY }}
+          # RTZR
+          RTZR_API_KEY: ${{ secrets.RTZR_API_KEY }}
+          # FAL
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          # MistralAI
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          # NVIDIA
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          # OpenAI
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Cartesia
+          CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+          # Gradium
+          GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
+          # Soniox
+          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
+          # Google
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          # Azure
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          # AWS
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          # Sarvam
+          SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+        run: |
+          uv run pytest -v tests/test_stt.py --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+
+      - name: Generate test summary
+        if: always()
+        id: test-summary
+        run: |
+          # Parse JUnit XML and generate markdown summary
+          python3 << 'EOF' > test-summary.md
+          import xml.etree.ElementTree as ET
+          import os
+
+          try:
+              tree = ET.parse('test-results.xml')
+              root = tree.getroot()
+              
+              testsuite = root.find('testsuite') if root.tag != 'testsuite' else root
+              if testsuite is None:
+                  testsuite = root
+              
+              tests = int(testsuite.get('tests', 0))
+              failures = int(testsuite.get('failures', 0))
+              errors = int(testsuite.get('errors', 0))
+              skipped = int(testsuite.get('skipped', 0))
+              time_taken = float(testsuite.get('time', 0))
+              
+              passed = tests - failures - errors - skipped
+              
+              # Determine status emoji
+              if failures == 0 and errors == 0:
+                  status = "✅ All tests passed"
+              else:
+                  status = "❌ Some tests failed"
+              
+              print(f"## STT Test Results\n")
+              print(f"**Status:** {status}\n")
+              print(f"| Metric | Count |")
+              print(f"|--------|-------|")
+              print(f"| ✅ Passed | {passed} |")
+              print(f"| ❌ Failed | {failures} |")
+              print(f"| 💥 Errors | {errors} |")
+              print(f"| ⏭️ Skipped | {skipped} |")
+              print(f"| 📊 Total | {tests} |")
+              print(f"| ⏱️ Duration | {time_taken:.1f}s |")
+              print()
+              
+              # List failures if any
+              if failures > 0 or errors > 0:
+                  print("<details>")
+                  print("<summary>Failed Tests</summary>\n")
+                  for testcase in testsuite.iter('testcase'):
+                      failure = testcase.find('failure')
+                      error = testcase.find('error')
+                      if failure is not None or error is not None:
+                          name = testcase.get('name', 'unknown')
+                          classname = testcase.get('classname', '')
+                          msg = (failure if failure is not None else error).get('message', '')[:200]
+                          print(f"- **{classname}::{name}**")
+                          print(f"  ```")
+                          print(f"  {msg}")
+                          print(f"  ```")
+                  print("</details>")
+              
+              # List skipped tests
+              skipped_tests = [tc for tc in testsuite.iter('testcase') if tc.find('skipped') is not None]
+              if skipped_tests:
+                  print("<details>")
+                  print("<summary>Skipped Tests</summary>\n")
+                  for testcase in skipped_tests[:20]:  # Limit to 20
+                      name = testcase.get('name', 'unknown')
+                      skip = testcase.find('skipped')
+                      reason = skip.get('message', '') if skip is not None else ''
+                      print(f"- {name}: {reason[:100]}")
+                  if len(skipped_tests) > 20:
+                      print(f"- ... and {len(skipped_tests) - 20} more")
+                  print("</details>")
+                  
+          except Exception as e:
+              print(f"## STT Test Results\n")
+              print(f"⚠️ Could not parse test results: {e}")
+          EOF
+
+      - name: Post results to PR
+        if: always() && inputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('test-summary.md', 'utf8');
+            const prNumber = parseInt('${{ inputs.pr_number }}');
+
+            if (isNaN(prNumber)) {
+              console.log('Invalid PR number, skipping comment');
+              return;
+            }
+
+            const body = `${summary}\n\n---\n*Triggered by workflow run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('## STT Test Results')
+            );
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+              console.log('Updated existing comment');
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body
+              });
+              console.log('Created new comment');
+            }
+
+      - name: Add to job summary
+        if: always()
+        run: |
+          cat test-summary.md >> $GITHUB_STEP_SUMMARY

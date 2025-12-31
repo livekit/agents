@@ -80,6 +80,8 @@ class STTCapabilities:
     interim_results: bool
     diarization: bool = False
     aligned_transcript: Literal["word", "chunk", False] = False
+    batch_recognition: bool = True
+    """Whether the STT supports batch recognition via recognize() method"""
 
 
 class STTError(BaseModel):
