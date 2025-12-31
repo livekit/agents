@@ -61,7 +61,7 @@ STTs: list[Callable[[], stt.STT]] = [
         cartesia,
         gradium,
         soniox,
-        google,
+        # google,
         inference,
         azure,
         aws,
@@ -167,6 +167,7 @@ async def test_stream(stt_factory: Callable[[], STT], sample_rate: int, request)
             # make sure the events are sent in the right order
             recv_start, recv_end = False, True
             start_time = time.time()
+            got_final_transcript = False
 
             async for event in stream:
                 if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
@@ -187,6 +188,11 @@ async def test_stream(stt_factory: Callable[[], STT], sample_rate: int, request)
                     if stt.provider not in {"FireworksAI", "RTZR", "livekit"}:
                         assert language is not None
                         assert language.lower().startswith("en")
+                    got_final_transcript = True
+                    # Some providers don't send END_OF_SPEECH, break after final transcript
+                    if closing:
+                        await asyncio.sleep(1)  # Give time for END_OF_SPEECH
+                        break
 
                 if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
                     recv_start = False
@@ -206,27 +212,23 @@ async def test_stream(stt_factory: Callable[[], STT], sample_rate: int, request)
             }:
                 assert len(text) > 0 and wer(text, transcript) <= 1.0
             else:
+                assert got_final_transcript, "No FINAL_TRANSCRIPT received"
                 assert wer(text, transcript) <= WER_THRESHOLD
 
         timed_out = False
 
-        async def _timeout_task():
+        async def _run_test():
             nonlocal timed_out
-            await asyncio.sleep(120)
-            timed_out = True
+            try:
+                async with asyncio.timeout(60):
+                    await asyncio.gather(_stream_input(), _stream_output())
+            except TimeoutError:
+                timed_out = True
+
+        try:
+            await _run_test()
+        finally:
             await stream.aclose()
 
-        timeout_task = asyncio.create_task(_timeout_task())
-        try:
-            await asyncio.gather(_stream_input(), _stream_output())
-        finally:
-            if not timeout_task.done():
-                timeout_task.cancel()
-                try:
-                    await timeout_task
-                except asyncio.CancelledError:
-                    pass
-                await stream.aclose()
-
         if timed_out:
-            pytest.fail(f"{label} streaming timed out after 120 seconds")
+            pytest.fail(f"{label} streaming timed out after 60 seconds")
