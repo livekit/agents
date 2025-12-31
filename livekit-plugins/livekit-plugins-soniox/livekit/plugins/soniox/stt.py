@@ -136,6 +136,8 @@ class STT(stt.STT):
         )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
+        if not self._api_key:
+            raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
         self._base_url = base_url
         self._http_session = http_session
         self._params = params or STTOptions()
