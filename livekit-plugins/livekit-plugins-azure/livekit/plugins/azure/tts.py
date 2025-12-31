@@ -14,12 +14,22 @@ from __future__ import annotations
 
 import asyncio
 import os
+import queue
+import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
 
 import aiohttp
 
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts, utils
+try:
+    import azure.cognitiveservices.speech as speechsdk
+except ImportError:
+    raise ImportError(
+        "azure-cognitiveservices-speech is required for streaming. "
+        "Install with: pip install azure-cognitiveservices-speech"
+    )
+
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tokenize, tts, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -35,6 +45,14 @@ SUPPORTED_OUTPUT_FORMATS = {
     24000: "raw-24khz-16bit-mono-pcm",
     44100: "raw-44100hz-16bit-mono-pcm",
     48000: "raw-48khz-16bit-mono-pcm",
+}
+
+# Azure SDK output format mapping - use Raw formats to avoid WAV headers
+SDK_OUTPUT_FORMATS = {
+    8000: speechsdk.SpeechSynthesisOutputFormat.Raw8Khz16BitMonoPcm,
+    16000: speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
+    24000: speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+    48000: speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
 }
 
 
@@ -140,7 +158,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -186,6 +204,7 @@ class TTS(tts.TTS):
             style=style,
             auth_token=speech_auth_token,
         )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
     def model(self) -> str:
@@ -226,6 +245,18 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -304,3 +335,247 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError(str(e)) from e
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    """Streaming TTS using Azure Speech SDK with TextStream input."""
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+        self._text_ch = utils.aio.Chan[str]()
+        self._synthesizer: speechsdk.SpeechSynthesizer | None = None
+        self._warmup_done = False
+        if self._synthesizer is None:
+            self._synthesizer = self._create_synthesizer()
+            # Warm up the synthesizer
+            self._warmup_synthesizer()
+
+
+    def _create_synthesizer(self) -> speechsdk.SpeechSynthesizer:
+        """Create and configure the Azure Speech synthesizer."""
+        # Build WebSocket v2 endpoint
+        if self._opts.speech_endpoint:
+            endpoint = self._opts.speech_endpoint.replace(
+                "/cognitiveservices/v1", "/cognitiveservices/websocket/v2"
+            )
+        else:
+            endpoint = f"wss://{self._opts.region}.tts.speech.microsoft.com/cognitiveservices/websocket/v2"
+
+        # Create speech config
+        speech_config = speechsdk.SpeechConfig(
+            endpoint=endpoint,
+            subscription=self._opts.subscription_key or "",
+        )
+
+        # Set deployment ID if provided
+        if self._opts.deployment_id:
+            speech_config.endpoint_id = self._opts.deployment_id
+
+        # Set voice and output format
+        speech_config.speech_synthesis_voice_name = self._opts.voice
+        
+        # Use SDK format if available
+        if self._opts.sample_rate in SDK_OUTPUT_FORMATS:
+            speech_config.set_speech_synthesis_output_format(
+                SDK_OUTPUT_FORMATS[self._opts.sample_rate]
+            )
+        else:
+            # Default to 24kHz raw format
+            speech_config.set_speech_synthesis_output_format(
+                speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm
+            )
+
+        # Create synthesizer (no audio config - we'll use events)
+        return speechsdk.SpeechSynthesizer(
+            speech_config=speech_config, audio_config=None
+        )
+
+    def _warmup_synthesizer(self) -> None:
+        """Warm up the synthesizer by synthesizing a short text."""
+        if self._warmup_done:
+            return
+        
+        import time
+        
+        # Warm-up: synthesize a short text first to establish connection
+        print("\n[Warm-up] Synthesizing warm-up text to establish connection...")
+        warmup_start = time.time()
+        warmup_request = speechsdk.SpeechSynthesisRequest(
+            input_type=speechsdk.SpeechSynthesisRequestInputType.TextStream
+        )
+        warmup_task = self._synthesizer.speak_async(warmup_request)
+        warmup_request.input_stream.write("Warm up.")
+        warmup_request.input_stream.close()
+        warmup_result = warmup_task.get()
+        warmup_time = time.time() - warmup_start
+        print(f"[Warm-up] Completed in {warmup_time:.3f}s\n")
+        
+        self._warmup_done = True
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+
+        async def _forward_input() -> None:
+            """Forward text chunks directly to synthesis."""
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    self._text_ch.send_nowait(input)
+                elif isinstance(input, self._FlushSentinel):
+                    # Flush marks segment boundary
+                    self._text_ch.send_nowait(None)
+            self._text_ch.close()
+
+        async def _run_synthesis() -> None:
+            """Run synthesis task."""
+            await self._synthesize_segment(output_emitter)
+
+        tasks = [
+            asyncio.create_task(_forward_input()),
+            asyncio.create_task(_run_synthesis()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except Exception as e:
+            raise APIConnectionError(str(e)) from e
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
+
+    async def _synthesize_segment(
+        self, output_emitter: tts.AudioEmitter
+    ) -> None:
+        """Synthesize using Azure SDK with streaming text and audio."""
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
+
+        # Use asyncio Queue to bridge sync callbacks to async
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        synthesis_error: list[Exception] = []
+        text_queue: queue.Queue[str | None] = queue.Queue()  # Sync queue for thread-safe access
+        
+        # Get the event loop before entering the thread
+        loop = asyncio.get_event_loop()
+
+        def _run_sdk_synthesis() -> None:
+            """Run Azure SDK synthesis in sync mode with streaming callbacks."""            
+            def synthesizing_callback(evt):
+                """Called when audio chunks are available during synthesis."""
+                import time
+                if evt.result.audio_data:
+                    # Raw PCM format - no headers to strip
+                    audio_chunk = evt.result.audio_data
+
+                    # print(f"  [SDK Callback {time.time():.3f}] Received audio chunk: {len(audio_chunk)} bytes")
+                    # Send audio to async queue (thread-safe)
+                    asyncio.run_coroutine_threadsafe(audio_queue.put(audio_chunk), loop)
+
+            def completed_callback(evt):
+                """Called when synthesis completes successfully."""
+                # Signal completion with None
+                asyncio.run_coroutine_threadsafe(audio_queue.put(None), loop)
+
+            def canceled_callback(evt):
+                """Called when synthesis is canceled or fails."""
+                cancellation = evt.result.cancellation_details
+                error = APIStatusError(
+                    f"Azure TTS synthesis canceled: {cancellation.reason}. "
+                    f"Error: {cancellation.error_details}"
+                )
+                synthesis_error.append(error)
+                # Signal error completion
+                asyncio.run_coroutine_threadsafe(audio_queue.put(None), loop)
+
+            # Connect event handlers
+            self._synthesizer.synthesizing.connect(synthesizing_callback)
+            self._synthesizer.synthesis_completed.connect(completed_callback)
+            self._synthesizer.synthesis_canceled.connect(canceled_callback)
+
+            # Create streaming request
+            tts_request = speechsdk.SpeechSynthesisRequest(
+                input_type=speechsdk.SpeechSynthesisRequestInputType.TextStream
+            )
+
+            try:
+                # Start synthesis (returns result future)
+                result_future = self._synthesizer.speak_async(tts_request)
+
+                # Stream text pieces as they arrive from the queue
+                import time
+                while True:
+                    text_piece = text_queue.get()  # Blocking get in sync thread
+                    if text_piece is None:
+                        break
+                    print(f"  [SDK Thread {time.time():.3f}] Sending text piece: '{text_piece}'")
+                    tts_request.input_stream.write(text_piece)
+
+                print("  [SDK Thread] Closing input stream.")
+                # Close input stream to signal completion
+                tts_request.input_stream.close()
+                
+                # Wait for synthesis to complete
+                # This blocks until the SDK finishes and callbacks fire
+                result = result_future.get()
+                
+                # Ensure completion signal is sent
+                if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                    asyncio.run_coroutine_threadsafe(audio_queue.put(None), loop)
+                
+            except Exception as e:
+                synthesis_error.append(e)
+                asyncio.run_coroutine_threadsafe(audio_queue.put(None), loop)
+
+        async def _stream_text_input() -> None:
+            """Stream text chunks to the SDK as they arrive."""
+            async for text_chunk in self._text_ch:
+                if text_chunk is None:
+                    # End of segment
+                    break
+                self._mark_started()
+                # Send to sync thread via sync queue
+                text_queue.put(text_chunk)
+            # Signal end of text
+            text_queue.put(None)
+  
+        async def _receive_audio() -> None:
+            """Receive audio chunks as they arrive."""
+            while True:
+                audio_chunk = await audio_queue.get()
+                
+                # None signals completion
+                if audio_chunk is None:
+                    break
+                
+                # Push audio chunk to output
+                output_emitter.push(audio_chunk)
+
+        try:
+            # Start SDK synthesis in thread pool
+            synthesis_task = loop.run_in_executor(None, _run_sdk_synthesis)
+
+            # Run text streaming and audio receiving concurrently
+            await asyncio.gather(
+                _stream_text_input(),
+                _receive_audio()
+            )
+
+            # Check for errors
+            if synthesis_error:
+                raise synthesis_error[0]
+
+            # Wait for synthesis thread to complete
+            await synthesis_task
+
+            output_emitter.end_segment()
+
+        except Exception as e:
+            raise APIConnectionError(f"Azure SDK synthesis failed: {e}") from e
