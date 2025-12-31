@@ -123,7 +123,7 @@ class STT(stt.STT):
         interim_results: bool = True,
         punctuate: bool = True,
         spoken_punctuation: bool = False,
-        enable_word_time_offsets: bool = True,
+        enable_word_time_offsets: NotGivenOr[bool] = NOT_GIVEN,
         enable_word_confidence: bool = False,
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
@@ -148,7 +148,7 @@ class STT(stt.STT):
             interim_results(bool): whether to return interim results (default: True)
             punctuate(bool): whether to punctuate the audio (default: True)
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
-            enable_word_time_offsets(bool): whether to enable word time offsets (default: True)
+            enable_word_time_offsets(bool): whether to enable word time offsets (default: None)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
@@ -163,6 +163,18 @@ class STT(stt.STT):
         """
         if not is_given(use_streaming):
             use_streaming = True
+
+        if model == "chirp_3":
+            if is_given(enable_word_time_offsets) and enable_word_time_offsets:
+                logger.warning(
+                    "Chirp 3 does not support word timestamps, setting 'enable_word_time_offsets' to False."
+                )
+            enable_word_time_offsets = False
+        elif is_given(enable_word_time_offsets):
+            enable_word_time_offsets = enable_word_time_offsets
+        else:
+            enable_word_time_offsets = True
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=use_streaming,
