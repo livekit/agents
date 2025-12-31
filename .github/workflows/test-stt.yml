@@ -94,7 +94,7 @@ jobs:
           # Sarvam
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
         run: |
-          uv run pytest -v tests/test_stt.py --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+          uv run pytest -n 3 -v tests/test_stt.py --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
 
       - name: Generate test summary
         if: always()
