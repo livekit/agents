@@ -429,7 +429,7 @@ class RecognizeStream(ABC):
         await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
-            await self._metrics_task
+            await aio.cancel_and_wait(self._metrics_task)
 
         await self._tee.aclose()
 
