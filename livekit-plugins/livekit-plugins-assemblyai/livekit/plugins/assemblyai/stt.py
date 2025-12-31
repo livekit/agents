@@ -85,7 +85,7 @@ class STT(stt.STT):
             ),
         )
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
-        if assemblyai_api_key is None:
+        if not assemblyai_api_key:
             raise ValueError(
                 "AssemblyAI API key is required. "
                 "Pass one in via the `api_key` parameter, "

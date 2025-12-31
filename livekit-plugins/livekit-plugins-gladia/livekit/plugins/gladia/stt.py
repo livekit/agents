@@ -281,8 +281,8 @@ class STT(stt.STT):
         self._base_url = base_url
 
         api_key = api_key or os.environ.get("GLADIA_API_KEY")
-        if api_key is None:
-            raise ValueError("Gladia API key is required")
+        if not api_key:
+            raise ValueError("Gladia API key is required. Set GLADIA_API_KEY or pass api_key")
 
         self._api_key = api_key
 
