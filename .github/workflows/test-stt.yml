@@ -13,6 +13,10 @@ on:
         required: false
         type: string
         default: ""
+  pull_request:
+    paths:
+      - "tests/test_stt.py"
+      - ".github/workflows/test-stt.yml"
 
 jobs:
   test-stt:
@@ -171,16 +175,23 @@ jobs:
           EOF
 
       - name: Post results to PR
-        if: always() && inputs.pr_number != ''
+        if: always() && (github.event_name == 'pull_request' || inputs.pr_number != '')
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const summary = fs.readFileSync('test-summary.md', 'utf8');
-            const prNumber = parseInt('${{ inputs.pr_number }}');
 
-            if (isNaN(prNumber)) {
-              console.log('Invalid PR number, skipping comment');
+            // Get PR number from event context or input
+            let prNumber;
+            if ('${{ github.event_name }}' === 'pull_request') {
+              prNumber = ${{ github.event.pull_request.number || 0 }};
+            } else {
+              prNumber = parseInt('${{ inputs.pr_number }}');
+            }
+
+            if (!prNumber || isNaN(prNumber)) {
+              console.log('No valid PR number, skipping comment');
               return;
             }
 
