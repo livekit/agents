@@ -134,96 +134,99 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], sample_rate: int, r
 async def test_stream(stt_factory: Callable[[], STT], sample_rate: int, request):
     plugin_id = request.node.callspec.id.split("-")[0]  # e.g., "livekit.plugins.deepgram"
     try:
-        stt: STT = stt_factory()
+        stt_instance: STT = stt_factory()
     except ValueError as e:
         pytest.skip(f"{plugin_id}: {e}")
 
-    label = f"{stt.model}@{stt.provider}"
-    if not stt.capabilities.streaming:
-        pytest.skip(f"{label} does not support streaming")
+    async with stt_instance as stt:
+        label = f"{stt.model}@{stt.provider}"
+        if not stt.capabilities.streaming:
+            pytest.skip(f"{label} does not support streaming")
 
-    frames, transcript, duration = await make_test_speech(
-        chunk_duration_ms=10, sample_rate=sample_rate
-    )
+        frames, transcript, duration = await make_test_speech(
+            chunk_duration_ms=10, sample_rate=sample_rate
+        )
 
-    stream = stt.stream()
-    closing = False
+        stream = stt.stream()
+        closing = False
 
-    @utils.log_exceptions(logger=logger)
-    async def _stream_input():
-        nonlocal closing
-        for frame in frames:
-            stream.push_frame(frame)
-            await asyncio.sleep(0.005)
+        @utils.log_exceptions(logger=logger)
+        async def _stream_input():
+            nonlocal closing
+            for frame in frames:
+                stream.push_frame(frame)
+                await asyncio.sleep(0.005)
 
-        stream.end_input()
-        closing = True
+            stream.end_input()
+            closing = True
 
-    @utils.log_exceptions(logger=logger)
-    async def _stream_output():
-        nonlocal closing
-        text = ""
-        # make sure the events are sent in the right order
-        recv_start, recv_end = False, True
-        start_time = time.time()
+        @utils.log_exceptions(logger=logger)
+        async def _stream_output():
+            nonlocal closing
+            text = ""
+            # make sure the events are sent in the right order
+            recv_start, recv_end = False, True
+            start_time = time.time()
 
-        async for event in stream:
-            if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
-                assert recv_end, "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
-                assert not recv_start
-                recv_end = False
-                recv_start = True
-                continue
+            async for event in stream:
+                if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
+                    assert recv_end, (
+                        "START_OF_SPEECH recv but no END_OF_SPEECH has been sent before"
+                    )
+                    assert not recv_start
+                    recv_end = False
+                    recv_start = True
+                    continue
 
-            if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
-                if text != "":
-                    text += " "
-                text += event.alternatives[0].text
-                # ensure STT is tagging languages correctly
-                language = event.alternatives[0].language
-                if stt.provider not in {"FireworksAI", "RTZR", "livekit"}:
-                    assert language is not None
-                    assert language.lower().startswith("en")
+                if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+                    if text != "":
+                        text += " "
+                    text += event.alternatives[0].text
+                    # ensure STT is tagging languages correctly
+                    language = event.alternatives[0].language
+                    if stt.provider not in {"FireworksAI", "RTZR", "livekit"}:
+                        assert language is not None
+                        assert language.lower().startswith("en")
 
-            if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
-                recv_start = False
-                recv_end = True
-                # wait for the closing to be set
-                await asyncio.sleep(1)
-                if closing:
-                    break
+                if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
+                    recv_start = False
+                    recv_end = True
+                    # wait for the closing to be set
+                    await asyncio.sleep(1)
+                    if closing:
+                        break
 
-        dt = time.time() - start_time
-        print(f"WER: {wer(text, transcript)} for streamed {stt} in {dt:.2f}s")
-        # RTZR defaults to Korean
-        if stt.provider in {
-            "RTZR",
-            "Deepgram",
-            "Sarvam",
-        }:
-            assert len(text) > 0 and wer(text, transcript) <= 1.0
-        else:
-            assert wer(text, transcript) <= WER_THRESHOLD
+            dt = time.time() - start_time
+            print(f"WER: {wer(text, transcript)} for streamed {stt} in {dt:.2f}s")
+            # RTZR defaults to Korean
+            if stt.provider in {
+                "RTZR",
+                "Deepgram",
+                "Sarvam",
+            }:
+                assert len(text) > 0 and wer(text, transcript) <= 1.0
+            else:
+                assert wer(text, transcript) <= WER_THRESHOLD
 
-    timed_out = False
+        timed_out = False
 
-    async def _timeout_task():
-        nonlocal timed_out
-        await asyncio.sleep(120)
-        timed_out = True
-        await stream.aclose()
-
-    timeout_task = asyncio.create_task(_timeout_task())
-    try:
-        await asyncio.gather(_stream_input(), _stream_output())
-    finally:
-        if not timeout_task.done():
-            timeout_task.cancel()
-            try:
-                await timeout_task
-            except asyncio.CancelledError:
-                pass
+        async def _timeout_task():
+            nonlocal timed_out
+            await asyncio.sleep(120)
+            timed_out = True
             await stream.aclose()
 
-    if timed_out:
-        pytest.fail(f"{label} streaming timed out after 120 seconds")
+        timeout_task = asyncio.create_task(_timeout_task())
+        try:
+            await asyncio.gather(_stream_input(), _stream_output())
+        finally:
+            if not timeout_task.done():
+                timeout_task.cancel()
+                try:
+                    await timeout_task
+                except asyncio.CancelledError:
+                    pass
+                await stream.aclose()
+
+        if timed_out:
+            pytest.fail(f"{label} streaming timed out after 120 seconds")
