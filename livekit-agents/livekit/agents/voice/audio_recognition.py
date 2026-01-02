@@ -180,9 +180,9 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_vad(None)
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
         self._sample_rate = frame.sample_rate
-        if self._stt_ch is not None:
+        if not skip_stt and self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
