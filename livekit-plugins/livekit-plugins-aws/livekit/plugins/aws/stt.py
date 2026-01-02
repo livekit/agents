@@ -267,12 +267,13 @@ class SpeechStream(stt.SpeechStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
-                        # Send empty frame to close
-                        await audio_stream.send(
-                            AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
-                        )
                     finally:
+                        # Send empty frame to close (required by AWS Transcribe)
+                        # Wrap in suppress to handle cancellation during send
                         with contextlib.suppress(Exception):
+                            await audio_stream.send(
+                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                            )
                             await audio_stream.close()
 
                 async def handle_transcript_events(
@@ -282,6 +283,18 @@ class SpeechStream(stt.SpeechStream):
                         async for event in output_stream:
                             if isinstance(event.value, TranscriptEvent):
                                 self._process_transcript_event(event.value)
+                    except BadRequestException as e:
+                        if (
+                            e.message
+                            and "complete signal was sent without the preceding empty frame"
+                            in e.message
+                        ):
+                            # This can happen during cancellation if the empty frame wasn't sent in time
+                            logger.warning(
+                                "AWS Transcribe stream closed with empty frame error (this is usually harmless)"
+                            )
+                        else:
+                            raise
                     except concurrent.futures.InvalidStateError:
                         logger.warning(
                             "AWS Transcribe stream closed unexpectedly (InvalidStateError)"
