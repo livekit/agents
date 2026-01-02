@@ -13,6 +13,7 @@ These providers work with pre-configured avatars using unique avatar identifiers
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
 - **[Simli](./simli/)** - [Platform](https://app.simli.com/)
 - **[Tavus](./tavus/)** - [Platform](https://www.tavus.io/)
+- **[TruGen](./trugen/)** - [Platform](https://app.trugen.ai/)
 
 ### 🖼️ Cloud-Based with Image Upload
 
