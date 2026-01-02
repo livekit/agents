@@ -280,6 +280,8 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:
                         break
                     continue
+                except asyncio.CancelledError:
+                    break
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
