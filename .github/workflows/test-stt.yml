@@ -17,9 +17,129 @@ on:
     paths:
       - "tests/test_stt.py"
       - ".github/workflows/test-stt.yml"
+  issue_comment:
+    types: [created]
 
 jobs:
+  slash-command-dispatch:
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Get PR details and check authorization
+        id: pr-info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = context.payload.comment.body.trim();
+            const isCommand = /^\/test-stt(\s|$)/.test(comment);
+
+            if (!isCommand) {
+              core.setOutput('is_command', 'false');
+              return;
+            }
+
+            // Get PR details
+            const prResponse = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+
+            const pr = prResponse.data;
+            const commenter = context.payload.comment.user.login;
+
+            // Check if commenter is an organization member (not just a collaborator)
+            let isAuthorized = false;
+
+            try {
+              // First check if the repo owner is an organization
+              const orgResponse = await github.rest.orgs.get({
+                org: context.repo.owner,
+              });
+
+              // If it's an organization, check if user is a member
+              if (orgResponse.data) {
+                try {
+                  await github.rest.orgs.checkMembershipForUser({
+                    org: context.repo.owner,
+                    username: commenter,
+                  });
+                  isAuthorized = true;
+                  console.log(`${commenter} is an organization member`);
+                } catch (memberError) {
+                  // User is not an organization member
+                  isAuthorized = false;
+                  console.log(`${commenter} is not an organization member`);
+                }
+              }
+            } catch (orgError) {
+              // Repo owner is not an organization (it's a user account)
+              // In this case, check if commenter is the repo owner
+              if (commenter === context.repo.owner) {
+                isAuthorized = true;
+                console.log(`${commenter} is the repository owner`);
+              } else {
+                isAuthorized = false;
+                console.log(`${commenter} is not authorized (repo is user-owned, not org-owned)`);
+              }
+            }
+
+            if (!isAuthorized) {
+              console.log(`Slash command rejected: ${commenter} is not an organization member`);
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: '-1'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                body: '❌ `/test-stt` command is only available for organization members.'
+              });
+              core.setOutput('is_command', 'false');
+              return;
+            }
+
+            core.setOutput('is_command', 'true');
+            core.setOutput('pr_number', pr.number.toString());
+            core.setOutput('branch', pr.head.ref);
+
+            console.log(`Slash command /test-stt detected for PR #${pr.number} by ${commenter}`);
+
+      - name: Trigger workflow
+        if: steps.pr-info.outputs.is_command == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'test-stt.yml',
+              ref: '${{ steps.pr-info.outputs.branch }}',
+              inputs: {
+                pr_number: '${{ steps.pr-info.outputs.pr_number }}',
+                branch: '${{ steps.pr-info.outputs.branch }}'
+              }
+            });
+
+            console.log('Workflow triggered successfully');
+
+            // Add reaction to comment
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
   test-stt:
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -30,7 +150,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch != '' && inputs.branch || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
           fetch-depth: 0
           lfs: true
 
@@ -164,7 +284,7 @@ jobs:
           EOF
 
       - name: Post results to PR
-        if: always() && (github.event_name == 'pull_request' || inputs.pr_number != '')
+        if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
         uses: actions/github-script@v7
         with:
           script: |
@@ -174,8 +294,10 @@ jobs:
             let prNumber;
             if ('${{ github.event_name }}' === 'pull_request') {
               prNumber = ${{ github.event.pull_request.number || 0 }};
+            } else if ('${{ github.event.inputs.pr_number }}') {
+              prNumber = parseInt('${{ github.event.inputs.pr_number }}');
             } else {
-              prNumber = parseInt('${{ inputs.pr_number }}');
+              prNumber = null;
             }
 
             if (!prNumber || isNaN(prNumber)) {
