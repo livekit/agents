@@ -260,6 +260,8 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:
                         break
                     continue
+                except asyncio.CancelledError:
+                    break
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -269,6 +271,7 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
+                    print(msg)
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
                     )  # this will trigger a reconnection, see the _run loop
