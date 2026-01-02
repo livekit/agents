@@ -225,6 +225,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                         "RTZR",  # RTZR defaults to Korean
                         "Deepgram",
                         "Sarvam",
+                        "FireworksAI",
                     }:
                         assert len(text) > 0 and wer(text, transcript) <= 1.0
                     else:
