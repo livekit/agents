@@ -171,7 +171,7 @@ jobs:
       - name: Setup Google credentials
         shell: bash
         run: |
-          printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
+          printf '%s' '${{ secrets.GOOGLE_STT_CREDENTIALS_JSON }}' > ${{ github.workspace }}/tests/google.json
 
       - name: Run STT tests
         env:
@@ -190,8 +190,7 @@ jobs:
           CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
           GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
           SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          GOOGLE_APPLICATION_CREDENTIALS: tests/google.json
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/tests/google.json
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -205,7 +204,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f tests/google.json
+          rm -f ${{ github.workspace }}/tests/google.json
 
       - name: Generate test summary
         if: always()
