@@ -12,6 +12,8 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 server = AgentServer()
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
@@ -28,6 +30,7 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
     session.generate_reply(instructions="Greet the user with a joke.")
+
 
 if __name__ == "__main__":
     cli.run_app(server)
