@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import heapq
 import json
+import string
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
@@ -156,6 +157,7 @@ class AgentActivity(RecognitionHooks):
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
+        self._interrupt_timer: asyncio.Task[None] | None = None
 
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
@@ -225,6 +227,11 @@ class AgentActivity(RecognitionHooks):
             logger.warning(
                 "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
                 "for more responsive interruption handling."
+            )
+
+        if self._session.options.interruption_ignore_words and not self.stt:
+            logger.warning(
+                "interruption_ignore_words requires STT to be enabled, the feature will be ignored"
             )
 
         return mode
@@ -1103,6 +1110,16 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
 
+        if self._session.options.interruption_ignore_words:
+            if hasattr(self, "_interrupt_timer") and self._interrupt_timer:
+                self._interrupt_timer.cancel()
+
+            self._interrupt_timer = asyncio.create_task(self._evaluate_interrupt_after_delay())
+        else:
+            self._interrupt_immediately()
+
+    def _interrupt_immediately(self) -> None:
+        """Handle immediate interruption"""
         # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
         try:
@@ -1111,6 +1128,18 @@ class AgentActivity(RecognitionHooks):
             logger.exception(
                 "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
             )
+
+    async def _evaluate_interrupt_after_delay(self) -> None:
+        await asyncio.sleep(0.25)  # grace window
+
+        if self._audio_recognition is None:
+            return
+
+        transcript = self._audio_recognition.current_transcript
+        if not self._should_interrupt_from_transcript(transcript):
+            return
+
+        self._interrupt_immediately()
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         if self.vad is None:
@@ -1168,16 +1197,16 @@ class AgentActivity(RecognitionHooks):
             # ignore if realtime model has turn detection enabled
             return
 
-        if (
-            self.stt is not None
-            and opt.min_interruption_words > 0
-            and self._audio_recognition is not None
-        ):
-            text = self._audio_recognition.current_transcript
+        if self.stt is not None and self._audio_recognition is not None:
+            text = self._audio_recognition.current_transcript or ""
 
-            # TODO(long): better word splitting for multi-language
-            if len(split_words(text, split_character=True)) < opt.min_interruption_words:
+            if not self._should_interrupt_from_transcript(text):
                 return
+
+            if opt.min_interruption_words > 0:
+                # TODO(long): better word splitting for multi-language
+                if len(split_words(text, split_character=True)) < opt.min_interruption_words:
+                    return
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -1202,6 +1231,48 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.interrupt()
 
                 self._current_speech.interrupt()
+
+    def _should_interrupt_from_transcript(self, transcript: str) -> bool:
+        """
+        Determine whether a user transcript should trigger an interruption.
+
+        If `interruption_ignore_words` is configured and all recognized words
+        are considered ignorable (e.g. fillers like "um", "uh"), the interruption
+        is suppressed.
+
+        Returns:
+            True if the transcript should trigger an interruption.
+            False if it should be ignored.
+        """
+        if not transcript or not transcript.strip():
+            return False
+
+        ignore = self._session.options.interruption_ignore_words
+
+        if not ignore:
+            return True
+
+        words = [
+            w.lower().strip(string.punctuation)
+            for w in transcript.split()
+            if w.strip(string.punctuation)
+        ]
+
+        if not words:
+            return False
+
+        ignore_set = {w.lower() for w in ignore}
+
+        for word in words:
+            if word not in ignore_set:
+                return True
+
+        logger.debug(
+            "Ignoring interruption due to filler-only transcript",
+            extra={"transcript": transcript, "ignore_words": list(ignore_set)},
+        )
+
+        return False
 
     # region recognition hooks
 
@@ -1376,13 +1447,19 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
-            and self._session.options.min_interruption_words > 0
-            and len(split_words(info.new_transcript, split_character=True))
-            < self._session.options.min_interruption_words
         ):
-            self._cancel_preemptive_generation()
-            # avoid interruption if the new_transcript is too short
-            return False
+            if not self._should_interrupt_from_transcript(info.new_transcript):
+                # Don't cancel preemptive generation if ignore words apply
+                return False
+
+            if (
+                self._session.options.min_interruption_words > 0
+                and len(split_words(info.new_transcript, split_character=True))
+                < self._session.options.min_interruption_words
+            ):
+                self._cancel_preemptive_generation()
+                # avoid interruption if the new_transcript is too short
+                return False
 
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(
@@ -2654,6 +2731,19 @@ class AgentActivity(RecognitionHooks):
                 # already new speech is scheduled, do nothing
                 self._paused_speech = None
                 return
+
+            # Check ignore words before resuming
+            if self._audio_recognition and self._audio_recognition.current_transcript:
+                if not self._should_interrupt_from_transcript(
+                    self._audio_recognition.current_transcript
+                ):
+                    logger.debug(
+                        "Not resuming false interruption due to ignore words",
+                        extra={"transcript": self._audio_recognition.current_transcript},
+                    )
+                    self._paused_speech = None
+                    self._false_interruption_timer = None
+                    return
 
             resumed = False
             if (

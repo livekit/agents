@@ -90,6 +90,7 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    interruption_ignore_words: list[str] | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -148,6 +149,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_interruption_words: int = 0,
+        interruption_ignore_words: list[str] | None = None,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 3.0,
         max_tool_steps: int = 3,
@@ -207,6 +209,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 register as an interruption. Default ``0.5`` s.
             min_interruption_words (int): Minimum number of words to consider
                 an interruption, only used if stt enabled. Default ``0``.
+            interruption_ignore_words (list[str] | None): List of words
+                that should not trigger interruptions when detected. Useful for
+                filler words ("um", "uh"), acknowledgments ("okay", "right"), or
+                backchannel responses. Words are matched case-insensitively with
+                punctuation stripped. Requires STT to be enabled. Default ``None``.
             min_endpointing_delay (float): Minimum time-in-seconds since the
                 last detected speech before the agent declares the user’s turn
                 complete. In VAD mode this effectively behaves like
@@ -275,6 +282,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
             min_interruption_words=min_interruption_words,
+            interruption_ignore_words=interruption_ignore_words,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
