@@ -57,7 +57,6 @@ STTs: list[Callable[[], stt.STT]] = [
         nvidia,
         openai,
         cartesia,
-        gradium,
         soniox,
         google,
         inference,
@@ -70,7 +69,13 @@ STTs: list[Callable[[], stt.STT]] = [
         # TODO: https://github.com/spi-tch/spitch-python/issues/162
         # spitch,
     ]
-] + [pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2")]
+] + [
+    pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
+    pytest.param(
+        lambda: gradium.STT(model_endpoint="wss://us.api.gradium.ai/api/speech/asr"),
+        id="livekit.plugins.gradium.STT",
+    ),
+]
 
 
 @pytest.fixture(scope="session", autouse=True)
