@@ -72,6 +72,7 @@ class FakeAudioOutput(AudioOutput):
         self._flush_handle = asyncio.get_event_loop().call_later(delay, _on_playback_finished)
 
     def clear_buffer(self) -> None:
+        super().clear_buffer()
         if not self._pushed_duration:
             return
 

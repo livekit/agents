@@ -249,6 +249,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     @abstractmethod
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
+        self.__capturing = False
 
     def on_attached(self) -> None:
         if self.next_in_chain:
