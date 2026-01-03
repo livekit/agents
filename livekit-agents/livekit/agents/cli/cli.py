@@ -179,6 +179,7 @@ class ConsoleAudioOutput(io.AudioOutput):
             self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
+        super().clear_buffer()
         with self._audio_lock:
             self._output_buf.clear()
             self._output_buf_empty.set()
