@@ -138,15 +138,19 @@ class BargeinCacheEntry:
     is_bargein: bool | None = None
 
     def get_total_duration(self, default: float = 0.0) -> float:
+        """RTT (Round Trip Time) time taken to perform the inference, in seconds."""
         return self.total_duration if self.total_duration is not None else default
 
     def get_prediction_duration(self, default: float = 0.0) -> float:
+        """Time taken to perform the inference from the model side, in seconds."""
         return self.prediction_duration if self.prediction_duration is not None else default
 
     def get_detection_delay(self, default: float = 0.0) -> float:
+        """Total time from the onset of the speech to the final prediction, in seconds."""
         return self.detection_delay if self.detection_delay is not None else default
 
     def get_probability(self, default: float = 0.0) -> float:
+        """The conservative estimated probability of the bargein event."""
         return (
             _estimate_probability(self.probabilities) if self.probabilities is not None else default
         )
@@ -489,6 +493,22 @@ class BargeinStreamBase(ABC):
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
+    @staticmethod
+    def _update_user_speech_span(user_speech_span: trace.Span, entry: BargeinCacheEntry) -> None:
+        user_speech_span.set_attribute(trace_types.ATTR_IS_BARGEIN, str(entry.is_bargein).lower())
+        user_speech_span.set_attribute(
+            trace_types.ATTR_BARGEIN_PROBABILITY, entry.get_probability()
+        )
+        user_speech_span.set_attribute(
+            trace_types.ATTR_BARGEIN_TOTAL_DURATION, entry.get_total_duration()
+        )
+        user_speech_span.set_attribute(
+            trace_types.ATTR_BARGEIN_PREDICTION_DURATION, entry.get_prediction_duration()
+        )
+        user_speech_span.set_attribute(
+            trace_types.ATTR_BARGEIN_DETECTION_DELAY, entry.get_detection_delay()
+        )
+
 
 class BargeinHttpStream(BargeinStreamBase):
     def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
@@ -638,7 +658,7 @@ class BargeinHttpStream(BargeinStreamBase):
                 )
                 if overlap_speech_started and entry.is_bargein:
                     if self._user_speech_span:
-                        self._user_speech_span.set_attribute(trace_types.ATTR_IS_BARGEIN, "true")
+                        self._update_user_speech_span(self._user_speech_span, entry)
                         self._user_speech_span = None
                     ev = BargeinEvent(
                         type=BargeinEventType.BARGEIN,
@@ -884,11 +904,6 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 elif msg_type == MSG_BARGEIN_DETECTED:
                     created_at = int(data["created_at"])
                     if overlap_speech_started and self._overlap_speech_started_at is not None:
-                        if self._user_speech_span:
-                            self._user_speech_span.set_attribute(
-                                trace_types.ATTR_IS_BARGEIN, "true"
-                            )
-                            self._user_speech_span = None
                         entry = cache.set_or_update(
                             created_at,
                             lambda c=created_at: BargeinCacheEntry(created_at=c),  # type: ignore[misc]
@@ -898,6 +913,9 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             prediction_duration=data.get("prediction_duration", 0.0),
                             detection_delay=time.time() - self._overlap_speech_started_at,
                         )
+                        if self._user_speech_span:
+                            self._update_user_speech_span(self._user_speech_span, entry)
+                            self._user_speech_span = None
                         logger.debug(
                             "bargein detected",
                             extra={
