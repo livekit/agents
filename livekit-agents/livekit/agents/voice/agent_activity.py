@@ -735,19 +735,20 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        if (
+        should_discard = bool(
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
-        ):
-            # discard the audio if the current speech is not interruptable
-            return
+        )
 
-        if self._rt_session is not None:
-            self._rt_session.push_audio(frame)
+        if not should_discard:
+            if self._rt_session is not None:
+                self._rt_session.push_audio(frame)
 
+        # Always forward to _audio_recognition for VAD, even when discarding STT/LLM
+        # VAD needs frames to detect speech end and update user state correctly
         if self._audio_recognition is not None:
-            self._audio_recognition.push_audio(frame)
+            self._audio_recognition.push_audio(frame, skip_stt=should_discard)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
