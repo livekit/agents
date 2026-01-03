@@ -356,6 +356,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Warm up only once
             self._warmup_synthesizer()
 
+    def _recreate_synthesizer(self) -> None:
+        """Recreate the synthesizer after connection issues."""
+        logger.info("recreating azure tts synthesizer after connection error")
+        try:
+            if self._tts._synthesizer:
+                # Clean up old synthesizer
+                del self._tts._synthesizer
+        except:
+            pass
+        self._tts._synthesizer = self._create_synthesizer()
+        self._tts._warmup_done = False
+        self._warmup_synthesizer()
+
 
     def _create_synthesizer(self) -> speechsdk.SpeechSynthesizer:
         """Create and configure the Azure Speech synthesizer."""
@@ -439,8 +452,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._text_ch.close()
 
         async def _run_synthesis() -> None:
-            """Run synthesis task."""
-            await self._synthesize_segment(output_emitter)
+            """Run synthesis task with retry on 499 errors."""
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    await self._synthesize_segment(output_emitter)
+                    break  # Success, exit retry loop
+                except (APIStatusError, APIConnectionError) as e:
+                    # Check if it's a 499 error (client closed connection)
+                    error_str = str(e)
+                    if "499" in error_str or "closed by client" in error_str.lower():
+                        if attempt < max_retries - 1:
+                            logger.warning(
+                                f"azure tts 499 error, recreating synthesizer and retrying (attempt {attempt + 1}/{max_retries})"
+                            )
+                            # Recreate synthesizer
+                            self._recreate_synthesizer()
+                            await asyncio.sleep(1.0)  # Wait before retry
+                            continue
+                    raise  # Re-raise if not retryable or out of retries
 
         tasks = [
             asyncio.create_task(_forward_input()),
@@ -450,6 +480,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except (APIStatusError, APIConnectionError):
+            raise  # Don't wrap these errors again
         except Exception as e:
             raise APIConnectionError(str(e)) from e
         finally:
@@ -630,6 +662,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             text_queue.put(None)
             # Flush any queued audio immediately
             output_emitter.flush()
+            # End segment on cancellation
+            try:
+                output_emitter.end_segment()
+            except:
+                pass  # Segment might already be ended
             # Drain queues
             while not text_queue.empty():
                 try:
@@ -643,6 +680,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
             raise
         except Exception as e:
+            # End segment on error
+            try:
+                output_emitter.end_segment()
+            except:
+                pass  # Segment might already be ended
             # Clean up queues on error
             while not text_queue.empty():
                 try:
