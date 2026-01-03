@@ -360,6 +360,12 @@ async def _audio_forwarding_task(
 
     try:
         audio_output.resume()
+
+        @audio_output.on("playback_started")
+        def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+            if not out.first_frame_fut.done():
+                out.first_frame_fut.set_result(ev.created_at)
+
         async for frame in tts_output:
             out.audio.append(frame)
 
@@ -380,9 +386,6 @@ async def _audio_forwarding_task(
                     await audio_output.capture_frame(f)
             else:
                 await audio_output.capture_frame(frame)
-
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(time.time())
 
         if resampler:
             for frame in resampler.flush():
