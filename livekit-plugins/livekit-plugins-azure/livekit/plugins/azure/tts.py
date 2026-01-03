@@ -38,6 +38,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
+
 SUPPORTED_OUTPUT_FORMATS = {
     8000: "raw-8khz-16bit-mono-pcm",
     16000: "raw-16khz-16bit-mono-pcm",
@@ -205,6 +207,9 @@ class TTS(tts.TTS):
             auth_token=speech_auth_token,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        # Shared synthesizer and warmup state across all streams
+        self._synthesizer: speechsdk.SpeechSynthesizer | None = None
+        self._warmup_done = False
 
     @property
     def model(self) -> str:
@@ -345,11 +350,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._text_ch = utils.aio.Chan[str]()
-        self._synthesizer: speechsdk.SpeechSynthesizer | None = None
-        self._warmup_done = False
-        if self._synthesizer is None:
-            self._synthesizer = self._create_synthesizer()
-            # Warm up the synthesizer
+        # Use shared synthesizer from TTS instance
+        if self._tts._synthesizer is None:
+            self._tts._synthesizer = self._create_synthesizer()
+            # Warm up only once
             self._warmup_synthesizer()
 
 
@@ -394,25 +398,25 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def _warmup_synthesizer(self) -> None:
         """Warm up the synthesizer by synthesizing a short text."""
-        if self._warmup_done:
+        if self._tts._warmup_done:
             return
-        
+
         import time
-        
+
         # Warm-up: synthesize a short text first to establish connection
-        print("\n[Warm-up] Synthesizing warm-up text to establish connection...")
+        logger.info("warming up azure tts synthesizer")
         warmup_start = time.time()
         warmup_request = speechsdk.SpeechSynthesisRequest(
             input_type=speechsdk.SpeechSynthesisRequestInputType.TextStream
         )
-        warmup_task = self._synthesizer.speak_async(warmup_request)
+        warmup_task = self._tts._synthesizer.speak_async(warmup_request)
         warmup_request.input_stream.write("Warm up.")
         warmup_request.input_stream.close()
         warmup_result = warmup_task.get()
         warmup_time = time.time() - warmup_start
-        print(f"[Warm-up] Completed in {warmup_time:.3f}s\n")
-        
-        self._warmup_done = True
+        logger.info("azure tts warmup completed", extra={"duration": f"{warmup_time:.3f}s"})
+
+        self._tts._warmup_done = True
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -462,7 +466,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         synthesis_error: list[Exception] = []
         text_queue: queue.Queue[str | None] = queue.Queue()  # Sync queue for thread-safe access
-        
+        cancelled = [False]  # Flag to signal cancellation to SDK thread
+
         # Get the event loop before entering the thread
         loop = asyncio.get_event_loop()
 
@@ -471,6 +476,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             def synthesizing_callback(evt):
                 """Called when audio chunks are available during synthesis."""
                 import time
+                if cancelled[0]:
+                    return  # Discard audio if cancelled
                 if evt.result.audio_data:
                     # Raw PCM format - no headers to strip
                     audio_chunk = evt.result.audio_data
@@ -496,9 +503,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 asyncio.run_coroutine_threadsafe(audio_queue.put(None), loop)
 
             # Connect event handlers
-            self._synthesizer.synthesizing.connect(synthesizing_callback)
-            self._synthesizer.synthesis_completed.connect(completed_callback)
-            self._synthesizer.synthesis_canceled.connect(canceled_callback)
+            self._tts._synthesizer.synthesizing.connect(synthesizing_callback)
+            self._tts._synthesizer.synthesis_completed.connect(completed_callback)
+            self._tts._synthesizer.synthesis_canceled.connect(canceled_callback)
 
             # Create streaming request
             tts_request = speechsdk.SpeechSynthesisRequest(
@@ -507,18 +514,24 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             try:
                 # Start synthesis (returns result future)
-                result_future = self._synthesizer.speak_async(tts_request)
+                result_future = self._tts._synthesizer.speak_async(tts_request)
 
                 # Stream text pieces as they arrive from the queue
-                import time
+                chunk_count = [0]
                 while True:
+                    if cancelled[0]:
+                        logger.debug("sdk thread detected cancellation, stopping text streaming")
+                        break
                     text_piece = text_queue.get()  # Blocking get in sync thread
                     if text_piece is None:
                         break
-                    print(f"  [SDK Thread {time.time():.3f}] Sending text piece: '{text_piece}'")
+                    if cancelled[0]:
+                        break
+                    chunk_count[0] += 1
                     tts_request.input_stream.write(text_piece)
+                    # Log each chunk as it's streamed
+                    logger.info("streaming tts chunk", extra={"chunk": chunk_count[0], "text": text_piece})
 
-                print("  [SDK Thread] Closing input stream.")
                 # Close input stream to signal completion
                 tts_request.input_stream.close()
                 
@@ -548,15 +561,30 @@ class SynthesizeStream(tts.SynthesizeStream):
   
         async def _receive_audio() -> None:
             """Receive audio chunks as they arrive."""
-            while True:
-                audio_chunk = await audio_queue.get()
-                
-                # None signals completion
-                if audio_chunk is None:
-                    break
-                
-                # Push audio chunk to output
-                output_emitter.push(audio_chunk)
+            try:
+                while True:
+                    if cancelled[0]:
+                        logger.debug("audio reception cancelled, discarding remaining chunks")
+                        # Drain remaining audio
+                        while not audio_queue.empty():
+                            try:
+                                await asyncio.wait_for(audio_queue.get(), timeout=0.01)
+                            except:
+                                break
+                        break
+
+                    audio_chunk = await audio_queue.get()
+
+                    # None signals completion
+                    if audio_chunk is None:
+                        break
+
+                    # Only push audio if not cancelled
+                    if not cancelled[0]:
+                        output_emitter.push(audio_chunk)
+            except asyncio.CancelledError:
+                cancelled[0] = True
+                raise
 
         try:
             # Start SDK synthesis in thread pool
@@ -577,5 +605,53 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             output_emitter.end_segment()
 
+        except asyncio.CancelledError:
+            # Clean up on interruption
+            logger.info("synthesis interrupted, stopping synthesizer")
+            cancelled[0] = True
+
+            # Stop the Azure synthesizer to terminate ongoing synthesis
+            # This only stops the current operation, synthesizer can be reused
+            try:
+                if self._tts._synthesizer:
+                    stop_future = self._tts._synthesizer.stop_speaking_async()
+                    # Wait for stop to complete (with timeout to avoid hanging)
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, stop_future.get),
+                        timeout=1.0
+                    )
+                    logger.debug("stopped azure synthesizer")
+            except asyncio.TimeoutError:
+                logger.warning("timeout stopping synthesizer")
+            except Exception as e:
+                logger.warning(f"error stopping synthesizer: {e}")
+
+            # Signal SDK thread to stop
+            text_queue.put(None)
+            # Flush any queued audio immediately
+            output_emitter.flush()
+            # Drain queues
+            while not text_queue.empty():
+                try:
+                    text_queue.get_nowait()
+                except:
+                    break
+            while not audio_queue.empty():
+                try:
+                    await asyncio.wait_for(audio_queue.get(), timeout=0.01)
+                except:
+                    break
+            raise
         except Exception as e:
+            # Clean up queues on error
+            while not text_queue.empty():
+                try:
+                    text_queue.get_nowait()
+                except:
+                    break
+            while not audio_queue.empty():
+                try:
+                    await asyncio.wait_for(audio_queue.get(), timeout=0.01)
+                except:
+                    break
             raise APIConnectionError(f"Azure SDK synthesis failed: {e}") from e
