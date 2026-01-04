@@ -141,6 +141,9 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], request):
 
                 # WARN: Sarvam only supports <30s audio chunks
                 if stt.provider == "Sarvam" and duration > 30:
+                    frames, *_ = await make_test_speech(
+                        sample_rate=sample_rate, chunk_duration_ms=5 * 1000
+                    )
                     n_batches = math.ceil(duration / 30)
                 else:
                     n_batches = 1
