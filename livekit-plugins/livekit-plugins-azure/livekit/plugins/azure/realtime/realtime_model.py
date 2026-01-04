@@ -52,6 +52,7 @@ from .utils import (
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+BYTES_PER_SAMPLE = NUM_CHANNELS * 2  # 2 bytes per sample for PCM16
 DEFAULT_VOICE = "en-US-AvaNeural"
 
 
@@ -70,6 +71,7 @@ class _RealtimeOptions:
     api_key: str | None
     use_default_credential: bool
     conn_options: APIConnectOptions
+    save_audio_per_turn: bool
 
 
 @dataclass
@@ -122,6 +124,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: str | None = None,
         use_default_credential: bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        save_audio_per_turn: bool = False,
     ) -> None:
         """
         Initialize Azure Voice Live Realtime model.
@@ -138,6 +141,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_key: Azure API key. If None, reads from AZURE_VOICELIVE_API_KEY.
             use_default_credential: Use DefaultAzureCredential for auth instead of API key.
             conn_options: Connection retry and timeout options.
+            save_audio_per_turn: Save audio to file for each turn (default: False).
 
         Example:
             ```python
@@ -203,6 +207,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_key=api_key_val,
             use_default_credential=use_default_credential,
             conn_options=conn_options,
+            save_audio_per_turn=save_audio_per_turn,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -513,7 +518,7 @@ class RealtimeSession(
             msg_gen = _MessageGeneration(
                 message_id=item_id,
                 text_ch=utils.aio.Chan[str](),
-                audio_ch=utils.aio.Chan[rtc.AudioFrame](),
+                audio_ch=utils.aio.Chan[rtc.AudioFrame](maxsize=25),  # Buffer ~500ms of audio
                 modalities=asyncio.Future(),
             )
             self._current_generation.messages[item_id] = msg_gen
@@ -576,47 +581,44 @@ class RealtimeSession(
     async def _handle_audio_delta(self, event) -> None:
         """Handle response.audio.delta event."""
         if not self._current_generation:
-            logger.warning("Received audio delta but no current generation")
-            return
+            return  # Skip logging in hot path
 
         item_id = getattr(event, "item_id", None)
         delta = getattr(event, "delta", None)
 
-        if not delta or not item_id or item_id not in self._current_generation.messages:
-            logger.warning(f"Skipping audio delta: delta={bool(delta)}, item_id={item_id}, "
-                          f"in_messages={item_id in self._current_generation.messages if item_id else False}")
+        if not delta or not item_id:
+            return
+
+        # Cache message generation lookup
+        msg_gen = self._current_generation.messages.get(item_id)
+        if not msg_gen:
             return
 
         if self._current_generation._first_token_timestamp is None:
             self._current_generation._first_token_timestamp = time.time()
 
         try:
-            # Delta is raw PCM16 audio bytes from Azure SDK
-            # Log first frame for debugging
+            # Log first frame only
             if not hasattr(self, '_logged_first_audio'):
                 self._logged_first_audio = True
-                logger.info(f"Audio delta type: {type(delta)}, length: {len(delta)} bytes, "
-                           f"is even: {len(delta) % 2 == 0}")
+                logger.info(f"First audio delta: {len(delta)} bytes, PCM16 format")
 
-            # Save audio data for debugging
-            self._current_generation._audio_data.extend(delta)
+            # Conditional audio saving - only when enabled
+            if self._realtime_model._opts.save_audio_per_turn:
+                self._current_generation._audio_data.extend(delta)
 
             # Create AudioFrame directly from raw bytes
             frame = rtc.AudioFrame(
                 data=delta,
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
-                samples_per_channel=len(delta) // (NUM_CHANNELS * 2),
+                samples_per_channel=len(delta) // BYTES_PER_SAMPLE,
             )
 
-            msg_gen = self._current_generation.messages[item_id]
             msg_gen.audio_ch.send_nowait(frame)
 
-            logger.debug(f"Sent audio frame: {len(delta)} bytes, {frame.samples_per_channel} samples")
-
         except Exception as e:
-            logger.error(f"Failed to process audio delta: {e}, delta type: {type(delta)}, "
-                        f"length: {len(delta) if delta else 0}")
+            logger.error(f"Failed to process audio delta: {e}")
 
     async def _handle_text_delta(self, event) -> None:
         """Handle response.audio_transcript.delta or response.text.delta event."""
@@ -695,8 +697,8 @@ class RealtimeSession(
         if not self._current_generation:
             return
 
-        # Save audio response to audio_debug/response_resp_3eGxL5Rym79pqzOKxkvOF7_1767439555843.wav (187200 bytes)
-        if len(self._current_generation._audio_data) > 0:
+        # Save audio response to file if enabled
+        if self._realtime_model._opts.save_audio_per_turn and len(self._current_generation._audio_data) > 0:
             try:
                 os.makedirs("audio_debug", exist_ok=True)
                 timestamp = int(time.time() * 1000)

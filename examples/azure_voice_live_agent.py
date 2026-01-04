@@ -16,6 +16,7 @@ Installation:
 Environment Variables:
     AZURE_VOICELIVE_ENDPOINT - Azure Voice Live endpoint (wss://...)
     AZURE_VOICELIVE_API_KEY - Azure API key
+    AZURE_VOICELIVE_MODEL - Azure model name (default: gpt-4o)
     LIVEKIT_URL - LiveKit server URL
     LIVEKIT_API_KEY - LiveKit API key
     LIVEKIT_API_SECRET - LiveKit API secret
@@ -31,12 +32,13 @@ Try asking:
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from typing import Any
 
 import python_weather
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 from dotenv import load_dotenv
 from jokeapi import Jokes
 
@@ -54,6 +56,9 @@ from livekit.agents.llm import function_tool
 from livekit.plugins import azure
 
 load_dotenv()
+
+# Suppress verbose Azure SDK debug logs
+logging.getLogger("azure").setLevel(logging.WARNING)
 
 g = DDGS()
 
@@ -169,18 +174,34 @@ class AzureVoiceAssistant(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    print("🎙️ Using Azure Voice Live Realtime API")
+    print("🎙️ Using Azure Voice Live Realtime API with Semantic VAD")
 
     # Create the agent with instructions and tools
     agent = AzureVoiceAssistant(name="Azure")
+
+    # Configure Semantic VAD for intelligent turn detection
+    # Options:
+    # - AzureSemanticVad: Default semantic VAD (multilingual)
+    # - AzureSemanticVadEn: English-only, optimized for English
+    # - AzureSemanticVadMultilingual: Explicit multilingual support
+    from azure.ai.voicelive.models import AzureSemanticVadEn
+
+    turn_detection = AzureSemanticVadEn(
+        threshold=0.5,                    # Voice activity detection threshold (0.0-1.0)
+        silence_duration_ms=500,          # Silence duration before turn ends
+        prefix_padding_ms=300,            # Audio padding before speech
+        speech_duration_ms=200,           # Minimum speech duration to trigger detection
+        remove_filler_words=True,         # Remove filler words like "um", "uh"
+    )
 
     # Create Azure Voice Live session
     session = AgentSession(
         llm=azure.realtime.RealtimeModel(
             endpoint=os.getenv("AZURE_VOICELIVE_ENDPOINT"),
             api_key=os.getenv("AZURE_VOICELIVE_API_KEY"),
-            model="gpt-4o",
-            voice=os.getenv("AZURE_VOICELIVE_VOICE", "en-US-AvaNeural"),  # Azure Neural Voice
+            model=os.getenv("AZURE_VOICELIVE_MODEL", "gpt-4o"),
+            voice=os.getenv("AZURE_VOICELIVE_VOICE", "en-US-AvaNeural"),
+            turn_detection=turn_detection,  # Use semantic VAD
             tool_choice="auto",
         )
     )
