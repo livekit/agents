@@ -387,3 +387,12 @@ class SpeechStream(stt.SpeechStream):
             if resp.alternatives and resp.alternatives[0].items
             else None,
         )
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        # WARN: this is a workaround to clean up AWS SDK CRT HTTP client connections
+        for connection in list(self._http_client._connections.values()):
+            with contextlib.suppress(Exception):
+                if connection.is_open():
+                    await connection.close()
+        self._http_client._connections.clear()
