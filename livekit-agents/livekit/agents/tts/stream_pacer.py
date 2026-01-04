@@ -131,9 +131,11 @@ class StreamPacerWrapper(SentenceStream):
             remaining_audio = (
                 audio_start_time + audio_duration - curr_time if audio_start_time > 0.0 else 0.0
             )
-            if first_sentence or (
-                generation_stopped and remaining_audio <= self._options.min_remaining_audio
-            ) or (self._input_ended and self._sentences):
+            if (
+                first_sentence
+                or (generation_stopped and remaining_audio <= self._options.min_remaining_audio)
+                or (self._input_ended and self._sentences)
+            ):
                 batch: list[str] = []
                 while self._sentences:
                     batch.append(self._sentences.pop(0))
