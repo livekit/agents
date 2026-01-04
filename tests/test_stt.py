@@ -3,6 +3,7 @@ Do speech recognition on a long audio file and compare the result with the expec
 """
 
 import asyncio
+import math
 import time
 from typing import Callable
 
@@ -83,6 +84,39 @@ def load_env():
     load_dotenv()
 
 
+async def batch_recognize(
+    stt: stt.STT, frames: list[rtc.AudioFrame], n_batches: int = 1
+) -> SpeechEvent:
+    if n_batches == 1:
+        return await stt.recognize(buffer=frames)
+    if n_batches > len(frames):
+        raise ValueError("n_batches must be less than or equal to the number of frames")
+
+    batch_size: int = len(frames) // n_batches
+    events: list[SpeechEvent] = []
+    for i in range(n_batches):
+        batch = frames[i * batch_size : (i + 1) * batch_size]
+        events.append(await stt.recognize(buffer=batch))
+
+    assert len(events) > 0
+    return SpeechEvent(
+        type=agents.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        request_id=events[0].request_id,
+        alternatives=[
+            SpeechData(
+                text=" ".join(
+                    [
+                        event.alternatives[0].text
+                        for event in events
+                        if event.alternatives[0].text is not None
+                    ]
+                ),
+                language=events[0].alternatives[0].language,
+            )
+        ],
+    )
+
+
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("stt_factory", STTs)
 async def test_recognize(stt_factory: Callable[[], stt.STT], request):
@@ -105,27 +139,12 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], request):
             try:
                 start_time = time.time()
 
-                # Sarvam only supports <30s audio
-                if stt.provider in {"Sarvam"} and duration > 30:
-                    frames, *_ = await make_test_speech(
-                        sample_rate=sample_rate, chunk_duration_ms=5 * 1000
-                    )
-                    event1 = await stt.recognize(buffer=frames[: len(frames) // 2])
-                    event2 = await stt.recognize(buffer=frames[len(frames) // 2 :])
-                    event = SpeechEvent(
-                        type=agents.stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=event1.request_id,
-                        alternatives=[
-                            SpeechData(
-                                text=event1.alternatives[0].text
-                                + " "
-                                + event2.alternatives[0].text,
-                                language=event1.alternatives[0].language,
-                            )
-                        ],
-                    )
+                # WARN: Sarvam only supports <30s audio chunks
+                if stt.provider == "Sarvam" and duration > 30:
+                    n_batches = math.ceil(duration / 30)
                 else:
-                    event = await stt.recognize(buffer=frames)
+                    n_batches = 1
+                event = await batch_recognize(stt, frames, n_batches)
                 text = event.alternatives[0].text
                 dt = time.time() - start_time
 
