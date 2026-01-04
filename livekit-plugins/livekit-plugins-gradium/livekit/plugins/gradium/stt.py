@@ -281,7 +281,7 @@ class SpeechStream(stt.SpeechStream):
                         break
                     continue
                 except asyncio.CancelledError:
-                    break
+                    raise
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,

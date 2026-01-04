@@ -348,7 +348,7 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
