@@ -73,7 +73,7 @@ class StreamPacerWrapper(SentenceStream):
         if self._audio_emitter._dst_ch.closed:
             # close the stream if the audio emitter is closed
             self._closing = True
-            self._wakeup_event.set()
+        self._wakeup_event.set()  # always wake up to send remaining sentences
 
     async def aclose(self) -> None:
         await self._sent_stream.aclose()
@@ -133,7 +133,7 @@ class StreamPacerWrapper(SentenceStream):
             )
             if first_sentence or (
                 generation_stopped and remaining_audio <= self._options.min_remaining_audio
-            ):
+            ) or (self._input_ended and self._sentences):
                 batch: list[str] = []
                 while self._sentences:
                     batch.append(self._sentences.pop(0))
