@@ -383,9 +383,10 @@ class SpeechStream(stt.SpeechStream):
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
+                tasks_group: asyncio.Future[None] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
@@ -398,6 +399,8 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    tasks_group.exception()
             finally:
                 if ws is not None:
                     await ws.close()

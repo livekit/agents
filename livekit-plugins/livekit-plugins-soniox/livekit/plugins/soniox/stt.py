@@ -264,9 +264,11 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(self._keepalive_task()),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                tasks_group: asyncio.Future[None] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -280,7 +282,9 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-            # Handle errors.
+                    tasks_group.cancel()
+                    tasks_group.exception()
+
             except asyncio.TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
