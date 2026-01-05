@@ -819,10 +819,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error, reason=reason))
 
-            if self._room_io:
-                # close room io after close event is emitted, ensure the room io's close callback is called
-                await self._room_io.aclose()
-
             self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
