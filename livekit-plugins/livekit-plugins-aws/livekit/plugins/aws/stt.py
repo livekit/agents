@@ -269,12 +269,15 @@ class SpeechStream(stt.SpeechStream):
                                 )
                     finally:
                         # Send empty frame to close (required by AWS Transcribe)
-                        # Wrap in suppress to handle cancellation during send
-                        with contextlib.suppress(Exception):
+                        try:
                             await audio_stream.send(
                                 AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
                             )
-                            await audio_stream.close()
+                        except Exception:
+                            pass
+                        finally:
+                            with contextlib.suppress(Exception):
+                                await audio_stream.close()
 
                 async def handle_transcript_events(
                     output_stream: EventReceiver[TranscriptResultStream],
