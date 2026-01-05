@@ -49,6 +49,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    InternalEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -357,7 +358,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
+        self._recorded_internal_events: list[InternalEvent] = []
         self._enable_recording: bool = False
+        self._include_internal_events: bool = False
         self._started_at: float | None = None
 
         # ivr activity
@@ -365,7 +368,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
+        self._recorded_internal_events.append(arg)
         super().emit(event, arg)
+
+    def collect(self, event: InternalEvent) -> None:
+        self._recorded_internal_events.append(event)
 
     @property
     def userdata(self) -> Userdata_T:
@@ -433,7 +440,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(user_input=user_input, output_type=output_type)
+        run_state = RunResult(agent_session=self, user_input=user_input, output_type=output_type)
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input)
         return run_state
@@ -450,6 +457,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
+        include_internal_events: bool = False,
     ) -> RunResult: ...
 
     @overload
@@ -464,6 +472,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: bool = True,
+        include_internal_events: bool = False,
     ) -> None: ...
 
     async def start(
@@ -477,6 +486,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
         record: NotGivenOr[bool] = NOT_GIVEN,
+        include_internal_events: bool = False,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -489,6 +499,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio
+            include_internal_events: Whether to include internal events in the session report
         """
         async with self._lock:
             if self._started:
@@ -504,6 +515,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     record = job_ctx.job.enable_recording
 
                 self._enable_recording = record
+                self._include_internal_events = include_internal_events
 
                 if self._enable_recording:
                     job_ctx.init_recording()
@@ -624,12 +636,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
                     self._job_context_cb_registered = True
 
+            if self._output.audio:
+                self._output.audio.on("playback_finished", self.collect)
+
             run_state: RunResult | None = None
             if capture_run:
                 if self._global_run_state is not None and not self._global_run_state.done():
                     raise RuntimeError("nested runs are not supported")
 
-                run_state = RunResult(output_type=None)
+                run_state = RunResult(agent_session=self, output_type=None)
                 self._global_run_state = run_state
 
             # it is ok to await it directly, there is no previous task to drain

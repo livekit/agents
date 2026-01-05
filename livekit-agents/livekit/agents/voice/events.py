@@ -7,19 +7,29 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Uni
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
+from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.room_io.types import TextInputEvent
+
 from ..llm import (
     LLM,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
+    GenerationCreatedEvent,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
     LLMError,
     RealtimeModel,
     RealtimeModelError,
 )
 from ..log import logger
 from ..metrics import AgentMetrics
-from ..stt import STT, STTError
+from ..stt import STT, SpeechEvent, STTError
 from ..tts import TTS, TTSError
+from ..vad import VADEvent
+from .run_result import (
+    RunEvent,
+)
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -237,6 +247,22 @@ AgentEvent = Annotated[
         SpeechCreatedEvent,
         ErrorEvent,
         CloseEvent,
+    ],
+    Field(discriminator="type"),
+]
+
+
+InternalEvent = Annotated[
+    Union[
+        AgentEvent,
+        VADEvent,
+        RunEvent,
+        SpeechEvent,
+        InputSpeechStartedEvent,
+        InputSpeechStoppedEvent,
+        GenerationCreatedEvent,
+        PlaybackFinishedEvent,
+        TextInputEvent,
     ],
     Field(discriminator="type"),
 ]

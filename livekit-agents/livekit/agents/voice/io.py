@@ -117,6 +117,8 @@ class VideoInput:
 
 @dataclass
 class PlaybackFinishedEvent:
+    type: Literal["playback_finished"] = "playback_finished"
+
     playback_position: float
     """How much of the audio was played back"""
     interrupted: bool

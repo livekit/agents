@@ -18,16 +18,20 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 @dataclass
 class InputSpeechStartedEvent:
-    pass
+    type: Literal["input_speech_started"] = "input_speech_started"
 
 
 @dataclass
 class InputSpeechStoppedEvent:
+    type: Literal["input_speech_stopped"] = "input_speech_stopped"
+
     user_transcription_enabled: bool
 
 
 @dataclass
 class MessageGeneration:
+    type: Literal["message_generation"] = "message_generation"
+
     message_id: str
     text_stream: AsyncIterable[str]  # could be io.TimedString
     audio_stream: AsyncIterable[rtc.AudioFrame]
@@ -36,6 +40,8 @@ class MessageGeneration:
 
 @dataclass
 class GenerationCreatedEvent:
+    type: Literal["generation_created"] = "generation_created"
+
     message_stream: AsyncIterable[MessageGeneration]
     function_stream: AsyncIterable[FunctionCall]
     user_initiated: bool

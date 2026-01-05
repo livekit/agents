@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from pydantic import BaseModel
+
+from livekit.agents.vad import VADEvent, VADEventType
 
 from ..llm import ChatContext
 from .agent_session import AgentSessionOptions
-from .events import AgentEvent
+from .events import AgentEvent, InternalEvent
 
 
 @dataclass
 class SessionReport:
     enable_recording: bool
+    include_internal_events: bool
     job_id: str
     room_id: str
     room: str
     options: AgentSessionOptions
     events: list[AgentEvent]
+    internal_events: list[InternalEvent]
     chat_history: ChatContext
     audio_recording_path: Path | None = None
     audio_recording_started_at: float | None = None
@@ -29,6 +35,7 @@ class SessionReport:
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
+        internal_events_dict: list[dict] = []
 
         for event in self.events:
             if event.type == "metrics_collected":
@@ -36,11 +43,24 @@ class SessionReport:
 
             events_dict.append(event.model_dump())
 
+        if self.include_internal_events:
+            for event in self.internal_events:
+                if isinstance(event, BaseModel):
+                    internal_events_dict.append(event.model_dump())
+                else:
+                    if isinstance(event, VADEvent):
+                        event.frames = []
+                        # skip inference done events, they are too frequent and too noisy
+                        if event.type == VADEventType.INFERENCE_DONE:
+                            continue
+                    internal_events_dict.append(asdict(event))
+
         return {
             "job_id": self.job_id,
             "room_id": self.room_id,
             "room": self.room,
             "events": events_dict,
+            "internal_events": internal_events_dict,
             "audio_recording_path": (
                 str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
             ),

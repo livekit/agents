@@ -1105,7 +1105,8 @@ class AgentActivity(RecognitionHooks):
 
         self._session._on_error(error)
 
-    def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
+    def _on_input_speech_started(self, ev: llm.InputSpeechStartedEvent) -> None:
+        self._session.collect(ev)
         if self.vad is None:
             self._session._update_user_state("speaking")
 
@@ -1119,6 +1120,7 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
+        self._session.collect(ev)
         if self.vad is None:
             self._session._update_user_state("listening")
 
@@ -1128,6 +1130,7 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
+        self._session.collect(ev)
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
         )
@@ -1140,6 +1143,8 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
+        self._session.collect(ev)
+
         if ev.user_initiated:
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
@@ -1214,6 +1219,7 @@ class AgentActivity(RecognitionHooks):
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_start_time = time.time()
         if ev:
+            self._session.collect(ev)
             speech_start_time = speech_start_time - ev.speech_duration
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         self._user_silence_event.clear()
@@ -1226,6 +1232,7 @@ class AgentActivity(RecognitionHooks):
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
         if ev:
+            self._session.collect(ev)
             speech_end_time = speech_end_time - ev.silence_duration
         self._session._update_user_state(
             "listening",
@@ -1241,6 +1248,9 @@ class AgentActivity(RecognitionHooks):
             self._start_false_interruption_timer(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+        if ev:
+            self._session.collect(ev)
+
         if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
@@ -1258,6 +1268,8 @@ class AgentActivity(RecognitionHooks):
             self._user_silence_event.set()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
+        self._session.collect(ev)
+
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -1286,6 +1298,7 @@ class AgentActivity(RecognitionHooks):
                 self._start_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
+        self._session.collect(ev)
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
