@@ -16,11 +16,6 @@ from .tts import (
     TTSCapabilities,
 )
 
-# already a retry mechanism in TTS.synthesize, don't retry in stream adapter
-DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
-    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
-)
-
 
 class StreamAdapter(TTS):
     def __init__(
@@ -79,7 +74,11 @@ class StreamAdapterWrapper(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_stream_adapter"
 
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
+        adapter_conn_options = APIConnectOptions(
+            timeout=conn_options.timeout,
+            max_retry=0,
+        )
+        super().__init__(tts=tts, conn_options=adapter_conn_options)
         self._tts: StreamAdapter = tts
         self._wrapped_tts_conn_options = conn_options
 

@@ -9,11 +9,6 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
-# already a retry mechanism in STT.recognize, don't retry in stream adapter
-DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
-    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
-)
-
 
 class StreamAdapter(STT):
     def __init__(self, *, stt: STT, vad: VAD) -> None:
@@ -84,7 +79,11 @@ class StreamAdapterWrapper(RecognizeStream):
         language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
+        adapter_conn_options = APIConnectOptions(
+            timeout=conn_options.timeout,
+            max_retry=0,
+        )
+        super().__init__(stt=stt, conn_options=adapter_conn_options)
         self._vad = vad
         self._wrapped_stt = wrapped_stt
         self._wrapped_stt_conn_options = conn_options
