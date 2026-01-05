@@ -105,7 +105,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "Universal-Streaming"
+        return self._opts.speech_model
 
     @property
     def provider(self) -> str:

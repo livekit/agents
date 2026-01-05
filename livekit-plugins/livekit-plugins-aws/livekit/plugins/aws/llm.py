@@ -22,13 +22,7 @@ import aioboto3  # type: ignore
 from botocore.config import Config  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
-from livekit.agents.llm import (
-    ChatContext,
-    FunctionTool,
-    FunctionToolCall,
-    RawFunctionTool,
-    ToolChoice,
-)
+from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -38,7 +32,6 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import to_fnc_ctx
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
@@ -133,7 +126,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -152,7 +145,7 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            tools_list = to_fnc_ctx(tools)
+            tools_list = llm.ToolContext(tools).parse_function_tools("aws")
             if self._opts.cache_tools:
                 tools_list.append({"cachePoint": {"type": "default"}})
 
@@ -216,7 +209,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

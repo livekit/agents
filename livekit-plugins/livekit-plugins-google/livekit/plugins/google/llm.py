@@ -24,13 +24,7 @@ from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import FunctionTool, RawFunctionTool, ToolChoice, utils as llm_utils
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -41,8 +35,7 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .tools import _LLMTool
-from .utils import create_tools_config, to_fnc_ctx, to_response_format
+from .utils import create_tools_config, to_response_format
 from .version import __version__
 
 
@@ -70,8 +63,8 @@ class _LLMOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    retrieval_config: NotGivenOr[types.RetrievalConfigOrDict]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
-    gemini_tools: NotGivenOr[list[_LLMTool]]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
@@ -91,7 +84,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: ChatModels | str = "gemini-3-flash-preview",
+        model: ChatModels | str = "gemini-2.5-flash",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
@@ -104,10 +97,10 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
+        retrieval_config: NotGivenOr[types.RetrievalConfigOrDict] = NOT_GIVEN,
         automatic_function_calling_config: NotGivenOr[
             types.AutomaticFunctionCallingConfigOrDict
         ] = NOT_GIVEN,
-        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
@@ -136,8 +129,8 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
+            retrieval_config (RetrievalConfigOrDict, optional): The retrieval configuration for response generation. Defaults to None.
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
-            gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
@@ -203,8 +196,8 @@ class LLM(llm.LLM):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
+            retrieval_config=retrieval_config,
             automatic_function_calling_config=automatic_function_calling_config,
-            gemini_tools=gemini_tools,
             http_options=http_options,
             seed=seed,
             safety_settings=safety_settings,
@@ -233,7 +226,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -241,7 +234,6 @@ class LLM(llm.LLM):
             types.SchemaUnion | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
 
@@ -251,6 +243,12 @@ class LLM(llm.LLM):
         tool_choice = (
             cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
         )
+        retrieval_config = (
+            self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
+        )
+        if isinstance(retrieval_config, dict):
+            retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
             if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -258,38 +256,44 @@ class LLM(llm.LLM):
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=[tool_choice["function"]["name"]],
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "required":
                 tool_names = []
                 for tool in tools or []:
-                    if is_function_tool(tool):
-                        tool_names.append(get_function_info(tool).name)
-                    elif is_raw_function_tool(tool):
-                        tool_names.append(get_raw_function_info(tool).name)
+                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
+                        tool_names.append(tool.info.name)
 
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=tool_names or None,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "auto":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.AUTO,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "none":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode=types.FunctionCallingConfigMode.NONE,
-                    )
+                    ),
+                    retrieval_config=retrieval_config,
                 )
                 extra["tool_config"] = gemini_tool_choice
+        elif retrieval_config:
+            extra["tool_config"] = types.ToolConfig(
+                retrieval_config=retrieval_config,
+            )
 
         if is_given(response_format):
             extra["response_schema"] = to_response_format(response_format)  # type: ignore
@@ -362,8 +366,6 @@ class LLM(llm.LLM):
         if is_given(self._opts.safety_settings):
             extra["safety_settings"] = self._opts.safety_settings
 
-        gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
-
         return LLMStream(
             self,
             client=self._client,
@@ -371,7 +373,6 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
-            gemini_tools=gemini_tools,
             extra_kwargs=extra,
         )
 
@@ -379,22 +380,21 @@ class LLM(llm.LLM):
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
-        llm: LLM,
+        llm_v: LLM,
         *,
         client: Client,
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
-        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
-        self._llm: LLM = llm
+        self._llm: LLM = llm_v
         self._extra_kwargs = extra_kwargs
-        self._gemini_tools = gemini_tools
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         retryable = True
@@ -410,11 +410,8 @@ class LLMStream(llm.LLMStream):
             )
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
-            function_declarations = to_fnc_ctx(self._tools)
-            tools_config = create_tools_config(
-                function_tools=function_declarations,
-                gemini_tools=self._gemini_tools if is_given(self._gemini_tools) else None,
-            )
+            tool_context = llm.ToolContext(self._tools)
+            tools_config = create_tools_config(tool_context, _only_single_type=True)
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
             http_options = self._llm._opts.http_options or types.HttpOptions(

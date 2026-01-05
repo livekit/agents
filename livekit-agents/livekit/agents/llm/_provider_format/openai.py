@@ -113,3 +113,25 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
             "detail": img.inference_detail,
         },
     }
+
+
+def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.RawFunctionTool):
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": tool.info.raw_schema,
+                }
+            )
+
+        elif isinstance(tool, llm.FunctionTool):
+            schema = (
+                llm.utils.build_strict_openai_schema(tool)
+                if strict
+                else llm.utils.build_legacy_openai_schema(tool)
+            )
+            schemas.append(schema)
+
+    return schemas
