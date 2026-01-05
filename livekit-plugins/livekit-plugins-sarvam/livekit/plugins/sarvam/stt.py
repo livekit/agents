@@ -20,6 +20,7 @@ This module provides an STT implementation that uses the Sarvam.ai API.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import enum
 import json
 import os
@@ -35,6 +36,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     stt,
@@ -45,15 +47,53 @@ from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
+from .version import __version__
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_STT_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text/ws"
-SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
-SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
+SARVAM_STT_TRANSLATE_BASE_URL = (
+    "https://api.sarvam.ai/speech-to-text-translate"
+)
+SARVAM_STT_TRANSLATE_STREAMING_URL = (
+    "wss://api.sarvam.ai/speech-to-text-translate/ws"
+)
 
 # Models
 SarvamSTTModels = Literal["saarika:v2.5", "saarika:v2.0", "saaras:v2.5"]
+
+
+def _build_custom_headers(
+    api_key: str,
+    additional_headers: dict | None = None,
+    websocket: bool = False,
+) -> dict:
+    """Build custom headers to identify the source of requests.
+
+    Args:
+        api_key: Sarvam API key
+        additional_headers: Additional headers to include
+        websocket: If True, only include essential headers for WebSocket
+    """
+    headers = {
+        "api-subscription-key": api_key,
+    }
+
+    # WebSocket connections may be strict about headers
+    # Only add User-Agent for WebSocket, full metadata for HTTP
+    if websocket:
+        headers["User-Agent"] = f"LiveKit-Agents-Python-Sarvam/{__version__}"
+    else:
+        headers.update({
+            "User-Agent": f"LiveKit-Agents-Python-Sarvam/{__version__}",
+            "X-SDK-Source": "livekit-agents-python",
+            "X-SDK-Version": __version__,
+            "X-Plugin-Name": "livekit-plugins-sarvam",
+        })
+
+    if additional_headers:
+        headers.update(additional_headers)
+    return headers
 
 
 class ConnectionState(enum.Enum):
@@ -74,7 +114,8 @@ class SarvamSTTOptions:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
         base_url: API endpoint URL (auto-determined from model if not provided)
-        streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
+        streaming_url: WebSocket streaming URL (auto-determined from model if
+            not provided)
         prompt: Optional prompt for STT translate (saaras models only)
     """
 
@@ -83,7 +124,8 @@ class SarvamSTTOptions:
     model: SarvamSTTModels | str = "saarika:v2.5"
     base_url: str | None = None
     streaming_url: str | None = None
-    prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    # Optional prompt for STT translate (saaras models only)
+    prompt: str | None = None
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -111,14 +153,16 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
         Tuple of (base_url, streaming_url)
     """
     if model.startswith("saaras:"):
-        return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
+        return (
+            SARVAM_STT_TRANSLATE_BASE_URL,
+            SARVAM_STT_TRANSLATE_STREAMING_URL,
+        )
     else:  # saarika models
         return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
 
 
-def _calculate_audio_duration(
-    buffer: AudioBuffer,
-) -> float:  # TODO: Copied from livekit/agents/utils/audio.py, check if it can be reused
+# TODO: Copied from livekit/agents/utils/audio.py, check if it can be reused
+def _calculate_audio_duration(buffer: AudioBuffer) -> float:
     """Calculate audio duration from buffer."""
     try:
         if isinstance(buffer, list):
@@ -129,12 +173,46 @@ def _calculate_audio_duration(
                 return total_samples / sample_rate
         elif hasattr(buffer, "duration"):
             return buffer.duration / 1000.0  # buffer.duration is in ms
-        elif hasattr(buffer, "samples_per_channel") and hasattr(buffer, "sample_rate"):
+        elif hasattr(buffer, "samples_per_channel") and hasattr(
+            buffer, "sample_rate"
+        ):
             # Single AudioFrame
             return buffer.samples_per_channel / buffer.sample_rate
     except Exception as e:
         logger.warning(f"Could not calculate audio duration: {e}")
     return 0.0
+
+
+def _json_loads_maybe(raw: str) -> object:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _truncate_for_log(val: object, *, max_len: int = 2000) -> str:
+    try:
+        if isinstance(val, str):
+            s = val
+        else:
+            s = json.dumps(val, ensure_ascii=False)
+    except Exception:
+        s = str(val)
+    if len(s) > max_len:
+        return s[:max_len] + "…(truncated)"
+    return s
+
+
+def _extract_request_id(body: object) -> str | None:
+    if isinstance(body, dict):
+        for k in ("request_id", "requestId", "id"):
+            v = body.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+    return None
 
 
 def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
@@ -186,13 +264,18 @@ class STT(stt.STT):
         flush_signal: bool | None = None,
         input_audio_codec: str | None = None,
     ) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+            )
+        )
 
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
             raise ValueError(
                 "Sarvam API key is required. "
-                "Provide it directly or set SARVAM_API_KEY environment variable."
+                "Provide it directly or set SARVAM_API_KEY env var."
             )
 
         self._opts = SarvamSTTOptions(
@@ -235,7 +318,8 @@ class STT(stt.STT):
 
         Args:
             buffer: Audio buffer containing speech data
-            language: BCP-47 language code (overrides the one set in constructor)
+            language: BCP-47 language code (overrides the one set in
+                constructor)
             model: Sarvam model to use (overrides the one set in constructor)
             conn_options: Connection options for API requests
 
@@ -247,16 +331,28 @@ class STT(stt.STT):
             APIStatusError: On API errors (non-200 status)
             APITimeoutError: On API timeout
         """
-        opts_language = self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
-        opts_model = self._opts.model if isinstance(model, type(NOT_GIVEN)) else model
+        opts_language = (
+            self._opts.language
+            if isinstance(language, type(NOT_GIVEN))
+            else language
+        )
+        opts_model = (
+            self._opts.model if isinstance(model, type(NOT_GIVEN)) else model
+        )
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
         form_data = aiohttp.FormData()
-        form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
+        form_data.add_field(
+            "file",
+            wav_bytes,
+            filename="audio.wav",
+            content_type="audio/wav",
+        )
 
         # Add model and language_code to the form data if specified
-        # Sarvam API docs state language_code is optional for saarika:v2x but mandatory for v1
+        # Sarvam API docs state language_code is optional for saarika:v2x but
+        # mandatory for v1
         # Model is also optional, defaults to saarika:v2.5
         if opts_language:
             form_data.add_field("language_code", opts_language)
@@ -265,7 +361,7 @@ class STT(stt.STT):
 
         if self._api_key is None:
             raise ValueError("API key cannot be None")
-        headers = {"api-subscription-key": self._api_key}
+        headers = _build_custom_headers(self._api_key)
 
         try:
             if self._opts.base_url is None:
@@ -279,20 +375,60 @@ class STT(stt.STT):
                     sock_connect=conn_options.timeout,
                 ),
             ) as res:
+                raw_text = await res.text()
+                body = _json_loads_maybe(raw_text)
+
                 if res.status != 200:
-                    error_text = await res.text()
-                    self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
+                    req_id = _extract_request_id(body)
+                    self._logger.error(
+                        "Sarvam STT HTTP error",
+                        extra={
+                            "status_code": res.status,
+                            "request_id": req_id,
+                            "body": _truncate_for_log(body),
+                            "model": str(opts_model),
+                            "language": str(opts_language),
+                        },
+                    )
                     raise APIStatusError(
-                        message=f"Sarvam API Error: {error_text}",
+                        message="Sarvam STT request failed",
                         status_code=res.status,
+                        request_id=req_id,
+                        body=body,
                     )
 
-                response_json = await res.json()
-                self._logger.debug(f"Sarvam API response: {response_json}")
+                if not isinstance(body, dict):
+                    self._logger.error(
+                        "Sarvam STT returned unexpected response format",
+                        extra={
+                            "status_code": res.status,
+                            "body": _truncate_for_log(body),
+                            "model": str(opts_model),
+                            "language": str(opts_language),
+                        },
+                    )
+                    raise APIStatusError(
+                        message="Sarvam STT unexpected response format",
+                        status_code=res.status,
+                        body=body,
+                        retryable=True,
+                    )
 
-                transcript_text = response_json.get("transcript", "")
-                request_id = response_json.get("request_id", "")
-                detected_language = response_json.get("language_code")
+                self._logger.debug(
+                    "Sarvam STT response received",
+                    extra={
+                        "status_code": res.status,
+                        "request_id": body.get("request_id"),
+                        "model": str(opts_model),
+                        "language": str(opts_language),
+                        "sdk_source": "livekit-agents-python",
+                        "sdk_version": __version__,
+                    },
+                )
+
+                transcript_text = body.get("transcript", "") or ""
+                request_id = body.get("request_id", "") or ""
+                detected_language = body.get("language_code")
                 if not isinstance(detected_language, str):
                     detected_language = opts_language or ""
 
@@ -300,16 +436,17 @@ class STT(stt.STT):
                 end_time = 0.0
 
                 # Try to get timestamps if available
-                timestamps_data = response_json.get("timestamps")
-                if timestamps_data and isinstance(timestamps_data, dict):
+                timestamps_data = body.get("timestamps")
+                if isinstance(timestamps_data, dict):
                     words_ts_start = timestamps_data.get("start_time_seconds")
                     words_ts_end = timestamps_data.get("end_time_seconds")
-                    if isinstance(words_ts_start, list) and len(words_ts_start) > 0:
-                        start_time = words_ts_start[0]
-                    if isinstance(words_ts_end, list) and len(words_ts_end) > 0:
-                        end_time = words_ts_end[-1]
+                    if isinstance(words_ts_start, list) and words_ts_start:
+                        start_time = float(words_ts_start[0] or 0.0)
+                    if isinstance(words_ts_end, list) and words_ts_end:
+                        end_time = float(words_ts_end[-1] or 0.0)
 
-                # If start/end times are still 0, use buffer duration as an estimate for end_time
+                # If start/end times are still 0, use buffer duration as an
+                # estimate for end_time
                 if start_time == 0.0 and end_time == 0.0:
                     end_time = _calculate_audio_duration(buffer)
 
@@ -319,7 +456,9 @@ class STT(stt.STT):
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=1.0,  # Sarvam doesn't provide confidence score in this response
+                        # Sarvam doesn't provide confidence score in this
+                        # response.
+                        confidence=1.0,
                     )
                 ]
 
@@ -329,15 +468,34 @@ class STT(stt.STT):
                     alternatives=alternatives,
                 )
 
+        except asyncio.CancelledError:
+            raise
+        except APIError:
+            raise
         except asyncio.TimeoutError as e:
-            self._logger.error(f"Sarvam API timeout: {e}")
-            raise APITimeoutError("Sarvam API request timed out") from e
+            self._logger.error(
+                "Sarvam STT request timed out",
+                extra={
+                    "timeout": conn_options.timeout,
+                    "model": str(opts_model),
+                    "language": str(opts_language),
+                },
+                exc_info=True,
+            )
+            raise APITimeoutError("Sarvam STT request timed out") from e
         except aiohttp.ClientError as e:
-            self._logger.error(f"Sarvam API client error: {e}")
-            raise APIConnectionError(f"Sarvam API connection error: {e}") from e
-        except Exception as e:
-            self._logger.error(f"Error during Sarvam STT processing: {e}")
-            raise APIConnectionError(f"Unexpected error in Sarvam STT: {e}") from e
+            self._logger.error(
+                "Sarvam STT connection error",
+                extra={
+                    "error_type": type(e).__name__,
+                    "model": str(opts_model),
+                    "language": str(opts_language),
+                },
+                exc_info=True,
+            )
+            raise APIConnectionError(
+                f"Sarvam STT connection error: {e}"
+            ) from e
 
     def stream(
         self,
@@ -372,10 +530,16 @@ class STT(stt.STT):
             if is_given(high_vad_sensitivity)
             else self._opts.high_vad_sensitivity
         )
-        opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
-        opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
+        opts_sample_rate = (
+            sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        )
+        opts_flush_signal = (
+            flush_signal if is_given(flush_signal) else self._opts.flush_signal
+        )
         opts_input_codec = (
-            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
+            input_audio_codec
+            if is_given(input_audio_codec)
+            else self._opts.input_audio_codec
         )
 
         # Create options for the stream
@@ -421,7 +585,11 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
     ) -> None:
         self._opts = opts
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        super().__init__(
+            stt=stt,
+            conn_options=conn_options,
+            sample_rate=opts.sample_rate,
+        )
         self._api_key = api_key
         self._session = http_session
         self._speaking = False
@@ -432,6 +600,10 @@ class SpeechStream(stt.SpeechStream):
         self._connection_state = ConnectionState.DISCONNECTED
         self._connection_lock = asyncio.Lock()
         self._session_id = id(self)
+
+        # Request ID tracking
+        self._client_request_id: str | None = None
+        self._server_request_id: str | None = None
 
         # Add flush mechanism
         self._ws: aiohttp.ClientWebSocketResponse | None = (
@@ -448,6 +620,7 @@ class SpeechStream(stt.SpeechStream):
             1,
         )
         self._end_of_stream_msg = self._build_end_of_stream_message()
+        self._closing_ws = False
 
     def _build_end_of_stream_message(self) -> str:
         return json.dumps(
@@ -463,7 +636,10 @@ class SpeechStream(stt.SpeechStream):
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
-        self._logger.debug("Starting stream cleanup", extra={"session_id": self._session_id})
+        self._logger.debug(
+            "Starting stream cleanup",
+            extra={"session_id": self._session_id},
+        )
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.DISCONNECTED
@@ -488,10 +664,14 @@ class SpeechStream(stt.SpeechStream):
         try:
             if self._ws and not self._ws.closed:
                 await self._ws.close()
-                self._logger.debug("WebSocket closed", extra={"session_id": self._session_id})
+                self._logger.debug(
+                    "WebSocket closed",
+                    extra={"session_id": self._session_id},
+                )
         except Exception as e:
             self._logger.warning(
-                f"Error closing WebSocket: {e}", extra={"session_id": self._session_id}
+                    f"Error closing WebSocket: {e}",
+                    extra={"session_id": self._session_id},
             )
         finally:
             self._ws = None
@@ -501,23 +681,34 @@ class SpeechStream(stt.SpeechStream):
             await super().aclose()
         except Exception as e:
             self._logger.warning(
-                f"Error in parent cleanup: {e}", extra={"session_id": self._session_id}
+                f"Error in parent cleanup: {e}",
+                extra={"session_id": self._session_id},
             )
 
         # Close session last
         try:
             if self._session and not self._session.closed:
                 await self._session.close()
-                self._logger.debug("HTTP session closed", extra={"session_id": self._session_id})
+                self._logger.debug(
+                    "HTTP session closed",
+                    extra={"session_id": self._session_id},
+                )
         except Exception as e:
             self._logger.warning(
-                f"Error closing session: {e}", extra={"session_id": self._session_id}
+                f"Error closing session: {e}",
+                extra={"session_id": self._session_id},
             )
         finally:
             # Clear reference to help with garbage collection
             pass  # Session reference will be cleared when object is destroyed
 
-    def update_options(self, *, language: str, model: str, prompt: str | None = None) -> None:
+    def update_options(
+        self,
+        *,
+        language: str,
+        model: str,
+        prompt: str | None = None,
+    ) -> None:
         """Update streaming options."""
         if not language or not language.strip():
             raise ValueError("Language cannot be empty")
@@ -539,14 +730,19 @@ class SpeechStream(stt.SpeechStream):
         )
         self._reconnect_event.set()
 
-    async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_initial_config(
+        self, ws: aiohttp.ClientWebSocketResponse
+    ) -> None:
         """Send initial configuration message with prompt for saaras models."""
         try:
             config_message = {"prompt": self._opts.prompt, "type": "config"}
             await ws.send_str(json.dumps(config_message))
             self._logger.debug(
                 "Sent initial config for saaras model",
-                extra={"session_id": self._session_id, "prompt": self._opts.prompt},
+                extra={
+                    "session_id": self._session_id,
+                    "prompt": self._opts.prompt,
+                },
             )
         except Exception as e:
             self._logger.error(
@@ -554,151 +750,194 @@ class SpeechStream(stt.SpeechStream):
                 extra={"session_id": self._session_id},
                 exc_info=True,
             )
-            raise APIConnectionError(f"Failed to send initial config: {e}") from e
+            raise APIConnectionError(
+                f"Failed to send initial config: {e}"
+            ) from e
+
+    def _build_log_context(self) -> dict:
+        """Build consistent logging context with request IDs."""
+        return {
+            "session_id": self._session_id,
+            "client_request_id": self._client_request_id,
+            "server_request_id": self._server_request_id,
+            "model": self._opts.model,
+            "language": self._opts.language,
+            "sdk_source": "livekit-agents-python",
+            "sdk_version": __version__,
+        }
 
     async def _run(self) -> None:
-        """Main streaming loop with WebSocket connection."""
-        num_retries = 0
-        max_retries = getattr(self._conn_options, "max_retry_count", 3)
+        """
+        Main loop for streaming transcription.
 
-        while num_retries <= max_retries:
+        Important: retries/backoff are handled by
+        livekit.agents.stt.RecognizeStream._main_task()
+        based on raised APIError subclasses, so this implementation should
+        raise the right
+        exceptions and avoid its own retry loops.
+        """
+        # Generate a client-side request ID for this stream
+        self._client_request_id = utils.shortuuid()
+        self._server_request_id = None
+
+        self._logger.debug(
+            "STT stream initialized",
+            extra=self._build_log_context(),
+        )
+
+        ws: aiohttp.ClientWebSocketResponse | None = None
+
+        while True:
             try:
-                await self._run_connection()
-                break  # Success, exit retry loop
+                ws = await self._connect_ws()
+                self._ws = ws
+                self._closing_ws = False
 
-            except (
-                aiohttp.ClientConnectorError,
-                asyncio.TimeoutError,
-            ) as e:  # TODO: Check if retry should happen for every Exception type
-                if num_retries == max_retries:
-                    async with self._connection_lock:
-                        self._connection_state = ConnectionState.FAILED
-                    raise APIConnectionError(
-                        f"Failed to connect to STT WebSocket after {max_retries} attempts"
-                    ) from e
+                # Send initial configuration message for saaras models (STT
+                # translate)
+                if self._opts.model.startswith("saaras") and self._opts.prompt:
+                    await self._send_initial_config(ws)
 
-                # Exponential backoff with jitter, max 30 seconds
-                retry_interval = min(2**num_retries + (num_retries * 0.1), 30)
-                async with self._connection_lock:
-                    self._connection_state = ConnectionState.RECONNECTING
-
-                self._logger.warning(
-                    f"Connection failed, retrying in {retry_interval:.1f}s",
-                    extra={
-                        "session_id": self._session_id,
-                        "attempt": num_retries + 1,
-                        "max_retries": max_retries + 1,
-                        "error": str(e),
-                    },
+                # Create tasks for audio processing and message handling
+                self._audio_task = asyncio.create_task(self._process_audio(ws))
+                self._message_task = asyncio.create_task(
+                    self._process_messages(ws)
                 )
-                await asyncio.sleep(retry_interval)
-                num_retries += 1
 
-            except Exception as e:
-                async with self._connection_lock:
-                    self._connection_state = ConnectionState.FAILED
-                self._logger.error(
-                    f"Unrecoverable error in WebSocket connection: {e}",
-                    extra={"session_id": self._session_id},
-                    exc_info=True,
+                tasks_group = asyncio.gather(
+                    self._audio_task,
+                    self._message_task,
                 )
-                raise APIConnectionError(f"WebSocket connection failed: {e}") from e
+                reconnect_task = asyncio.create_task(
+                    self._reconnect_event.wait()
+                )
 
-    async def _run_connection(self) -> None:
-        """Run a single WebSocket connection attempt."""
-        # Check if session is still valid
+                try:
+                    done, _ = await asyncio.wait(
+                        (tasks_group, reconnect_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if tasks_group in done:
+                        tasks_group.result()
+                        return
+
+                    # reconnect requested
+                    self._logger.info(
+                        "Reconnection requested, closing current connection",
+                        extra={"session_id": self._session_id},
+                    )
+                    self._reconnect_event.clear()
+                    continue
+
+                finally:
+                    await utils.aio.gracefully_cancel(
+                        self._audio_task,
+                        self._message_task,
+                        reconnect_task,
+                    )
+                    tasks_group.cancel()
+                    with contextlib.suppress(Exception):
+                        tasks_group.exception()
+
+            finally:
+                if ws is not None and not ws.closed:
+                    await ws.close()
+                ws = None
+                self._ws = None
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        """Connect to Sarvam STT WebSocket with correct error handling."""
         if self._session.closed:
-            raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
+            raise APIConnectionError(
+                "Session is closed, cannot establish WebSocket connection"
+            )
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTING
 
-        # Build WebSocket URL with parameters
         if self._opts.streaming_url is None:
             raise ValueError("streaming_url cannot be None")
         ws_url = _build_websocket_url(self._opts.streaming_url, self._opts)
-
-        # Connect to WebSocket with proper authentication
-        headers = {"api-subscription-key": self._api_key}
+        headers = _build_custom_headers(self._api_key, websocket=True)
 
         self._logger.info(
-            "Connecting to STT WebSocket",
-            extra={"session_id": self._session_id, "url": ws_url},
+            "Connecting to Sarvam STT WebSocket",
+            extra={
+                **self._build_log_context(),
+                "url": ws_url,
+            },
         )
 
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(ws_url, headers=headers),
-            self._conn_options.timeout,
-        )
-
-        # Store WebSocket reference for cleanup - ensure it's always cleaned up
-        self._ws = ws
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(ws_url, headers=headers),
+                self._conn_options.timeout,
+            )
+        except asyncio.CancelledError:
+            raise
+        except aiohttp.WSServerHandshakeError as e:
+            # Handshake status is meaningful: 4xx should not be retried by
+            # default.
+            status = getattr(e, "status", -1) or -1
+            self._logger.error(
+                "Sarvam STT WebSocket handshake failed",
+                extra={
+                    "session_id": self._session_id,
+                    "status_code": status,
+                    "error_type": type(e).__name__,
+                    "url": ws_url,
+                },
+                exc_info=True,
+            )
+            raise APIStatusError(
+                message="Sarvam STT WebSocket handshake failed",
+                status_code=status,
+                body=str(e),
+            ) from e
+        except asyncio.TimeoutError as e:
+            self._logger.error(
+                "Timed out connecting to Sarvam STT WebSocket",
+                extra={
+                    "session_id": self._session_id,
+                    "timeout": self._conn_options.timeout,
+                    "url": ws_url,
+                },
+                exc_info=True,
+            )
+            raise APITimeoutError(
+                "Timed out connecting to Sarvam STT WebSocket"
+            ) from e
+        except aiohttp.ClientError as e:
+            self._logger.error(
+                "Failed to connect to Sarvam STT WebSocket",
+                extra={
+                    "session_id": self._session_id,
+                    "error_type": type(e).__name__,
+                    "url": ws_url,
+                },
+                exc_info=True,
+            )
+            raise APIConnectionError(
+                f"Failed to connect to Sarvam STT WebSocket: {e}"
+            ) from e
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTED
 
         self._logger.info(
-            "WebSocket connected successfully", extra={"session_id": self._session_id}
+            "Sarvam STT WebSocket connected",
+            extra={
+                **self._build_log_context(),
+                "ws_closed": ws.closed,
+            },
         )
-
-        # Send initial configuration message for saaras models (STT translate)
-        if self._opts.model.startswith("saaras") and self._opts.prompt:
-            await self._send_initial_config(ws)
-
-        # Create tasks for audio processing and message handling
-        self._audio_task = asyncio.create_task(self._process_audio(ws))
-        self._message_task = asyncio.create_task(self._process_messages(ws))
-
-        # Wait for both tasks to complete or reconnection event
-        tasks = [self._audio_task, self._message_task]
-        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-        try:
-            done, pending = await asyncio.wait(
-                tasks + [reconnect_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Check if reconnection was requested
-            if reconnect_task in done:
-                self._logger.info(
-                    "Reconnection requested, closing current connection",
-                    extra={"session_id": self._session_id},
-                )
-                self._reconnect_event.clear()
-                return
-
-            # Cancel remaining tasks using LiveKit's utility
-            if pending:
-                await utils.aio.cancel_and_wait(*pending)
-
-            # Check for exceptions in completed tasks
-            for task in done:
-                if task != reconnect_task:
-                    exc = task.exception()
-                    if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
-
-        finally:
-            # Clean up tasks
-            all_tasks = tasks + [reconnect_task]
-            await utils.aio.cancel_and_wait(*all_tasks)
-
-            # Close WebSocket
-            try:
-                if ws and not ws.closed:
-                    await ws.close()
-            except Exception as e:
-                self._logger.warning(
-                    f"Error closing WebSocket: {e}",
-                    extra={"session_id": self._session_id},
-                )
+        return ws
 
     @utils.log_exceptions(logger=logger)
-    async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _process_audio(
+        self, ws: aiohttp.ClientWebSocketResponse
+    ) -> None:
         """Process audio frames and send them in chunks."""
         import base64
 
@@ -711,11 +950,19 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.debug(
             "Starting audio processing",
-            extra={"session_id": self._session_id, "chunk_size": chunk_size},
+            extra={
+                **self._build_log_context(),
+                "chunk_size": chunk_size,
+            },
         )
 
         try:
             async for frame in self._input_ch:
+                if ws.closed:
+                    raise APIConnectionError(
+                        "Sarvam STT WebSocket closed while sending audio "
+                        f"(code={ws.close_code})"
+                    )
                 if isinstance(frame, rtc.AudioFrame):
                     try:
                         # Convert audio frame to Int16 data
@@ -726,10 +973,15 @@ class SpeechStream(stt.SpeechStream):
                         # Check if we have enough data for a chunk
                         while len(audio_buffer) >= chunk_size:
                             # Convert to Int16Array
-                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
+                            chunk_data = np.array(
+                                audio_buffer[:chunk_size],
+                                dtype=np.int16,
+                            )
 
                             # Convert to base64
-                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
+                            base64_audio = base64.b64encode(
+                                chunk_data.tobytes()
+                            ).decode("utf-8")
 
                             # Send audio in the required format
                             audio_message = {
@@ -740,7 +992,25 @@ class SpeechStream(stt.SpeechStream):
                                 }
                             }
 
-                            await ws.send_str(json.dumps(audio_message))
+                            try:
+                                await ws.send_str(json.dumps(audio_message))
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as e:
+                                self._logger.error(
+                                    "Failed to send audio chunk",
+                                    extra={
+                                        "session_id": self._session_id,
+                                        "chunks_sent": chunks_sent,
+                                        "ws_closed": ws.closed,
+                                        "close_code": ws.close_code,
+                                        "error_type": type(e).__name__,
+                                    },
+                                    exc_info=True,
+                                )
+                                raise APIConnectionError(
+                                    f"Failed to send audio over WebSocket: {e}"
+                                ) from e
                             chunks_sent += 1
 
                             # Remove sent data from buffer
@@ -767,7 +1037,25 @@ class SpeechStream(stt.SpeechStream):
                         "Received FlushSentinel, sending end of stream",
                         extra={"session_id": self._session_id},
                     )
-                    await ws.send_str(self._end_of_stream_msg)
+                    self._closing_ws = True
+                    try:
+                        await ws.send_str(self._end_of_stream_msg)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._logger.error(
+                            "Failed to send end_of_stream message",
+                            extra={
+                                "session_id": self._session_id,
+                                "ws_closed": ws.closed,
+                                "close_code": ws.close_code,
+                                "error_type": type(e).__name__,
+                            },
+                            exc_info=True,
+                        )
+                        raise APIConnectionError(
+                            f"Failed to send end_of_stream: {e}"
+                        ) from e
                     break
 
                 # Check if Sarvam VAD triggered flush
@@ -777,84 +1065,161 @@ class SpeechStream(stt.SpeechStream):
                         extra={"session_id": self._session_id},
                     )
                     flush_message = {"type": "flush"}
-                    await ws.send_str(json.dumps(flush_message))
+                    try:
+                        await ws.send_str(json.dumps(flush_message))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._logger.error(
+                            "Failed to send flush message",
+                            extra={
+                                "session_id": self._session_id,
+                                "ws_closed": ws.closed,
+                                "close_code": ws.close_code,
+                                "error_type": type(e).__name__,
+                            },
+                            exc_info=True,
+                        )
+                        raise APIConnectionError(
+                            f"Failed to send flush: {e}"
+                        ) from e
                     self._should_flush = False  # Reset flag
 
+        except asyncio.CancelledError:
+            raise
+        except APIError:
+            raise
         except Exception as e:
             self._logger.error(
-                f"Error in audio processing: {e}",
-                extra={"session_id": self._session_id, "chunks_sent": chunks_sent},
+                "Error in audio processing loop",
+                extra={
+                    "session_id": self._session_id,
+                    "chunks_sent": chunks_sent,
+                    "ws_closed": ws.closed,
+                    "close_code": ws.close_code,
+                    "error_type": type(e).__name__,
+                },
                 exc_info=True,
             )
-            raise
+            raise APIConnectionError(
+                f"Error in Sarvam STT audio loop: {e}"
+            ) from e
         finally:
             self._logger.debug(
                 f"Audio processing completed, sent {chunks_sent} chunks",
-                extra={"session_id": self._session_id},
+                extra={
+                    **self._build_log_context(),
+                    "chunks_sent": chunks_sent,
+                },
             )
 
     @utils.log_exceptions(logger=logger)
-    async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _process_messages(
+        self, ws: aiohttp.ClientWebSocketResponse
+    ) -> None:
         """Process incoming messages from the WebSocket."""
         self._logger.info(
             "Starting message processing",
-            extra={"session_id": self._session_id, "ws_closed": ws.closed},
+            extra={
+                **self._build_log_context(),
+                "ws_closed": ws.closed,
+            },
         )
 
         try:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        data = json.loads(msg.data)
-                        await self._handle_message(data)
-                    except json.JSONDecodeError as e:
-                        self._logger.warning(
-                            "Invalid JSON received from WebSocket",
-                            extra={
-                                "session_id": self._session_id,
-                                "raw_data": msg.data,
-                                "error": str(e),
-                            },
-                        )
-                        continue  # Skip malformed message
-                    except Exception as e:
-                        self._logger.error(
-                            "Error processing WebSocket message",
-                            extra={"session_id": self._session_id, "error": str(e)},
-                            exc_info=True,
-                        )
-                        # Re-raise unexpected errors as they might indicate serious issues
-                        raise APIStatusError(f"Message processing error: {e}") from e
+            while True:
+                msg = await ws.receive()
 
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {ws.exception()}"
-                    self._logger.error(error_msg, extra={"session_id": self._session_id})
-                    raise APIConnectionError(error_msg)
-
-                elif msg.type in (
+                if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    self._logger.info(
-                        f"WebSocket closed: {msg.type}",
-                        extra={"session_id": self._session_id},
-                    )
-                    break
+                    if self._closing_ws or self._session.closed:
+                        self._logger.info(
+                            "WebSocket closed (expected)",
+                            extra={
+                                "session_id": self._session_id,
+                                "close_code": ws.close_code,
+                                "ws_closed": ws.closed,
+                            },
+                        )
+                        return
 
-                else:
-                    self._logger.debug(
-                        f"Unknown WebSocket message type: {msg.type}",
-                        extra={"session_id": self._session_id},
+                    self._logger.error(
+                        "WebSocket closed unexpectedly",
+                        extra={
+                            "session_id": self._session_id,
+                            "close_code": ws.close_code,
+                            "ws_closed": ws.closed,
+                        },
+                    )
+                    raise APIConnectionError(
+                        "Sarvam STT WebSocket closed unexpectedly "
+                        f"(code={ws.close_code})"
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    err = ws.exception()
+                    self._logger.error(
+                        "WebSocket error",
+                        extra={
+                            "session_id": self._session_id,
+                            "close_code": ws.close_code,
+                            "ws_closed": ws.closed,
+                            "ws_exception": str(err),
+                        },
+                        exc_info=True,
+                    )
+                    raise APIConnectionError(
+                        f"Sarvam STT WebSocket error: {err}"
+                    )
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    self._logger.warning(
+                        "Unexpected WebSocket message type",
+                        extra={
+                            "session_id": self._session_id,
+                            "msg_type": str(msg.type),
+                        },
+                    )
+                    continue
+
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    self._logger.warning(
+                        "Invalid JSON received from WebSocket",
+                        extra={
+                            "session_id": self._session_id,
+                            "raw_data": _truncate_for_log(
+                                msg.data,
+                                max_len=1000,
+                            ),
+                        },
+                    )
+                    continue
+
+                await self._handle_message(data)
+
+        except asyncio.CancelledError:
+            raise
+        except APIError:
+            raise
         except Exception as e:
             self._logger.error(
-                f"Error in message processing loop: {e}",
-                extra={"session_id": self._session_id},
+                "Error in message processing loop",
+                extra={
+                    "session_id": self._session_id,
+                    "ws_closed": ws.closed,
+                    "close_code": ws.close_code,
+                    "error_type": type(e).__name__,
+                },
                 exc_info=True,
             )
-            raise
+            raise APIConnectionError(
+                f"Error in Sarvam STT message loop: {e}"
+            ) from e
 
     async def _handle_message(self, data: dict) -> None:
         """Handle different types of messages from Sarvam streaming API."""
@@ -899,15 +1264,27 @@ class SpeechStream(stt.SpeechStream):
         language = transcript_data.get("language_code", "")
         request_id = transcript_data.get("request_id", "")
 
+        # Capture server request ID if not already set
+        if request_id and not self._server_request_id:
+            self._server_request_id = request_id
+            self._logger.debug(
+                "Received Sarvam server request ID",
+                extra=self._build_log_context(),
+            )
+
         if not transcript_text:
-            self._logger.debug("Received empty transcript", extra={"session_id": self._session_id})
+            self._logger.debug(
+                "Received empty transcript",
+                extra=self._build_log_context(),
+            )
             return
 
         try:
             # Create usage event with proper metrics extraction
             metrics = transcript_data.get("metrics", {})
             request_data = {
-                "original_id": request_id,
+                "client_request_id": self._client_request_id,
+                "server_request_id": request_id,
                 "processing_latency": metrics.get("processing_latency", 0.0),
             }
             usage_event = stt.SpeechEvent(
@@ -926,9 +1303,10 @@ class SpeechStream(stt.SpeechStream):
             )
 
             # Create final transcript event with request_id
+            # Use server request_id as primary, but log both IDs for tracking
             speech_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
+                request_id=request_id,  # Sarvam server request ID
                 alternatives=[speech_data],
             )
             self._event_ch.send_nowait(speech_event)
@@ -936,10 +1314,9 @@ class SpeechStream(stt.SpeechStream):
             self._logger.debug(
                 "Transcript processed successfully",
                 extra={
-                    "session_id": self._session_id,
+                    **self._build_log_context(),
                     "text_length": len(transcript_text),
                     "language": language,
-                    "request_id": request_id,
                     "confidence": speech_data.confidence,
                 },
             )
@@ -963,45 +1340,62 @@ class SpeechStream(stt.SpeechStream):
         if not signal_type:
             self._logger.warning(
                 "VAD event missing signal_type",
-                extra={"session_id": self._session_id, "event_data": event_data},
+                extra={
+                    **self._build_log_context(),
+                    "event_data": event_data,
+                },
             )
             return
 
         self._logger.debug(
             f"Processing VAD event: {signal_type}",
-            extra={"session_id": self._session_id, "signal_type": signal_type},
+            extra={
+                **self._build_log_context(),
+                "signal_type": signal_type,
+            },
         )
 
         try:
             if signal_type == "START_SPEECH":
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH
+                    )
                     self._event_ch.send_nowait(start_event)
-                    self._logger.debug("Speech started", extra={"session_id": self._session_id})
+                    self._logger.debug(
+                        "Speech started",
+                        extra=self._build_log_context(),
+                    )
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    end_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH
+                    )
                     self._event_ch.send_nowait(end_event)
 
-                    # Set flag to trigger flush when Sarvam detects end of speech
+                    # Set flag to trigger flush when Sarvam detects end of
+                    # speech.
                     self._should_flush = True
                     self._logger.debug(
                         "Speech ended, flush triggered",
-                        extra={"session_id": self._session_id},
+                        extra=self._build_log_context(),
                     )
             else:
                 self._logger.debug(
                     f"Unknown VAD signal type: {signal_type}",
-                    extra={"session_id": self._session_id},
+                    extra=self._build_log_context(),
                 )
 
         except Exception as e:
             self._logger.error(
                 f"Error processing VAD event: {e}",
-                extra={"session_id": self._session_id, "event_data": event_data},
+                extra={
+                    "session_id": self._session_id,
+                    "event_data": event_data,
+                },
                 exc_info=True,
             )
             raise
@@ -1022,13 +1416,32 @@ class SpeechStream(stt.SpeechStream):
 
         # Determine if error is recoverable based on error code/type
         recoverable_codes = ["rate_limit", "temporary_unavailable", "timeout"]
-        recoverable_keywords = ["rate limit", "temporary", "timeout", "connection"]
+        recoverable_keywords = [
+            "rate limit",
+            "temporary",
+            "timeout",
+            "connection",
+        ]
 
         is_recoverable = error_code in recoverable_codes or any(
-            keyword in str(error_info).lower() for keyword in recoverable_keywords
+            keyword in str(error_info).lower()
+            for keyword in recoverable_keywords
         )
 
         if is_recoverable:
-            raise APIConnectionError(f"Recoverable API error: {error_info}")
+            # Treat as retryable: transient, rate limit, temporary errors
+            raise APIConnectionError(
+                "Sarvam STT recoverable streaming error "
+                f"(code={error_code}): {error_info}"
+            )
         else:
-            raise APIStatusError(f"API error: {error_info}")
+            # Treat as non-retryable by default: invalid args, auth, etc.
+            raise APIStatusError(
+                message=(
+                    "Sarvam STT streaming error "
+                    f"(code={error_code}): {error_info}"
+                ),
+                status_code=-1,
+                body=data,
+                retryable=False,
+            )

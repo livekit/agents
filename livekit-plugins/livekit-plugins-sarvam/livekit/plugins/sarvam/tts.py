@@ -42,6 +42,7 @@ from livekit.agents import (
 )
 
 from .log import logger
+from .version import __version__
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
@@ -84,6 +85,39 @@ MODEL_SPEAKER_COMPATIBILITY = {
         "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
     }
 }
+
+
+def _build_custom_headers(
+    api_key: str,
+    additional_headers: dict | None = None,
+    websocket: bool = False,
+) -> dict:
+    """Build custom headers to identify the source of requests.
+
+    Args:
+        api_key: Sarvam API key
+        additional_headers: Additional headers to include
+        websocket: If True, only include essential headers for WebSocket
+    """
+    headers = {
+        "api-subscription-key": api_key,
+    }
+
+    # WebSocket connections may be strict about headers
+    # Only add User-Agent for WebSocket, full metadata for HTTP
+    if websocket:
+        headers["User-Agent"] = f"LiveKit-Agents-Python-Sarvam/{__version__}"
+    else:
+        headers.update({
+            "User-Agent": f"LiveKit-Agents-Python-Sarvam/{__version__}",
+            "X-SDK-Source": "livekit-agents-python",
+            "X-SDK-Version": __version__,
+            "X-Plugin-Name": "livekit-plugins-sarvam",
+        })
+
+    if additional_headers:
+        headers.update(additional_headers)
+    return headers
 
 
 class ConnectionState(enum.Enum):
@@ -255,16 +289,24 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        headers = {
-            "api-subscription-key": self._opts.api_key,
-            "User-Agent": "LiveKit-Sarvam-TTS/1.0",
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate, br",
-        }
+        headers = _build_custom_headers(
+            self._opts.api_key,
+            {
+                "Accept": "*/*",
+                "Accept-Encoding": "gzip, deflate, br",
+            },
+            websocket=True,
+        )
         # Add model parameter to URL like the client does
         ws_url = f"{self._opts.ws_url}?model={self._opts.model}&send_completion_event={self._opts.send_completion_event}"
 
-        logger.info("Connecting to Sarvam TTS WebSocket")
+        logger.info(
+            "Connecting to Sarvam TTS WebSocket",
+            extra={
+                "sdk_source": "livekit-agents-python",
+                "sdk_version": __version__,
+            }
+        )
 
         try:
             return await asyncio.wait_for(
@@ -364,6 +406,7 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        self._pool.prewarm()
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -404,10 +447,10 @@ class ChunkedStream(tts.ChunkedStream):
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
             payload["loudness"] = self._opts.loudness
-        headers = {
-            "api-subscription-key": self._opts.api_key,
-            "Content-Type": "application/json",
-        }
+        headers = _build_custom_headers(
+            self._opts.api_key,
+            {"Content-Type": "application/json"}
+        )
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,
@@ -771,6 +814,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             "speaker": self._opts.speaker,
             "client_request_id": self._client_request_id,
             "server_request_id": self._server_request_id,
+            "sdk_source": "livekit-agents-python",
+            "sdk_version": __version__,
         }
 
     def _maybe_set_server_request_id(self, data: dict) -> None:
