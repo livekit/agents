@@ -1616,19 +1616,18 @@ class AgentActivity(RecognitionHooks):
         )
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
         # See discussion in https://github.com/livekit/agents/issues/4432
-        wait_for_user_silence = (
-            asyncio.ensure_future(self._user_silence_event.wait())
-            if speech_handle.allow_interruptions
-            else asyncio.ensure_future(asyncio.sleep(0))
-        )
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization, wait_for_user_silence])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(wait_for_authorization, wait_for_user_silence)
+            await utils.aio.cancel_and_wait(*authorization_tasks)
             return
 
         text_source: AsyncIterable[str] | None = None
@@ -1884,18 +1883,17 @@ class AgentActivity(RecognitionHooks):
 
         self._session._update_agent_state("thinking")
 
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        wait_for_user_silence = (
-            asyncio.ensure_future(self._user_silence_event.wait())
-            if speech_handle.allow_interruptions
-            else asyncio.ensure_future(asyncio.sleep(0))
-        )
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization, wait_for_user_silence])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, wait_for_authorization, wait_for_user_silence)
+            await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
             await text_tee.aclose()
             return
 
@@ -2164,15 +2162,14 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
 
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        wait_for_user_silence = (
-            asyncio.ensure_future(self._user_silence_event.wait())
-            if speech_handle.allow_interruptions
-            else asyncio.ensure_future(asyncio.sleep(0))
-        )
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization, wait_for_user_silence])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(wait_for_authorization, wait_for_user_silence)
+            await utils.aio.cancel_and_wait(*authorization_tasks)
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -2261,17 +2258,16 @@ class AgentActivity(RecognitionHooks):
         )
         tool_ctx = llm.ToolContext(self.tools)
 
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        wait_for_user_silence = (
-            asyncio.ensure_future(self._user_silence_event.wait())
-            if speech_handle.allow_interruptions
-            else asyncio.ensure_future(asyncio.sleep(0))
-        )
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization, wait_for_user_silence])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(wait_for_authorization, wait_for_user_silence)
+            await utils.aio.cancel_and_wait(*authorization_tasks)
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history
 
