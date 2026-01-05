@@ -1,9 +1,10 @@
 from __future__ import annotations  # noqa: I001
 
 import io
+import logging
 import socket
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 from livekit.protocol import agent
 
@@ -32,6 +33,9 @@ class CliArgs:
     # pipe used for the communication between the watch server and the watch client
     # when reload/dev mode is enabled
     mp_cch: socket.socket | None = None
+
+    # custom logging setup callback - if provided, replaces default logging configuration
+    log_setup_fnc: Callable[[logging.Logger, int | str], None] | None = None
 
 
 @dataclass
