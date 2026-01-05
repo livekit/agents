@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
@@ -30,7 +30,7 @@ from ..utils.misc import is_given
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..llm import LLM, FunctionTool, RawFunctionTool
+    from ..llm import LLM, Tool, Toolset
 
 
 class ImageContent(BaseModel):
@@ -183,6 +183,13 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Extra data for this function call. Can include provider-specific data
+    (e.g., extra["google"] for thought signatures)."""
+    group_id: str | None = None
+    """Optional group ID for parallel function calls. When multiple function calls
+    should be grouped together (e.g., parallel tool calls from a single API response),
+    set this to a shared value. If not set, falls back to using id for grouping."""
 
 
 class FunctionCallOutput(BaseModel):
@@ -279,28 +286,28 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
-        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        exclude_handoff: bool = False,
+        tools: NotGivenOr[Sequence[Tool | Toolset | str]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import (
-            get_function_info,
-            get_raw_function_info,
-            is_function_tool,
-            is_raw_function_tool,
-        )
+        from .tool_context import FunctionTool, RawFunctionTool, Toolset
 
-        valid_tools = set[str]()
-        if is_given(tools):
+        def get_tool_names(
+            tools: Sequence[Tool | Toolset | str],
+        ) -> Generator[str, None, None]:
             for tool in tools:
                 if isinstance(tool, str):
-                    valid_tools.add(tool)
-                elif is_function_tool(tool):
-                    valid_tools.add(get_function_info(tool).name)
-                elif is_raw_function_tool(tool):
-                    valid_tools.add(get_raw_function_info(tool).name)
-                # TODO(theomonnom): other tools
+                    yield tool
+                elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+                    yield tool.info.name
+                elif isinstance(tool, Toolset):
+                    yield from get_tool_names(tool.tools)
+                else:
+                    # TODO(theomonnom): other tools
+                    continue
 
+        valid_tools = set(get_tool_names(tools)) if tools else set()
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -316,6 +323,9 @@ class ChatContext:
                 continue
 
             if exclude_empty_message and item.type == "message" and not item.content:
+                continue
+
+            if exclude_handoff and item.type == "agent_handoff":
                 continue
 
             if (

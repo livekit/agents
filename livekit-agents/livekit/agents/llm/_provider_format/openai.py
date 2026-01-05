@@ -19,14 +19,17 @@ def to_chat_ctx(
 
         # one message can contain zero or more tool calls
         msg = _to_chat_item(group.message) if group.message else {"role": "assistant"}
-        tool_calls = [
-            {
+        tool_calls = []
+        for tool_call in group.tool_calls:
+            tc: dict[str, Any] = {
                 "id": tool_call.call_id,
                 "type": "function",
                 "function": {"name": tool_call.name, "arguments": tool_call.arguments},
             }
-            for tool_call in group.tool_calls
-        ]
+            # Include provider-specific extra content (e.g., Google thought signatures)
+            if tool_call.extra.get("google"):
+                tc["extra_content"] = {"google": tool_call.extra["google"]}
+            tool_calls.append(tc)
         if tool_calls:
             msg["tool_calls"] = tool_calls
         messages.append(msg)
@@ -53,26 +56,32 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         if not list_content:
             # certain providers require text-only content in a string vs a list.
             # for max-compatibility, we will combine all text content into a single string.
-            return {"role": msg.role, "content": text_content}
+            result: dict[str, Any] = {"role": msg.role, "content": text_content}
+        else:
+            if text_content:
+                list_content.append({"type": "text", "text": text_content})
+            result = {"role": msg.role, "content": list_content}
 
-        if text_content:
-            list_content.append({"type": "text", "text": text_content})
-
-        return {"role": msg.role, "content": list_content}
+        # Include provider-specific extra content (e.g., Google thought signatures)
+        if msg.extra.get("google"):
+            result["extra_content"] = {"google": msg.extra["google"]}
+        return result
 
     elif msg.type == "function_call":
+        tc: dict[str, Any] = {
+            "id": msg.call_id,
+            "type": "function",
+            "function": {
+                "name": msg.name,
+                "arguments": msg.arguments,
+            },
+        }
+        # Include provider-specific extra content (e.g., Google thought signatures)
+        if msg.extra.get("google"):
+            tc["extra_content"] = {"google": msg.extra["google"]}
         return {
             "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": msg.call_id,
-                    "type": "function",
-                    "function": {
-                        "name": msg.name,
-                        "arguments": msg.arguments,
-                    },
-                }
-            ],
+            "tool_calls": [tc],
         }
 
     elif msg.type == "function_call_output":
@@ -104,3 +113,25 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
             "detail": img.inference_detail,
         },
     }
+
+
+def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.RawFunctionTool):
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": tool.info.raw_schema,
+                }
+            )
+
+        elif isinstance(tool, llm.FunctionTool):
+            schema = (
+                llm.utils.build_strict_openai_schema(tool)
+                if strict
+                else llm.utils.build_legacy_openai_schema(tool)
+            )
+            schemas.append(schema)
+
+    return schemas

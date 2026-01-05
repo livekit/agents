@@ -25,7 +25,7 @@ livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
-livekit-plugins-liveavatar = { workspace = true}
+livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
@@ -49,12 +49,14 @@ livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
+livekit-plugins-xai = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
     "livekit-plugins/livekit-plugins-browser",
     "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-durable",
 ]
 
 [dependency-groups]
@@ -121,6 +123,10 @@ follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = "aws_sdk_bedrock_runtime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["aws_sdk_transcribe_streaming.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

@@ -362,7 +362,11 @@ class TTS(tts.TTS):
             ws = await asyncio.wait_for(
                 session.ws_connect(f"{base_url}/tts", headers=headers), timeout
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (
+            aiohttp.ClientConnectorError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit TTS quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit TTS") from e
@@ -498,6 +502,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["transcript"] = ev.token + " "
+                generation_config: dict[str, Any] = {}
+                if self._opts.voice:
+                    generation_config["voice"] = self._opts.voice
+                if self._opts.model:
+                    generation_config["model"] = self._opts.model
+                if self._opts.language:
+                    generation_config["language"] = self._opts.language
+                token_pkt["generation_config"] = generation_config
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))

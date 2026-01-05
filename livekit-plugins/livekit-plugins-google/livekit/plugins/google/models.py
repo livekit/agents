@@ -1,6 +1,6 @@
 from typing import Literal
 
-# Speech to Text v2
+# Speech to Text (v1 and v2)
 
 SpeechModels = Literal[
     "long",
@@ -13,6 +13,13 @@ SpeechModels = Literal[
     "chirp_3",
     "latest_long",
     "latest_short",
+]
+# https://docs.cloud.google.com/speech-to-text/docs/transcription-model
+
+SpeechModelsV2 = Literal[
+    "telephony",
+    "chirp_2",
+    "chirp_3",
 ]
 
 SpeechLanguages = Literal[
@@ -189,6 +196,9 @@ SpeechLanguages = Literal[
 Gender = Literal["male", "female", "neutral"]
 
 ChatModels = Literal[
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
     "gemini-2.5-pro-preview-05-06",
     "gemini-2.5-flash-preview-04-17",
     "gemini-2.5-flash-preview-05-20",
@@ -196,4 +206,8 @@ ChatModels = Literal[
     "gemini-2.0-flash-lite-preview-02-05",
     "gemini-2.0-pro-exp-02-05",
     "gemini-1.5-pro",
+]
+
+GeminiTTSModels = Literal[
+    "gemini-2.5-flash-tts", "gemini-2.5-flash-lite-preview-tts", "gemini-2.5-pro-tts"
 ]

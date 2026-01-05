@@ -16,16 +16,7 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import llm, stt, tts, utils, vad
-from ..llm.tool_context import (
-    StopResponse,
-    ToolFlag,
-    _FunctionToolInfo,
-    _RawFunctionToolInfo,
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
+from ..llm.tool_context import FunctionToolInfo, RawFunctionToolInfo, StopResponse, ToolFlag
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -99,7 +90,7 @@ class _PreemptiveGeneration:
     user_message: llm.ChatMessage
     info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
-    tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
 
@@ -120,6 +111,8 @@ class AgentActivity(RecognitionHooks):
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
+        self._user_silence_event: asyncio.Event = asyncio.Event()
+        self._user_silence_event.set()
 
         # for false interruption handling
         self._paused_speech: SpeechHandle | None = None
@@ -289,7 +282,9 @@ class AgentActivity(RecognitionHooks):
         return self._current_speech
 
     @property
-    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
+    def tools(
+        self,
+    ) -> list[llm.Tool | llm.Toolset]:
         return self._session.tools + self._agent.tools + self._mcp_tools  # type: ignore
 
     @property
@@ -320,12 +315,12 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 
         if self._rt_session is not None:
-            await self._rt_session.update_tools(tools)
+            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
@@ -550,7 +545,7 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the chat_ctx")
 
             try:
-                await self._rt_session.update_tools(self.tools)
+                await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
             except llm.RealtimeError:
                 logger.exception("failed to update the tools")
 
@@ -740,19 +735,20 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        if (
+        should_discard = bool(
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
-        ):
-            # discard the audio if the current speech is not interruptable
-            return
+        )
 
-        if self._rt_session is not None:
-            self._rt_session.push_audio(frame)
+        if not should_discard:
+            if self._rt_session is not None:
+                self._rt_session.push_audio(frame)
 
+        # Always forward to _audio_recognition for VAD, even when discarding STT/LLM
+        # VAD needs frames to detect speech end and update user state correctly
         if self._audio_recognition is not None:
-            self._audio_recognition.push_audio(frame)
+            self._audio_recognition.push_audio(frame, skip_stt=should_discard)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
@@ -849,17 +845,16 @@ class AgentActivity(RecognitionHooks):
         # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
         if on_enter_data := _OnEnterContextVar.get(None):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
-                filtered_tools = []
+                filtered_tools: list[llm.Tool | llm.Toolset] = []
                 for tool in tools:
-                    info: _RawFunctionToolInfo | _FunctionToolInfo
-                    if is_raw_function_tool(tool):
-                        info = get_raw_function_info(tool)
-                    elif is_function_tool(tool):
-                        info = get_function_info(tool)
+                    info: RawFunctionToolInfo | FunctionToolInfo | None = None
+                    if isinstance(tool, (llm.RawFunctionTool, llm.FunctionTool)):
+                        info = tool.info
 
-                    if not info or (info.flags & ToolFlag.IGNORE_ON_ENTER):
+                    if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
                         continue
 
+                    # TODO(long): add IGNORE_ON_ENTER to ToolSet?
                     filtered_tools.append(tool)
 
                 tools = filtered_tools
@@ -1213,6 +1208,7 @@ class AgentActivity(RecognitionHooks):
 
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
         self._session._update_user_state("speaking")
+        self._user_silence_event.clear()
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -1227,6 +1223,7 @@ class AgentActivity(RecognitionHooks):
             "listening",
             last_speaking_time=speech_end_time,
         )
+        self._user_silence_event.set()
 
         if (
             self._paused_speech
@@ -1242,6 +1239,15 @@ class AgentActivity(RecognitionHooks):
 
         if ev.speech_duration >= self._session.options.min_interruption_duration:
             self._interrupt_by_audio_activity()
+
+        if (
+            ev.speaking
+            # allow some silence between utterances during active speech
+            and ev.raw_accumulated_silence <= self._session.options.min_endpointing_delay / 2
+        ):
+            self._user_silence_event.clear()
+        else:
+            self._user_silence_event.set()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1610,13 +1616,18 @@ class AgentActivity(RecognitionHooks):
         )
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
+        # See discussion in https://github.com/livekit/agents/issues/4432
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(wait_for_authorization)
+            await utils.aio.cancel_and_wait(*authorization_tasks)
             return
 
         text_source: AsyncIterable[str] | None = None
@@ -1749,7 +1760,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -1780,7 +1791,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        tools: list[llm.Tool | llm.Toolset],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -1872,13 +1883,17 @@ class AgentActivity(RecognitionHooks):
 
         self._session._update_agent_state("thinking")
 
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
-            await utils.aio.cancel_and_wait(*tasks, wait_for_authorization)
+            await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
             await text_tee.aclose()
             return
 
@@ -2147,10 +2162,14 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
 
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(wait_for_authorization)
+            await utils.aio.cancel_and_wait(*authorization_tasks)
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -2239,12 +2258,16 @@ class AgentActivity(RecognitionHooks):
         )
         tool_ctx = llm.ToolContext(self.tools)
 
-        wait_for_authorization = asyncio.ensure_future(speech_handle._wait_for_authorization())
-        await speech_handle.wait_if_not_interrupted([wait_for_authorization])
+        authorization_tasks: list[asyncio.Future[Any]] = [
+            asyncio.ensure_future(speech_handle._wait_for_authorization())
+        ]
+        if speech_handle.allow_interruptions:
+            authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
+        await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(wait_for_authorization)
+            await utils.aio.cancel_and_wait(*authorization_tasks)
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history
 
