@@ -105,7 +105,7 @@ class _DefaultLoadCalc:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return cls._instance._get_avg()
 
 
 @dataclass
@@ -324,7 +324,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
-        self._closed, self._draining, self._connecting = True, False, False
+        self._closed, self._draining, self._connecting, self._connection_failed = (
+            True,
+            False,
+            False,
+            False,
+        )
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -577,6 +582,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             async def health_check(_: Any) -> web.Response:
                 if self._inference_executor and not self._inference_executor.is_alive():
                     return web.Response(status=503, text="inference process not running")
+
+                if self._connection_failed:
+                    return web.Response(status=503, text="failed to connect to livekit")
 
                 return web.Response(text="OK")
 
@@ -1016,6 +1024,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._max_retry:
+                    self._connection_failed = True
                     raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
                     ) from None

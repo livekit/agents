@@ -27,8 +27,7 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
-from ..tools import _LLMTool
-from ..utils import create_tools_config, get_tool_results_for_realtime, to_fnc_ctx
+from ..utils import create_tools_config, get_tool_results_for_realtime
 from ..version import __version__
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
@@ -79,7 +78,6 @@ class _RealtimeOptions:
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
     context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN
     api_version: NotGivenOr[str] = NOT_GIVEN
-    gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
@@ -150,7 +148,6 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
-        _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
     ) -> None:
         """
@@ -167,7 +164,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-live-001" or "gemini-2.0-flash-exp" (vertexai).
+            model (str, optional): The name of the model to use. Defaults to "gemini-2.5-flash-native-audio-preview-12-2025" or "gemini-live-2.5-flash-native-audio" (vertexai).
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -191,7 +188,6 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
-            _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -283,7 +279,6 @@ class RealtimeModel(llm.RealtimeModel):
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
             api_version=api_version,
-            gemini_tools=_gemini_tools,
             tool_behavior=tool_behavior,
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
@@ -355,7 +350,6 @@ class RealtimeSession(llm.RealtimeSession):
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._gemini_declarations: list[types.FunctionDeclaration] = []
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -368,7 +362,11 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
         api_version = self._opts.api_version
-        if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
+        if (
+            not api_version
+            and (self._opts.enable_affective_dialog or self._opts.proactivity)
+            and not self._opts.vertexai
+        ):
             api_version = "v1alpha"
 
         http_options = self._opts.http_options or types.HttpOptions(
@@ -473,9 +471,12 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        chat_ctx = chat_ctx.copy(
+            exclude_handoff=True, exclude_instructions=True, exclude_empty_message=True
+        )
         async with self._session_lock:
             if not self._active_session:
-                self._chat_ctx = chat_ctx.copy()
+                self._chat_ctx = chat_ctx
                 return
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
@@ -490,9 +491,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(
-                exclude_function_call=True,
-            ).to_provider_format(format="google", inject_dummy_user_message=False)
+            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                format="google", inject_dummy_user_message=False
+            )
             # we are not generating, and do not need to inject
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(
@@ -507,19 +508,15 @@ class RealtimeSession(llm.RealtimeSession):
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
-        self._chat_ctx = chat_ctx.copy()
+        self._chat_ctx = chat_ctx
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
-        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(
-            tools, use_parameters_json_schema=False, tool_behavior=self._opts.tool_behavior
-        )
-        current_tool_names = {f.name for f in self._gemini_declarations}
-        new_tool_names = {f.name for f in new_declarations}
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
+        tool_ctx = llm.ToolContext(tools)
+        if self._tools == tool_ctx:
+            return
 
-        if current_tool_names != new_tool_names:
-            self._gemini_declarations = new_declarations
-            self._tools = llm.ToolContext(tools)
-            self._mark_restart_needed()
+        self._tools = tool_ctx
+        self._mark_restart_needed()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -686,6 +683,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._active_session = session
                         turns_dict, _ = self._chat_ctx.copy(
                             exclude_function_call=True,
+                            exclude_handoff=True,
+                            exclude_instructions=True,
+                            exclude_empty_message=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
@@ -876,10 +876,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(
-            function_tools=self._gemini_declarations,
-            gemini_tools=self._opts.gemini_tools if is_given(self._opts.gemini_tools) else None,
-        )
+        tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(

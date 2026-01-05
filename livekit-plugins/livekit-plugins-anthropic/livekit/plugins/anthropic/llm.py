@@ -25,7 +25,7 @@ import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
+from livekit.agents.llm.tool_context import Tool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -134,7 +134,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -175,7 +175,7 @@ class LLM(llm.LLM):
             extra["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
         if tools:
-            extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
+            extra["tools"] = llm.ToolContext(tools).parse_function_tools("anthropic")
             tool_choice = (
                 cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
             )
@@ -215,6 +215,9 @@ class LLM(llm.LLM):
             if extra.get("system"):
                 extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
+            if extra.get("tools"):
+                extra["tools"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
             seen_assistant = False
             for msg in reversed(messages):
                 if (
@@ -253,7 +256,7 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
