@@ -35,7 +35,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import ChatModels, _supports_thinking
-from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
+from .utils import CACHE_CONTROL_EPHEMERAL
 
 
 @dataclass
