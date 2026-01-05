@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import pathlib
+import pickle
 import re
 import signal
 import sys
@@ -38,7 +39,7 @@ from rich.theme import Theme
 from livekit import rtc
 
 from .._exceptions import CLIError
-from ..job import JobExecutorType, TextMessageContext
+from ..job import JobExecutorType, TextMessageContext, get_job_context
 from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio
@@ -1015,35 +1016,36 @@ def _text_mode(
             c.console.bell()
             continue
 
+        async def _handle_sms(
+            text: str, sms_handler: Callable[[TextMessageContext], Awaitable[None]]
+        ) -> list[RunEvent]:
+            # simulate a sms received event
+            assert sess_data_file
+
+            session_data: bytes | None = None
+            if os.path.isfile(sess_data_file):
+                with open(sess_data_file, "rb") as f:
+                    session_data = f.read()
+
+            text_context = TextMessageContext(text=text, session_data=session_data)
+            await sms_handler(text_context)
+
+            if session := get_job_context()._primary_agent_session:
+                # serialize the state of the session
+                with open(sess_data_file, "wb") as f:
+                    f.write(pickle.dumps(session.get_state()))
+                logger.debug(
+                    "session state serialized", extra={"session_data_file": sess_data_file}
+                )
+
+            return text_context.result.events.copy() if text_context.result else []
+
         def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
             async def _generate(text: str) -> list[RunEvent]:
-                if sms_handler is not None:
-                    # simulate a sms received event
-                    assert sess_data_file
+                if sms_handler:
+                    return await _handle_sms(text, sms_handler)
 
-                    session_data: bytes | None = None
-                    if os.path.isfile(sess_data_file):
-                        with open(sess_data_file, "rb") as f:
-                            session_data = f.read()
-
-                    text_context = TextMessageContext(text=text, session_data=session_data)
-                    await sms_handler(text_context)
-
-                    # serialize the state of the session
-                    if text_context.session_data:
-                        with open(sess_data_file, "wb") as f:
-                            f.write(text_context.session_data)
-                        logger.debug(
-                            "session state serialized", extra={"session_data_file": sess_data_file}
-                        )
-
-                    result = text_context.result
-                    if result is None:
-                        logger.warning("result is not set from the sms handler")
-                        return []
-                else:
-                    result = await c.io_session.run(user_input=text)
-
+                result = await c.io_session.run(user_input=text)
                 return result.events.copy()
 
             def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
@@ -1330,9 +1332,9 @@ def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)
 
-        if not server._sms_handler_fnc:
+        if not server._text_handler_fnc:
             raise ValueError("sms_handler is required when simulating SMS")
-        sms_handler = server._sms_handler_fnc
+        sms_handler = server._text_handler_fnc
 
         console_worker = _ConsoleWorker(
             server=server, shutdown_cb=_on_worker_shutdown, sms_job=True

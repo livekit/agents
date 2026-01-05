@@ -867,6 +867,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tools = valid_tools
         self._chat_ctx = llm.ChatContext.from_dict(state_dict["chat_ctx"])
 
+        # TODO: save to TextMessageContext?
+        try:
+            job_ctx = get_job_context()
+            job_ctx._primary_agent_session = self
+        except RuntimeError:
+            pass
+
         if self._started:
             # only allow rehydrate session that not started yet?
             await self._update_activity(state_dict["agent"])

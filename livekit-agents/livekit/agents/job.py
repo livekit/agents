@@ -22,7 +22,6 @@ import inspect
 import json
 import logging
 import multiprocessing as mp
-import pickle
 import tempfile
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -141,11 +140,6 @@ class TextMessageContext:
     async def send_result(self, result: RunResult) -> None:
         # simulate sending result
         self._result = result
-
-    async def save_session(self, session: AgentSession) -> None:
-        # simulate saving session
-        state = session.get_state()
-        self._session_data = pickle.dumps(state)
 
     @property
     def session_data(self) -> bytes | None:

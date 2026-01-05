@@ -64,7 +64,7 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-@server.sms_handler()
+@server.text_handler()
 async def sms_handler(ctx: TextMessageContext):
     logger.info(f"SMS received: {ctx.text}")
 
@@ -77,7 +77,6 @@ async def sms_handler(ctx: TextMessageContext):
     result = await session.run(user_input=ctx.text)
 
     await ctx.send_result(result)
-    await ctx.save_session(session)
 
 
 @server.rtc_session()

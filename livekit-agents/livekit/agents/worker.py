@@ -350,7 +350,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
-        self._sms_handler_fnc: Callable[[TextMessageContext], Awaitable[None]] | None = None
+        self._text_handler_fnc: Callable[[TextMessageContext], Awaitable[None]] | None = None
 
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
@@ -500,20 +500,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return decorator
 
     @overload
-    def sms_handler(
+    def text_handler(
         self,
         func: Callable[[TextMessageContext], Awaitable[None]],
     ) -> Callable[[TextMessageContext], Awaitable[None]]: ...
 
     @overload
-    def sms_handler(
+    def text_handler(
         self,
     ) -> Callable[
         [Callable[[TextMessageContext], Awaitable[None]]],
         Callable[[TextMessageContext], Awaitable[None]],
     ]: ...
 
-    def sms_handler(
+    def text_handler(
         self,
         func: Callable[[TextMessageContext], Awaitable[None]] | None = None,
     ) -> (
@@ -524,17 +524,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ]
     ):
         """
-        Decorator or direct registrar for the SMS received event.
+        Decorator or direct registrar for the text received event.
         """
 
         def decorator(
             f: Callable[[TextMessageContext], Awaitable[None]],
         ) -> Callable[[TextMessageContext], Awaitable[None]]:
-            if self._sms_handler_fnc is not None:
+            if self._text_handler_fnc is not None:
                 raise RuntimeError(
-                    "The AgentServer currently only supports registering only one sms_handler"
+                    "The AgentServer currently only supports registering only one text_handler"
                 )
-            self._sms_handler_fnc = f
+            self._text_handler_fnc = f
             return f
 
         if func is not None:
