@@ -69,6 +69,8 @@ class TTS(tts.TTS):
         sample_rate: int = SAMPLE_RATE,
         # HTTP client
         http_session: aiohttp.ClientSession | None = None,
+        # Streaming configuration
+        chunk_size: int | None = None,
     ) -> None:
         """
         Create a new instance of Camb.ai TTS.
@@ -90,6 +92,7 @@ class TTS(tts.TTS):
             enhance_named_entities: Enhanced pronunciation for named entities.
             sample_rate: Audio sample rate in Hz (default: 24000).
             http_session: Optional aiohttp session to reuse.
+            chunk_size: Bytes per chunk when streaming audio. If None, uses default chunking.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -116,6 +119,7 @@ class TTS(tts.TTS):
         # HTTP session management
         self._session = http_session
         self._close_session_on_cleanup = http_session is None
+        self._chunk_size = chunk_size
 
         # Configuration
         self._opts = _TTSOptions(
@@ -279,9 +283,13 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 # Stream audio chunks
-                async for chunk in response.content.iter_chunked(8192):
-                    if chunk:
-                        output_emitter.push(chunk)
+                if self._tts._chunk_size is not None:
+                    async for chunk in response.content.iter_chunked(self._tts._chunk_size):
+                        if chunk:
+                            output_emitter.push(chunk)
+                else:
+                    async for data, _ in response.content.iter_chunks():
+                        output_emitter.push(data)
 
                 output_emitter.flush()
 
