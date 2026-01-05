@@ -367,12 +367,9 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._input_complete = asyncio.Event()
-        self._model_timeout = tts._total_timeout
         if self._opts.model == "arcana":
             raise ValueError(
                 "The Arcana model is not supported for JSON WebSocket streaming. Please switch to the 'mistv2' model."
-
             )
 
     def _build_ws_url(self) -> str:
@@ -422,13 +419,12 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             async for input_data in self._input_ch:
                 if isinstance(input_data, str):
                     await ws.send_str(json.dumps({"text": input_data}))
+                    await ws.send_str(json.dumps({"operation": "flush"}))
                 elif isinstance(input_data, self._FlushSentinel):
                     await ws.send_str(json.dumps({"operation": "flush"}))
         except Exception as e:
             logger.error("Rime WebSocket send task failed: %s", e)
             raise APIConnectionError(f"Send task failed: {e}") from e
-        finally:
-            self._input_complete.set()
 
     async def _recv_task(
         self, ws: aiohttp.ClientWebSocketResponse, output_emitter: tts.AudioEmitter
@@ -436,23 +432,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         segment_started = False
 
         while True:
-            try:
-                # Use timeout to detect completion - 2 seconds after input is complete
-                if self._input_complete.is_set():
-                    timeout = self._model_timeout
-                else:
-                    timeout = self._conn_options.timeout
-
-                msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
-            except asyncio.TimeoutError:
-                # If input is complete and we get timeout, synthesis is done
-                if self._input_complete.is_set():
-                    if segment_started:
-                        output_emitter.end_segment()
-                    output_emitter.end_input()
-                    break
-                continue
-
+            msg = await ws.receive()
             if msg.type in (
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSED,
@@ -480,6 +460,11 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
                     segment_started = True
                 audio_data = base64.b64decode(data["data"])
                 output_emitter.push(audio_data)
+            elif data.get("type") == "done":
+                if segment_started:
+                    output_emitter.end_segment()
+                output_emitter.end_input()
+                break
             elif data.get("type") == "timestamps":
                 word_timestamps = data.get("word_timestamps", {})
                 words = word_timestamps.get("words", [])
