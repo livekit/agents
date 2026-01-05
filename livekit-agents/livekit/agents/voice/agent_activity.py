@@ -1110,16 +1110,6 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None:
             self._session._update_user_state("speaking")
 
-        if self._session.options.interruption_ignore_words:
-            if hasattr(self, "_interrupt_timer") and self._interrupt_timer:
-                self._interrupt_timer.cancel()
-
-            self._interrupt_timer = asyncio.create_task(self._evaluate_interrupt_after_delay())
-        else:
-            self._interrupt_immediately()
-
-    def _interrupt_immediately(self) -> None:
-        """Handle immediate interruption"""
         # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
         try:
@@ -1128,18 +1118,6 @@ class AgentActivity(RecognitionHooks):
             logger.exception(
                 "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
             )
-
-    async def _evaluate_interrupt_after_delay(self) -> None:
-        await asyncio.sleep(0.25)  # grace window
-
-        if self._audio_recognition is None:
-            return
-
-        transcript = self._audio_recognition.current_transcript
-        if not self._should_interrupt_from_transcript(transcript):
-            return
-
-        self._interrupt_immediately()
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         if self.vad is None:
@@ -1200,7 +1178,10 @@ class AgentActivity(RecognitionHooks):
         if self.stt is not None and self._audio_recognition is not None:
             text = self._audio_recognition.current_transcript or ""
 
-            if not self._should_interrupt_from_transcript(text):
+            if (
+                self._session.options.interruption_ignore_words
+                and not self._should_interrupt_from_transcript(text)
+            ):
                 return
 
             if opt.min_interruption_words > 0:
