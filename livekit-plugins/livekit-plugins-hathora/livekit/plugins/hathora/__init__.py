@@ -17,18 +17,16 @@
 See https://docs.livekit.io/agents/integrations/tts/hathora/ and https://docs.livekit.io/agents/integrations/stt/hathora/ for more information.
 """
 
-from .stt import STT, ParakeetTDTSTTOptions
-from .tts import TTS, KokoroTTSOptions, ChatterboxTTSOptions, KokoroChunkedStream, ChatterboxChunkedStream
+from .utils import ConfigOption
+from .stt import STT
+from .tts import TTS, ChunkedStream
 from .version import __version__
 
 __all__ = [
     "STT",
     "TTS",
-    "KokoroTTSOptions",
-    "ChatterboxTTSOptions",
-    "KokoroChunkedStream",
-    "ChatterboxChunkedStream",
-    "ParakeetTDTSTTOptions",
+    "ConfigOption",
+    "ChunkedStream",
     "__version__"
 ]
 

@@ -15,9 +15,8 @@
 from __future__ import annotations
 
 import os
-from collections import deque
-from dataclasses import dataclass
-from typing import Optional, Literal, ByteString
+from typing import Optional
+import base64
 
 import aiohttp
 
@@ -28,31 +27,29 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NotGivenOr, NOT_GIVEN
+from livekit.agents.types import NotGivenOr, NOT_GIVEN
 
 from .constants import (
     API_AUTH_HEADER,
     USER_AGENT,
 )
-from .log import logger
-from .models import STTModels
+from .utils import ConfigOption
 
-@dataclass
-class BaseSTTOptions:
-    base_url: str
-    model: STTModels
-    api_key: Optional[str] = None
-    sample_rate: Optional[int] = 16000
-
-@dataclass
-class ParakeetTDTSTTOptions(BaseSTTOptions):
-    model: Literal['nvidia_parakeet_tdt_v3'] = 'nvidia_parakeet_tdt_v3'
 
 class STT(stt.STT):
+    """This service supports several different speech-to-text models hosted by Hathora.
+
+    [Documentation](https://models.hathora.dev)
+    """
+
     def __init__(
         self,
         *,
-        opts: ParakeetTDTSTTOptions,
+        model: str,
+        language: Optional[str] = None,
+        model_config: Optional[list[ConfigOption]] = None,
+        api_key: Optional[str] = None,
+        base_url: str = "https://api.models.hathora.dev/inference/v1/stt"
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -61,15 +58,28 @@ class STT(stt.STT):
             )
         )
 
-        self._opts = opts
-        self._opts.api_key = self._opts.api_key or os.environ.get("HATHORA_API_KEY")
+        self._model = model
+        self._language = language
+        self._model_config = model_config
+        self._api_key = api_key or os.environ.get("HATHORA_API_KEY")
+        self._base_url = base_url
 
     @property
     def model(self) -> str:
-        return self._opts.model
+        """Get the model name/identifier for this TTS instance.
+
+        Returns:
+            The model name.
+        """
+        return self._model
 
     @property
     def provider(self) -> str:
+        """Get the provider name/identifier for this TTS instance.
+
+        Returns:
+            "Hathora"
+        """
         return "Hathora"
 
     async def _recognize_impl(
@@ -79,42 +89,49 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        if isinstance(self._opts, ParakeetTDTSTTOptions):
-            url = f"{self._opts.base_url}"
+        url = f"{self._base_url}"
 
-            url_query_params = []
-            url_query_params.append(f"sample_rate={self._opts.sample_rate}")
+        payload = {
+            "model": self._model,
+        }
 
-            if len(url_query_params) > 0:
-                url += "?" + "&".join(url_query_params)
+        if self._language is not None:
+            payload["language"] = self._language
+        elif language is not NOT_GIVEN:
+            payload["language"] = language
 
-            form_data = aiohttp.FormData()
-            form_data.add_field("file", rtc.combine_audio_frames(buffer).to_wav_bytes(), filename="audio.wav", content_type="application/octet-stream")
+        if self._model_config is not None:
+            payload["model_config"] = [
+                {"name": option.name, "value": option.value} for option in self._model_config
+            ]
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    headers={
-                        API_AUTH_HEADER: f"Bearer {self._opts.api_key}",
-                        "User-Agent": USER_AGENT,
-                    },
-                    data=form_data,
-                ) as resp:
-                    response = await resp.json()
+        bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
+        base64_audio = base64.b64encode(bytes).decode("utf-8")
+        payload["audio"] = base64_audio
 
-            if response and "text" in response:
-                text = response["text"].strip()
-                if text:
-                    return stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[
-                            stt.SpeechData(
-                                language=language or "en",
-                                text=text,
-                            )
-                        ],
-                    )
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers={
+                    API_AUTH_HEADER: f"Bearer {self._api_key}",
+                    "User-Agent": USER_AGENT,
+                },
+                json=payload,
+            ) as resp:
+                response = await resp.json()
 
-            raise APIStatusError("No text found in the response", status_code=400)
+        if response and "text" in response:
+            text = response["text"].strip()
+            returned_language = response.get("language", None)
+            if text:
+                return stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[
+                        stt.SpeechData(
+                            language=returned_language or language or "en",
+                            text=text,
+                        )
+                    ],
+                )
 
-        raise NotImplementedError(f"Model {self._opts.model} is not supported")
+        raise APIStatusError("No text found in the response", status_code=400)
