@@ -81,7 +81,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=False,
                 aligned_transcript="word",
-                batch_recognition=False,
+                offline_recognize=False,
             ),
         )
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")

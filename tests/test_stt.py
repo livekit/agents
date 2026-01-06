@@ -132,7 +132,7 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], request):
 
     async with stt_instance as stt:
         label = f"{stt.model}@{stt.provider}"
-        if not stt.capabilities.batch_recognition:
+        if not stt.capabilities.offline_recognize:
             pytest.skip(f"{label} does not support batch recognition")
 
         for attempt in range(2):

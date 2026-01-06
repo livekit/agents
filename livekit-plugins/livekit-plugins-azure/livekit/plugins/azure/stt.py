@@ -104,7 +104,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 aligned_transcript="chunk",
-                batch_recognition=False,
+                offline_recognize=False,
             )
         )
         if not language or not is_given(language):

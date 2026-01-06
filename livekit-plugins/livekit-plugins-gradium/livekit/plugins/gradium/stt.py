@@ -86,7 +86,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,  # only final transcripts
                 aligned_transcript=False,  # only chunk start times are available
-                batch_recognition=False,
+                offline_recognize=False,
             ),
         )
 

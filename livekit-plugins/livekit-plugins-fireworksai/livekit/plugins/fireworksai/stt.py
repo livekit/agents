@@ -139,7 +139,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 aligned_transcript=False,
-                batch_recognition=False,
+                offline_recognize=False,
             ),
         )
         if sample_rate != 16000:

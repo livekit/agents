@@ -102,7 +102,7 @@ class STTv2(stt.STT):
                 streaming=True,
                 interim_results=True,
                 aligned_transcript="word",
-                batch_recognition=False,
+                offline_recognize=False,
             )
         )
 

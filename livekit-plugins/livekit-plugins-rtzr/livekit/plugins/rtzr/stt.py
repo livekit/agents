@@ -83,7 +83,7 @@ class STT(stt.STT):
                 interim_results=True,
                 # word timestamps don't seem to work despite the docs saying they do
                 aligned_transcript="chunk",
-                batch_recognition=False,
+                offline_recognize=False,
             )
         )
 
