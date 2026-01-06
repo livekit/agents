@@ -41,7 +41,7 @@ from .log import logger
 from .telemetry import _upload_session_report, trace_types, tracer
 from .telemetry.traces import _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
-from .utils import http_context, is_given, wait_for_participant
+from .utils import aio, http_context, is_given, wait_for_participant
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .voice.agent_session import AgentSession
     from .voice.report import SessionReport
-    from .voice.run_result import RunResult
+    from .voice.run_result import RunEvent
 
 
 def get_job_context() -> JobContext:
@@ -134,12 +134,16 @@ class _ContextLogFieldsFilter(logging.Filter):
 class TextMessageContext:
     def __init__(self, *, text: str, session_data: bytes | None = None) -> None:
         self._text = text
-        self._result: RunResult | None = None
         self._session_data = session_data
 
-    async def send_result(self, result: RunResult) -> None:
+        self._response_ch: aio.Chan[str] = aio.Chan()
+
+    async def send_response(self, ev: RunEvent | str) -> None:
         # simulate sending result
-        self._result = result
+        if isinstance(ev, str):
+            await self._response_ch.send(ev)
+        elif ev.type == "message" and (text := ev.item.text_content):
+            await self._response_ch.send(text)
 
     @property
     def session_data(self) -> bytes | None:
@@ -150,8 +154,8 @@ class TextMessageContext:
         return self._text
 
     @property
-    def result(self) -> RunResult | None:
-        return self._result
+    def response_ch(self) -> aio.Chan[str]:
+        return self._response_ch
 
 
 class JobContext:

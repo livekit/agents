@@ -58,6 +58,9 @@ class MyAgent(Agent):
 
         logger.info(f"Looking up weather for {location}")
 
+        # this will create multiple responses to the user
+        context.session.say("Let me check the weather for you")
+
         return "sunny with a temperature of 70 degrees."
 
 
@@ -74,9 +77,8 @@ async def sms_handler(ctx: TextMessageContext):
     else:
         await session.start(agent=MyAgent(greet_on_enter=False))
 
-    result = await session.run(user_input=ctx.text)
-
-    await ctx.send_result(result)
+    async for ev in session.run(user_input=ctx.text):
+        await ctx.send_response(ev)
 
 
 @server.rtc_session()

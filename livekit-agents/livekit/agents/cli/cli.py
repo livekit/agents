@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 import pickle
+import queue
 import re
 import signal
 import sys
@@ -988,17 +989,8 @@ def live_status(
         yield update
 
 
-def _text_mode(
-    c: AgentsConsole,
-    *,
-    sms_handler: Callable[[TextMessageContext], Awaitable[None]] | None = None,
-    sess_data_file: str | None = None,
-) -> None:
+def _text_mode(c: AgentsConsole) -> None:
     def _key_read(ch: str) -> None:
-        if sms_handler:
-            # sms console doesn't support toggling mode
-            return
-
         if ch == key.CTRL_T:
             raise _ToggleMode()
 
@@ -1016,37 +1008,10 @@ def _text_mode(
             c.console.bell()
             continue
 
-        async def _handle_sms(
-            text: str, sms_handler: Callable[[TextMessageContext], Awaitable[None]]
-        ) -> list[RunEvent]:
-            # simulate a sms received event
-            assert sess_data_file
-
-            session_data: bytes | None = None
-            if os.path.isfile(sess_data_file):
-                with open(sess_data_file, "rb") as f:
-                    session_data = f.read()
-
-            text_context = TextMessageContext(text=text, session_data=session_data)
-            await sms_handler(text_context)
-
-            if session := get_job_context()._primary_agent_session:
-                # serialize the state of the session
-                with open(sess_data_file, "wb") as f:
-                    f.write(pickle.dumps(session.get_state()))
-                logger.debug(
-                    "session state serialized", extra={"session_data_file": sess_data_file}
-                )
-
-            return text_context.result.events.copy() if text_context.result else []
-
         def _generate_with_context(text: str, result_fut: asyncio.Future[list[RunEvent]]) -> None:
             async def _generate(text: str) -> list[RunEvent]:
-                if sms_handler:
-                    return await _handle_sms(text, sms_handler)
-
-                result = await c.io_session.run(user_input=text)
-                return result.events.copy()
+                sess = await c.io_session.run(user_input=text)  # type: ignore
+                return sess.events.copy()
 
             def _done_callback(task: asyncio.Task[list[RunEvent]]) -> None:
                 if exception := task.exception():
@@ -1069,6 +1034,90 @@ def _text_mode(
 
         for event in h.result():
             _print_run_event(c, event)
+
+
+def _sms_text_mode(
+    c: AgentsConsole,
+    *,
+    sms_handler: Callable[[TextMessageContext], Awaitable[None]],
+    sess_data_file: str,
+) -> None:
+    while True:
+        try:
+            text = prompt(Text.from_markup("  [bold]User input[/bold]: "), console=c.console)
+        except KeyboardInterrupt:
+            break
+
+        if not text.strip():
+            c.console.bell()
+            continue
+
+        def _generate_with_context(
+            text: str, resp_queue: queue.Queue[str | BaseException | None]
+        ) -> None:
+            async def _generate() -> None:
+                # simulate a sms received event
+                session_data: bytes | None = None
+                if os.path.isfile(sess_data_file):
+                    with open(sess_data_file, "rb") as f:
+                        session_data = f.read()
+
+                text_context = TextMessageContext(text=text, session_data=session_data)
+
+                async def _handle() -> None:
+                    try:
+                        await sms_handler(text_context)
+                    finally:
+                        text_context.response_ch.close()
+
+                async def _forward_responses() -> None:
+                    async for response in text_context.response_ch:
+                        resp_queue.put(response, block=False)
+
+                handle_task = asyncio.create_task(_handle())
+                forward_task = asyncio.create_task(_forward_responses())
+                await asyncio.gather(handle_task, forward_task)
+
+                if session := get_job_context()._primary_agent_session:
+                    # serialize the state of the session
+                    with open(sess_data_file, "wb") as wf:
+                        wf.write(pickle.dumps(session.get_state()))
+                    logger.debug(
+                        "session state serialized", extra={"session_data_file": sess_data_file}
+                    )
+
+            def _done_callback(task: asyncio.Task[None]) -> None:
+                if exception := task.exception():
+                    resp_queue.put(exception)
+                else:
+                    resp_queue.put(None)
+
+            task = asyncio.create_task(_generate())
+            task.add_done_callback(_done_callback)
+
+        resp_queue = queue.Queue[str | BaseException | None]()
+        c.io_loop.call_soon_threadsafe(
+            _generate_with_context, text, resp_queue, context=c.io_context
+        )
+
+        c.print(text, tag="You")
+
+        while True:
+            resp: str | BaseException | None = ""
+            with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
+                while True:
+                    try:
+                        resp = resp_queue.get(timeout=0.1)
+                        if isinstance(resp, BaseException):
+                            raise resp
+                        break
+                    except queue.Empty:
+                        pass
+            if resp:
+                c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+
+            if resp is None:
+                break
 
 
 AGENT_PALETTE: list[str] = ["#1FD5F9", "#09C338", "#1F5DF9", "#BA1FF9", "#F9AE1F", "#FA4C39"]
@@ -1334,7 +1383,6 @@ def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
 
         if not server._text_handler_fnc:
             raise ValueError("sms_handler is required when simulating SMS")
-        sms_handler = server._text_handler_fnc
 
         console_worker = _ConsoleWorker(
             server=server, shutdown_cb=_on_worker_shutdown, sms_job=True
@@ -1343,7 +1391,7 @@ def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
 
         try:
             c.wait_for_io_acquisition()
-            _text_mode(c, sms_handler=sms_handler, sess_data_file=sess_data_file)
+            _sms_text_mode(c, sms_handler=server._text_handler_fnc, sess_data_file=sess_data_file)
         except _ExitCli:
             pass
         finally:
