@@ -1333,7 +1333,8 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
                 agent_identity=args.simulate_job.participant_identity,
             )
 
-        asyncio.run_coroutine_threadsafe(simulate_job(), loop)
+        if args.simulate_job:
+            asyncio.run_coroutine_threadsafe(simulate_job(), loop)
 
     try:
         main_task = loop.create_task(_worker_run(server), name="worker_main_task_cli")
@@ -1599,7 +1600,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             str,
             typer.Option(help="Room name to connect to"),
         ],
-        participant_identity: Annotated[str, typer.Option(help="Participant identity")] = None,
+        participant_identity: Annotated[
+            Optional[str], typer.Option(help="Participant identity")
+        ] = None,
     ) -> None:
         if participant_identity is None:
             participant_identity = shortuuid("agent-")
