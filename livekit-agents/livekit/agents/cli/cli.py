@@ -1584,6 +1584,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     ) -> None:
         c = AgentsConsole.get_instance()
 
+        if not url:
+            raise ValueError("LiveKit URL must be set")
+
         async def connect_task() -> None:
             nonlocal room, participant_identity
             if participant_identity is None:
