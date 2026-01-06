@@ -104,7 +104,7 @@ class AudioByteStream:
         frames = []
         while len(self._buf) >= self._bytes_per_frame:
             frame_data = self._buf[: self._bytes_per_frame]
-            self._buf = self._buf[self._bytes_per_frame :]
+            del self._buf[: self._bytes_per_frame]
 
             frames.append(
                 rtc.AudioFrame(
@@ -138,7 +138,7 @@ class AudioByteStream:
         if len(self._buf) == 0:
             return []
 
-        if len(self._buf) % (2 * self._num_channels) != 0:
+        if len(self._buf) % self._bytes_per_sample != 0:
             logger.warning("AudioByteStream: incomplete frame during flush, dropping")
             return []
 
@@ -147,7 +147,7 @@ class AudioByteStream:
                 data=self._buf.copy(),
                 sample_rate=self._sample_rate,
                 num_channels=self._num_channels,
-                samples_per_channel=len(self._buf) // 2,
+                samples_per_channel=len(self._buf) // self._bytes_per_sample,
             )
         ]
         self._buf.clear()
@@ -192,3 +192,4 @@ async def audio_frames_from_file(
 
     finally:
         await cancel_and_wait(reader_task)
+        await decoder.aclose()
