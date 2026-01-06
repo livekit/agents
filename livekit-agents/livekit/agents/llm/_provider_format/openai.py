@@ -186,6 +186,8 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
+
+
 def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.function_tools.values():
@@ -204,5 +206,23 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
                 else llm.utils.build_legacy_openai_schema(tool)
             )
             schemas.append(schema)
+
+    return schemas
+
+
+def to_responses_fnc_ctx(
+    self, tool_ctx: llm.ToolContext, *, strict: bool = True
+) -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.RawFunctionTool):
+            schema = tool.info.raw_schema
+            schema["type"] = "function"
+            schemas.append(schema)
+        elif isinstance(tool, llm.FunctionTool):
+            schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            schemas.append(schema)  # type: ignore
+        elif isinstance(tool, llm.ProviderTool):
+            schemas.append(tool.to_dict())
 
     return schemas

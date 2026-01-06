@@ -13,9 +13,7 @@ from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
+    Tool,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -163,7 +161,7 @@ class LLMStream(llm.LLMStream):
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
@@ -173,6 +171,7 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
+        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
@@ -180,15 +179,16 @@ class LLMStream(llm.LLMStream):
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
 
-            fnc_ctx = (
-                self.to_fnc_ctx(self._tools, strict=self._strict_tool_schema)
-                if self._tools
-                else openai.NOT_GIVEN
+            tool_schemas = cast(
+                list[ToolParam],
+                self._tool_ctx.parse_function_tools(
+                    "openai.responses", strict=self._strict_tool_schema
+                ),
             )
 
             self._oai_stream = stream = await self._client.responses.create(
                 model=self._model,
-                tools=fnc_ctx,
+                tools=tool_schemas,
                 input=cast(Union[str, ResponseInputParam, openai.NotGiven], chat_ctx),
                 stream=True,
                 timeout=httpx.Timeout(self._conn_options.timeout),
@@ -277,16 +277,3 @@ class LLMStream(llm.LLMStream):
             id=self._response_id,
             delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
         )
-
-    def to_fnc_ctx(
-        self, fnc_ctx: list[FunctionTool | RawFunctionTool], *, strict: bool = True
-    ) -> list[ToolParam]:
-        tools: list[ToolParam] = []
-        for fnc in fnc_ctx:
-            if is_raw_function_tool(fnc):
-                info = get_raw_function_info(fnc)
-                tools.append(info)  # type: ignore
-            elif is_function_tool(fnc):
-                schema = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
-                tools.append(schema)  # type: ignore
-        return tools

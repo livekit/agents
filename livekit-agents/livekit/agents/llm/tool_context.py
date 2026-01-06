@@ -406,6 +406,8 @@ class ToolContext:
         """Parse the function tools to a provider-specific schema."""
         if format == "openai":
             return _provider_format.openai.to_fnc_ctx(self, **kwargs)
+        elif format == "openai.responses":
+            return _provider_format.openai.to_responses_fnc_ctx(self, **kwargs)
         elif format == "google":
             return _provider_format.google.to_fnc_ctx(self, **kwargs)
         elif format == "anthropic":
