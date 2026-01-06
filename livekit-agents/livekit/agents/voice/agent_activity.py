@@ -1940,6 +1940,9 @@ class AgentActivity(RecognitionHooks):
 
         # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            # function call is created during LLM generation, might be before the speech is authorized
+            # reset the `created_at` to the start time of the tool execution
+            fnc_call.created_at = time.time()
             speech_handle._item_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
@@ -1988,9 +1991,6 @@ class AgentActivity(RecognitionHooks):
 
         # add the tools messages that triggers this reply to the chat context
         if _previous_tools_messages:
-            for tool_msg in _previous_tools_messages:
-                # reset the created_at to the reply start time
-                tool_msg.created_at = reply_started_at
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
 
@@ -2145,8 +2145,6 @@ class AgentActivity(RecognitionHooks):
                 )
             elif len(new_fnc_outputs) > 0:
                 # add the tool calls and outputs to the chat context even no reply is generated
-                for tool_msg in tool_messages:
-                    tool_msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
