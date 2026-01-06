@@ -1316,25 +1316,27 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     @server.once("worker_started")
     def _simulate_job() -> None:
         async def simulate_job() -> None:
-            room_name = args.simulate_job.room
-            async with api.LiveKitAPI(args.url, args.api_key, args.api_secret) as lk_api:
-                room_request = api.ListRoomsRequest(names=[room_name])
-                active_room = await lk_api.room.list_rooms(room_request)
+            if args.simulate_job is not None:
+                room_name = args.simulate_job.room
+                async with api.LiveKitAPI(args.url, args.api_key, args.api_secret) as lk_api:
+                    room_request = api.ListRoomsRequest(names=[room_name])
+                    active_room = await lk_api.room.list_rooms(room_request)
 
-                if not active_room.rooms:
-                    room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room_name))
-                else:
-                    room_info = active_room.rooms[0]
+                    if not active_room.rooms:
+                        room_info = await lk_api.room.create_room(
+                            api.CreateRoomRequest(name=room_name)
+                        )
+                    else:
+                        room_info = active_room.rooms[0]
 
-            await server.simulate_job(
-                room=room_name,
-                fake_job=False,
-                room_info=room_info,
-                agent_identity=args.simulate_job.participant_identity,
-            )
+                await server.simulate_job(
+                    room=room_name,
+                    fake_job=False,
+                    room_info=room_info,
+                    agent_identity=args.simulate_job.participant_identity,
+                )
 
-        if args.simulate_job:
-            asyncio.run_coroutine_threadsafe(simulate_job(), loop)
+        asyncio.run_coroutine_threadsafe(simulate_job(), loop)
 
     try:
         main_task = loop.create_task(_worker_run(server), name="worker_main_task_cli")
@@ -1601,7 +1603,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Room name to connect to"),
         ],
         participant_identity: Annotated[
-            Optional[str], typer.Option(help="Participant identity")
+            Optional[str],  # noqa: UP007
+            typer.Option(help="Participant identity"),
         ] = None,
     ) -> None:
         if participant_identity is None:

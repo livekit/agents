@@ -13,8 +13,8 @@ from ..job import JobAcceptArguments, RunningJobInfo
 
 @dataclass
 class SimulateJobArgs:
-    room: str = ""
-    participant_identity: str = ""
+    room: str
+    participant_identity: str
 
 
 @dataclass
