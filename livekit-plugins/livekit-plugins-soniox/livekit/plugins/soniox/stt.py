@@ -128,11 +128,16 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=False
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                offline_recognize=False,
             )
         )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
+        if not self._api_key:
+            raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
         self._base_url = base_url
         self._http_session = http_session
         self._params = params or STTOptions()
@@ -259,9 +264,11 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(self._keepalive_task()),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                tasks_group: asyncio.Future[None] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -275,7 +282,9 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-            # Handle errors.
+                    tasks_group.cancel()
+                    tasks_group.exception()
+
             except asyncio.TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
@@ -343,7 +352,7 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break

@@ -442,7 +442,10 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["openai"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["openai", "openai.responses"],
+        *,
+        inject_dummy_user_message: bool = True,
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
@@ -470,7 +473,8 @@ class ChatContext:
 
     def to_provider_format(
         self,
-        format: Literal["openai", "google", "aws", "anthropic", "mistralai"] | str,
+        format: Literal["openai", "openai.responses", "google", "aws", "anthropic", "mistralai"]
+        | str,
         *,
         inject_dummy_user_message: bool = True,
         **kwargs: Any,
@@ -487,6 +491,8 @@ class ChatContext:
 
         if format == "openai":
             return _provider_format.openai.to_chat_ctx(self, **kwargs)
+        elif format == "openai.responses":
+            return _provider_format.openai.to_responses_chat_ctx(self, **kwargs)
         elif format == "google":
             return _provider_format.google.to_chat_ctx(self, **kwargs)
         elif format == "aws":

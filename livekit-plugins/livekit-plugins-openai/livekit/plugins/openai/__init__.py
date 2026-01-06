@@ -24,6 +24,7 @@ https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
 from . import realtime, tools
+from . import realtime, responses
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import (
@@ -51,6 +52,7 @@ __all__ = [
     "EmbeddingData",
     "realtime",
     "tools",
+    "responses",
     "__version__",
 ]
 

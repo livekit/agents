@@ -109,7 +109,10 @@ class STT(stt.STT):
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="word"
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
             )
         )
 
@@ -264,13 +267,17 @@ class SpeechStream(stt.SpeechStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
-                        # Send empty frame to close
-                        await audio_stream.send(
-                            AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
-                        )
                     finally:
-                        with contextlib.suppress(Exception):
-                            await audio_stream.close()
+                        # Send empty frame to close (required by AWS Transcribe)
+                        try:
+                            await audio_stream.send(
+                                AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
+                            )
+                        except Exception:
+                            pass
+                        finally:
+                            with contextlib.suppress(Exception):
+                                await audio_stream.close()
 
                 async def handle_transcript_events(
                     output_stream: EventReceiver[TranscriptResultStream],
@@ -279,6 +286,18 @@ class SpeechStream(stt.SpeechStream):
                         async for event in output_stream:
                             if isinstance(event.value, TranscriptEvent):
                                 self._process_transcript_event(event.value)
+                    except BadRequestException as e:
+                        if (
+                            e.message
+                            and "complete signal was sent without the preceding empty frame"
+                            in e.message
+                        ):
+                            # This can happen during cancellation if the empty frame wasn't sent in time
+                            logger.warning(
+                                "AWS Transcribe stream closed with empty frame error (this is usually harmless)"
+                            )
+                        else:
+                            raise
                     except concurrent.futures.InvalidStateError:
                         logger.warning(
                             "AWS Transcribe stream closed unexpectedly (InvalidStateError)"

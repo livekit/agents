@@ -34,13 +34,13 @@ from rich.table import Column, Table
 from rich.text import Text
 from rich.theme import Theme
 
-from livekit import rtc
+from livekit import api, rtc
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
-from ..utils import aio
+from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..worker import AgentServer, WorkerOptions
@@ -209,7 +209,8 @@ class ConsoleAudioOutput(io.AudioOutput):
         wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         try:
             await asyncio.wait(
-                [wait_for_playout, wait_for_interruption], return_when=asyncio.FIRST_COMPLETED
+                [wait_for_playout, wait_for_interruption],
+                return_when=asyncio.FIRST_COMPLETED,
             )
             interrupted = wait_for_interruption.done()
         finally:
@@ -296,7 +297,8 @@ class AgentsConsole:
         self._log_handler = RichLoggingHandler(self)
 
         self._session_directory = pathlib.Path(
-            self._console_directory, f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}"
+            self._console_directory,
+            f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
         )
 
     def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
@@ -917,7 +919,10 @@ def _print_audio_devices() -> None:
 
 
 def prompt(
-    message: str | Text, *, console: Console, key_read_cb: Callable[[str], Any] | None = None
+    message: str | Text,
+    *,
+    console: Console,
+    key_read_cb: Callable[[str], Any] | None = None,
 ) -> str:
     buffer: list[str] = []
 
@@ -973,7 +978,10 @@ def live_status(
         return Columns([msg, spin], expand=False, equal=False, padding=(0, 1))
 
     with Live(
-        _render(), console=console, refresh_per_second=refresh_per_second, transient=transient
+        _render(),
+        console=console,
+        refresh_per_second=refresh_per_second,
+        transient=transient,
     ) as live:
 
         def update(new_text: str | Text | None = None) -> None:
@@ -1032,7 +1040,14 @@ def _text_mode(c: AgentsConsole) -> None:
             _print_run_event(c, event)
 
 
-AGENT_PALETTE: list[str] = ["#1FD5F9", "#09C338", "#1F5DF9", "#BA1FF9", "#F9AE1F", "#FA4C39"]
+AGENT_PALETTE: list[str] = [
+    "#1FD5F9",
+    "#09C338",
+    "#1F5DF9",
+    "#BA1FF9",
+    "#F9AE1F",
+    "#FA4C39",
+]
 
 
 def _agent_style(name: str) -> Style:
@@ -1088,7 +1103,11 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
 
     elif event.type == "message":
         if event.item.text_content:
-            c.print(event.item.text_content, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+            c.print(
+                event.item.text_content,
+                tag="Agent",
+                tag_style=Style.parse("black on #B11FF9"),
+            )
     else:
         logger.warning(f"unknown RunEvent type {event.type}")
 
@@ -1283,6 +1302,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     async def _worker_run(worker: AgentServer) -> None:
         try:
             await server.run(devmode=args.devmode, unregistered=jupyter)
+
         except Exception:
             logger.exception("worker failed")
 
@@ -1292,6 +1312,31 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
 
         watch_client = WatchClient(server, args, loop=loop)
         watch_client.start()
+
+    @server.once("worker_started")
+    def _simulate_job() -> None:
+        async def simulate_job() -> None:
+            if args.simulate_job is not None:
+                room_name = args.simulate_job.room
+                async with api.LiveKitAPI(args.url, args.api_key, args.api_secret) as lk_api:
+                    room_request = api.ListRoomsRequest(names=[room_name])
+                    active_room = await lk_api.room.list_rooms(room_request)
+
+                    if not active_room.rooms:
+                        room_info = await lk_api.room.create_room(
+                            api.CreateRoomRequest(name=room_name)
+                        )
+                    else:
+                        room_info = active_room.rooms[0]
+
+                await server.simulate_job(
+                    room=room_name,
+                    fake_job=False,
+                    room_info=room_info,
+                    agent_identity=args.simulate_job.participant_identity,
+                )
+
+        asyncio.run_coroutine_threadsafe(simulate_job(), loop)
 
     try:
         main_task = loop.create_task(_worker_run(server), name="worker_main_task_cli")
@@ -1434,7 +1479,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _run_worker(
             server=server,
             args=proto.CliArgs(
-                log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
+                log_level=log_level.value,
+                url=url,
+                api_key=api_key,
+                api_secret=api_secret,
             ),
         )
 
@@ -1521,6 +1569,59 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         except KeyboardInterrupt:
             logger.warning("exiting forcefully")
             os._exit(1)
+
+    @app.command()
+    def connect(
+        *,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(help="Set the log level", case_sensitive=False),
+        ] = LogLevel.debug,
+        url: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(
+                help="The WebSocket URL of your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_URL",
+            ),
+        ] = None,
+        api_key: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(
+                help="API key for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_KEY",
+            ),
+        ] = None,
+        api_secret: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(
+                help="API secret for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_SECRET",
+            ),
+        ] = None,
+        room: Annotated[
+            str,
+            typer.Option(help="Room name to connect to"),
+        ],
+        participant_identity: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(help="Participant identity"),
+        ] = None,
+    ) -> None:
+        if participant_identity is None:
+            participant_identity = shortuuid("agent-")
+        _run_worker(
+            server=server,
+            args=proto.CliArgs(
+                log_level=log_level.value,
+                devmode=True,
+                url=url,
+                api_key=api_key,
+                api_secret=api_secret,
+                simulate_job=proto.SimulateJobArgs(
+                    room=room, participant_identity=participant_identity
+                ),
+            ),
+        )
 
     @app.command()
     def download_files() -> None:
