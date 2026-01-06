@@ -121,10 +121,10 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'test-stt.yml',
-              ref: '${{ steps.pr-info.outputs.branch }}',
+              ref: 'main',
               inputs: {
                 pr_number: '${{ steps.pr-info.outputs.pr_number }}',
-                branch: '${{ steps.pr-info.outputs.branch }}'
+                branch: 'refs/pull/${{ steps.pr-info.outputs.pr_number }}/head'
               }
             });
 
