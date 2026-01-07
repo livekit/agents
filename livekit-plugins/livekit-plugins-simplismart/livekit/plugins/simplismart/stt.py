@@ -104,7 +104,6 @@ class STT(stt.STT):
         self._logger = logger.getChild(self.__class__.__name__)
         self._session = http_session
 
-
     @property
     def provider(self) -> str:
         return "Simplismart"
