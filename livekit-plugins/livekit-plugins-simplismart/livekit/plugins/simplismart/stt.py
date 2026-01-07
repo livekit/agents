@@ -573,7 +573,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_str(self._end_of_stream_msg)
                     break
 
-                # Check if Sarvam VAD triggered flush
+                # Check if Simplismart VAD triggered flush
                 if self._should_flush:
                     self._logger.debug(
                         "VAD triggered flush, sending flush message",
@@ -650,8 +650,8 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_message(self, data: dict) -> None:
-        """Handle different types of messages from Sarvam streaming API."""
+    async def _handle_message(self, data: str) -> None:
+        """Handle different types of messages from Simplismart streaming API."""
         try:
             await self._handle_transcript_data(data)
 
