@@ -6,12 +6,12 @@ This example demonstrates how to integrate Krisp noise cancellation
 into a LiveKit voice agent for human-to-bot conversations.
 
 The audio pipeline:
-    Room → RoomIO → KrispAudioInput (NC here) → VAD → STT → LLM → TTS → Room
+    Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM → TTS → Room
 
 Prerequisites:
     1. Set KRISP_VIVA_FILTER_MODEL_PATH environment variable to your .kef model file
     2. Install required packages:
-       - livekit-agents
+       - livekit-agents (with PR #4145 support for FrameProcessor)
        - livekit-plugins-krisp
        - livekit-plugins-silero (for VAD)
        - livekit-plugins-openai (or your preferred STT/LLM/TTS)
@@ -75,7 +75,14 @@ async def entrypoint(ctx: JobContext):
         max_endpointing_delay=3.0,
     )
 
-    logger.info("Starting agent session with RoomIO")
+    logger.info("Starting agent session with RoomIO and Krisp noise cancellation")
+
+    # Create Krisp FrameProcessor for noise cancellation
+    processor = krisp.KrispVivaFilterFrameProcessor(
+        noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
+        frame_duration_ms=10,
+        sample_rate=16000,  # Pre-load model at this sample rate
+    )
 
     # Start the session with RoomIO configuration
     # IMPORTANT: frame_size_ms must match Krisp's frame_duration_ms
@@ -87,28 +94,12 @@ async def entrypoint(ctx: JobContext):
                 sample_rate=16000,  # Krisp supports: 8k, 16k, 24k, 32k, 44.1k, 48k
                 num_channels=1,
                 frame_size_ms=10,  # Must match Krisp frame_duration_ms (10, 15, 20, 30, or 32)
+                noise_cancellation=processor,  # Pass FrameProcessor directly
             ),
         ),
     )
 
-    # ⭐ INTEGRATION POINT: Wrap audio input with Krisp noise cancellation
-    if session.input.audio:
-        logger.info("Wrapping audio input with Krisp noise cancellation")
-
-        session.input.audio = krisp.KrispAudioInput(
-            source=session.input.audio,
-            # model_path=None,  # Uses KRISP_VIVA_FILTER_MODEL_PATH env var
-            noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
-            frame_duration_ms=10,  # Must match frame_size_ms above
-            sample_rate=16000,  # Pre-load model at this sample rate
-        )
-
-        # Notify the input chain that it's been attached
-        session.input.audio.on_attached()
-
-        logger.info("✅ Krisp noise cancellation active")
-    else:
-        logger.warning("No audio input available, Krisp not applied")
+    logger.info("✅ Krisp noise cancellation active")
 
 
 if __name__ == "__main__":

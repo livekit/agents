@@ -4,8 +4,7 @@ Real-time noise reduction and audio-based turn detection for LiveKit voice agent
 
 ## Features
 
-- **`KrispAudioInput`**: Noise cancellation for incoming user audio (human-to-bot)
-- **`KrispVivaFilter`**: Real-time noise reduction for audio processing
+- **`KrispVivaFilterFrameProcessor`**: Real-time noise reduction FrameProcessor for audio processing
 - **`KrispVivaTurn`**: Audio-based turn detection for accurate end-of-turn detection
 
 ## Installation
@@ -47,7 +46,7 @@ Note: Noise reduction and turn detection use different model files.
 
 ### Human-to-Bot Noise Cancellation (Recommended)
 
-For cleaning up user audio before STT/VAD processing:
+For cleaning up user audio before STT/VAD processing using the FrameProcessor approach:
 
 ```python
 from livekit.agents import AgentSession, Agent, JobContext, room_io
@@ -55,6 +54,13 @@ from livekit.plugins import krisp, silero, openai
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
+    # Create Krisp FrameProcessor
+    processor = krisp.KrispVivaFilterFrameProcessor(
+        noise_suppression_level=100,  # 0-100
+        frame_duration_ms=10,
+        sample_rate=16000,
+    )
+    
     session = AgentSession(
         vad=silero.VAD.load(),
         stt=openai.STT(),
@@ -62,7 +68,7 @@ async def entrypoint(ctx: JobContext):
         tts=openai.TTS(),
     )
     
-    # Start session with RoomIO
+    # Start session with RoomIO and pass FrameProcessor directly
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
@@ -70,22 +76,13 @@ async def entrypoint(ctx: JobContext):
             audio_input=room_io.AudioInputOptions(
                 sample_rate=16000,
                 frame_size_ms=10,  # Must match Krisp frame_duration_ms
+                noise_cancellation=processor,  # Pass FrameProcessor directly
             ),
         ),
     )
-    
-    # ⭐ Apply Krisp to incoming user audio
-    if session.input.audio:
-        session.input.audio = krisp.KrispAudioInput(
-            source=session.input.audio,
-            noise_suppression_level=100,  # 0-100
-            frame_duration_ms=10,
-            sample_rate=16000,
-        )
-        session.input.audio.on_attached()
 ```
 
-**Audio Pipeline:** `Room → RoomIO → KrispAudioInput → VAD → STT → LLM`
+**Audio Pipeline:** `Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM`
 
 ### Turn Detection
 
@@ -116,17 +113,7 @@ async def entrypoint(ctx):
 
 ## Configuration
 
-### KrispAudioInput Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `source` | AudioInput | required | Upstream audio input to wrap (from RoomIO) |
-| `model_path` | str | env var | Path to noise reduction `.kef` model |
-| `noise_suppression_level` | int | 100 | Noise reduction intensity (0-100) |
-| `frame_duration_ms` | int | 10 | Frame size: 10, 15, 20, 30, or 32ms |
-| `sample_rate` | int | None | Optional: pre-initialize with sample rate |
-
-### KrispVivaFilter Parameters
+### KrispVivaFilterFrameProcessor Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -198,15 +185,15 @@ The plugin uses `KrispSDKManager` to manage the Krisp SDK instance:
 from livekit.plugins import krisp
 
 # Both share the same SDK instance
-noise_filter = krisp.KrispVivaFilter(noise_suppression_level=90)
+noise_processor = krisp.KrispVivaFilterFrameProcessor(noise_suppression_level=90)
 turn_detector = krisp.KrispVivaTurn(threshold=0.5)
 
-# Process audio through filter and turn detector
-filtered_frame = noise_filter.filter(audio_frame)
+# Process audio through processor and turn detector
+filtered_frame = noise_processor.process(audio_frame)  # FrameProcessor.process() is synchronous
 turn_probability = turn_detector.process_audio(filtered_frame, is_speech=True)
 
 # Cleanup - SDK destroyed only when both are closed
-noise_filter.close()  # SDK still active (turn_detector holds reference)
+noise_processor.close()  # SDK still active (turn_detector holds reference)
 turn_detector.close()  # SDK now destroyed (last reference released)
 ```
 
@@ -250,15 +237,13 @@ For 20ms @ 16kHz, each frame must have exactly 320 samples.
 
 ## API Reference
 
-### `KrispAudioInput`
+### `KrispVivaFilterFrameProcessor`
 
-**Purpose:** Wrap RoomIO audio input to apply noise cancellation to incoming user audio (human-to-bot).
+**Purpose:** FrameProcessor implementation for Krisp noise reduction. Can be used directly with the `noise_cancellation` parameter in `AudioInputOptions` or `RoomInputOptions`.
 
 **Constructor:**
 ```python
-KrispAudioInput(
-    source: AudioInput,
-    *,
+KrispVivaFilterFrameProcessor(
     model_path: str | None = None,
     noise_suppression_level: int = 100,
     frame_duration_ms: int = 10,
@@ -267,41 +252,38 @@ KrispAudioInput(
 ```
 
 **Methods:**
-- `async __anext__() -> AudioFrame` - Get next filtered frame (called automatically)
-- `on_attached()` - Called when attached to session (call explicitly after wrapping)
-- `on_detached()` - Called when detached (cleanup happens automatically)
-- `enable_filtering()` - Enable noise filtering
-- `disable_filtering()` - Disable noise filtering (passthrough)
-
-**Properties:**
-- `is_filtering_enabled: bool` - Check if filtering is active
-- `label: str` - Audio input label ("KrispNC")
-- `source: AudioInput` - Upstream audio source
-
-**Usage:**
-```python
-if session.input.audio:
-    session.input.audio = krisp.KrispAudioInput(
-        source=session.input.audio,
-        noise_suppression_level=100,
-    )
-    session.input.audio.on_attached()
-```
-
-### `KrispVivaFilter`
-
-**Methods:**
-- `async filter(frame: AudioFrame) -> AudioFrame` - Filter a single frame
-- `async process_stream(audio_stream) -> AudioFrame` - Filter a stream
+- `process(frame: AudioFrame) -> AudioFrame` - Process a single frame (synchronous, required by FrameProcessor interface)
 - `enable()` / `disable()` - Toggle filtering
 - `close()` - Clean up resources
 
 **Properties:**
 - `is_enabled: bool` - Check if filtering is active
 
+**Usage:**
+```python
+# Create processor
+processor = krisp.KrispVivaFilterFrameProcessor(
+    noise_suppression_level=100,
+    frame_duration_ms=10,
+)
+
+# Use in AudioInputOptions
+await session.start(
+    agent=MyAgent(),
+    room=ctx.room,
+    room_options=room_io.RoomOptions(
+        audio_input=room_io.AudioInputOptions(
+            sample_rate=16000,
+            frame_size_ms=10,
+            noise_cancellation=processor,  # Pass FrameProcessor directly
+        ),
+    ),
+)
+```
+
 **Context Manager:**
 ```python
-with KrispVivaFilter() as filter:
+with KrispVivaFilterFrameProcessor() as processor:
     # Automatic cleanup
     pass
 ```

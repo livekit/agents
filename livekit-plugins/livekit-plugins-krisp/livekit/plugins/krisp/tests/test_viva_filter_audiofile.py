@@ -22,6 +22,14 @@ import os
 import sys
 import time
 
+# Add package root to Python path when running as standalone script
+# This allows imports like 'livekit.plugins.krisp' to work
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+# Go up from tests/ -> krisp/ -> plugins/ -> livekit/ -> livekit-plugins-krisp/
+_package_root = os.path.abspath(os.path.join(_script_dir, "..", "..", "..", ".."))
+if _package_root not in sys.path:
+    sys.path.insert(0, _package_root)
+
 # This is a standalone script, not a pytest test file
 # Handle missing dependencies gracefully during pytest collection
 try:
@@ -74,13 +82,13 @@ def load_filter():
 
     # Import the module
     try:
-        from livekit.plugins.krisp import KrispVivaFilter
+        from livekit.plugins.krisp import KrispVivaFilterFrameProcessor
     except ImportError as e:
-        print(f"Error: Could not import KrispVivaFilter: {e}")
+        print(f"Error: Could not import KrispVivaFilterFrameProcessor: {e}")
         print("Make sure livekit-plugins-krisp is installed: pip install livekit-plugins-krisp")
         sys.exit(1)
 
-    return KrispVivaFilter, model_path
+    return KrispVivaFilterFrameProcessor, model_path
 
 
 async def process_audio_file(
@@ -179,8 +187,8 @@ async def process_audio_file(
                     samples_per_channel=frame_size_samples,
                 )
 
-                # Filter the frame
-                filtered_frame = await audio_filter.filter(audio_frame)
+                # Process the frame (FrameProcessor.process() is synchronous)
+                filtered_frame = audio_filter.process(audio_frame)
 
                 # Convert filtered frame back to numpy array
                 filtered_samples = np.frombuffer(filtered_frame.data, dtype=np.int16)

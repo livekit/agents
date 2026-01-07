@@ -36,6 +36,14 @@ from .krisp_instance import (
 )
 from .log import logger
 
+# Check if FrameProcessor is available (requires livekit-rtc >= 1.0.23 with PR #4145)
+if not hasattr(rtc, "FrameProcessor"):
+    raise ImportError(
+        "FrameProcessor is not available in your livekit-rtc version. "
+        "KrispVivaFilterFrameProcessor requires livekit-rtc >= 1.0.23 with FrameProcessor support. "
+        "Please update livekit-rtc: pip install --upgrade 'livekit>=1.0.23'"
+    )
+
 try:
     import krisp_audio
 
@@ -48,12 +56,37 @@ except ModuleNotFoundError:
     )
 
 
-class KrispVivaFilter:
-    """Audio filter using the Krisp VIVA SDK for noise reduction and voice isolation.
+class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
+    """FrameProcessor implementation for Krisp noise reduction.
 
-    This filter provides real-time noise reduction and voice isolation for audio streams using Krisp's
-    proprietary noise suppression algorithms. It's designed to be used as a processing
-    node in the LiveKit Agents audio pipeline.
+    This class implements the FrameProcessor interface from livekit-rtc,
+    allowing it to be used directly with the noise_cancellation parameter
+    in AudioInputOptions or RoomInputOptions.
+
+    Example:
+        ```python
+        from livekit.agents import room_io
+        from livekit.plugins import krisp
+
+        # Create frame processor
+        processor = krisp.KrispVivaFilterFrameProcessor(
+            noise_suppression_level=100,
+            frame_duration_ms=10,
+        )
+
+        # Use it directly in AudioInputOptions
+        await session.start(
+            agent=MyAgent(),
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                audio_input=room_io.AudioInputOptions(
+                    sample_rate=16000,
+                    frame_size_ms=10,
+                    noise_cancellation=processor,
+                ),
+            ),
+        )
+        ```
     """
 
     def __init__(
@@ -63,15 +96,14 @@ class KrispVivaFilter:
         frame_duration_ms: int = 10,
         sample_rate: int | None = None,
     ) -> None:
-        """Initialize the Krisp noise reduction and voice isolation filter.
+        """Initialize the Krisp frame processor.
 
         Args:
             model_path: Path to the Krisp model file (.kef extension).
                 If None, uses KRISP_VIVA_FILTER_MODEL_PATH environment variable.
             noise_suppression_level: Noise suppression level (0-100, default: 100).
             frame_duration_ms: Frame duration in milliseconds (10, 15, 20, 30, or 32, default: 10).
-            sample_rate: Optional sample rate in Hz. If provided, the session will be
-                created immediately. If None, the session will be created on the first frame.
+            sample_rate: sample rate in Hz. If None, default to 16000 Hz.
 
         Raises:
             RuntimeError: If krisp-audio package is not installed.
@@ -80,11 +112,10 @@ class KrispVivaFilter:
             Exception: If model file doesn't have .kef extension.
             FileNotFoundError: If model file doesn't exist.
         """
-
         # Check if krisp-audio is available
         if not KRISP_AUDIO_AVAILABLE:
             raise RuntimeError(
-                "krisp-audio package is not installed. Install it with: pip install krisp-audio"
+                "krisp-audio package is not installed."
             )
 
         # Initialize state variables first
@@ -110,7 +141,7 @@ class KrispVivaFilter:
                 logger.error(
                     "Model path is not provided and KRISP_VIVA_FILTER_MODEL_PATH is not set."
                 )
-                raise ValueError("Model path for KrispVivaFilter must be provided.")
+                raise ValueError("Model path for KrispVivaFilterFrameProcessor must be provided.")
 
             if not self._model_path.endswith(".kef"):
                 raise Exception("Model is expected with .kef extension")
@@ -130,7 +161,7 @@ class KrispVivaFilter:
             init_sample_rate = sample_rate if sample_rate is not None else 16000
             self._create_session(init_sample_rate)
             logger.info(
-                f"Krisp filter initialized with {init_sample_rate}Hz session "
+                f"Krisp frame processor initialized with {init_sample_rate}Hz session "
                 f"(model pre-loaded, will recreate session if different sample rate)"
             )
         except Exception:
@@ -170,21 +201,10 @@ class KrispVivaFilter:
             logger.error(f"❌ Failed to create Krisp session: {e}")
             raise
 
-    def enable(self) -> None:
-        """Enable noise filtering."""
-        self._filtering_enabled = True
+    def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Process an audio frame with Krisp noise reduction.
 
-    def disable(self) -> None:
-        """Disable noise filtering (audio will pass through unmodified)."""
-        self._filtering_enabled = False
-
-    @property
-    def is_enabled(self) -> bool:
-        """Check if filtering is currently enabled."""
-        return self._filtering_enabled
-
-    async def filter(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        """Apply Krisp noise reduction to an audio frame.
+        This is the method required by the FrameProcessor interface.
 
         Args:
             frame: Input audio frame. Must contain exactly the number of samples
@@ -201,8 +221,8 @@ class KrispVivaFilter:
         if not self._filtering_enabled:
             return frame
 
-        # Create a new session for the input sample rate
-        self._create_session(frame.sample_rate)
+        if self._session is None or self._sample_rate != frame.sample_rate:
+            raise ValueError(f"Session not created or sample rate mismatch: {frame.sample_rate}Hz")
 
         # Verify frame size matches expected duration
         expected_samples = int((frame.sample_rate * self._frame_duration_ms) / 1000)
@@ -244,40 +264,30 @@ class KrispVivaFilter:
             # Return original frame on error
             return frame
 
-    async def process_stream(
-        self, audio_stream: AsyncIterable[rtc.AudioFrame]
-    ) -> AsyncIterable[rtc.AudioFrame]:
-        """Process a stream of audio frames with noise reduction.
+    def process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Public method that calls _process (for backward compatibility)."""
+        return self._process(frame)
 
-        This is a convenience method for processing an entire audio stream.
-        All frames in the stream must have the correct size for the configured
-        frame_duration_ms.
+    def enable(self) -> None:
+        """Enable noise filtering."""
+        self._filtering_enabled = True
 
-        Args:
-            audio_stream: An async iterable of audio frames to process.
+    def disable(self) -> None:
+        """Disable noise filtering (audio will pass through unmodified)."""
+        self._filtering_enabled = False
 
-        Yields:
-            Filtered audio frames with noise reduction applied.
+    @property
+    def enabled(self) -> bool:
+        """Check if filtering is currently enabled (required by FrameProcessor interface)."""
+        return self._filtering_enabled
 
-        Example:
-            ```python
-            async def realtime_audio_output_node(
-                self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-            ) -> AsyncIterable[rtc.AudioFrame]:
-                krisp_filter = krisp.KrispVivaFilter(frame_duration_ms=20)
-                async for frame in krisp_filter.process_stream(audio):
-                    yield frame
-            ```
-        """
-        async for frame in audio_stream:
-            filtered_frame = await self.filter(frame)
-            yield filtered_frame
+    @property
+    def is_enabled(self) -> bool:
+        """Check if filtering is currently enabled (backward compatibility)."""
+        return self._filtering_enabled
 
-    def close(self) -> None:
-        """Clean up filter session resources.
-
-        Call this when you're done with the filter to free session resources.
-        """
+    def _close(self) -> None:
+        """Clean up processor session resources (required by FrameProcessor interface)."""
         if self._session is not None:
             self._session = None
 
@@ -286,7 +296,11 @@ class KrispVivaFilter:
             KrispSDKManager.release()
             self._sdk_acquired = False
 
-        logger.debug("Krisp filter session closed")
+        logger.debug("Krisp frame processor session closed")
+
+    def close(self) -> None:
+        """Clean up processor session resources (public method for backward compatibility)."""
+        self._close()
 
     def __del__(self) -> None:
         """Destructor to ensure cleanup of session resources.

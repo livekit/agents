@@ -18,13 +18,12 @@ This plugin provides real-time noise reduction and audio-based turn detection
 using Krisp's proprietary algorithms via the VIVA SDK.
 
 Features:
-    - KrispVivaFilter: Real-time noise reduction for audio streams
+    - KrispVivaFilterFrameProcessor: Real-time noise reduction FrameProcessor
     - KrispVivaTurn: Audio-based turn detection for end-of-turn detection
 """
 
 from livekit.agents import Plugin
 
-from .audio_input import KrispAudioInput
 from .krisp_instance import (
     KRISP_FRAME_DURATIONS,
     KRISP_SAMPLE_RATES,
@@ -34,12 +33,11 @@ from .krisp_instance import (
 )
 from .log import logger
 from .version import __version__
-from .viva_filter import KrispVivaFilter
+from .viva_filter import KrispVivaFilterFrameProcessor
 from .viva_turn import KrispVivaTurn
 
 __all__ = [
-    "KrispAudioInput",
-    "KrispVivaFilter",
+    "KrispVivaFilterFrameProcessor",
     "KrispVivaTurn",
     "KrispSDKManager",
     "KRISP_SAMPLE_RATES",

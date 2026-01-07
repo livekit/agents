@@ -19,7 +19,7 @@ import logging
 import numpy as np
 
 from livekit import rtc
-from livekit.plugins.krisp import KrispVivaFilter
+from livekit.plugins.krisp import KrispVivaFilterFrameProcessor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("krisp-minimal-test")
@@ -33,14 +33,14 @@ async def test_krisp_filter():
     logger.info("=" * 60)
 
     try:
-        # Create the filter
-        logger.info("\n1. Creating Krisp filter...")
-        krisp_filter = KrispVivaFilter(
+        # Create the frame processor
+        logger.info("\n1. Creating Krisp frame processor...")
+        krisp_processor = KrispVivaFilterFrameProcessor(
             noise_suppression_level=100,
             frame_duration_ms=10,
             sample_rate=16000,
         )
-        logger.info("✅ Krisp filter created successfully")
+        logger.info("✅ Krisp frame processor created successfully")
 
         # Create a test audio frame (10ms @ 16kHz = 160 samples)
         logger.info("\n2. Creating test audio frame...")
@@ -67,8 +67,8 @@ async def test_krisp_filter():
         logger.info(f"✅ Test frame created: {num_samples} samples @ {sample_rate}Hz")
 
         # Process the frame through Krisp
-        logger.info("\n3. Processing frame through Krisp filter...")
-        filtered_frame = await krisp_filter.filter(test_frame)
+        logger.info("\n3. Processing frame through Krisp frame processor...")
+        filtered_frame = krisp_processor.process(test_frame)
         logger.info("✅ Frame processed successfully")
 
         # Verify output
@@ -86,31 +86,17 @@ async def test_krisp_filter():
         # Test multiple frames
         logger.info("\n5. Processing multiple frames...")
         for i in range(10):
-            _ = await krisp_filter.filter(test_frame)
+            _ = krisp_processor.process(test_frame)
             logger.info(f"   Frame {i + 1}/10 processed")
         logger.info("✅ Multiple frames processed successfully")
 
-        # Test stream processing
-        logger.info("\n6. Testing stream processing...")
-
-        async def generate_frames():
-            """Generate test audio frames."""
-            for _ in range(5):
-                yield test_frame
-
-        frame_count = 0
-        async for _ in krisp_filter.process_stream(generate_frames()):
-            frame_count += 1
-
-        logger.info(f"✅ Stream processing completed: {frame_count} frames")
-
         # Cleanup
-        logger.info("\n7. Cleaning up...")
-        krisp_filter.close()
-        logger.info("✅ Filter closed")
+        logger.info("\n6. Cleaning up...")
+        krisp_processor.close()
+        logger.info("✅ Frame processor closed")
 
         logger.info("\n" + "=" * 60)
-        logger.info("✅ ALL TESTS PASSED - Krisp filter is working correctly!")
+        logger.info("✅ ALL TESTS PASSED - Krisp frame processor is working correctly!")
         logger.info("=" * 60)
 
     except Exception as e:
@@ -120,82 +106,10 @@ async def test_krisp_filter():
         raise
 
 
-async def test_krisp_audio_input():
-    """Test KrispAudioInput wrapper (if livekit-agents is available)."""
-    try:
-        from livekit.agents.voice import io
-        from livekit.plugins.krisp import KrispAudioInput
-
-        logger.info("\n" + "=" * 60)
-        logger.info("Testing KrispAudioInput Wrapper")
-        logger.info("=" * 60)
-
-        # Create a mock audio source
-        class MockAudioInput(io.AudioInput):
-            def __init__(self):
-                super().__init__(label="MockInput")
-                self.frame_count = 0
-
-            async def __anext__(self):
-                if self.frame_count >= 5:
-                    raise StopAsyncIteration
-
-                self.frame_count += 1
-
-                # Generate test frame
-                sample_rate = 16000
-                num_samples = 160  # 10ms @ 16kHz
-                audio_data = np.random.randint(-1000, 1000, num_samples, dtype=np.int16)
-
-                return rtc.AudioFrame(
-                    data=audio_data.tobytes(),
-                    sample_rate=sample_rate,
-                    num_channels=1,
-                    samples_per_channel=num_samples,
-                )
-
-        logger.info("\n1. Creating mock audio input...")
-        mock_input = MockAudioInput()
-        logger.info("✅ Mock input created")
-
-        logger.info("\n2. Wrapping with KrispAudioInput...")
-        krisp_input = KrispAudioInput(
-            source=mock_input,
-            noise_suppression_level=100,
-            frame_duration_ms=10,
-            sample_rate=16000,
-        )
-        krisp_input.on_attached()
-        logger.info("✅ KrispAudioInput wrapper created")
-
-        logger.info("\n3. Processing frames through wrapper...")
-        frame_count = 0
-        async for frame in krisp_input:
-            frame_count += 1
-            logger.info(
-                f"   Frame {frame_count}: {frame.samples_per_channel} samples @ {frame.sample_rate}Hz"
-            )
-
-        logger.info(f"✅ Processed {frame_count} frames through wrapper")
-
-        krisp_input.on_detached()
-        logger.info("✅ Wrapper cleaned up")
-
-        logger.info("\n" + "=" * 60)
-        logger.info("✅ KrispAudioInput wrapper test passed!")
-        logger.info("=" * 60)
-
-    except ImportError:
-        logger.warning("\n⚠️  livekit-agents not installed, skipping KrispAudioInput test")
-
-
 async def main():
     """Run all tests."""
-    # Test basic filter
+    # Test frame processor
     await test_krisp_filter()
-
-    # Test audio input wrapper (if available)
-    await test_krisp_audio_input()
 
 
 if __name__ == "__main__":

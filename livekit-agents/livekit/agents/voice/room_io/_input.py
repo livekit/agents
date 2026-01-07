@@ -209,7 +209,12 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         *,
         sample_rate: int,
         num_channels: int,
-        noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | None,
+        noise_cancellation: (
+            rtc.NoiseCancellationOptions
+            | NoiseCancellationSelector
+            | rtc.FrameProcessor[rtc.AudioFrame]
+            | None
+        ),
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
