@@ -1582,37 +1582,38 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             typer.Option(help="Participant identity"),
         ] = None,
     ) -> None:
+        if participant_identity is None:
+            participant_identity = shortuuid("agent-")
+
         c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
 
-        if not url:
-            raise ValueError("LiveKit URL must be set")
+        loop = asyncio.get_event_loop()
 
-        async def connect_task() -> None:
-            nonlocal room, participant_identity
-            if participant_identity is None:
-                participant_identity = shortuuid("agent-")
-            livekit_token = (
-                api.AccessToken(
-                    api_key=api_key,
-                    api_secret=api_secret,
+        @server.once("worker_started")
+        def _simulate_job() -> None:
+            async def simulate_job() -> None:
+                async with api.LiveKitAPI(url, api_key, api_secret) as lk_api:
+                    room_request = api.ListRoomsRequest(names=[room])
+                    active_room = await lk_api.room.list_rooms(room_request)
+
+                    if not active_room.rooms:
+                        room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room))
+                    else:
+                        room_info = active_room.rooms[0]
+
+                await server.simulate_job(
+                    room=room,
+                    fake_job=False,
+                    room_info=room_info,
+                    agent_identity=participant_identity,
                 )
-                .with_kind("agent")
-                .with_identity(participant_identity)
-                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                .to_jwt()
-            )
 
-            room_instance = rtc.Room()
-
-            await room_instance.connect(url, livekit_token)
-
-            await server.run()
+            loop = asyncio.get_event_loop()
+            asyncio.run_coroutine_threadsafe(simulate_job(), loop)
 
         try:
-            loop = asyncio.get_event_loop()
-            asyncio.set_event_loop(loop)
-
-            loop.run_until_complete(connect_task())
+            loop.run_until_complete(server.run(devmode=True, unregistered=True))
         except _ExitCli:
             raise typer.Exit() from None
         except KeyboardInterrupt:
