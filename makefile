@@ -110,7 +110,8 @@ type-check: ## Run mypy type checker
 		-p livekit.plugins.anam \
 		-p livekit.plugins.ultravox \
 		-p livekit.plugins.fireworksai \
-		-p livekit.plugins.minimax; then \
+		-p livekit.plugins.minimax \
+		-p livekit.plugins.vosk; then \
 		echo "$(BOLD)$(GREEN)✓ Type checking passed$(RESET)"; \
 	else \
 		echo "$(BOLD)$(RED)✗ Type checking failed$(RESET)"; \
