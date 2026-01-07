@@ -171,7 +171,6 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
-        # self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
