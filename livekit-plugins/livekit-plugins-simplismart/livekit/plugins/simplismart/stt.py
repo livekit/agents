@@ -19,8 +19,9 @@ This module provides an STT implementation that uses the SimpliSmart API.
 
 import asyncio
 import base64
-import os
 import enum
+import json
+import os
 import weakref
 from typing import Any, Literal
 
@@ -38,7 +39,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, rtc
 from livekit.agents.utils.misc import is_given
-import json
 
 from .log import logger
 
@@ -88,13 +88,17 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        base_url: str,
+        base_url: str | None = None,
         api_key: str | None = None,
         streaming_url: str | None = None,
         model: str | None = None,
         params: dict[str, Any] | SimplismartSTTOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
+
+        assert (
+            base_url is not None or streaming_url is not None
+        ), "base_url or streaming_url are required"
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True if streaming_url is not None else False,
@@ -209,8 +213,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        prompt: NotGivenOr[str] = NOT_GIVEN,
-        high_vad_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
         **kwargs: Any,
     ) -> "SpeechStream":
         """Create a streaming transcription session."""
@@ -223,7 +225,9 @@ class STT(stt.STT):
             opts_model = self._opts.model
 
         # Create options for the stream
-        stream_opts = SimplismartSTTOptions(language=opts_language, model=opts_model)
+        stream_opts = SimplismartSTTOptions(
+            language=opts_language, model=opts_model, streaming_url=self._streaming_url
+        )
 
         # Create a fresh session for this stream to avoid conflicts
         stream_session = aiohttp.ClientSession()
@@ -350,8 +354,8 @@ class SpeechStream(stt.SpeechStream):
         """Send initial configuration message with language for Simplismart models."""
         try:
             config_message = {"language": self._opts.language}
-            await ws.send_str(json.dumps(config_message))
-            self._logger.debug(
+            await ws.send_json(config_message)
+            self._logger.info(
                 "Sent initial config for Simplismart model",
                 extra={"session_id": self._session_id, "language": self._opts.language},
             )
@@ -511,7 +515,6 @@ class SpeechStream(stt.SpeechStream):
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
-        import base64
 
         import numpy as np
 
@@ -650,21 +653,7 @@ class SpeechStream(stt.SpeechStream):
     async def _handle_message(self, data: dict) -> None:
         """Handle different types of messages from Sarvam streaming API."""
         try:
-            msg_type = data.get("type")
-            if not msg_type:
-                self._logger.warning(
-                    "Received message without type field",
-                    extra={"session_id": self._session_id, "data": data},
-                )
-                return
-
-            if msg_type == "data":
-                await self._handle_transcript_data(data)
-            else:
-                self._logger.debug(
-                    f"Unknown message type: {msg_type}",
-                    extra={"session_id": self._session_id, "data": data},
-                )
+            await self._handle_transcript_data(data)
 
         except KeyError as e:
             self._logger.warning(
@@ -679,14 +668,14 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"Message processing error: {e}") from e
 
-    async def _handle_transcript_data(self, data: dict) -> None:
+    async def _handle_transcript_data(self, data: str) -> None:
         """Handle transcription result messages."""
-        transcript_text = data.get("data", "")
-        request_id = data.get("request_id", "")
+        transcript_text = data
+        request_id = self._session_id
 
         try:
             # Create usage event with proper metrics extraction
-            metrics = data.get("metrics", {})
+            metrics = {}
             request_data = {
                 "original_id": request_id,
                 "processing_latency": metrics.get("processing_latency", 0.0),
