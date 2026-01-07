@@ -210,11 +210,11 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
     return schemas
 
 
-def to_responses_fnc_ctx(
-    self, tool_ctx: llm.ToolContext, *, strict: bool = True
-) -> list[dict[str, Any]]:
+def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
+    from livekit.plugins import openai
+
     schemas: list[dict[str, Any]] = []
-    for tool in tool_ctx.function_tools.values():
+    for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
             schema = tool.info.raw_schema
             schema["type"] = "function"
@@ -222,7 +222,7 @@ def to_responses_fnc_ctx(
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             schemas.append(schema)  # type: ignore
-        elif isinstance(tool, llm.ProviderTool):
+        elif isinstance(tool, openai.tools.OpenAITool):
             schemas.append(tool.to_dict())
 
     return schemas

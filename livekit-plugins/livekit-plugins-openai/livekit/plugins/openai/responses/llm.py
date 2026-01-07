@@ -171,7 +171,7 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
-        self._tool_ctx = llm.ToolContext(tools)
+        # self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
@@ -179,6 +179,7 @@ class LLMStream(llm.LLMStream):
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
 
+            self._tool_ctx = llm.ToolContext(self.tools)
             tool_schemas = cast(
                 list[ToolParam],
                 self._tool_ctx.parse_function_tools(

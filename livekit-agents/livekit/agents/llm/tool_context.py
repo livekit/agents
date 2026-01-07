@@ -386,6 +386,11 @@ class ToolContext:
 
     @overload
     def parse_function_tools(
+        self, format: Literal["openai.responses"], *, strict: bool = True
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def parse_function_tools(
         self,
         format: Literal["google"],
         *,
