@@ -551,7 +551,9 @@ class SpeechStream(stt.SpeechStream):
         }
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(f"{base_url}/stt", headers=headers),
+                self._session.ws_connect(
+                    f"{base_url}/stt?model={self._opts.model}", headers=headers
+                ),
                 self._conn_options.timeout,
             )
             params["type"] = "session.create"

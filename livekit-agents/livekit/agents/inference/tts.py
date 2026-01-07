@@ -360,7 +360,8 @@ class TTS(tts.TTS):
         ws = None
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(f"{base_url}/tts", headers=headers), timeout
+                session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
+                timeout,
             )
         except (
             aiohttp.ClientConnectorError,
