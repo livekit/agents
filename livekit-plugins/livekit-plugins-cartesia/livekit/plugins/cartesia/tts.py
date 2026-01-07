@@ -106,7 +106,7 @@ class TTS(tts.TTS):
         """
         Create a new instance of Cartesia TTS.
 
-        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
+        See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the Cartesia API.
 
         Args:
             model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
@@ -521,9 +521,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                extra={"cartesia_context_id": cartesia_context_id, "error": e},
+                extra={"cartesia_context_id": cartesia_context_id},
             )
             raise APIConnectionError() from e
 

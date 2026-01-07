@@ -9,6 +9,7 @@ from livekit import rtc
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
+from ..io import TextOutput
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -102,6 +103,8 @@ class TextOutputOptions:
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
+    next_in_chain: TextOutput | None = None
+    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
 
 
 @dataclass
@@ -248,9 +251,9 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     audio_frame_size_ms: int = 50
     """The frame size in milliseconds for the audio input."""
-    noise_cancellation: (
-        rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None
-    ) = None
+    noise_cancellation: rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None = (
+        None
+    )
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If not provided,

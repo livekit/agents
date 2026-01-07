@@ -142,7 +142,7 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     params = {
         "language-code": opts.language,
         "model": opts.model,
-        "vad_signals": "false",
+        "vad_signals": "true",
     }
 
     if opts.sample_rate:
@@ -270,7 +270,7 @@ class STT(stt.STT):
         if opts_model:
             form_data.add_field("model", str(opts_model))
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         headers = {"api-subscription-key": self._api_key}
 
@@ -400,7 +400,7 @@ class STT(stt.STT):
         # Create a fresh session for this stream to avoid conflicts
         stream_session = aiohttp.ClientSession()
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         stream = SpeechStream(
             stt=self,
