@@ -221,7 +221,7 @@ def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> l
             schemas.append(schema)
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            schemas.append(schema)  # type: ignore
+            schemas.append(schema)
         elif isinstance(tool, openai.tools.OpenAITool):
             schemas.append(tool.to_dict())
 
