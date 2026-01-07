@@ -186,7 +186,9 @@ async def test_tool_call() -> None:
         agent_state_events[3].new_state == "processing"
     )  # from speaking to processing when tool call is executed
     check_timestamp(agent_state_events[3].created_at - t_origin, 5.5, speed_factor=speed)
-    assert agent_state_events[4].new_state == "thinking"  # from processing to thinking for LLM inference
+    assert (
+        agent_state_events[4].new_state == "thinking"
+    )  # from processing to thinking for LLM inference
     assert agent_state_events[5].new_state == "speaking"
     assert agent_state_events[6].new_state == "listening"
 
