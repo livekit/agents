@@ -95,10 +95,9 @@ class STT(stt.STT):
         params: dict[str, Any] | SimplismartSTTOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
-
-        assert (
-            base_url is not None or streaming_url is not None
-        ), "base_url or streaming_url are required"
+        assert base_url is not None or streaming_url is not None, (
+            "base_url or streaming_url are required"
+        )
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True if streaming_url is not None else False,
@@ -142,9 +141,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        language = (
-            self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
-        )
+        language = self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
         audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
@@ -165,9 +162,7 @@ class STT(stt.STT):
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
-                    self._logger.error(
-                        f"Simplismart API error: {res.status} - {error_text}"
-                    )
+                    self._logger.error(f"Simplismart API error: {res.status} - {error_text}")
                     raise APIStatusError(
                         message=f"Simplismart API Error: {error_text}",
                         status_code=res.status,
@@ -261,9 +256,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
     ) -> None:
         self._opts = opts
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE)
         self._api_key = api_key
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
@@ -290,9 +283,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
-        self._logger.debug(
-            "Starting stream cleanup", extra={"session_id": self._session_id}
-        )
+        self._logger.debug("Starting stream cleanup", extra={"session_id": self._session_id})
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.DISCONNECTED
@@ -317,9 +308,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             if self._ws and not self._ws.closed:
                 await self._ws.close()
-                self._logger.debug(
-                    "WebSocket closed", extra={"session_id": self._session_id}
-                )
+                self._logger.debug("WebSocket closed", extra={"session_id": self._session_id})
         except Exception as e:
             self._logger.warning(
                 f"Error closing WebSocket: {e}", extra={"session_id": self._session_id}
@@ -339,9 +328,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             if self._session and not self._session.closed:
                 await self._session.close()
-                self._logger.debug(
-                    "HTTP session closed", extra={"session_id": self._session_id}
-                )
+                self._logger.debug("HTTP session closed", extra={"session_id": self._session_id})
         except Exception as e:
             self._logger.warning(
                 f"Error closing session: {e}", extra={"session_id": self._session_id}
@@ -419,9 +406,7 @@ class SpeechStream(stt.SpeechStream):
         """Run a single WebSocket connection attempt."""
         # Check if session is still valid
         if self._session.closed:
-            raise APIConnectionError(
-                "Session is closed, cannot establish WebSocket connection"
-            )
+            raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTING
@@ -493,9 +478,7 @@ class SpeechStream(stt.SpeechStream):
                         if isinstance(exc, BaseException):
                             raise exc
                         else:
-                            raise RuntimeError(
-                                f"Task failed with non-BaseException: {exc}"
-                            )
+                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
 
         finally:
             # Clean up tasks
@@ -540,9 +523,7 @@ class SpeechStream(stt.SpeechStream):
                         # Check if we have enough data for a chunk
                         while len(audio_buffer) >= chunk_size:
                             # Convert to Int16Array
-                            chunk_data = np.array(
-                                audio_buffer[:chunk_size], dtype=np.int16
-                            )
+                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
                             await ws.send_bytes(chunk_data.tobytes())
                             chunks_sent += 1
 
@@ -631,9 +612,7 @@ class SpeechStream(stt.SpeechStream):
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     error_msg = f"WebSocket error: {ws.exception()}"
-                    self._logger.error(
-                        error_msg, extra={"session_id": self._session_id}
-                    )
+                    self._logger.error(error_msg, extra={"session_id": self._session_id})
                     raise APIConnectionError(error_msg)
 
                 else:
