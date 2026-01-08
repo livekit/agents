@@ -1313,31 +1313,6 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
         watch_client = WatchClient(server, args, loop=loop)
         watch_client.start()
 
-    @server.once("worker_started")
-    def _simulate_job() -> None:
-        async def simulate_job() -> None:
-            if args.simulate_job is not None:
-                room_name = args.simulate_job.room
-                async with api.LiveKitAPI(args.url, args.api_key, args.api_secret) as lk_api:
-                    room_request = api.ListRoomsRequest(names=[room_name])
-                    active_room = await lk_api.room.list_rooms(room_request)
-
-                    if not active_room.rooms:
-                        room_info = await lk_api.room.create_room(
-                            api.CreateRoomRequest(name=room_name)
-                        )
-                    else:
-                        room_info = active_room.rooms[0]
-
-                await server.simulate_job(
-                    room=room_name,
-                    fake_job=False,
-                    room_info=room_info,
-                    agent_identity=args.simulate_job.participant_identity,
-                )
-
-        asyncio.run_coroutine_threadsafe(simulate_job(), loop)
-
     try:
         main_task = loop.create_task(_worker_run(server), name="worker_main_task_cli")
         try:
@@ -1609,19 +1584,48 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     ) -> None:
         if participant_identity is None:
             participant_identity = shortuuid("agent-")
-        _run_worker(
-            server=server,
-            args=proto.CliArgs(
-                log_level=log_level.value,
-                devmode=True,
-                url=url,
-                api_key=api_key,
-                api_secret=api_secret,
-                simulate_job=proto.SimulateJobArgs(
-                    room=room, participant_identity=participant_identity
-                ),
-            ),
-        )
+
+        c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
+
+        loop = asyncio.get_event_loop()
+        _task: asyncio.Task | None = None
+
+        @server.once("worker_started")
+        def _simulate_job() -> None:
+            nonlocal _task
+
+            async def simulate_job() -> None:
+                async with api.LiveKitAPI(url, api_key, api_secret) as lk_api:
+                    room_request = api.ListRoomsRequest(names=[room])
+                    active_room = await lk_api.room.list_rooms(room_request)
+
+                    if not active_room.rooms:
+                        room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room))
+                    else:
+                        room_info = active_room.rooms[0]
+
+                await server.simulate_job(
+                    room=room,
+                    fake_job=False,
+                    room_info=room_info,
+                    agent_identity=participant_identity,
+                )
+
+            _task = asyncio.create_task(simulate_job())
+
+        try:
+            loop.run_until_complete(server.run(devmode=True, unregistered=True))
+        except _ExitCli:
+            raise typer.Exit() from None
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
+            os._exit(1)
+        except CLIError as e:
+            c.print(" ")
+            c.print(f"[error]{e}")
+            c.print(" ")
+            raise typer.Exit(code=1) from None
 
     @app.command()
     def download_files() -> None:
