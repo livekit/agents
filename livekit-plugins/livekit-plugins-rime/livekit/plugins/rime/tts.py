@@ -15,11 +15,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import json
 import base64
+import json
+import os
 from dataclasses import dataclass, replace
-from livekit.agents.voice.io import TimedString
+from typing import Literal
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -37,11 +38,11 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from typing import Literal
+from livekit.agents.voice.io import TimedString
+
 from .langs import TTSLangs
 from .log import logger
 from .models import ArcanaVoices, TTSModels
-from urllib.parse import urlencode
 
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
@@ -211,7 +212,6 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        ws_text_url: NotGivenOr[str] = NOT_GIVEN,
         ws_json_url: NotGivenOr[str] = NOT_GIVEN,
         segment: NotGivenOr[str] = NOT_GIVEN,
         no_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
