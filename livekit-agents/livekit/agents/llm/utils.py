@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
 
+
 def _sanitize_json_control_chars(json_str: str) -> str:
     """
     Sanitize a JSON string by escaping control characters inside string values.
@@ -64,25 +65,25 @@ def _sanitize_json_control_chars(json_str: str) -> str:
         i = 0
         while i < len(string_content):
             char = string_content[i]
-            if char == '\\' and i + 1 < len(string_content):
+            if char == "\\" and i + 1 < len(string_content):
                 # Already escaped sequence, keep as-is
                 result.append(char)
                 result.append(string_content[i + 1])
                 i += 2
             elif ord(char) < 0x20:  # Control characters (U+0000 to U+001F)
-                if char == '\n':
-                    result.append('\\n')
-                elif char == '\r':
-                    result.append('\\r')
-                elif char == '\t':
-                    result.append('\\t')
+                if char == "\n":
+                    result.append("\\n")
+                elif char == "\r":
+                    result.append("\\r")
+                elif char == "\t":
+                    result.append("\\t")
                 else:
-                    result.append(f'\\u{ord(char):04x}')
+                    result.append(f"\\u{ord(char):04x}")
                 i += 1
             else:
                 result.append(char)
                 i += 1
-        return ''.join(result)
+        return "".join(result)
 
     # Pattern to match JSON string values (handles escaped quotes)
     string_pattern = r'"(?:[^"\\]|\\.)*"'
