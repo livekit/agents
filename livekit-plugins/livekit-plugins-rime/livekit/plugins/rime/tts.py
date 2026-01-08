@@ -496,7 +496,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             async with self._tts._ensure_session().ws_connect(
                 ws_url,
                 headers={"Authorization": f"Bearer {self._tts._api_key}"},
-                timeout=aiohttp.ClientTimeout(total=self._tts._total_timeout),
+                timeout=aiohttp.ClientWSTimeout(ws_close=self._tts._total_timeout),
             ) as ws:
                 self._ws = ws
                 send_task = asyncio.create_task(self._send_task(ws))
@@ -509,5 +509,6 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            if send_task is not None or recv_task is not None:
-                await utils.aio.gracefully_cancel(send_task, recv_task)
+            tasks_to_cancel = [t for t in [send_task, recv_task] if t is not None]
+            if tasks_to_cancel:
+                await utils.aio.gracefully_cancel(*tasks_to_cancel)
