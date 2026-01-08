@@ -48,7 +48,6 @@ ARCANA_MODEL_TIMEOUT = 60 * 4
 MISTV2_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"  # http
 RIME_WS_JSON_URL = "wss://users.rime.ai/ws2"  # ws_json
-RIME_WS_TEXT_URL = "wss://users.rime.ai/ws"  # ws_text
 
 
 @dataclass
@@ -92,9 +91,8 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: str = RIME_BASE_URL,
-        ws_text_url: str = RIME_WS_TEXT_URL,
         ws_json_url: str = RIME_WS_JSON_URL,
-        protocol: Literal["http", "ws_json", "ws_text"] = "http",
+        protocol: Literal["http", "ws_json"] = "http",
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
@@ -163,7 +161,6 @@ class TTS(tts.TTS):
             )
         self._session = http_session
         self._base_url = base_url
-        self._ws_text_url = ws_text_url
         self._ws_json_url = ws_json_url
         self._protocol = protocol
 
@@ -223,8 +220,6 @@ class TTS(tts.TTS):
     ) -> None:
         if is_given(base_url):
             self._base_url = base_url
-        if is_given(ws_text_url):
-            self._ws_text_url = ws_text_url
         if is_given(ws_json_url):
             self._ws_json_url = ws_json_url
         if is_given(segment):
