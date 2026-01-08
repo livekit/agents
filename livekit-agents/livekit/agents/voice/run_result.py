@@ -147,7 +147,7 @@ class RunResult(Generic[Run_T]):
         return val
 
     def __aiter__(self) -> AsyncIterator[RunEvent]:
-        # NOTE: the order of FunctionCallEvent and FunctionCallOutputEvent may not be the same as that in final result
+        # NOTE: the order of FunctionCallEvent may not be the same as that in final result
         return self
 
     def _agent_handoff(
