@@ -34,15 +34,16 @@ from rich.table import Column, Table
 from rich.text import Text
 from rich.theme import Theme
 
-from livekit import rtc
+from livekit import api, rtc
 
 from .._exceptions import CLIError
 from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
-from ..utils import aio
+from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
+from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
 from . import proto
 from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
@@ -209,7 +210,8 @@ class ConsoleAudioOutput(io.AudioOutput):
         wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         try:
             await asyncio.wait(
-                [wait_for_playout, wait_for_interruption], return_when=asyncio.FIRST_COMPLETED
+                [wait_for_playout, wait_for_interruption],
+                return_when=asyncio.FIRST_COMPLETED,
             )
             interrupted = wait_for_interruption.done()
         finally:
@@ -296,7 +298,8 @@ class AgentsConsole:
         self._log_handler = RichLoggingHandler(self)
 
         self._session_directory = pathlib.Path(
-            self._console_directory, f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}"
+            self._console_directory,
+            f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
         )
 
     def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
@@ -314,12 +317,21 @@ class AgentsConsole:
             self._io_context = contextvars.copy_context()
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
+            self._io_transcription_sync = TranscriptSynchronizer(
+                next_in_chain_audio=self._io_audio_output,
+                next_in_chain_text=None,
+            )
             self._io_acquired_event.set()
             self._io_session = session
 
-        self._update_sess_io(
-            session, self.console_mode, self._io_audio_input, self._io_audio_output
-        )
+        if session:
+            self._update_sess_io(
+                session,
+                self.console_mode,
+                self._io_audio_input,
+                self._io_transcription_sync.audio_output,
+                self._io_transcription_sync.text_output,
+            )
 
     @property
     def enabled(self) -> bool:
@@ -395,7 +407,8 @@ class AgentsConsole:
                 self.io_session,
                 mode,
                 self._io_audio_input,
-                self._io_audio_output,
+                self._io_transcription_sync.audio_output,
+                self._io_transcription_sync.text_output,
             )
 
     def _update_sess_io(
@@ -403,7 +416,8 @@ class AgentsConsole:
         sess: AgentSession,
         mode: ConsoleMode,
         audio_input: ConsoleAudioInput,
-        audio_output: ConsoleAudioOutput,
+        audio_output: io.AudioOutput,
+        text_output: io.TextOutput,
     ) -> None:
         if asyncio.get_running_loop() != self.io_loop:
             raise RuntimeError("_update_sess_io must be executed on the io_loop")
@@ -418,10 +432,12 @@ class AgentsConsole:
             if mode == "text":
                 sess.input.audio = None
                 sess.output.audio = None
+                sess.output.transcription = None
                 self._log_handler.addFilter(self._text_mode_log_filter)
             else:
                 sess.input.audio = audio_input
                 sess.output.audio = audio_output
+                sess.output.transcription = text_output
                 self._log_handler.removeFilter(self._text_mode_log_filter)
 
     def print(
@@ -917,7 +933,10 @@ def _print_audio_devices() -> None:
 
 
 def prompt(
-    message: str | Text, *, console: Console, key_read_cb: Callable[[str], Any] | None = None
+    message: str | Text,
+    *,
+    console: Console,
+    key_read_cb: Callable[[str], Any] | None = None,
 ) -> str:
     buffer: list[str] = []
 
@@ -973,7 +992,10 @@ def live_status(
         return Columns([msg, spin], expand=False, equal=False, padding=(0, 1))
 
     with Live(
-        _render(), console=console, refresh_per_second=refresh_per_second, transient=transient
+        _render(),
+        console=console,
+        refresh_per_second=refresh_per_second,
+        transient=transient,
     ) as live:
 
         def update(new_text: str | Text | None = None) -> None:
@@ -1032,7 +1054,14 @@ def _text_mode(c: AgentsConsole) -> None:
             _print_run_event(c, event)
 
 
-AGENT_PALETTE: list[str] = ["#1FD5F9", "#09C338", "#1F5DF9", "#BA1FF9", "#F9AE1F", "#FA4C39"]
+AGENT_PALETTE: list[str] = [
+    "#1FD5F9",
+    "#09C338",
+    "#1F5DF9",
+    "#BA1FF9",
+    "#F9AE1F",
+    "#FA4C39",
+]
 
 
 def _agent_style(name: str) -> Style:
@@ -1088,7 +1117,11 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
 
     elif event.type == "message":
         if event.item.text_content:
-            c.print(event.item.text_content, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+            c.print(
+                event.item.text_content,
+                tag="Agent",
+                tag_style=Style.parse("black on #B11FF9"),
+            )
     else:
         logger.warning(f"unknown RunEvent type {event.type}")
 
@@ -1283,6 +1316,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
     async def _worker_run(worker: AgentServer) -> None:
         try:
             await server.run(devmode=args.devmode, unregistered=jupyter)
+
         except Exception:
             logger.exception("worker failed")
 
@@ -1434,7 +1468,10 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _run_worker(
             server=server,
             args=proto.CliArgs(
-                log_level=log_level.value, url=url, api_key=api_key, api_secret=api_secret
+                log_level=log_level.value,
+                url=url,
+                api_key=api_key,
+                api_secret=api_secret,
             ),
         )
 
@@ -1521,6 +1558,88 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         except KeyboardInterrupt:
             logger.warning("exiting forcefully")
             os._exit(1)
+
+    @app.command()
+    def connect(
+        *,
+        log_level: Annotated[
+            LogLevel,
+            typer.Option(help="Set the log level", case_sensitive=False),
+        ] = LogLevel.debug,
+        url: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(
+                help="The WebSocket URL of your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_URL",
+            ),
+        ] = None,
+        api_key: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(
+                help="API key for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_KEY",
+            ),
+        ] = None,
+        api_secret: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(
+                help="API secret for authenticating with your LiveKit server or Cloud project.",
+                envvar="LIVEKIT_API_SECRET",
+            ),
+        ] = None,
+        room: Annotated[
+            str,
+            typer.Option(help="Room name to connect to"),
+        ],
+        participant_identity: Annotated[
+            Optional[str],  # noqa: UP007
+            typer.Option(help="Participant identity"),
+        ] = None,
+    ) -> None:
+        if participant_identity is None:
+            participant_identity = shortuuid("agent-")
+
+        c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
+
+        loop = asyncio.get_event_loop()
+        _task: asyncio.Task | None = None
+
+        @server.once("worker_started")
+        def _simulate_job() -> None:
+            nonlocal _task
+
+            async def simulate_job() -> None:
+                async with api.LiveKitAPI(url, api_key, api_secret) as lk_api:
+                    room_request = api.ListRoomsRequest(names=[room])
+                    active_room = await lk_api.room.list_rooms(room_request)
+
+                    if not active_room.rooms:
+                        room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room))
+                    else:
+                        room_info = active_room.rooms[0]
+
+                await server.simulate_job(
+                    room=room,
+                    fake_job=False,
+                    room_info=room_info,
+                    agent_identity=participant_identity,
+                )
+
+            _task = asyncio.create_task(simulate_job())
+
+        try:
+            loop.run_until_complete(server.run(devmode=True, unregistered=True))
+        except _ExitCli:
+            raise typer.Exit() from None
+        except KeyboardInterrupt:
+            logger.warning("exiting forcefully")
+            os._exit(1)
+        except CLIError as e:
+            c.print(" ")
+            c.print(f"[error]{e}")
+            c.print(" ")
+            raise typer.Exit(code=1) from None
 
     @app.command()
     def download_files() -> None:

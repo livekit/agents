@@ -88,7 +88,7 @@ class IntroAgent(Agent):
         logger.info(
             "switching to the story agent with the provided user data: %s", context.userdata
         )
-        return story_agent, "Let's start the story!"
+        return story_agent
 
 
 class StoryAgent(Agent):

@@ -78,7 +78,9 @@ async def collect_digits(
             result = await GetDtmfTask(
                 num_digits=num_digits,
                 ask_for_confirmation=confirmation,
-                chat_ctx=agent.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True),
+                chat_ctx=agent.chat_ctx.copy(
+                    exclude_instructions=True, exclude_function_call=True, exclude_handoff=True
+                ),
                 extra_instructions=(
                     "You are gathering keypad digits from a bank customer. "
                     f"Prompt them with: {prompt}."

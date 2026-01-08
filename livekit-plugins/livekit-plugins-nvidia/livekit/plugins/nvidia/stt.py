@@ -16,6 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from . import auth
 
@@ -50,13 +51,15 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
 
         if is_given(api_key):
             self.nvidia_api_key = api_key
         else:
-            self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+            self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
             if use_ssl and not self.nvidia_api_key:
                 raise ValueError(
                     "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable "
@@ -167,6 +170,7 @@ class SpeechStream(stt.SpeechStream):
                 enable_automatic_punctuation=self._stt._opts.punctuate,
                 sample_rate_hertz=self._stt._opts.sample_rate,
                 audio_channel_count=1,
+                enable_word_time_offsets=True,
             ),
             interim_results=True,
         )
@@ -272,8 +276,8 @@ class SpeechStream(stt.SpeechStream):
         start_time = 0.0
         end_time = 0.0
         if words:
-            start_time = getattr(words[0], "start_time", 0) / 1000.0
-            end_time = getattr(words[-1], "end_time", 0) / 1000.0
+            start_time = getattr(words[0], "start_time", 0) / 1000.0 + self.start_time_offset
+            end_time = getattr(words[-1], "end_time", 0) / 1000.0 + self.start_time_offset
 
         return stt.SpeechData(
             language=self._language,
@@ -281,4 +285,14 @@ class SpeechStream(stt.SpeechStream):
             end_time=end_time,
             confidence=confidence,
             text=transcript,
+            words=[
+                TimedString(
+                    text=getattr(word, "word", ""),
+                    start_time=getattr(word, "start_time", 0) + self.start_time_offset,
+                    end_time=getattr(word, "end_time", 0) + self.start_time_offset,
+                )
+                for word in words
+            ]
+            if words
+            else None,
         )

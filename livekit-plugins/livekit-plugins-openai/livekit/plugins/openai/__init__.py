@@ -23,7 +23,7 @@ See https://docs.livekit.io/agents/integrations/openai/ and
 https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
-from . import realtime
+from . import realtime, responses, tools
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import (
@@ -50,6 +50,8 @@ __all__ = [
     "create_embeddings",
     "EmbeddingData",
     "realtime",
+    "tools",
+    "responses",
     "__version__",
 ]
 

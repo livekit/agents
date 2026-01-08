@@ -74,7 +74,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.FunctionTool | llm.RawFunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -131,7 +131,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         prev_convo = ""
         if chat_ctx:
             context_copy = chat_ctx.copy(
-                exclude_empty_message=True, exclude_instructions=True, exclude_function_call=True
+                exclude_empty_message=True,
+                exclude_instructions=True,
+                exclude_function_call=True,
+                exclude_handoff=True,
             )
             for msg in context_copy.items:
                 if msg.type != "message":

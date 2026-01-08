@@ -123,7 +123,9 @@ class BaseAgent(Agent):
         # add the previous agent's chat history to the current agent
         if isinstance(userdata.prev_agent, Agent):
             truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy(
-                exclude_instructions=True, exclude_function_call=False
+                exclude_instructions=True,
+                exclude_function_call=False,
+                exclude_handoff=True,
             ).truncate(max_items=6)
             existing_ids = {item.id for item in chat_ctx.items}
             items_copy = [item for item in truncated_chat_ctx.items if item.id not in existing_ids]

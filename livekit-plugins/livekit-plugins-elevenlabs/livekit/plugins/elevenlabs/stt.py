@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import aiohttp
 
@@ -37,6 +37,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import STTRealtimeSampleRates
@@ -62,6 +63,7 @@ class STTOptions:
     base_url: str
     language_code: str | None
     tag_audio_events: bool
+    include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
 
@@ -77,6 +79,7 @@ class STT(stt.STT):
         use_realtime: bool = False,
         sample_rate: STTRealtimeSampleRates = 16000,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -94,7 +97,13 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
         """  # noqa: E501
 
-        super().__init__(capabilities=STTCapabilities(streaming=use_realtime, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=use_realtime,
+                interim_results=True,
+                aligned_transcript="word" if include_timestamps and use_realtime else False,
+            )
+        )
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
@@ -112,6 +121,7 @@ class STT(stt.STT):
             tag_audio_events=tag_audio_events,
             sample_rate=sample_rate,
             server_vad=server_vad,
+            include_timestamps=include_timestamps,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -190,6 +200,7 @@ class STT(stt.STT):
             start_time=start_time,
             end_time=end_time,
             speaker_id=speaker_id,
+            words=words,
         )
 
     def _transcription_to_speech_event(
@@ -199,6 +210,7 @@ class STT(stt.STT):
         start_time: float,
         end_time: float,
         speaker_id: str | None,
+        words: list[dict[str, Any]] | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -209,6 +221,16 @@ class STT(stt.STT):
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
+                    words=[
+                        TimedString(
+                            text=word.get("text", ""),
+                            start_time=word.get("start", 0),
+                            end_time=word.get("end", 0),
+                        )
+                        for word in words
+                    ]
+                    if words
+                    else None,
                 )
             ],
         )
@@ -405,6 +427,9 @@ class SpeechStream(stt.SpeechStream):
         if self._language:
             params.append(f"language_code={self._language}")
 
+        if self._opts.include_timestamps:
+            params.append("include_timestamps=true")
+
         query_string = "&".join(params)
 
         # Convert HTTPS URL to WSS
@@ -428,10 +453,25 @@ class SpeechStream(stt.SpeechStream):
         """Process incoming WebSocket messages from ElevenLabs"""
         message_type = data.get("message_type")
         text = data.get("text", "")
+        words = data.get("words", [])
+        start_time = words[0].get("start", 0) if words else 0
+        end_time = words[-1].get("end", 0) if words else 0
 
+        # 11labs only sends word timestamps for final transcripts
         speech_data = stt.SpeechData(
             language=self._language or "en",
             text=text,
+            start_time=start_time + self.start_time_offset,
+            end_time=end_time + self.start_time_offset,
+            words=[
+                TimedString(
+                    text=word.get("text", ""),
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                )
+                for word in words
+            ],
         )
 
         if message_type == "partial_transcript":
@@ -452,12 +492,12 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(interim_event)
 
-        elif message_type == "committed_transcript":
-            logger.debug("Received message type committed_transcript: %s", data)
-
+        # 11labs sends both when include_timestamps is True
+        elif (
+            message_type == "committed_transcript" and not self._opts.include_timestamps
+        ) or message_type == "committed_transcript_with_timestamps":
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
-
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
@@ -484,9 +524,6 @@ class SpeechStream(stt.SpeechStream):
             # Session initialization message - informational only
             session_id = data.get("session_id", "unknown")
             logger.debug("Session started with ID: %s", session_id)
-
-        elif message_type == "committed_transcript_with_timestamps":
-            logger.debug("Received message type committed_transcript_with_timestamps: %s", data)
 
         # Error handling for known ElevenLabs error types
         elif message_type in (

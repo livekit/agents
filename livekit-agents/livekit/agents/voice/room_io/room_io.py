@@ -149,9 +149,11 @@ class RoomIO:
                 self._forward_user_transcript(self._user_transcript_ch)
             )
 
-            # TODO(long): add next in the chain for session.output.transcription
             self._agent_tr_output = _ParticipantTranscriptionOutput(
-                room=self._room, is_delta_stream=True, participant=None
+                room=self._room,
+                is_delta_stream=True,
+                participant=None,
+                next_in_chain=output_text_options.next_in_chain,
             )
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output

@@ -30,7 +30,11 @@ class WizperSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
     ):
-        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=False, interim_results=True, aligned_transcript=False
+            )
+        )
         self._api_key = api_key if is_given(api_key) else os.getenv("FAL_KEY")
         if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")

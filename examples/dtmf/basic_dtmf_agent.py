@@ -67,7 +67,9 @@ class DtmfAgent(Agent):
                 result = await GetDtmfTask(
                     num_digits=1,
                     chat_ctx=self.chat_ctx.copy(
-                        exclude_instructions=True, exclude_function_call=True
+                        exclude_instructions=True,
+                        exclude_function_call=True,
+                        exclude_handoff=True,
                     ),
                     extra_instructions=(
                         "Let the caller know they can choose one of three Horizon Wireless services: "
@@ -103,7 +105,9 @@ class DtmfAgent(Agent):
                 result = await GetDtmfTask(
                     num_digits=10,
                     chat_ctx=self.chat_ctx.copy(
-                        exclude_instructions=True, exclude_function_call=True
+                        exclude_instructions=True,
+                        exclude_function_call=True,
+                        exclude_handoff=True,
                     ),
                     ask_for_confirmation=True,
                     extra_instructions=(

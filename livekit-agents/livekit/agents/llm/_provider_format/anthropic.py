@@ -108,3 +108,27 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
             "media_type": img.mime_type,
         },
     }
+
+
+def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.FunctionTool):
+            fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            schemas.append(
+                {
+                    "name": fnc["name"],
+                    "description": fnc["description"] or "",
+                    "input_schema": fnc["parameters"],
+                }
+            )
+        elif isinstance(tool, llm.RawFunctionTool):
+            info = tool.info
+            schemas.append(
+                {
+                    "name": info.name,
+                    "description": info.raw_schema.get("description", ""),
+                    "input_schema": info.raw_schema.get("parameters", {}),
+                }
+            )
+    return schemas

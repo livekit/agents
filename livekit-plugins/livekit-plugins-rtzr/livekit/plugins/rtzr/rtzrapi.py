@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Iterable
 from typing import Any
 
 import aiohttp
@@ -38,6 +39,57 @@ class RTZRTimeoutError(RTZRAPIError):
 
 
 DEFAULT_SAMPLE_RATE = 8000
+
+
+def _format_keywords(
+    keywords: Iterable[str] | Iterable[tuple[str, float]],
+) -> str:
+    formatted: list[str] = []
+    keyword_list = list(keywords)
+    if len(keyword_list) > 100:
+        raise ValueError("RTZR keyword boosting supports up to 100 keywords")
+
+    for item in keyword_list:
+        if isinstance(item, tuple):
+            if len(item) != 2:
+                raise ValueError("RTZR keyword boosting tuples must be (keyword, boost)")
+            word, boost = item
+            if not word:
+                raise ValueError("RTZR keyword boosting keywords must be non-empty")
+            if len(word) > 20:
+                raise ValueError("RTZR keyword boosting keywords must be <= 20 chars")
+            if boost < -5.0 or boost > 5.0:
+                raise ValueError("RTZR keyword boost must be between -5.0 and 5.0")
+            formatted.append(f"{word}:{boost}")
+            continue
+
+        if not isinstance(item, str):
+            raise ValueError("RTZR keyword boosting items must be strings or (keyword, boost)")
+
+        keyword = item.strip()
+        if not keyword:
+            raise ValueError("RTZR keyword boosting keywords must be non-empty")
+
+        if ":" in keyword:
+            word, boost_str = keyword.rsplit(":", 1)
+            if not word:
+                raise ValueError("RTZR keyword boosting keywords must be non-empty")
+            if len(word) > 20:
+                raise ValueError("RTZR keyword boosting keywords must be <= 20 chars")
+            try:
+                boost = float(boost_str)
+            except ValueError as exc:
+                raise ValueError("RTZR keyword boost must be a number") from exc
+            if boost < -5.0 or boost > 5.0:
+                raise ValueError("RTZR keyword boost must be between -5.0 and 5.0")
+            formatted.append(f"{word}:{boost}")
+            continue
+
+        if len(keyword) > 20:
+            raise ValueError("RTZR keyword boosting keywords must be <= 20 chars")
+        formatted.append(keyword)
+
+    return ",".join(formatted)
 
 
 class RTZROpenAPIClient:
@@ -167,6 +219,7 @@ class RTZROpenAPIClient:
         noise_threshold: float = 0.60,
         active_threshold: float = 0.80,
         use_punctuation: bool = False,
+        keywords: Iterable[str] | Iterable[tuple[str, float]] | None = None,
     ) -> dict[str, str]:
         """Build configuration dictionary for WebSocket connection."""
         config = {
@@ -179,5 +232,8 @@ class RTZROpenAPIClient:
             "active_threshold": str(active_threshold),
             "use_punctuation": "true" if use_punctuation else "false",
         }
+
+        if keywords:
+            config["keywords"] = _format_keywords(keywords)
 
         return config

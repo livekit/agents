@@ -48,8 +48,25 @@ session = AgentSession(
 )
 ```
 
+Keyword boosting (Streaming STT only, sommers_ko model only):
+
+```python
+stt = rtzr.STT(
+    model="sommers_ko",
+    keywords=[
+        "키워드",
+        ("부스팅", 3.5),
+        "키위드:-1.0",
+    ],
+)
+```
+
+Rules:
+- Use list entries as `keyword` or `keyword:score`, or use `(keyword, score)` tuples.
+- Score must be between -5.0 and 5.0, up to 100 keywords, each <= 20 chars.
+- Keywords must be written in Korean pronunciation (Hangul and spaces only); non-Korean input will error.
+
 Notes:
 - The WebSocket streaming endpoint accepts raw PCM frames when `encoding=LINEAR16`.
 - The plugin relies on the server-side endpointing (EPD). You do not need to send finalize messages.
 - When the pipeline closes the stream, the plugin sends `EOS` to end the session.
-

@@ -37,6 +37,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEvent
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
@@ -83,6 +84,8 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,  # only final transcripts
+                aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
 
@@ -300,12 +303,24 @@ class SpeechStream(stt.SpeechStream):
                     segments = data.get("segments", [])
                     text = data.get("transcript", "")
                     confidence = data.get("confidence", 0.0)
+                    timed_words = [
+                        TimedString(
+                            text=segment.get("text", ""),
+                            start_time=segment.get("start", 0.0) + self.start_time_offset,
+                            end_time=segment.get("end", 0.0) + self.start_time_offset,
+                            start_time_offset=self.start_time_offset,
+                        )
+                        for segment in segments
+                    ]
+                    start_time = (
+                        next((s.get("start", 0.0) for s in segments), 0.0) + self.start_time_offset
+                    )
+                    end_time = (
+                        next((s.get("end", 0.0) for s in segments), 0.0) + self.start_time_offset
+                    )
 
                     if not is_final:
                         if text:
-                            start_time = segments[0].get("start", 0.0) if segments else 0.0
-                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[
@@ -315,6 +330,7 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
+                                        words=timed_words,
                                     )
                                 ],
                             )
@@ -324,9 +340,6 @@ class SpeechStream(stt.SpeechStream):
                         language = data.get("language_code", self._opts.language)
 
                         if text:
-                            start_time = segments[0].get("start", 0.0) if segments else 0.0
-                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 alternatives=[
@@ -336,6 +349,7 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
+                                        words=timed_words,
                                     )
                                 ],
                             )
@@ -397,7 +411,7 @@ class SpeechStream(stt.SpeechStream):
                 "sample_rate": self._opts.sample_rate,
                 "enable_partial_transcripts": False,
             },
-            "whisper_params": {"audio_language": self._opts.language},
+            "whisper_params": {"audio_language": self._opts.language, "show_word_timestamps": True},
         }
 
         await ws.send_str(json.dumps(metadata))

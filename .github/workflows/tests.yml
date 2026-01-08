@@ -49,6 +49,7 @@ jobs:
           tests/test_schema_gemini.py
           tests/test_tokenizer.py
           tests/test_transcription_filter.py
+          tests/test_tools.py
 
   evaluation:
     # don't run tests for PRs on forks
