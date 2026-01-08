@@ -124,7 +124,7 @@ class STT(stt.STT):
             strict_hallucination_reduction: Whether to apply hallucination reduction.
         """
         if streaming:
-            base_url = f"ws://{urlparse(base_url).netloc}/ws/audio"
+            base_url = f"wss://{urlparse(base_url).netloc}/ws/audio"
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=streaming,
