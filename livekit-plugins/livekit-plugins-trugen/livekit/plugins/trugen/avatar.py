@@ -27,8 +27,10 @@ _AVATAR_AGENT_IDENTITY = "trugen-avatar"
 _AVATAR_AGENT_NAME = "Trugen Avatar"
 _DEFAULT_AVATAR_ID = "45e3f732"
 
+
 class TrugenException(Exception):
     """Exception for TruGen.AI errors"""
+
 
 class AvatarSession:
     """TruGen Realtime Avatar Session"""
