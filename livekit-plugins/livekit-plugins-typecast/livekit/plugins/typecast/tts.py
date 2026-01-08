@@ -336,23 +336,17 @@ class ChunkedStream(tts.ChunkedStream):
                         body=error_body,
                     )
 
-                # Initialize output emitter
+                # Initialize output emitter with audio/wav mime type
+                # AudioEmitter will handle WAV header parsing automatically
                 output_emitter.initialize(
                     request_id=request_id,
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    mime_type="audio/wav",
                 )
 
                 # Read and emit audio in chunks
-                # First chunk: skip WAV header (44 bytes)
-                first_chunk = True
                 async for chunk in resp.content.iter_chunked(1024):
-                    if first_chunk:
-                        # Remove WAV header from first chunk
-                        chunk = chunk[44:]
-                        first_chunk = False
-
                     if chunk:
                         output_emitter.push(chunk)
 
