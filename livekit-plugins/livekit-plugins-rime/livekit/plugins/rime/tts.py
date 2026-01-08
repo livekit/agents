@@ -368,7 +368,7 @@ class JSONSynthesizeStream(tts.SynthesizeStream):
             )
 
     def _build_ws_url(self) -> str:
-        params = {
+        params: dict[str, str | int | float | bool] = {
             "modelId": self._opts.model,
             "speaker": self._opts.speaker,
             "audioFormat": "pcm",
