@@ -24,8 +24,9 @@ import json
 import os
 import weakref
 from typing import Any, Literal
-
+from urllib.parse import urlparse
 import aiohttp
+from aiohttp import ClientTimeout
 from pydantic import BaseModel
 
 from livekit.agents import (
@@ -41,6 +42,7 @@ from livekit.agents.utils import AudioBuffer, rtc
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
+from .models import STTModels
 
 
 class ConnectionState(enum.Enum):
@@ -59,15 +61,12 @@ class SimplismartSTTOptions(BaseModel):
     without_timestamps: bool = True
     vad_model: Literal["silero", "frame"] = "frame"
     vad_filter: bool = True
-    model: str | None = "openai/whisper-large-v3-turbo"
-    word_timestamps: bool = False
     vad_onset: float | None = 0.5
     vad_offset: float | None = None
     min_speech_duration_ms: int = 0
     max_speech_duration_s: float = 30
     min_silence_duration_ms: int = 2000
     speech_pad_ms: int = 400
-    diarization: bool = False
     initial_prompt: str | None = None
     hotwords: str | None = None
     num_speakers: int = 0
@@ -81,7 +80,6 @@ class SimplismartSTTOptions(BaseModel):
     repetition_penalty: float = 1.01
     suppress_tokens: list[int] = [-1]
     strict_hallucination_reduction: bool = False
-    streaming_url: str | None = None
 
 
 class STT(stt.STT):
@@ -90,17 +88,46 @@ class STT(stt.STT):
         *,
         base_url: str | None = None,
         api_key: str | None = None,
-        streaming_url: str | None = None,
-        model: str | None = None,
+        streaming: bool = False,
+        model: STTModels | str = "openai/whisper-large-v3-turbo",
         params: dict[str, Any] | SimplismartSTTOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ):
-        assert base_url is not None or streaming_url is not None, (
-            "base_url or streaming_url are required"
-        )
+        """
+        Configuration options for the Simplismart STT (Speech-to-Text) engine.
+
+        Attributes:
+            language: Language code for transcription (default: None for auto-detect).
+            task: Operation to perform, either "transcribe" or "translate".
+            without_timestamps: If True, disables timestamp generation in transcripts.
+            vad_model: Voice Activity Detection model to use ("silero" or "frame").
+            vad_filter: Whether to apply VAD to filter input audio.
+            model: Model identifier for the backend STT model.
+            vad_onset: Time (in seconds) for VAD onset boundary.
+            vad_offset: Time (in seconds) for VAD offset boundary.
+            min_speech_duration_ms: Minimum duration (ms) for a valid speech segment.
+            max_speech_duration_s: Maximum speech segment duration (seconds).
+            min_silence_duration_ms: Minimum silence duration (ms) to split speech.
+            speech_pad_ms: Padding (ms) added to boundaries of detected speech.
+            initial_prompt: An optional initial prompt for contextual biasing.
+            hotwords: Comma-separated list of hotwords to bias recognition.
+            num_speakers: Number of speakers for diarization.
+            compression_ratio_threshold: Threshold for output compression ratio.
+            beam_size: Beam size for the decoder.
+            temperature: Decoding temperature (affects randomness).
+            multilingual: Whether to permit multilingual recognition.
+            max_tokens: Maximum number of output tokens for the model.
+            log_prob_threshold: Log probability threshold for word filtering.
+            length_penalty: Penalty for longer transcriptions.
+            repetition_penalty: Penalty for repeated words during decoding.
+            suppress_tokens: List of token IDs to suppress in output.
+            strict_hallucination_reduction: Whether to apply hallucination reduction.
+        """
+        if streaming:
+            base_url = f"ws://{urlparse(base_url).netloc}/ws/audio"
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True if streaming_url is not None else False,
+                streaming=streaming,
                 interim_results=False,
                 aligned_transcript="word",
             )
@@ -113,15 +140,12 @@ class STT(stt.STT):
         if params is None:
             params = SimplismartSTTOptions()
 
+        self._model = model
         if isinstance(params, SimplismartSTTOptions):
             self._opts = params
-            self._model = params.model
         else:
             self._opts = SimplismartSTTOptions(**params)
-        self._opts.streaming_url = streaming_url
         self._base_url = base_url
-        self._streaming_url = streaming_url
-        self._logger = logger.getChild(self.__class__.__name__)
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -129,10 +153,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Simplismart"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
-        return self._session
+    @property
+    def model(self) -> str:
+        return self._model
 
     async def _recognize_impl(
         self,
@@ -152,77 +175,72 @@ class STT(stt.STT):
         payload["model"] = self._model
 
         try:
-            async with self._ensure_session().post(
-                self._base_url,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-            ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    self._logger.error(f"Simplismart API error: {res.status} - {error_text}")
-                    raise APIStatusError(
-                        message=f"Simplismart API Error: {error_text}",
-                        status_code=res.status,
+            async with aiohttp.ClientSession(
+                timeout=ClientTimeout(total=conn_options.timeout)
+            ) as session:
+                async with session.post(
+                    self._base_url,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                ) as res:
+                    if res.status != 200:
+                        error_text = await res.text()
+                        logger.error(f"Simplismart API error: {res.status} - {error_text}")
+                        raise APIStatusError(
+                            message=f"Simplismart API Error: {error_text}",
+                            status_code=res.status,
+                        )
+
+                    response_json = await res.json()
+
+                    detected_language = response_json["info"]["language"]
+
+                    start_time = response_json["timestamps"][0][0]
+                    end_time = response_json["timestamps"][-1][1]
+                    request_id = response_json.get("request_id", "")
+                    text = "".join(response_json["transcription"])
+
+                    alternatives = [
+                        stt.SpeechData(
+                            language=detected_language,
+                            text=text,
+                            start_time=start_time,
+                            end_time=end_time,
+                        ),
+                    ]
+
+                    return stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=request_id,
+                        alternatives=alternatives,
                     )
-
-                response_json = await res.json()
-
-                detected_language = response_json["info"]["language"]
-
-                start_time = response_json["timestamps"][0][0]
-                end_time = response_json["timestamps"][-1][1]
-                request_id = response_json.get("request_id", "")
-                text = "".join(response_json["transcription"])
-
-                alternatives = [
-                    stt.SpeechData(
-                        language=detected_language,
-                        text=text,
-                        start_time=start_time,
-                        end_time=end_time,
-                        confidence=1.0,
-                    ),
-                ]
-
-                return stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
-                    alternatives=alternatives,
-                )
         except asyncio.TimeoutError as e:
-            self._logger.error(f"Simplismart API timeout: {e}")
+            logger.error(f"Simplismart API timeout: {e}")
             raise APITimeoutError("Simplismart API request timed out") from e
         except aiohttp.ClientError as e:
-            self._logger.error(f"Simplismart API client error: {e}")
+            logger.error(f"Simplismart API client error: {e}")
             raise APIConnectionError(f"Simplismart API connection error: {e}") from e
         except Exception as e:
-            self._logger.error(f"Error during Simplismart STT processing: {e}")
+            logger.error(f"Error during Simplismart STT processing: {e}")
             raise APIConnectionError(f"Unexpected error in Simplismart STT: {e}") from e
 
     def stream(
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         **kwargs: Any,
     ) -> "SpeechStream":
         """Create a streaming transcription session."""
         opts_language = language if is_given(language) else self._opts.language
-        opts_model = model if is_given(model) else self._opts.model
-
-        if not isinstance(opts_language, str):
-            opts_language = self._opts.language
-        if not isinstance(opts_model, str):
-            opts_model = self._opts.model
+        opts_model = model if is_given(model) else self._model
 
         # Create options for the stream
-        stream_opts = SimplismartSTTOptions(
-            language=opts_language, model=opts_model, streaming_url=self._streaming_url
-        )
+        stream_opts = SimplismartSTTOptions(language=opts_language, model=opts_model)
 
         # Create a fresh session for this stream to avoid conflicts
         stream_session = aiohttp.ClientSession()
@@ -259,398 +277,126 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE)
         self._api_key = api_key
         self._session = http_session
-        self._logger = logger.getChild(self.__class__.__name__)
         self._reconnect_event = asyncio.Event()
+        self._request_id = id(self)
+        self.ws_url = stt._base_url
 
-        # Connection state management
-        self._connection_state = ConnectionState.DISCONNECTED
-        self._connection_lock = asyncio.Lock()
-        self._session_id = id(self)
+    async def _run(self) -> None:
+        @utils.log_exceptions(logger=logger)
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            # forward audio to simplismart in chunks of 50ms
+            samples_50ms = self._SAMPLE_RATE // 20
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=samples_50ms,
+            )
 
-        # Add flush mechanism
-        self._ws: aiohttp.ClientWebSocketResponse | None = (
-            None  # Store WebSocket reference for flush
-        )
-        self._should_flush = False  # Flag to trigger flush
+            async for data in self._input_ch:
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                elif isinstance(data, self._FlushSentinel):
+                    frames.extend(audio_bstream.flush())
 
-        # Task management for cleanup
-        self._audio_task: asyncio.Task | None = None
-        self._message_task: asyncio.Task | None = None
-        self._chunk_size = max(
-            int(self._SAMPLE_RATE * self._CHUNK_DURATION_MS / 1000),
-            1,
-        )
+                for frame in frames:
+                    await ws.send_bytes(frame.data.tobytes())
 
-    async def aclose(self) -> None:
-        """Close the stream and clean up resources."""
-        self._logger.debug("Starting stream cleanup", extra={"session_id": self._session_id})
+        @utils.log_exceptions(logger=logger)
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    # close is expected, see SpeechStream.aclose
+                    # or when the agent session ends, the http session is closed
+                    if self._session.closed:
+                        return
 
-        async with self._connection_lock:
-            self._connection_state = ConnectionState.DISCONNECTED
+                    # this will trigger a reconnection, see the _run loop
+                    raise APIStatusError(message="simplismart connection closed unexpectedly")
 
-        # Cancel running tasks first
-        tasks_to_cancel = []
-        if self._audio_task and not self._audio_task.done():
-            tasks_to_cancel.append(self._audio_task)
-        if self._message_task and not self._message_task.done():
-            tasks_to_cancel.append(self._message_task)
+                if msg.type != aiohttp.WSMsgType.BINARY:
+                    logger.warning("unexpected simplismart message type %s", msg.type)
+                    continue
 
-        if tasks_to_cancel:
+                try:
+                    self._handle_transcript_data(msg.data.decode("utf-8"))
+                except Exception:
+                    logger.exception("failed to process simplismart message")
+
+        ws: aiohttp.ClientWebSocketResponse | None = None
+
+        while True:
             try:
-                await utils.aio.cancel_and_wait(*tasks_to_cancel)
-            except Exception as e:
-                self._logger.warning(
-                    f"Error cancelling tasks: {e}",
-                    extra={"session_id": self._session_id},
-                )
+                ws = await self._connect_ws()
+                await self._send_initial_config(ws)
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+                tasks_group = asyncio.gather(*tasks)
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
 
-        # Close WebSocket
-        try:
-            if self._ws and not self._ws.closed:
-                await self._ws.close()
-                self._logger.debug("WebSocket closed", extra={"session_id": self._session_id})
-        except Exception as e:
-            self._logger.warning(
-                f"Error closing WebSocket: {e}", extra={"session_id": self._session_id}
-            )
-        finally:
-            self._ws = None
+                    # propagate exceptions from completed tasks
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
 
-        # Call parent cleanup
-        try:
-            await super().aclose()
-        except Exception as e:
-            self._logger.warning(
-                f"Error in parent cleanup: {e}", extra={"session_id": self._session_id}
-            )
+                    if wait_reconnect_task not in done:
+                        break
 
-        # Close session last
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception
+            finally:
+                if ws is not None:
+                    await ws.close()
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
-            if self._session and not self._session.closed:
-                await self._session.close()
-                self._logger.debug("HTTP session closed", extra={"session_id": self._session_id})
-        except Exception as e:
-            self._logger.warning(
-                f"Error closing session: {e}", extra={"session_id": self._session_id}
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    self.ws_url,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                ),
+                self._conn_options.timeout,
             )
-        finally:
-            # Clear reference to help with garbage collection
-            pass  # Session reference will be cleared when object is destroyed
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to simplismart") from e
+        return ws
 
     async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send initial configuration message with language for Simplismart models."""
         try:
             config_message = {"language": self._opts.language}
             await ws.send_json(config_message)
-            self._logger.info(
+            logger.info(
                 "Sent initial config for Simplismart model",
-                extra={"session_id": self._session_id, "language": self._opts.language},
+                extra={"request_id": self._request_id, "language": self._opts.language},
             )
         except Exception as e:
-            self._logger.error(
+            logger.error(
                 f"Failed to send initial configuration: {e}",
-                extra={"session_id": self._session_id},
+                extra={"request_id": self._request_id},
                 exc_info=True,
             )
             raise APIConnectionError(f"Failed to send initial config: {e}") from e
 
-    async def _run(self) -> None:
-        """Main streaming loop with WebSocket connection."""
-        num_retries = 0
-        max_retries = getattr(self._conn_options, "max_retry_count", 3)
-
-        while num_retries <= max_retries:
-            try:
-                await self._run_connection()
-                break  # Success, exit retry loop
-
-            except (
-                aiohttp.ClientConnectorError,
-                asyncio.TimeoutError,
-            ) as e:  # TODO: Check if retry should happen for every Exception type
-                if num_retries == max_retries:
-                    async with self._connection_lock:
-                        self._connection_state = ConnectionState.FAILED
-                    raise APIConnectionError(
-                        f"Failed to connect to STT WebSocket after {max_retries} attempts"
-                    ) from e
-
-                # Exponential backoff with jitter, max 30 seconds
-                retry_interval = min(2**num_retries + (num_retries * 0.1), 30)
-                async with self._connection_lock:
-                    self._connection_state = ConnectionState.RECONNECTING
-
-                self._logger.warning(
-                    f"Connection failed, retrying in {retry_interval:.1f}s",
-                    extra={
-                        "session_id": self._session_id,
-                        "attempt": num_retries + 1,
-                        "max_retries": max_retries + 1,
-                        "error": str(e),
-                    },
-                )
-                await asyncio.sleep(retry_interval)
-                num_retries += 1
-
-            except Exception as e:
-                async with self._connection_lock:
-                    self._connection_state = ConnectionState.FAILED
-                self._logger.error(
-                    f"Unrecoverable error in WebSocket connection: {e}",
-                    extra={"session_id": self._session_id},
-                    exc_info=True,
-                )
-                raise APIConnectionError(f"WebSocket connection failed: {e}") from e
-
-    async def _run_connection(self) -> None:
-        """Run a single WebSocket connection attempt."""
-        # Check if session is still valid
-        if self._session.closed:
-            raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
-
-        async with self._connection_lock:
-            self._connection_state = ConnectionState.CONNECTING
-
-        # Build WebSocket URL with parameters
-        if self._opts.streaming_url is None:
-            raise ValueError("streaming_url cannot be None")
-        ws_url = self._opts.streaming_url
-
-        # Connect to WebSocket with proper authentication
-        headers = {"api-subscription-key": self._api_key}
-
-        self._logger.info(
-            "Connecting to STT WebSocket",
-            extra={"session_id": self._session_id, "url": ws_url},
-        )
-
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(ws_url, headers=headers),
-            self._conn_options.timeout,
-        )
-
-        # Store WebSocket reference for cleanup - ensure it's always cleaned up
-        self._ws = ws
-
-        async with self._connection_lock:
-            self._connection_state = ConnectionState.CONNECTED
-
-        self._logger.info(
-            "WebSocket connected successfully", extra={"session_id": self._session_id}
-        )
-
-        # Send initial configuration message for Simplismart models
-        if self._opts.language:
-            await self._send_initial_config(ws)
-
-        # Create tasks for audio processing and message handling
-        self._audio_task = asyncio.create_task(self._process_audio(ws))
-        self._message_task = asyncio.create_task(self._process_messages(ws))
-
-        # Wait for both tasks to complete or reconnection event
-        tasks = [self._audio_task, self._message_task]
-        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-        try:
-            done, pending = await asyncio.wait(
-                tasks + [reconnect_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Check if reconnection was requested
-            if reconnect_task in done:
-                self._logger.info(
-                    "Reconnection requested, closing current connection",
-                    extra={"session_id": self._session_id},
-                )
-                self._reconnect_event.clear()
-                return
-
-            # Cancel remaining tasks using LiveKit's utility
-            if pending:
-                await utils.aio.cancel_and_wait(*pending)
-
-            # Check for exceptions in completed tasks
-            for task in done:
-                if task != reconnect_task:
-                    exc = task.exception()
-                    if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
-
-        finally:
-            # Clean up tasks
-            all_tasks = tasks + [reconnect_task]
-            await utils.aio.cancel_and_wait(*all_tasks)
-
-            # Close WebSocket
-            try:
-                if ws and not ws.closed:
-                    await ws.close()
-            except Exception as e:
-                self._logger.warning(
-                    f"Error closing WebSocket: {e}",
-                    extra={"session_id": self._session_id},
-                )
-
-    @utils.log_exceptions(logger=logger)
-    async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Process audio frames and send them in chunks."""
-
-        import numpy as np
-
-        # Audio buffering for chunked sending
-        audio_buffer: list[np.int16] = []
-        chunk_size = self._chunk_size  # Derived from selected sample rate
-        chunks_sent = 0
-
-        self._logger.debug(
-            "Starting audio processing",
-            extra={"session_id": self._session_id, "chunk_size": chunk_size},
-        )
-
-        try:
-            async for frame in self._input_ch:
-                if isinstance(frame, rtc.AudioFrame):
-                    try:
-                        # Convert audio frame to Int16 data
-                        audio_data = frame.data.tobytes()
-                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                        audio_buffer.extend(audio_array)
-
-                        # Check if we have enough data for a chunk
-                        while len(audio_buffer) >= chunk_size:
-                            # Convert to Int16Array
-                            chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
-                            await ws.send_bytes(chunk_data.tobytes())
-                            chunks_sent += 1
-
-                            # Remove sent data from buffer
-                            audio_buffer = audio_buffer[chunk_size:]
-
-                            # Log progress periodically
-                            if chunks_sent % 100 == 0:
-                                self._logger.debug(
-                                    f"Sent {chunks_sent} audio chunks",
-                                    extra={"session_id": self._session_id},
-                                )
-
-                    except Exception as e:
-                        self._logger.error(
-                            f"Error processing audio frame: {e}",
-                            extra={"session_id": self._session_id},
-                            exc_info=True,
-                        )
-                        raise
-
-                elif isinstance(frame, self._FlushSentinel):
-                    # LiveKit VAD FlushSentinel - handles stream termination
-                    self._logger.debug(
-                        "Received FlushSentinel, sending end of stream",
-                        extra={"session_id": self._session_id},
-                    )
-                    await ws.send_str(self._end_of_stream_msg)
-                    break
-
-                # Check if Simplismart VAD triggered flush
-                if self._should_flush:
-                    self._logger.debug(
-                        "VAD triggered flush, sending flush message",
-                        extra={"session_id": self._session_id},
-                    )
-                    flush_message = {"type": "flush"}
-                    await ws.send_str(json.dumps(flush_message))
-                    self._should_flush = False  # Reset flag
-
-        except Exception as e:
-            self._logger.error(
-                f"Error in audio processing: {e}",
-                extra={"session_id": self._session_id, "chunks_sent": chunks_sent},
-                exc_info=True,
-            )
-            raise
-        finally:
-            self._logger.debug(
-                f"Audio processing completed, sent {chunks_sent} chunks",
-                extra={"session_id": self._session_id},
-            )
-
-    @utils.log_exceptions(logger=logger)
-    async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Process incoming messages from the WebSocket."""
-        self._logger.info(
-            "Starting message processing",
-            extra={"session_id": self._session_id, "ws_closed": ws.closed},
-        )
-
-        try:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    try:
-                        data = msg.data.decode("utf-8")
-                        await self._handle_message(data)
-                    except json.JSONDecodeError as e:
-                        self._logger.warning(
-                            "Invalid JSON received from WebSocket",
-                            extra={
-                                "session_id": self._session_id,
-                                "raw_data": msg.data,
-                                "error": str(e),
-                            },
-                        )
-                        continue  # Skip malformed message
-                    except Exception as e:
-                        self._logger.error(
-                            "Error processing WebSocket message",
-                            extra={"session_id": self._session_id, "error": str(e)},
-                            exc_info=True,
-                        )
-                        # Re-raise unexpected errors as they might indicate serious issues
-                        raise APIStatusError(f"Message processing error: {e}") from e
-
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {ws.exception()}"
-                    self._logger.error(error_msg, extra={"session_id": self._session_id})
-                    raise APIConnectionError(error_msg)
-
-                else:
-                    self._logger.debug(
-                        f"Unknown WebSocket message type: {msg.type}",
-                        extra={"session_id": self._session_id},
-                    )
-
-        except Exception as e:
-            self._logger.error(
-                f"Error in message processing loop: {e}",
-                extra={"session_id": self._session_id},
-                exc_info=True,
-            )
-            raise
-
-    async def _handle_message(self, data: str) -> None:
-        """Handle different types of messages from Simplismart streaming API."""
-        try:
-            await self._handle_transcript_data(data)
-
-        except KeyError as e:
-            self._logger.warning(
-                f"Missing required field in message: {e}",
-                extra={"session_id": self._session_id, "data": data},
-            )
-        except Exception as e:
-            self._logger.error(
-                f"Unexpected error handling message: {e}",
-                extra={"session_id": self._session_id, "data": data},
-                exc_info=True,
-            )
-            raise APIStatusError(f"Message processing error: {e}") from e
-
-    async def _handle_transcript_data(self, data: str) -> None:
+    def _handle_transcript_data(self, data: str) -> None:
         """Handle transcription result messages."""
         transcript_text = data
-        request_id = self._session_id
+        request_id = self._request_id
 
         try:
             # Create usage event with proper metrics extraction
@@ -682,22 +428,21 @@ class SpeechStream(stt.SpeechStream):
             )
             self._event_ch.send_nowait(speech_event)
 
-            self._logger.debug(
+            logger.debug(
                 "Transcript processed successfully",
                 extra={
-                    "session_id": self._session_id,
+                    "request_id": self._request_id,
                     "text_length": len(transcript_text),
                     "language": self._opts.language,
-                    "request_id": request_id,
                     "confidence": speech_data.confidence,
                 },
             )
 
         except Exception as e:
-            self._logger.error(
+            logger.error(
                 f"Error processing transcript data: {e}",
                 extra={
-                    "session_id": self._session_id,
+                    "request_id": self._request_id,
                     "transcript_text": transcript_text,
                 },
                 exc_info=True,
