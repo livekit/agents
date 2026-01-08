@@ -43,6 +43,7 @@ from ..plugin import Plugin
 from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
+from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
 from . import proto
 from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
@@ -316,12 +317,21 @@ class AgentsConsole:
             self._io_context = contextvars.copy_context()
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
+            self._io_transcription_sync = TranscriptSynchronizer(
+                next_in_chain_audio=self._io_audio_output,
+                next_in_chain_text=None,
+            )
             self._io_acquired_event.set()
             self._io_session = session
 
-        self._update_sess_io(
-            session, self.console_mode, self._io_audio_input, self._io_audio_output
-        )
+        if session:
+            self._update_sess_io(
+                session,
+                self.console_mode,
+                self._io_audio_input,
+                self._io_transcription_sync.audio_output,
+                self._io_transcription_sync.text_output,
+            )
 
     @property
     def enabled(self) -> bool:
@@ -397,7 +407,8 @@ class AgentsConsole:
                 self.io_session,
                 mode,
                 self._io_audio_input,
-                self._io_audio_output,
+                self._io_transcription_sync.audio_output,
+                self._io_transcription_sync.text_output,
             )
 
     def _update_sess_io(
@@ -405,7 +416,8 @@ class AgentsConsole:
         sess: AgentSession,
         mode: ConsoleMode,
         audio_input: ConsoleAudioInput,
-        audio_output: ConsoleAudioOutput,
+        audio_output: io.AudioOutput,
+        text_output: io.TextOutput,
     ) -> None:
         if asyncio.get_running_loop() != self.io_loop:
             raise RuntimeError("_update_sess_io must be executed on the io_loop")
@@ -420,10 +432,12 @@ class AgentsConsole:
             if mode == "text":
                 sess.input.audio = None
                 sess.output.audio = None
+                sess.output.transcription = None
                 self._log_handler.addFilter(self._text_mode_log_filter)
             else:
                 sess.input.audio = audio_input
                 sess.output.audio = audio_output
+                sess.output.transcription = text_output
                 self._log_handler.removeFilter(self._text_mode_log_filter)
 
     def print(
