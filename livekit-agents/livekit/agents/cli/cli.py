@@ -1589,9 +1589,12 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _configure_logger(c, log_level.value)
 
         loop = asyncio.get_event_loop()
+        _task: asyncio.Task | None = None
 
         @server.once("worker_started")
         def _simulate_job() -> None:
+            nonlocal _task
+
             async def simulate_job() -> None:
                 async with api.LiveKitAPI(url, api_key, api_secret) as lk_api:
                     room_request = api.ListRoomsRequest(names=[room])
@@ -1609,8 +1612,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                     agent_identity=participant_identity,
                 )
 
-            loop = asyncio.get_event_loop()
-            asyncio.run_coroutine_threadsafe(simulate_job(), loop)
+            _task = asyncio.create_task(simulate_job())
 
         try:
             loop.run_until_complete(server.run(devmode=True, unregistered=True))
