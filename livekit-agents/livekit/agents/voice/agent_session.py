@@ -92,6 +92,7 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    state_passphrase: str | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -162,6 +163,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
+        state_passphrase: str | None = None,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -251,6 +253,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
+            state_passphrase (str, optional): The passphrase to encrypt/decrypt the chat context when
+                serializing/rehydrating the session.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -294,6 +298,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            state_passphrase=state_passphrase,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -842,18 +847,51 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
-    def get_state(self) -> dict[str, Any]:
+    def serialize(self) -> bytes:
+        """
+        Serialize the session state to bytes.
+
+        If state_passphrase is set, the chat context will be encrypted.
+        """
+        from .agent import state_passphrase_ctx
+
         tool_ctx = llm.ToolContext(self.tools)
-        return {
+        history: dict[str, Any] | bytes = self._chat_ctx.to_dict(
+            exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+        )
+
+        encrypted = False
+        passphrase = self._opts.state_passphrase
+        if passphrase is not None:
+            history = utils.encryption.encrypt(pickle.dumps(history), passphrase)
+            encrypted = True
+
+        state = {
             "tools": list(tool_ctx.function_tools.keys()),
-            "chat_ctx": self._chat_ctx.to_dict(
-                exclude_image=False, exclude_function_call=False, exclude_timestamp=False
-            ),
+            "history": history,
+            "history_encrypted": encrypted,
             "agent": self._agent,
         }
 
-    async def rehydrate(self, state: dict[str, Any] | bytes) -> None:
-        state_dict = pickle.loads(state) if isinstance(state, bytes) else state
+        # set context var so Agent.__getstate__ can access the passphrase
+        token = state_passphrase_ctx.set(passphrase)
+        try:
+            return pickle.dumps(state)
+        finally:
+            state_passphrase_ctx.reset(token)
+
+    async def rehydrate(self, state: bytes) -> None:
+        """Restore session state from bytes."""
+        from .agent import state_passphrase_ctx
+
+        passphrase = self._opts.state_passphrase
+
+        # set context var so Agent.__setstate__ can access the passphrase
+        token = state_passphrase_ctx.set(passphrase)
+        try:
+            state_dict: dict[str, Any] = pickle.loads(state)
+        finally:
+            state_passphrase_ctx.reset(token)
 
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
@@ -865,7 +903,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 logger.warning("tool not found when unpickling", extra={"missing_tool": name})
 
         self._tools = valid_tools
-        self._chat_ctx = llm.ChatContext.from_dict(state_dict["chat_ctx"])
+
+        # decrypt and unpickle chat history
+        history = state_dict["history"]
+        if isinstance(history, bytes):
+            if state_dict.get("history_encrypted", False):
+                if passphrase is not None:
+                    history = utils.encryption.decrypt(history, passphrase)
+                else:
+                    raise ValueError("state_passphrase required to decrypt encrypted session state")
+            history = pickle.loads(history)
+        self._chat_ctx = llm.ChatContext.from_dict(history)
 
         # TODO: save to TextMessageContext?
         try:

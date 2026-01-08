@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import pathlib
-import pickle
 import queue
 import re
 import signal
@@ -1081,7 +1080,7 @@ def _sms_text_mode(
                 if session := get_job_context()._primary_agent_session:
                     # serialize the state of the session
                     with open(sess_data_file, "wb") as wf:
-                        wf.write(pickle.dumps(session.get_state()))
+                        wf.write(session.serialize())
                     logger.debug(
                         "session state serialized", extra={"session_data_file": sess_data_file}
                     )

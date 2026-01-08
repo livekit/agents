@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import pickle
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -23,6 +25,11 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
     from .audio_recognition import TurnDetectionMode
     from .io import TimedString
+
+
+# context variable for passing passphrase during pickle/unpickle
+# set by AgentSession before serialization/deserialization
+state_passphrase_ctx: ContextVar[str | None] = ContextVar("state_passphrase", default=None)
 
 
 @dataclass
@@ -353,11 +360,20 @@ class Agent:
 
     def __getstate__(self) -> dict[str, Any]:
         tool_ctx = llm.ToolContext(self.tools)
+        chat_ctx: dict[str, Any] | bytes = self.chat_ctx.to_dict(
+            exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+        )
+
+        encrypted = False
+        if (passphrase := state_passphrase_ctx.get()) is not None:
+            chat_ctx = utils.encryption.encrypt(pickle.dumps(chat_ctx), passphrase)
+            encrypted = True
+
         return {
             "tools": list(tool_ctx.function_tools.keys()),
-            "chat_ctx": self.chat_ctx.to_dict(
-                exclude_image=False, exclude_function_call=False, exclude_timestamp=False
-            ),
+            "chat_ctx": chat_ctx,
+            "chat_ctx_encrypted": encrypted,
+            # TODO: add parent agent
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -380,7 +396,18 @@ class Agent:
         # TODO: support AgentTask
 
         self._tools = valid_tools
-        self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
+
+        # decrypt and unpickle chat context
+        chat_ctx = state["chat_ctx"]
+        if isinstance(chat_ctx, bytes):
+            if state.get("chat_ctx_encrypted", False):
+                if (passphrase := state_passphrase_ctx.get()) is not None:
+                    chat_ctx = utils.encryption.decrypt(chat_ctx, passphrase)
+                else:
+                    raise ValueError("state_passphrase required to decrypt encrypted session state")
+            chat_ctx = pickle.loads(chat_ctx)
+        self._chat_ctx = llm.ChatContext.from_dict(chat_ctx)
+
         self._rehydrated = True  # skip on_enter when rehydrating
 
     def is_rehydrated(self) -> bool:

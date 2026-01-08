@@ -54,6 +54,7 @@ dependencies = [
     "prometheus-client>=0.22",
     "openai>=1.99.2",
     "aiofiles>=24",
+    "cryptography~=46.0",
 ]
 
 [project.optional-dependencies]

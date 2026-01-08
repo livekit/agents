@@ -71,7 +71,10 @@ server = AgentServer()
 async def sms_handler(ctx: TextMessageContext):
     logger.info(f"SMS received: {ctx.text}")
 
-    session = AgentSession(llm="openai/gpt-4.1-mini")
+    session = AgentSession(
+        llm="openai/gpt-4.1-mini",
+        state_passphrase="my-secret-passphrase",
+    )
     if ctx.session_data:
         await session.rehydrate(ctx.session_data)
     else:
