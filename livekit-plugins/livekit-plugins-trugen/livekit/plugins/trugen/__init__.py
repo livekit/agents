@@ -14,11 +14,12 @@
 
 """TruGen.AI plugin for LiveKit Agents"""
 
-from .avatar import AvatarSession
+from .avatar import AvatarSession, TrugenException
 from .version import __version__
 
 __all__ = [
     "AvatarSession",
+    "TrugenException",
     "__version__",
 ]
 

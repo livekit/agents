@@ -25,7 +25,10 @@ from .log import logger
 _BASE_API_URL = "https://api.trugen.ai"
 _AVATAR_AGENT_IDENTITY = "trugen-avatar"
 _AVATAR_AGENT_NAME = "Trugen Avatar"
+_DEFAULT_AVATAR_ID = "45e3f732"
 
+class TrugenException(Exception):
+    """Exception for TruGen.AI errors"""
 
 class AvatarSession:
     """TruGen Realtime Avatar Session"""
@@ -39,11 +42,11 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        self._avatar_id = avatar_id
+        self._avatar_id = avatar_id or _DEFAULT_AVATAR_ID
         self._api_url = _BASE_API_URL
         self._api_key = api_key or os.getenv("TRUGEN_API_KEY")
         if self._api_key is None:
-            raise Exception(
+            raise TrugenException(
                 "The api_key not found; set this by passing api_key to the client or "
                 "by setting the TRUGEN_API_KEY environment variable"
             )
@@ -134,4 +137,4 @@ class AvatarSession:
                 if i < self._conn_options.max_retry - 1:
                     await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIConnectionError("Max retry exhaused; Unable to start TruGen.AI Avatar Session.")
+        raise APIConnectionError("Max retries exhaused; Unable to start TruGen.AI Avatar Session.")
