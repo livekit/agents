@@ -24,6 +24,7 @@ import base64
 import enum
 import json
 import os
+import platform
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -90,30 +91,25 @@ MODEL_SPEAKER_COMPATIBILITY = {
 def _build_custom_headers(
     api_key: str,
     additional_headers: dict | None = None,
-    websocket: bool = False,
 ) -> dict:
     """Build custom headers to identify the source of requests.
 
+    Standardized headers sent across all flows (HTTP and WebSocket)
+    for consistent debugging and request tracking.
+
     Args:
         api_key: Sarvam API key
-        additional_headers: Additional headers to include
-        websocket: If True, only include essential headers for WebSocket
+        additional_headers: Additional headers to include (e.g., Content-Type)
     """
     headers = {
         "api-subscription-key": api_key,
+        #"User-Agent": f"LiveKit-Agents-Python-Sarvam/{__version__}",
+        "X-SDK-Source": "Livekit",
+        "X-SDK-Version": __version__,
+        "SDK-Language": "Python",
+        "SDK-Language-Version": platform.python_version()
+        #"X-Plugin-Name": "livekit-plugins-sarvam",
     }
-
-    # WebSocket connections may be strict about headers
-    # Only add User-Agent for WebSocket, full metadata for HTTP
-    if websocket:
-        headers["User-Agent"] = f"LiveKit-Agents-Python-Sarvam/{__version__}"
-    else:
-        headers.update({
-            "User-Agent": f"LiveKit-Agents-Python-Sarvam/{__version__}",
-            "X-SDK-Source": "livekit-agents-python",
-            "X-SDK-Version": __version__,
-            "X-Plugin-Name": "livekit-plugins-sarvam",
-        })
 
     if additional_headers:
         headers.update(additional_headers)
@@ -295,7 +291,6 @@ class TTS(tts.TTS):
                 "Accept": "*/*",
                 "Accept-Encoding": "gzip, deflate, br",
             },
-            websocket=True,
         )
         # Add model parameter to URL like the client does
         ws_url = f"{self._opts.ws_url}?model={self._opts.model}&send_completion_event={self._opts.send_completion_event}"
