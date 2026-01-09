@@ -27,9 +27,6 @@ from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
     ChatContext,
     ChatMessage,
-    FunctionTool,
-    ProviderTool,
-    RawFunctionTool,
     ToolChoice,
     utils as llm_utils,
 )
