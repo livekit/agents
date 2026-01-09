@@ -323,10 +323,10 @@ class STT(stt.STT):
                 ),
             ) as res:
                 raw_text = await res.text()
-                body = _json_loads_maybe(raw_text)
+                body = json.loads(raw_text) if raw_text else None
 
                 if res.status != 200:
-                    req_id = _extract_request_id(body)
+                    req_id = body.get("request_id", "") if body else None
                     self._logger.error(
                         "Sarvam STT HTTP error",
                         extra={
