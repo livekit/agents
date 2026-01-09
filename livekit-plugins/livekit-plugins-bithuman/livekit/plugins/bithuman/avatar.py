@@ -6,6 +6,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 import cv2
@@ -315,7 +316,9 @@ class AvatarSession:
 
         if is_custom_endpoint:
             # Use FormData format for custom endpoints (e.g., gpu-avatar-worker, cerebrium)
-            await self._send_formdata_request(livekit_url, livekit_token, room_name)
+            # Parse async parameter from URL if present
+            async_mode = self._parse_async_parameter_from_url()
+            await self._send_formdata_request(livekit_url, livekit_token, room_name, async_mode=async_mode)
         else:
             # Use JSON format for default BitHuman API
             await self._send_json_request(livekit_url, livekit_token, room_name)
@@ -383,8 +386,34 @@ class AvatarSession:
             form_data=None,
         )
 
+    def _parse_async_parameter_from_url(self) -> bool | None:
+        """
+        Parse async parameter from api_url if present.
+
+        Returns:
+            True if async=true, False if async=false, None if not present
+        """
+        if self._api_url is None:
+            return None
+        
+        try:
+            parsed = urlparse(self._api_url)
+            query_params = parse_qs(parsed.query)
+            
+            if "async" in query_params:
+                async_value = query_params["async"][0].lower()
+                if async_value == "true":
+                    return True
+                elif async_value == "false":
+                    return False
+        except Exception:
+            # If parsing fails, return None (don't add async_mode parameter)
+            pass
+        
+        return None
+
     async def _send_formdata_request(
-        self, livekit_url: str, livekit_token: str, room_name: str
+        self, livekit_url: str, livekit_token: str, room_name: str, async_mode: bool | None = None
     ) -> None:
         """
         Send request using multipart/form-data format (for custom avatar worker endpoints).
@@ -398,12 +427,18 @@ class AvatarSession:
             livekit_url: LiveKit server URL
             livekit_token: JWT token for room access
             room_name: Name of the LiveKit room
+            async_mode: Optional async_mode parameter (parsed from URL if async parameter present)
         """
         # Build form data with required fields
         form_data = aiohttp.FormData()
         form_data.add_field("livekit_url", livekit_url)
         form_data.add_field("livekit_token", livekit_token)
         form_data.add_field("room_name", room_name)
+        
+        # Add async_mode parameter if parsed from URL
+        # FastAPI Form bool accepts "true"/"false" strings and converts them to boolean
+        if async_mode is not None:
+            form_data.add_field("async_mode", "true" if async_mode else "false")
 
         # Handle avatar image - send as file upload or URL
         if isinstance(self._avatar_image, Image.Image):
