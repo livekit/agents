@@ -480,7 +480,8 @@ class STT(stt.STT):
         opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
         opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
         opts_input_codec = (
-            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec)
+            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
+        )
 
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
