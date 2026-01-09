@@ -332,7 +332,7 @@ class STT(stt.STT):
                         extra={
                             "status_code": res.status,
                             "request_id": req_id,
-                            "body": _truncate_for_log(body),
+                            "body": body,
                             "model": str(opts_model),
                             "language": str(opts_language),
                         },
@@ -349,7 +349,7 @@ class STT(stt.STT):
                         "Sarvam STT returned unexpected response format",
                         extra={
                             "status_code": res.status,
-                            "body": _truncate_for_log(body),
+                            "body": body,
                             "model": str(opts_model),
                             "language": str(opts_language),
                         },
@@ -1099,13 +1099,7 @@ class SpeechStream(stt.SpeechStream):
                 except json.JSONDecodeError:
                     self._logger.warning(
                         "Invalid JSON received from WebSocket",
-                        extra={
-                            "session_id": self._session_id,
-                            "raw_data": _truncate_for_log(
-                                msg.data,
-                                max_len=1000,
-                            ),
-                        },
+                        extra={"session_id": self._session_id, "data": msg.data},
                     )
                     continue
 
