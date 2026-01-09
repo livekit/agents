@@ -72,7 +72,7 @@ class TTS(tts.TTS):
         ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
         ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
 
-        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
+        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the AWS Polly TTS.
 
         Args:
             voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".

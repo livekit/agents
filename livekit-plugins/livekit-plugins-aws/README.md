@@ -1,20 +1,20 @@
 # AWS Plugin for LiveKit Agents
 
-Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe, and realtime voice-to-voice support for Amazon Nova 2 Sonic
+Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe, and realtime speech-to-speech support for Amazon Nova Sonic
 
 **What's included:**
-- **RealtimeModel** - Amazon Nova Sonic 1.0 & 2.0 for speech-to-speech
+- **RealtimeModel** - Amazon Nova 2 Sonic and Nova Sonic 1.0 for speech-to-speech
 - **LLM** - Powered by Amazon Bedrock, defaults to Nova 2 Lite
-- **STT** - Powered by AWS Transcribe
+- **STT** - Powered by Amazon Transcribe
 - **TTS** - Powered by Amazon Polly
 
 See [https://docs.livekit.io/agents/integrations/aws/](https://docs.livekit.io/agents/integrations/aws/) for more information.
 
 ## ⚠️ Breaking Change
 
-**Default model changed to Nova 2.0 Sonic**: `RealtimeModel()` now defaults to `amazon.nova-2-sonic-v1:0` with `modalities="mixed"` (was `amazon.nova-sonic-v1:0` with `modalities="audio"`).
+**Default model changed to Nova 2 Sonic**: `RealtimeModel()` now defaults to `amazon.nova-2-sonic-v1:0` with `modalities="mixed"` (was `amazon.nova-sonic-v1:0` with `modalities="audio"`).
 
-If you need the previous behavior, explicitly specify Nova 1.0 Sonic:
+If you need the previous behavior, explicitly specify Nova Sonic 1.0:
 ```python
 model = aws.realtime.RealtimeModel.with_nova_sonic_1()
 # or
@@ -76,13 +76,13 @@ function aws-creds() {
 The `realtime_joke_teller.py` example demonstrates both realtime and pipeline modes:
 
 ### Demonstrates Both Modes
-- **Realtime mode**: Nova Sonic 2.0 for end-to-end speech-to-speech
-- **Pipeline mode**: AWS Transcribe + Nova 2 Lite + Amazon Polly
+- **Realtime mode**: Nova 2 Sonic for end-to-end speech-to-speech
+- **Pipeline mode**: Amazon Transcribe + Nova 2 Lite + Amazon Polly
 
 ### Demonstrates Nova 2 Sonic Capabilities
 - **Text prompting**: Agent greets users first using `generate_reply()`
-- **Multilingual support**: Automatic language detection and response in 8 languages
-- **Multiple voices**: 15 expressive voices across languages
+- **Multilingual support**: Automatic language detection and response in 7 languages
+- **Multiple voices**: 18 expressive voices across languages
 - **Function calling**: Weather lookup, web search, and joke telling
 
 ### Setup
@@ -132,13 +132,13 @@ The `realtime_joke_teller.py` example demonstrates both realtime and pipeline mo
 
 ### Running the Example
 
-**Realtime Mode (Nova Sonic 2.0)** - Recommended for testing:
+**Realtime Mode (Nova 2 Sonic)** - Recommended for testing:
 ```bash
 python realtime_joke_teller.py console
 ```
 This runs locally using your computer's speakers and microphone. **Use a headset to prevent echo.**
 
-**Multilingual Support:** Sonic automatically detects and responds in your language. Just start speaking in your preferred language (English, French, Italian, German, Spanish, Portuguese, or Hindi) and Sonic will respond in the same language!
+**Multilingual Support:** Nova 2 Sonic automatically detects and responds in your language. Just start speaking in your preferred language (English, French, Italian, German, Spanish, Portuguese, or Hindi) and Nova 2 Sonic will respond in the same language!
 
 **Pipeline Mode (Transcribe + Nova Lite + Polly)**:
 ```bash
@@ -164,25 +164,25 @@ Try asking:
 Amazon Nova 2 Sonic is a unified speech-to-speech foundation model that delivers:
 
 - **Realtime bidirectional streaming** - Low-latency, natural conversations
-- **Multilingual support** - English, French, Italian, German, Spanish, Portuguese, Hindi
+- **Multilingual support** - English, French, Italian, German, Spanish, Portuguese, and Hindi
 - **Automatic language mirroring** - Responds in the user's spoken language
 - **Polyglot voices** - Matthew and Tiffany can seamlessly switch between languages within a single conversation, ideal for multilingual applications
-- **16 expressive voices** - Multiple voices per language with natural prosody
+- **18 expressive voices** - Multiple voices per language with natural prosody
 - **Function calling** - Built-in tool use and agentic workflows
 - **Interruption handling** - Graceful handling without losing context
 - **Noise robustness** - Works in real-world environments
-- **Text input support** (Nova 2.0 only) - Programmatic text prompting
+- **Text input support** - Programmatic text prompting
 
 ### Model Selection
 
 ```python
 from livekit.plugins import aws
 
+# Nova 2 Sonic (audio + text input, latest)
+model = aws.realtime.RealtimeModel.with_nova_sonic_2()
+
 # Nova Sonic 1.0 (audio-only, original model)
 model = aws.realtime.RealtimeModel.with_nova_sonic_1()
-
-# Nova Sonic 2.0 (audio + text input, latest)
-model = aws.realtime.RealtimeModel.with_nova_sonic_2()
 ```
 
 ### Voice Selection
@@ -197,31 +197,37 @@ model = aws.realtime.RealtimeModel.with_nova_sonic_2(
 )
 ```
 
-#### Nova Sonic 1.0 Voices (11 voices)
+#### Nova 2 Sonic Voice IDs (18 voices)
 
-- **English (US)**: `matthew`, `tiffany`
-- **English (GB)**: `amy`
-- **Spanish**: `lupe`, `carlos`
+See [official documentation](https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-language-support.html) for most up-to-date list and IDs.
+
+- **English (US)**: `tiffany` (polyglot), `matthew` (polyglot)
+- **English (UK)**: `amy`
+- **English (Australia)**: `olivia`
+- **English (India)**: `kiara`, `arjun`
 - **French**: `ambre`, `florian`
-- **German**: `greta`, `lennart`
 - **Italian**: `beatrice`, `lorenzo`
-
-#### Nova Sonic 2.0 Voices (16 voices)
-
-- **English (US)**: `matthew` (polyglot), `tiffany` (polyglot), `olivia`
-- **English (GB)**: `amy`
-- **Spanish**: `lupe`, `carlos`
-- **French**: `ambre`, `florian`
 - **German**: `tina`, `lennart`
-- **Italian**: `beatrice`, `lorenzo`
-- **Portuguese (Brazilian)**: `carolina`, `leo`
-- **Hindi**: `arjun`, `kiara`
+- **Spanish (US)**: `lupe`, `carlos`
+- **Portuguese (Brazil)**: `carolina`, `leo`
+- **Hindi**: `kiara`, `arjun`
 
-**Note**: Matthew and Tiffany in Nova 2.0 support polyglot mode, seamlessly switching between languages within a single conversation.
+**Note**: Tiffany abd Matthew in Nova 2 Sonic support polyglot mode, seamlessly switching between languages within a single conversation.
+
+#### Nova Sonic 1.0 Voice IDs (11 voices)
+
+See [official documentation](https://docs.aws.amazon.com/nova/latest/userguide/available-voices.html) for most up-to-date list and IDs.
+
+- **English (US)**: `tiffany`, `matthew`
+- **English (UK)**: `amy`
+- **French**: `ambre`, `florian`
+- **Italian**: `beatrice`, `lorenzo`
+- **German**: `greta`, `lennart`
+- **Spanish**: `lupe`, `carlos`
 
 ### Text Prompting with `generate_reply()`
 
-Nova 2 Sonic supports programmatic text input to trigger agent responses:
+Nova 2 Sonic supports programmatic text input. This can be used to trigger agent responses or to mix speech and text input within a UI in the same conversation:
 
 ```python
 class Assistant(Agent):
@@ -274,9 +280,9 @@ model = aws.realtime.RealtimeModel.with_nova_sonic_2(
 )
 ```
 
-- **HIGH**: Fast responses, may interrupt slower speakers
-- **MEDIUM**: Balanced, works for most use cases (recommended)
-- **LOW**: Patient, better for thoughtful or hesitant speakers
+- **HIGH**: Fastest response time, optimized for latency. May interrupt slower speakers
+- **MEDIUM**: Balanced approach with moderate response time. Reduces false positives while maintaining responsiveness (recommended)
+- **LOW**: Slowest response time with maximum patience, better for hesitant speakers
 
 ### Complete Example
 
@@ -292,7 +298,7 @@ load_dotenv()
 class Assistant(Agent):
     def __init__(self):
         super().__init__(
-            instructions="You are a helpful voice assistant powered by Amazon Nova Sonic 2.0."
+            instructions="You are a helpful voice assistant powered by Amazon Nova 2 Sonic."
         )
     
     async def on_enter(self):
@@ -328,7 +334,7 @@ For more control over individual components, use pipeline mode:
 from livekit.plugins import aws, silero
 
 session = AgentSession(
-    stt=aws.STT(),                    # AWS Transcribe
+    stt=aws.STT(),                    # Amazon Transcribe
     llm=aws.LLM(),                    # Nova 2 Lite (default)
     tts=aws.TTS(),                    # Amazon Polly
     vad=silero.VAD.load(),
@@ -341,7 +347,7 @@ Amazon Nova 2 Lite is a fast, cost-effective reasoning model optimized for every
 
 - **Lightning-fast processing** - Very low latency for real-time conversations
 - **Cost-effective** - Industry-leading price-performance
-- **Multimodal inputs** - Text and images ([source](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html))
+- **Multimodal inputs** - Text, image, and video ([documentation](https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-multimodal-models.html))
 - **1 million token context window** - Handle long conversations and complex context ([source](https://aws.amazon.com/blogs/aws/introducing-amazon-nova-2-lite-a-fast-cost-effective-reasoning-model/))
 - **Agentic workflows** - RAG systems, function calling, tool use
 - **Fine-tuning support** - Customize for your specific use case
@@ -351,5 +357,5 @@ Ideal for pipeline mode where you need fast, accurate LLM responses in voice app
 ## Resources
 
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
-- [AWS Nova Documentation](https://docs.aws.amazon.com/nova/latest/userguide/speech.html)
+- [Amazon Nova Documentation](https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-conversational-speech.html)
 - [Example: realtime_joke_teller.py](https://github.com/livekit/agents/blob/main/examples/voice_agents/realtime_joke_teller.py)

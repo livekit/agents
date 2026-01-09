@@ -207,3 +207,7 @@ ChatModels = Literal[
     "gemini-2.0-pro-exp-02-05",
     "gemini-1.5-pro",
 ]
+
+GeminiTTSModels = Literal[
+    "gemini-2.5-flash-tts", "gemini-2.5-flash-lite-preview-tts", "gemini-2.5-pro-tts"
+]

@@ -69,7 +69,7 @@ SESSION_TIMEOUT = 60.0
 
 
 async def test_events_and_metrics() -> None:
-    speed = 5.0
+    speed = 2.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
@@ -513,10 +513,10 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[3].role == "assistant"
     assert agent.chat_ctx.items[3].text_content == "session.say from on_user_turn_completed"
     assert agent.chat_ctx.items[4].type == "function_call"
-    assert agent.chat_ctx.items[5].type == "function_call_output"
-    assert agent.chat_ctx.items[6].type == "message"
-    assert agent.chat_ctx.items[6].role == "assistant"
-    assert agent.chat_ctx.items[6].text_content == "Goodbye! have a nice day!"
+    assert agent.chat_ctx.items[5].type == "message"
+    assert agent.chat_ctx.items[5].role == "assistant"
+    assert agent.chat_ctx.items[5].text_content == "Goodbye! have a nice day!"
+    assert agent.chat_ctx.items[6].type == "function_call_output"
 
 
 @pytest.mark.parametrize(
@@ -527,7 +527,7 @@ async def test_generate_reply() -> None:
     ],
 )
 async def test_preemptive_generation(preemptive_generation: bool, expected_latency: float) -> None:
-    speed = 5.0
+    speed = 2.0
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)

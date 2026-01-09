@@ -52,6 +52,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
 
@@ -286,9 +287,9 @@ class SpeechStream(stt.SpeechStream):
             text=transcript,
             words=[
                 TimedString(
-                    text=word.get("word", ""),
-                    start_time=word.get("start_time", 0) + self.start_time_offset,
-                    end_time=word.get("end_time", 0) + self.start_time_offset,
+                    text=getattr(word, "word", ""),
+                    start_time=getattr(word, "start_time", 0) + self.start_time_offset,
+                    end_time=getattr(word, "end_time", 0) + self.start_time_offset,
                 )
                 for word in words
             ]
