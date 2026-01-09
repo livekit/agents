@@ -295,7 +295,7 @@ class TTS(tts.TTS):
             extra={
                 "sdk_source": "livekit-agents-python",
                 "sdk_version": __version__,
-            }
+            },
         )
 
         try:
@@ -437,10 +437,7 @@ class ChunkedStream(tts.ChunkedStream):
         if self._opts.model == "bulbul:v2":
             payload["pitch"] = self._opts.pitch
             payload["loudness"] = self._opts.loudness
-        headers = _build_custom_headers(
-            self._opts.api_key,
-            {"Content-Type": "application/json"}
-        )
+        headers = _build_custom_headers(self._opts.api_key, {"Content-Type": "application/json"})
         try:
             async with self._tts._ensure_session().post(
                 url=self._opts.base_url,

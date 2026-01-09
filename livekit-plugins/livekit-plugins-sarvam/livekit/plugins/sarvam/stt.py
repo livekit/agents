@@ -53,12 +53,8 @@ from .version import __version__
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_STT_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text/ws"
-SARVAM_STT_TRANSLATE_BASE_URL = (
-    "https://api.sarvam.ai/speech-to-text-translate"
-)
-SARVAM_STT_TRANSLATE_STREAMING_URL = (
-    "wss://api.sarvam.ai/speech-to-text-translate/ws"
-)
+SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
+SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
 SarvamSTTModels = Literal["saarika:v2.5", "saarika:v2.0", "saaras:v2.5"]
@@ -163,9 +159,7 @@ def _calculate_audio_duration(buffer: AudioBuffer) -> float:
                 return total_samples / sample_rate
         elif hasattr(buffer, "duration"):
             return buffer.duration / 1000.0  # buffer.duration is in ms
-        elif hasattr(buffer, "samples_per_channel") and hasattr(
-            buffer, "sample_rate"
-        ):
+        elif hasattr(buffer, "samples_per_channel") and hasattr(buffer, "sample_rate"):
             # Single AudioFrame
             return buffer.samples_per_channel / buffer.sample_rate
     except Exception as e:
@@ -234,8 +228,7 @@ class STT(stt.STT):
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
             raise ValueError(
-                "Sarvam API key is required. "
-                "Provide it directly or set SARVAM_API_KEY env var."
+                "Sarvam API key is required. Provide it directly or set SARVAM_API_KEY env var."
             )
 
         self._opts = SarvamSTTOptions(
@@ -291,14 +284,8 @@ class STT(stt.STT):
             APIStatusError: On API errors (non-200 status)
             APITimeoutError: On API timeout
         """
-        opts_language = (
-            self._opts.language
-            if isinstance(language, type(NOT_GIVEN))
-            else language
-        )
-        opts_model = (
-            self._opts.model if isinstance(model, type(NOT_GIVEN)) else model
-        )
+        opts_language = self._opts.language if isinstance(language, type(NOT_GIVEN)) else language
+        opts_model = self._opts.model if isinstance(model, type(NOT_GIVEN)) else model
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
@@ -453,9 +440,7 @@ class STT(stt.STT):
                 },
                 exc_info=True,
             )
-            raise APIConnectionError(
-                f"Sarvam STT connection error: {e}"
-            ) from e
+            raise APIConnectionError(f"Sarvam STT connection error: {e}") from e
 
     def stream(
         self,
@@ -492,7 +477,10 @@ class STT(stt.STT):
         )
         opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
         opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
+        opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
         opts_input_codec = (
+            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
             input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
         )
 
@@ -619,8 +607,8 @@ class SpeechStream(stt.SpeechStream):
                 )
         except Exception as e:
             self._logger.warning(
-                    f"Error closing WebSocket: {e}",
-                    extra={"session_id": self._session_id},
+                f"Error closing WebSocket: {e}",
+                extra={"session_id": self._session_id},
             )
         finally:
             self._ws = None
@@ -679,9 +667,7 @@ class SpeechStream(stt.SpeechStream):
         )
         self._reconnect_event.set()
 
-    async def _send_initial_config(
-        self, ws: aiohttp.ClientWebSocketResponse
-    ) -> None:
+    async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send initial configuration message with prompt for saaras models."""
         try:
             config_message = {"prompt": self._opts.prompt, "type": "config"}
@@ -699,9 +685,7 @@ class SpeechStream(stt.SpeechStream):
                 extra={"session_id": self._session_id},
                 exc_info=True,
             )
-            raise APIConnectionError(
-                f"Failed to send initial config: {e}"
-            ) from e
+            raise APIConnectionError(f"Failed to send initial config: {e}") from e
 
     def _build_log_context(self) -> dict:
         """Build consistent logging context with request IDs."""
@@ -749,17 +733,13 @@ class SpeechStream(stt.SpeechStream):
 
                 # Create tasks for audio processing and message handling
                 self._audio_task = asyncio.create_task(self._process_audio(ws))
-                self._message_task = asyncio.create_task(
-                    self._process_messages(ws)
-                )
+                self._message_task = asyncio.create_task(self._process_messages(ws))
 
                 tasks_group = asyncio.gather(
                     self._audio_task,
                     self._message_task,
                 )
-                reconnect_task = asyncio.create_task(
-                    self._reconnect_event.wait()
-                )
+                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
@@ -798,9 +778,7 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Connect to Sarvam STT WebSocket with correct error handling."""
         if self._session.closed:
-            raise APIConnectionError(
-                "Session is closed, cannot establish WebSocket connection"
-            )
+            raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTING
@@ -856,9 +834,7 @@ class SpeechStream(stt.SpeechStream):
                 },
                 exc_info=True,
             )
-            raise APITimeoutError(
-                "Timed out connecting to Sarvam STT WebSocket"
-            ) from e
+            raise APITimeoutError("Timed out connecting to Sarvam STT WebSocket") from e
         except aiohttp.ClientError as e:
             self._logger.error(
                 "Failed to connect to Sarvam STT WebSocket",
@@ -869,9 +845,7 @@ class SpeechStream(stt.SpeechStream):
                 },
                 exc_info=True,
             )
-            raise APIConnectionError(
-                f"Failed to connect to Sarvam STT WebSocket: {e}"
-            ) from e
+            raise APIConnectionError(f"Failed to connect to Sarvam STT WebSocket: {e}") from e
 
         async with self._connection_lock:
             self._connection_state = ConnectionState.CONNECTED
@@ -886,9 +860,7 @@ class SpeechStream(stt.SpeechStream):
         return ws
 
     @utils.log_exceptions(logger=logger)
-    async def _process_audio(
-        self, ws: aiohttp.ClientWebSocketResponse
-    ) -> None:
+    async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
         import base64
 
@@ -911,8 +883,7 @@ class SpeechStream(stt.SpeechStream):
             async for frame in self._input_ch:
                 if ws.closed:
                     raise APIConnectionError(
-                        "Sarvam STT WebSocket closed while sending audio "
-                        f"(code={ws.close_code})"
+                        f"Sarvam STT WebSocket closed while sending audio (code={ws.close_code})"
                     )
                 if isinstance(frame, rtc.AudioFrame):
                     try:
@@ -930,9 +901,7 @@ class SpeechStream(stt.SpeechStream):
                             )
 
                             # Convert to base64
-                            base64_audio = base64.b64encode(
-                                chunk_data.tobytes()
-                            ).decode("utf-8")
+                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
 
                             # Send audio in the required format
                             audio_message = {
@@ -988,7 +957,23 @@ class SpeechStream(stt.SpeechStream):
                         "Received FlushSentinel, sending end of stream",
                         extra={"session_id": self._session_id},
                     )
-                    await ws.send_str(self._end_of_stream_msg)
+                    self._closing_ws = True
+                    try:
+                        await ws.send_str(self._end_of_stream_msg)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._logger.error(
+                            "Failed to send end_of_stream message",
+                            extra={
+                                "session_id": self._session_id,
+                                "ws_closed": ws.closed,
+                                "close_code": ws.close_code,
+                                "error_type": type(e).__name__,
+                            },
+                            exc_info=True,
+                        )
+                        raise APIConnectionError(f"Failed to send end_of_stream: {e}") from e
                     break
 
                 # Check if Sarvam VAD triggered flush
@@ -1013,9 +998,7 @@ class SpeechStream(stt.SpeechStream):
                             },
                             exc_info=True,
                         )
-                        raise APIConnectionError(
-                            f"Failed to send flush: {e}"
-                        ) from e
+                        raise APIConnectionError(f"Failed to send flush: {e}") from e
                     self._should_flush = False  # Reset flag
 
         except asyncio.CancelledError:
@@ -1034,9 +1017,7 @@ class SpeechStream(stt.SpeechStream):
                 },
                 exc_info=True,
             )
-            raise APIConnectionError(
-                f"Error in Sarvam STT audio loop: {e}"
-            ) from e
+            raise APIConnectionError(f"Error in Sarvam STT audio loop: {e}") from e
         finally:
             self._logger.debug(
                 f"Audio processing completed, sent {chunks_sent} chunks",
@@ -1047,9 +1028,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
     @utils.log_exceptions(logger=logger)
-    async def _process_messages(
-        self, ws: aiohttp.ClientWebSocketResponse
-    ) -> None:
+    async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process incoming messages from the WebSocket."""
         self._logger.info(
             "Starting message processing",
@@ -1088,8 +1067,7 @@ class SpeechStream(stt.SpeechStream):
                         },
                     )
                     raise APIConnectionError(
-                        "Sarvam STT WebSocket closed unexpectedly "
-                        f"(code={ws.close_code})"
+                        f"Sarvam STT WebSocket closed unexpectedly (code={ws.close_code})"
                     )
 
                 if msg.type == aiohttp.WSMsgType.ERROR:
@@ -1104,9 +1082,7 @@ class SpeechStream(stt.SpeechStream):
                         },
                         exc_info=True,
                     )
-                    raise APIConnectionError(
-                        f"Sarvam STT WebSocket error: {err}"
-                    )
+                    raise APIConnectionError(f"Sarvam STT WebSocket error: {err}")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     self._logger.warning(
@@ -1150,9 +1126,7 @@ class SpeechStream(stt.SpeechStream):
                 },
                 exc_info=True,
             )
-            raise APIConnectionError(
-                f"Error in Sarvam STT message loop: {e}"
-            ) from e
+            raise APIConnectionError(f"Error in Sarvam STT message loop: {e}") from e
 
     async def _handle_message(self, data: dict) -> None:
         """Handle different types of messages from Sarvam streaming API."""
@@ -1294,9 +1268,7 @@ class SpeechStream(stt.SpeechStream):
             if signal_type == "START_SPEECH":
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH
-                    )
+                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug(
                         "Speech started",
@@ -1306,9 +1278,7 @@ class SpeechStream(stt.SpeechStream):
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.END_OF_SPEECH
-                    )
+                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     self._event_ch.send_nowait(end_event)
 
                     # Set flag to trigger flush when Sarvam detects end of
@@ -1359,23 +1329,18 @@ class SpeechStream(stt.SpeechStream):
         ]
 
         is_recoverable = error_code in recoverable_codes or any(
-            keyword in str(error_info).lower()
-            for keyword in recoverable_keywords
+            keyword in str(error_info).lower() for keyword in recoverable_keywords
         )
 
         if is_recoverable:
             # Treat as retryable: transient, rate limit, temporary errors
             raise APIConnectionError(
-                "Sarvam STT recoverable streaming error "
-                f"(code={error_code}): {error_info}"
+                f"Sarvam STT recoverable streaming error (code={error_code}): {error_info}"
             )
         else:
             # Treat as non-retryable by default: invalid args, auth, etc.
             raise APIStatusError(
-                message=(
-                    "Sarvam STT streaming error "
-                    f"(code={error_code}): {error_info}"
-                ),
+                message=(f"Sarvam STT streaming error (code={error_code}): {error_info}"),
                 status_code=-1,
                 body=data,
                 retryable=False,
