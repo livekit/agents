@@ -120,8 +120,7 @@ class SarvamSTTOptions:
     model: SarvamSTTModels | str = "saarika:v2.5"
     base_url: str | None = None
     streaming_url: str | None = None
-    # Optional prompt for STT translate (saaras models only)
-    prompt: str | None = None
+    prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -179,38 +178,6 @@ def _calculate_audio_duration(buffer: AudioBuffer) -> float:
     return 0.0
 
 
-def _json_loads_maybe(raw: str) -> object:
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw
-
-
-def _truncate_for_log(val: object, *, max_len: int = 2000) -> str:
-    try:
-        if isinstance(val, str):
-            s = val
-        else:
-            s = json.dumps(val, ensure_ascii=False)
-    except Exception:
-        s = str(val)
-    if len(s) > max_len:
-        return s[:max_len] + "…(truncated)"
-    return s
-
-
-def _extract_request_id(body: object) -> str | None:
-    if isinstance(body, dict):
-        for k in ("request_id", "requestId", "id"):
-            v = body.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-    return None
-
-
 def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     """Build WebSocket URL with parameters."""
     params = {
@@ -264,6 +231,8 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                # chunk timestamps don't seem to work despite the docs saying they do
+                aligned_transcript=False,
             )
         )
 
@@ -355,7 +324,7 @@ class STT(stt.STT):
         if opts_model:
             form_data.add_field("model", str(opts_model))
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         headers = _build_custom_headers(self._api_key)
 
@@ -526,16 +495,10 @@ class STT(stt.STT):
             if is_given(high_vad_sensitivity)
             else self._opts.high_vad_sensitivity
         )
-        opts_sample_rate = (
-            sample_rate if is_given(sample_rate) else self._opts.sample_rate
-        )
-        opts_flush_signal = (
-            flush_signal if is_given(flush_signal) else self._opts.flush_signal
-        )
+        opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
         opts_input_codec = (
-            input_audio_codec
-            if is_given(input_audio_codec)
-            else self._opts.input_audio_codec
+            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
         )
 
         # Create options for the stream
@@ -553,7 +516,7 @@ class STT(stt.STT):
         # Create a fresh session for this stream to avoid conflicts
         stream_session = aiohttp.ClientSession()
 
-        if self._api_key is None:
+        if not self._api_key:
             raise ValueError("API key cannot be None")
         stream = SpeechStream(
             stt=self,
@@ -581,11 +544,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
     ) -> None:
         self._opts = opts
-        super().__init__(
-            stt=stt,
-            conn_options=conn_options,
-            sample_rate=opts.sample_rate,
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._api_key = api_key
         self._session = http_session
         self._speaking = False
@@ -616,7 +575,6 @@ class SpeechStream(stt.SpeechStream):
             1,
         )
         self._end_of_stream_msg = self._build_end_of_stream_message()
-        self._closing_ws = False
 
     def _build_end_of_stream_message(self) -> str:
         return json.dumps(
@@ -855,7 +813,9 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.streaming_url is None:
             raise ValueError("streaming_url cannot be None")
         ws_url = _build_websocket_url(self._opts.streaming_url, self._opts)
-        headers = _build_custom_headers(self._api_key)
+
+        # Connect to WebSocket with proper authentication
+        headers = {"api-subscription-key": self._api_key}
 
         self._logger.info(
             "Connecting to Sarvam STT WebSocket",
@@ -1033,25 +993,7 @@ class SpeechStream(stt.SpeechStream):
                         "Received FlushSentinel, sending end of stream",
                         extra={"session_id": self._session_id},
                     )
-                    self._closing_ws = True
-                    try:
-                        await ws.send_str(self._end_of_stream_msg)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        self._logger.error(
-                            "Failed to send end_of_stream message",
-                            extra={
-                                "session_id": self._session_id,
-                                "ws_closed": ws.closed,
-                                "close_code": ws.close_code,
-                                "error_type": type(e).__name__,
-                            },
-                            exc_info=True,
-                        )
-                        raise APIConnectionError(
-                            f"Failed to send end_of_stream: {e}"
-                        ) from e
+                    await ws.send_str(self._end_of_stream_msg)
                     break
 
                 # Check if Sarvam VAD triggered flush
@@ -1296,6 +1238,8 @@ class SpeechStream(stt.SpeechStream):
             speech_data = stt.SpeechData(
                 language=language,
                 text=transcript_text,
+                start_time=transcript_data.get("speech_start", 0.0),
+                end_time=transcript_data.get("speech_end", 0.0),
             )
 
             # Create final transcript event with request_id

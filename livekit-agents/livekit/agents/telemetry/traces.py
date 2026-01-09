@@ -18,27 +18,27 @@ from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import (
-    LogData,
     LoggerProvider,
     LoggingHandler,
-    LogRecord,
     LogRecordProcessor,
+    ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, TraceFlags, Tracer
+from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import AttributeValue
+from opentelemetry.util.types import Attributes, AttributeValue
 
 from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
 from ..log import logger
+from . import trace_types
 
 if TYPE_CHECKING:
-    from ..llm import ChatItem
+    from ..llm import ChatContext, ChatItem
     from ..voice.report import SessionReport
 
 
@@ -79,25 +79,16 @@ class _MetadataLogProcessor(LogRecordProcessor):
     def __init__(self, metadata: dict[str, AttributeValue]) -> None:
         self._metadata = metadata
 
-    def emit(self, log_data: LogData) -> None:
+    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
             log_data.log_record.attributes = self._metadata
 
-        log_data.log_record.attributes.update(  # type: ignore
-            {"logger.name": log_data.instrumentation_scope.name}
-        )
-
-    def on_emit(self, log_data: LogData) -> None:
-        if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)  # type: ignore
-        else:
-            log_data.log_record.attributes = self._metadata
-
-        log_data.log_record.attributes.update(  # type: ignore
-            {"logger.name": log_data.instrumentation_scope.name}
-        )
+        if log_data.instrumentation_scope:
+            log_data.log_record.attributes.update(  # type: ignore
+                {"logger.name": log_data.instrumentation_scope.name}
+            )
 
     def shutdown(self) -> None:
         pass
@@ -206,6 +197,46 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     root.addHandler(handler)
 
 
+def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
+    role_to_event = {
+        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
+        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+    }
+
+    events: list[tuple[str, Attributes]] = []
+    for item in chat_ctx.items:
+        if item.type == "message" and (event_name := role_to_event.get(item.role)):
+            # only support text content for now
+            events.append((event_name, {"content": item.text_content or ""}))
+        elif item.type == "function_call":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            json.dumps(
+                                {
+                                    "function": {"name": item.name, "arguments": item.arguments},
+                                    "id": item.call_id,
+                                    "type": "function",
+                                }
+                            )
+                        ],
+                    },
+                )
+            )
+        elif item.type == "function_call_output":
+            events.append(
+                (
+                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
+                    {"content": item.output, "name": item.name, "id": item.call_id},
+                )
+            )
+    return events
+
+
 def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
     item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
@@ -309,16 +340,11 @@ async def _upload_session_report(
         severity_text: str = "unspecified",
     ) -> None:
         chat_logger.emit(
-            LogRecord(
-                body=body,
-                timestamp=timestamp,
-                attributes=attributes,
-                trace_id=0,
-                span_id=0,
-                severity_number=severity,
-                severity_text=severity_text,
-                trace_flags=TraceFlags.get_default(),
-            )
+            body=body,
+            timestamp=timestamp,
+            attributes=attributes,
+            severity_number=severity,
+            severity_text=severity_text,
         )
 
     _log(

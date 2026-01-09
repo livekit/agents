@@ -809,8 +809,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             "speaker": self._opts.speaker,
             "client_request_id": self._client_request_id,
             "server_request_id": self._server_request_id,
-            "sdk_source": "livekit-agents-python",
-            "sdk_version": __version__,
         }
 
     def _maybe_set_server_request_id(self, data: dict) -> None:
