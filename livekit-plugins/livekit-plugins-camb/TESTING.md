@@ -25,7 +25,7 @@ uv run python examples/test_camb_tts.py
 This will test:
 - ✅ Voice listing (`list_voices()`)
 - ✅ Basic synthesis
-- ✅ MARS models (mars-8, mars-8-flash, mars-8-instruct)
+- ✅ MARS models (mars-flash, mars-pro, mars-instruct)
 - ✅ Speed control
 - ✅ Multi-language support (optional)
 
@@ -155,9 +155,9 @@ The main test suite checks:
 - Each voice has: id (int), name (str), gender, language
 
 ### MARS Models
-- `mars-8`: Default, balanced
-- `mars-8-flash`: Faster, similar quality
-- `mars-8-instruct`: Supports user_instructions parameter
+- `mars-flash`: Faster inference (default)
+- `mars-pro`: Higher quality synthesis
+- `mars-instruct`: Supports user_instructions parameter
 
 ### Error Cases
 - Invalid API key → APIStatusError (401)

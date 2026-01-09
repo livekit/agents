@@ -1,11 +1,11 @@
 # Camb.ai Plugin for LiveKit Agents
 
-Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS-8 technology.
+Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS technology.
 
 ## Features
 
-- High-quality neural text-to-speech with MARS-8 series models
-- Multiple model variants (mars-8, mars-8-flash, mars-8-instruct)
+- High-quality neural text-to-speech with MARS series models
+- Multiple model variants (mars-flash, mars-pro, mars-instruct)
 - User instructions for style and tone control
 - Speed control and enhanced pronunciation
 - Support for 140+ languages
@@ -64,18 +64,18 @@ stream = tts.synthesize("Using a specific voice!")
 
 ## Model Selection
 
-Camb.ai offers multiple MARS-8 models for different use cases:
+Camb.ai offers multiple MARS models for different use cases:
 
 ```python
-# Default balanced model
-tts = TTS(model="mars-8")
+# Faster inference (default)
+tts = TTS(model="mars-flash")
 
-# Faster inference
-tts = TTS(model="mars-8-flash")
+# Higher quality
+tts = TTS(model="mars-pro")
 
 # Supports user instructions for style/tone
 tts = TTS(
-    model="mars-8-instruct",
+    model="mars-instruct",
     user_instructions="Speak in a friendly, conversational tone"
 )
 ```
@@ -87,7 +87,7 @@ tts = TTS(
     api_key="your-api-key",  # Or use CAMB_API_KEY env var
     voice_id=2681,  # Voice ID from list-voices (Attic voice)
     language="en-us",  # BCP-47 locale
-    model="mars-8-instruct",  # MARS model variant
+    model="mars-instruct",  # MARS model variant
     speed=1.0,  # Speech rate (0.5-2.0)
     user_instructions="Speak energetically with clear enunciation",
     output_format="pcm_s16le",  # Audio format
@@ -126,9 +126,9 @@ async def entrypoint(ctx: agents.JobContext):
 - **api_key** (str | None): Camb.ai API key
 - **voice_id** (int): Voice ID to use (default: 2681)
 - **language** (str): BCP-47 locale (default: "en-us")
-- **model** (SpeechModel): MARS model variant (default: "mars-8")
+- **model** (SpeechModel): MARS model variant (default: "mars-flash")
 - **speed** (float): Speech rate (default: 1.0)
-- **user_instructions** (str | None): Style/tone guidance (requires mars-8-instruct)
+- **user_instructions** (str | None): Style/tone guidance (requires mars-instruct)
 - **output_format** (OutputFormat): Audio format (default: "pcm_s16le")
 - **enhance_named_entities** (bool): Enhanced pronunciation (default: False)
 - **base_url** (str): API base URL
@@ -136,12 +136,9 @@ async def entrypoint(ctx: agents.JobContext):
 
 ### Available Models
 
-- **mars-8**: Default, balanced quality and speed
-- **mars-8-flash**: Faster inference, lower latency
-- **mars-8-instruct**: Supports user_instructions for style control
-- **mars-7**: Previous generation model
-- **mars-6**: Older generation model
-- **auto**: Automatic model selection
+- **mars-flash**: Faster inference, lower latency (default)
+- **mars-pro**: Higher quality synthesis
+- **mars-instruct**: Supports user_instructions for style control
 
 ### Output Formats
 
@@ -213,11 +210,11 @@ tts = TTS()
 tts.update_options(voice_id=12345)
 
 # Change speed and model
-tts.update_options(speed=1.2, model="mars-8-flash")
+tts.update_options(speed=1.2, model="mars-pro")
 
 # Add user instructions
 tts.update_options(
-    model="mars-8-instruct",
+    model="mars-instruct",
     user_instructions="Speak warmly and enthusiastically"
 )
 ```
@@ -250,7 +247,7 @@ Coming soon:
 
 ## Links
 
-- [Camb.ai Documentation](https://camb.mintlify.app/)
+- [Camb.ai Documentation](https://docs.camb.ai/)
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
 - [GitHub Repository](https://github.com/livekit/agents)
 

@@ -69,8 +69,6 @@ class TTS(tts.TTS):
         sample_rate: int = SAMPLE_RATE,
         # HTTP client
         http_session: aiohttp.ClientSession | None = None,
-        # Streaming configuration
-        chunk_size: int | None = None,
     ) -> None:
         """
         Create a new instance of Camb.ai TTS.
@@ -85,14 +83,13 @@ class TTS(tts.TTS):
             credentials_file: GCP credentials file path for Vertex AI (future support).
             voice_id: Voice ID to use. Use list_voices() to discover available voices.
             language: BCP-47 locale (e.g., 'en-us', 'fr-fr').
-            model: MARS model to use ('mars-8', 'mars-8-flash', 'mars-8-instruct', etc.).
+            model: MARS model to use ('mars-flash', 'mars-pro', 'mars-instruct').
             speed: Speech rate (default: 1.0).
-            user_instructions: Style/tone guidance (3-1000 chars, requires mars-8-instruct model).
+            user_instructions: Style/tone guidance (3-1000 chars, requires mars-instruct model).
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
             sample_rate: Audio sample rate in Hz (default: 24000).
             http_session: Optional aiohttp session to reuse.
-            chunk_size: Bytes per chunk when streaming audio. If None, uses default chunking.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -119,7 +116,6 @@ class TTS(tts.TTS):
         # HTTP session management
         self._session = http_session
         self._close_session_on_cleanup = http_session is None
-        self._chunk_size = chunk_size
 
         # Configuration
         self._opts = _TTSOptions(
@@ -213,7 +209,7 @@ class ChunkedStream(tts.ChunkedStream):
             "enhance_named_entities_pronunciation": self._opts.enhance_named_entities,
         }
 
-        # Add user instructions if provided (requires mars-8-instruct model)
+        # Add user instructions if provided (requires mars-instruct model)
         if self._opts.user_instructions:
             payload["user_instructions"] = self._opts.user_instructions
 
@@ -283,13 +279,8 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 # Stream audio chunks
-                if self._tts._chunk_size is not None:
-                    async for chunk in response.content.iter_chunked(self._tts._chunk_size):
-                        if chunk:
-                            output_emitter.push(chunk)
-                else:
-                    async for data, _ in response.content.iter_chunks():
-                        output_emitter.push(data)
+                async for data, _ in response.content.iter_chunks():
+                    output_emitter.push(data)
 
                 output_emitter.flush()
 
