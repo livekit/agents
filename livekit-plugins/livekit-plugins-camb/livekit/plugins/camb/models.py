@@ -19,12 +19,9 @@ from typing import Literal
 
 # Speech models supported by Camb.ai MARS series
 SpeechModel = Literal[
-    "mars-8",  # Default, balanced quality/speed
-    "mars-8-flash",  # Faster inference
-    "mars-8-instruct",  # Supports user_instructions
-    "mars-7",  # Previous generation
-    "mars-6",  # Older generation
-    "auto",  # Auto-select best model
+    "mars-flash",  # Faster inference
+    "mars-pro",  # Higher quality
+    "mars-instruct",  # Supports user_instructions
 ]
 
 # Audio output formats
@@ -70,7 +67,7 @@ class _TTSOptions:
 # Constants
 DEFAULT_VOICE_ID = 2681  # Attic voice (publicly available)
 DEFAULT_LANGUAGE = "en-us"
-DEFAULT_MODEL: SpeechModel = "mars-8-flash"  # Faster inference
+DEFAULT_MODEL: SpeechModel = "mars-flash"  # Faster inference
 DEFAULT_OUTPUT_FORMAT: OutputFormat = "pcm_s16le"
 SAMPLE_RATE = 24000  # 24kHz - standard for Camb.ai PCM output
 NUM_CHANNELS = 1
