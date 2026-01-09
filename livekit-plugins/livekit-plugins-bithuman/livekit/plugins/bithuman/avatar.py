@@ -315,10 +315,16 @@ class AvatarSession:
         is_custom_endpoint = not self._is_default_api_url()
 
         if is_custom_endpoint:
-            # Use FormData format for custom endpoints (e.g., gpu-avatar-worker, cerebrium)
-            # Parse async parameter from URL if present
-            async_mode = self._parse_async_parameter_from_url()
-            await self._send_formdata_request(livekit_url, livekit_token, room_name, async_mode=async_mode)
+            # Check if this is a RunPod endpoint
+            if self._is_runpod_endpoint():
+                # RunPod endpoints (/run, /runsync) use JSON format with {"input": {...}}
+                # No async_mode parameter needed - RunPod uses /run vs /runsync to distinguish
+                await self._send_runpod_json_request(livekit_url, livekit_token, room_name)
+            else:
+                # Use FormData format for other custom endpoints (e.g., gpu-avatar-worker, cerebrium)
+                # Parse async parameter from URL if present
+                async_mode = self._parse_async_parameter_from_url()
+                await self._send_formdata_request(livekit_url, livekit_token, room_name, async_mode=async_mode)
         else:
             # Use JSON format for default BitHuman API
             await self._send_json_request(livekit_url, livekit_token, room_name)
@@ -334,6 +340,17 @@ class AvatarSession:
             return True
         default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
         return any(domain in self._api_url for domain in default_domains)
+
+    def _is_runpod_endpoint(self) -> bool:
+        """
+        Check if using RunPod Serverless endpoint.
+
+        Returns:
+            True if URL contains api.runpod.ai or api.runpod.io.
+        """
+        if self._api_url is None:
+            return False
+        return "api.runpod.ai" in self._api_url or "api.runpod.io" in self._api_url
 
     async def _send_json_request(
         self, livekit_url: str, livekit_token: str, room_name: str
@@ -380,6 +397,70 @@ class AvatarSession:
             "api-secret": self._api_secret,
         }
 
+        await self._send_request_with_retry(
+            headers=headers,
+            json_data=json_data,
+            form_data=None,
+        )
+
+    async def _send_runpod_json_request(
+        self, livekit_url: str, livekit_token: str, room_name: str
+    ) -> None:
+        """
+        Send request using RunPod JSON format.
+        
+        RunPod expects JSON format: {"input": {"livekit_url": ..., "livekit_token": ..., ...}}
+        
+        Args:
+            livekit_url: LiveKit server URL
+            livekit_token: JWT token for room access
+            room_name: Name of the LiveKit room
+        """
+        # Prepare input data for RunPod format
+        input_data = {
+            "livekit_url": livekit_url,
+            "livekit_token": livekit_token,
+            "room_name": room_name,
+        }
+        
+        # Handle avatar image - convert to base64 for JSON serialization
+        if isinstance(self._avatar_image, Image.Image):
+            img_byte_arr = io.BytesIO()
+            self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
+            img_byte_arr.seek(0)
+            import base64
+            input_data["avatar_image"] = base64.b64encode(img_byte_arr.getvalue()).decode("utf-8")
+        elif isinstance(self._avatar_image, bytes):
+            import base64
+            input_data["avatar_image"] = base64.b64encode(self._avatar_image).decode("utf-8")
+        elif isinstance(self._avatar_image, str):
+            # String can be URL or base64
+            if self._avatar_image.startswith(("http://", "https://")):
+                input_data["avatar_image_url"] = self._avatar_image
+            else:
+                # Assume base64, use as-is
+                input_data["avatar_image"] = self._avatar_image
+        
+        # Add avatar_id if provided
+        if utils.is_given(self._avatar_id):
+            input_data["avatar_id"] = self._avatar_id
+        
+        # RunPod expects {"input": {...}} format
+        json_data = {"input": input_data}
+        
+        # Authorization header for RunPod uses api_token (Bearer token format)
+        auth_token = self._api_token or self._api_secret
+        if auth_token is None:
+            raise BitHumanException(
+                "api_token or api_secret is required for RunPod endpoint requests. "
+                "Set BITHUMAN_API_TOKEN or BITHUMAN_API_SECRET environment variable."
+            )
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_token}",
+        }
+        
         await self._send_request_with_retry(
             headers=headers,
             json_data=json_data,
