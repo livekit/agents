@@ -853,7 +853,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         If state_passphrase is set, the chat context will be encrypted.
         """
-        from .agent import state_passphrase_ctx
+        from .agent import _state_passphrase_ctx
 
         tool_ctx = llm.ToolContext(self.tools)
         history: dict[str, Any] | bytes = self._chat_ctx.to_dict(
@@ -867,6 +867,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             encrypted = True
 
         state = {
+            "userdata": self._userdata,
             "tools": list(tool_ctx.function_tools.keys()),
             "history": history,
             "history_encrypted": encrypted,
@@ -874,24 +875,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         }
 
         # set context var so Agent.__getstate__ can access the passphrase
-        token = state_passphrase_ctx.set(passphrase)
+        token = _state_passphrase_ctx.set(passphrase)
         try:
             return pickle.dumps(state)
         finally:
-            state_passphrase_ctx.reset(token)
+            _state_passphrase_ctx.reset(token)
 
     async def rehydrate(self, state: bytes) -> None:
         """Restore session state from bytes."""
-        from .agent import state_passphrase_ctx
+        from .agent import _state_passphrase_ctx
 
         passphrase = self._opts.state_passphrase
 
         # set context var so Agent.__setstate__ can access the passphrase
-        token = state_passphrase_ctx.set(passphrase)
+        token = _state_passphrase_ctx.set(passphrase)
         try:
             state_dict: dict[str, Any] = pickle.loads(state)
         finally:
-            state_passphrase_ctx.reset(token)
+            _state_passphrase_ctx.reset(token)
 
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
@@ -903,6 +904,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 logger.warning("tool not found when unpickling", extra={"missing_tool": name})
 
         self._tools = valid_tools
+        self._userdata = state_dict["userdata"]
 
         # decrypt and unpickle chat history
         history = state_dict["history"]

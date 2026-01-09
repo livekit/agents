@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
@@ -37,6 +37,10 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        self._init_kwargs = {
+            "extra_instructions": extra_instructions,
+            "allow_interruptions": allow_interruptions,
+        }
         super().__init__(
             instructions=(
                 "You are only a single step in a broader system, responsible solely for capturing an email address.\n"
@@ -77,6 +81,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         # speech_handle/turn used to update the email address.
         # used to ignore the call to confirm_email_address in case the LLM is hallucinating and not asking for user confirmation
         self._email_update_speech_handle: SpeechHandle | None = None
+
+    def get_init_kwargs(self) -> dict[str, Any]:
+        return self._init_kwargs
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide an email address.")

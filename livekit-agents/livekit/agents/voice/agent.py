@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 # context variable for passing passphrase during pickle/unpickle
 # set by AgentSession before serialization/deserialization
-state_passphrase_ctx: ContextVar[str | None] = ContextVar("state_passphrase", default=None)
+_state_passphrase_ctx: ContextVar[str | None] = ContextVar("state_passphrase", default=None)
 
 
 @dataclass
@@ -94,6 +94,17 @@ class Agent:
         self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
         self._rehydrated = False
+
+    def get_init_kwargs(self) -> dict[str, Any]:
+        return {
+            "instructions": self._instructions,
+            "id": self._id,
+            "allow_interruptions": self._allow_interruptions,
+            "min_consecutive_speech_delay": self._min_consecutive_speech_delay,
+            "use_tts_aligned_transcript": self._use_tts_aligned_transcript,
+            "min_endpointing_delay": self._min_endpointing_delay,
+            "max_endpointing_delay": self._max_endpointing_delay,
+        }
 
     @property
     def id(self) -> str:
@@ -358,6 +369,28 @@ class Agent:
 
         return self._activity
 
+    @staticmethod
+    def _reconstruct(cls: type[Agent], init_kwargs: dict[str, Any], state: dict[str, Any]) -> Agent:
+        try:
+            agent = cls(**init_kwargs)
+        except TypeError:
+            logger.error(
+                "arguments mismatch when reconstructing agent", extra={"init_kwargs": init_kwargs}
+            )
+            raise
+        agent.__setstate__(state)
+        return agent
+
+    def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
+        init_kwargs: dict[str, Any] = {}
+        if "get_init_kwargs" in type(self).__dict__:
+            # only use get_init_kwargs if it's defined directly on type(self), not inherited
+            init_kwargs = self.get_init_kwargs()
+        return (
+            self._reconstruct,
+            (self.__class__, init_kwargs, self.__getstate__()),
+        )
+
     def __getstate__(self) -> dict[str, Any]:
         tool_ctx = llm.ToolContext(self.tools)
         chat_ctx: dict[str, Any] | bytes = self.chat_ctx.to_dict(
@@ -365,7 +398,7 @@ class Agent:
         )
 
         encrypted = False
-        if (passphrase := state_passphrase_ctx.get()) is not None:
+        if (passphrase := _state_passphrase_ctx.get()) is not None:
             chat_ctx = utils.encryption.encrypt(pickle.dumps(chat_ctx), passphrase)
             encrypted = True
 
@@ -377,12 +410,6 @@ class Agent:
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        try:
-            self.__init__()  # type: ignore
-        except TypeError as e:
-            logger.error("Agent rehydration requires a zero-argument constructor")
-            raise e
-
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
         for name in state["tools"]:
@@ -401,7 +428,7 @@ class Agent:
         chat_ctx = state["chat_ctx"]
         if isinstance(chat_ctx, bytes):
             if state.get("chat_ctx_encrypted", False):
-                if (passphrase := state_passphrase_ctx.get()) is not None:
+                if (passphrase := _state_passphrase_ctx.get()) is not None:
                     chat_ctx = utils.encryption.decrypt(chat_ctx, passphrase)
                 else:
                     raise ValueError("state_passphrase required to decrypt encrypted session state")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
@@ -32,6 +32,10 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        self._init_kwargs = {
+            "extra_instructions": extra_instructions,
+            "allow_interruptions": allow_interruptions,
+        }
         super().__init__(
             instructions=(
                 "You are only a single step in a broader system, responsible solely for capturing an address.\n"
@@ -76,6 +80,16 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         self._current_address = ""
 
         self._address_update_speech_handle: SpeechHandle | None = None
+
+    def get_init_kwargs(self) -> dict[str, Any]:
+        return self._init_kwargs
+
+    def __getstate__(self) -> dict[str, Any]:
+        return super().__getstate__() | {"current_address": self._current_address}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        super().__setstate__(state)
+        self._current_address = state["current_address"]
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide their address.")
