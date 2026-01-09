@@ -28,7 +28,7 @@ async def entrypoint(ctx: JobContext):
             custom_background_url="https://images.pexels.com/photos/259915/pexels-photo-259915.jpeg",
             video_height=720,
             video_width=1280,
-        )
+        ),
     )
     await avatario_avatar.start(session, room=ctx.room)
 
