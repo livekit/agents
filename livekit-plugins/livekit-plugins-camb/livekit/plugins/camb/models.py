@@ -65,7 +65,7 @@ class _TTSOptions:
 
 
 # Constants
-DEFAULT_VOICE_ID = 2681  # Attic voice (publicly available)
+DEFAULT_VOICE_ID = 147320
 DEFAULT_LANGUAGE = "en-us"
 DEFAULT_MODEL: SpeechModel = "mars-flash"  # Faster inference
 DEFAULT_OUTPUT_FORMAT: OutputFormat = "pcm_s16le"

@@ -58,7 +58,7 @@ for voice in voices:
 ## Select a Specific Voice
 
 ```python
-tts = TTS(voice_id=2681)  # Use Attic voice
+tts = TTS(voice_id=147320)
 stream = tts.synthesize("Using a specific voice!")
 ```
 
@@ -85,7 +85,7 @@ tts = TTS(
 ```python
 tts = TTS(
     api_key="your-api-key",  # Or use CAMB_API_KEY env var
-    voice_id=2681,  # Voice ID from list-voices (Attic voice)
+    voice_id=147320,  # Voice ID from list-voices
     language="en-us",  # BCP-47 locale
     model="mars-instruct",  # MARS model variant
     speed=1.0,  # Speech rate (0.5-2.0)
@@ -124,7 +124,7 @@ async def entrypoint(ctx: agents.JobContext):
 ### TTS Constructor Parameters
 
 - **api_key** (str | None): Camb.ai API key
-- **voice_id** (int): Voice ID to use (default: 2681)
+- **voice_id** (int): Voice ID to use (default: 147320)
 - **language** (str): BCP-47 locale (default: "en-us")
 - **model** (SpeechModel): MARS model variant (default: "mars-flash")
 - **speed** (float): Speech rate (default: 1.0)
