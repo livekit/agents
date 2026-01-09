@@ -79,12 +79,7 @@ def _build_custom_headers(
     """
     headers = {
         "api-subscription-key": api_key,
-        #"User-Agent": f"LiveKit-Agents-Python-Sarvam/{__version__}",
-        "X-SDK-Source": "Livekit",
-        "X-SDK-Version": __version__,
-        "SDK-Language": "Python",
-        "SDK-Language-Version": platform.python_version()
-        #"X-Plugin-Name": "livekit-plugins-sarvam",
+        "User-Agent": f"Livekit/{__version__} Python/{platform.python_version()}",
     }
 
     if additional_headers:
