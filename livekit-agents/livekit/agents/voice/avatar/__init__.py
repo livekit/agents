@@ -1,4 +1,5 @@
 from ._datastream_io import DataStreamAudioOutput, DataStreamAudioReceiver
+from ._datastream_io_upd import LatencyAudioOutput, attach_video_latency_listener
 from ._queue_io import QueueAudioOutput
 from ._runner import AvatarOptions, AvatarRunner
 from ._types import AudioReceiver, AudioSegmentEnd, VideoGenerator
@@ -12,6 +13,8 @@ __all__ = [
     "QueueAudioOutput",
     "DataStreamAudioReceiver",
     "DataStreamAudioOutput",
+    "LatencyAudioOutput",
+    "attach_video_latency_listener",
 ]
 
 # Cleanup docs of unexported modules

@@ -57,6 +57,16 @@ class TTSMetrics(BaseModel):
     metadata: Metadata | None = None
 
 
+class VAMetrics(BaseModel):
+    type: Literal["va_metrics"] = "va_metrics"
+    label: str
+    request_id: str
+    timestamp: float
+    ttfb: float
+    audio_duration: float
+    metadata: Metadata | None = None
+
+
 class VADMetrics(BaseModel):
     type: Literal["vad_metrics"] = "vad_metrics"
     label: str
@@ -85,6 +95,19 @@ class EOUMetrics(BaseModel):
 
     speech_id: str | None = None
 
+    metadata: Metadata | None = None
+
+
+class VideoAvatarMetrics(BaseModel):
+    type: Literal["video_avatar_metrics"] = "video_avatar_metrics"
+    event_id: str
+    timestamp: float
+    audio_sent_ts: float
+    ws_received_ts: float | None = None
+    video_received_ts: float | None = None
+    full_latency: float
+    server_latency: float
+    video_pipeline_latency: float
     metadata: Metadata | None = None
 
 
@@ -139,4 +162,5 @@ AgentMetrics = Union[
     VADMetrics,
     EOUMetrics,
     RealtimeModelMetrics,
+    VideoAvatarMetrics,
 ]
