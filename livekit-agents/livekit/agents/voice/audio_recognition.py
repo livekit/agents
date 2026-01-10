@@ -449,7 +449,9 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            self._last_speaking_time = time.time()
+            # Note: Don't update _last_speaking_time here - it was already set at START_OF_SPEECH.
+            # Updating it here would make transcription_delay calculation incorrect (~0) since
+            # END_OF_SPEECH typically arrives after FINAL_TRANSCRIPT in STT mode.
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
