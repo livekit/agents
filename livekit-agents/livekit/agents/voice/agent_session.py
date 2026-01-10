@@ -1164,6 +1164,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._agent_state == state:
             return
 
+        from .agent_activity import _SpeechHandleContextVar
+
+        speech_handle = _SpeechHandleContextVar.get(None)
+        speech_id = speech_handle.id if speech_handle else None
+
         if state == "speaking":
             self._llm_error_counts = 0
             self._tts_error_counts = 0
@@ -1192,7 +1197,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state = state
         self.emit(
             "agent_state_changed",
-            AgentStateChangedEvent(old_state=old_state, new_state=state),
+            AgentStateChangedEvent(old_state=old_state, new_state=state, speech_id=speech_id),
         )
 
     def _update_user_state(
@@ -1234,7 +1239,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
-        self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+        from .agent_activity import _SpeechHandleContextVar
+
+        speech_handle = _SpeechHandleContextVar.get(None)
+        speech_id = speech_handle.id if speech_handle else None
+
+        self.emit(
+            "conversation_item_added", ConversationItemAddedEvent(item=message, speech_id=speech_id)
+        )
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
