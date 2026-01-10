@@ -127,11 +127,17 @@ class PlaybackFinishedEvent:
 
 
 @dataclass
+class PlaybackStartedEvent:
+    created_at: float
+    """The timestamp (time.time())when the playback started"""
+
+
+@dataclass
 class AudioOutputCapabilities:
     pause: bool
 
 
-class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
+class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started"]]):
     def __init__(
         self,
         *,
@@ -167,6 +173,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
                     synchronized_transcript=ev.synchronized_transcript,
                 ),
             )
+            self.next_in_chain.on(
+                "playback_started", lambda ev: self.on_playback_started(created_at=ev.created_at)
+            )
 
     @property
     def label(self) -> str:
@@ -175,6 +184,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     @property
     def next_in_chain(self) -> AudioOutput | None:
         return self.__next_in_chain
+
+    def on_playback_started(self, *, created_at: float) -> None:
+        self.emit("playback_started", PlaybackStartedEvent(created_at=created_at))
 
     def on_playback_finished(
         self,
