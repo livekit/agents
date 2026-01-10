@@ -278,17 +278,22 @@ class ChunkedStream(ABC):
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                should_retry = (
+                    e.retryable
+                    and not output_emitter.has_pushed_audio()
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                    )
 
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    f"failed to synthesize speech, retrying in {retry_interval}s",
+                    exc_info=e,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                )
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
@@ -353,6 +358,8 @@ class SynthesizeStream(ABC):
         self._tts = tts
         self._conn_options = conn_options
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._replay_events: list[str | SynthesizeStream._FlushSentinel] = []
+        self._input_ended = False
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, self._monitor_aiter = self._tee
@@ -388,6 +395,10 @@ class SynthesizeStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
+            if i > 0:
+                # Retry runs `_run` again on the same stream instance. Most streaming TTS
+                # implementations consume `self._input_ch`, so we need to replay buffered input.
+                self._reset_for_retry()
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
@@ -416,17 +427,22 @@ class SynthesizeStream(ABC):
                 return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                should_retry = (
+                    e.retryable
+                    and not output_emitter.has_pushed_audio()
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
-                    )
 
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    f"failed to synthesize speech, retrying in {retry_interval}s",
+                    exc_info=e,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                )
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
@@ -512,13 +528,6 @@ class SynthesizeStream(ABC):
         if not token or self._input_ch.closed:
             return
 
-        self._pushed_text += token
-
-        if self._metrics_task is None:
-            self._metrics_task = asyncio.create_task(
-                self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
-            )
-
         if not self._mtc_text:
             if self._num_segments >= 1:
                 logger.warning(
@@ -529,6 +538,14 @@ class SynthesizeStream(ABC):
                 return
 
             self._num_segments += 1
+
+        self._pushed_text += token
+        self._replay_events.append(token)
+
+        if self._metrics_task is None:
+            self._metrics_task = asyncio.create_task(
+                self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
+            )
 
         self._mtc_text += token
         self._input_ch.send_nowait(token)
@@ -542,12 +559,29 @@ class SynthesizeStream(ABC):
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
 
-        self._input_ch.send_nowait(self._FlushSentinel())
+        sentinel = self._FlushSentinel()
+        self._replay_events.append(sentinel)
+        self._input_ch.send_nowait(sentinel)
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
         self.flush()
+        self._input_ended = True
         self._input_ch.close()
+
+    def _reset_for_retry(self) -> None:
+        # Reset per-attempt timing used for metrics; without this, retries can produce incorrect
+        # durations/TTFB because `_mark_started` only sets the first time.
+        self._started_time = 0
+
+        ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        for ev in self._replay_events:
+            ch.send_nowait(ev)
+
+        if self._input_ended:
+            ch.close()
+
+        self._input_ch = ch
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
@@ -625,6 +659,9 @@ class AudioEmitter:
             if -len(self._audio_durations) <= idx < len(self._audio_durations)
             else 0.0
         )
+
+    def has_pushed_audio(self) -> bool:
+        return any(d > 0.0 for d in self._audio_durations)
 
     @property
     def num_segments(self) -> int:

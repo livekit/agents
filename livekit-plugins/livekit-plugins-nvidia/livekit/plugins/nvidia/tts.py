@@ -121,41 +121,41 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
-        self._context_id = utils.shortuuid()
-        self._sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-        self._token_q = queue.Queue()
-        self._event_loop = asyncio.get_running_loop()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        context_id = utils.shortuuid()
+        sent_tokenizer_stream = self._opts.word_tokenizer.stream()
+        token_q: queue.Queue[tokenize.TokenData | None] = queue.Queue()
+        event_loop = asyncio.get_running_loop()
         output_emitter.initialize(
-            request_id=self._context_id,
+            request_id=context_id,
             sample_rate=self._opts.sample_rate,
             num_channels=1,
             stream=True,
             mime_type="audio/pcm",
         )
-        output_emitter.start_segment(segment_id=self._context_id)
+        output_emitter.start_segment(segment_id=context_id)
 
-        done_fut = asyncio.Future()
+        done_fut: asyncio.Future[None] = event_loop.create_future()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
+                    sent_tokenizer_stream.flush()
                     continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
 
         async def _process_segments() -> None:
-            async for word_stream in self._sent_tokenizer_stream:
-                self._token_q.put(word_stream)
-            self._token_q.put(None)
+            async for word_stream in sent_tokenizer_stream:
+                token_q.put(word_stream)
+            token_q.put(None)
 
         def _synthesize_worker() -> None:
             try:
                 service = self._tts._ensure_session()
                 while True:
-                    token = self._token_q.get()
+                    token = token_q.get()
 
                     if not token:
                         break
@@ -169,15 +169,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                             encoding=AudioEncoding.LINEAR_PCM,
                         )
                         for response in responses:
-                            self._event_loop.call_soon_threadsafe(
-                                output_emitter.push, response.audio
-                            )
+                            event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
 
                     except Exception as e:
                         logger.error(f"Error in synthesis: {e}")
                         continue
             finally:
-                self._event_loop.call_soon_threadsafe(done_fut.set_result, None)
+                event_loop.call_soon_threadsafe(done_fut.set_result, None)
 
         synthesize_thread = threading.Thread(
             target=_synthesize_worker,
@@ -194,6 +192,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
-            self._token_q.put(None)
+            token_q.put(None)
             await done_fut
             output_emitter.end_segment()
+            await sent_tokenizer_stream.aclose()
