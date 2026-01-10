@@ -11,6 +11,7 @@ from livekit.agents import (
     MetricsCollectedEvent,
     RunContext,
     cli,
+    inference,
     metrics,
     room_io,
 )
@@ -36,7 +37,7 @@ class MyAgent(Agent):
             "you will speak english to the user",
         )
 
-    async def on_enter(self):
+    async def on_enter(self) -> None:
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
         # Keep it uninterruptible so the client has time to calibrate AEC (Acoustic Echo Cancellation).
@@ -47,7 +48,7 @@ class MyAgent(Agent):
     @function_tool
     async def lookup_weather(
         self, context: RunContext, location: str, latitude: str, longitude: str
-    ):
+    ) -> str:
         """Called when the user asks for weather related information.
         Ensure the user's location (city or region) is provided.
         When given a location, please estimate the latitude and longitude of the location and
@@ -67,7 +68,7 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
+def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
@@ -75,12 +76,12 @@ server.setup_fnc = prewarm
 
 
 @server.rtc_session()
-async def entrypoint(ctx: JobContext):
+async def entrypoint(ctx: JobContext) -> None:
     # each log entry will include these fields
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-    session = AgentSession(
+    session: AgentSession = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
         stt="deepgram/nova-3",
@@ -94,6 +95,7 @@ async def entrypoint(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
+        bargein_detector=inference.BargeinDetector(),
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
@@ -107,11 +109,11 @@ async def entrypoint(ctx: JobContext):
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
+    def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
-    async def log_usage():
+    async def log_usage() -> None:
         summary = usage_collector.get_summary()
         logger.info(f"Usage: {summary}")
 
