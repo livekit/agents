@@ -25,7 +25,6 @@ from livekit.plugins import (
     deepgram,
     elevenlabs,
     google,
-    groq,
     hume,
     inworld,
     lmnt,
