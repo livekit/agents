@@ -429,7 +429,7 @@ logging.getLogger("livekit.agents.voice.softacks").setLevel(logging.DEBUG)
 
 ---
 
-<!-- ## Core concepts
+## Core concepts
 
 - Agent: An LLM-based application with defined instructions.
 - AgentSession: A container for agents that manages interactions with end users.
@@ -729,7 +729,7 @@ To get started quickly, try the [Agents Playground](https://agents-playground.li
 python myagent.py start
 ```
 
-Runs the agent with production-ready optimizations. -->
+Runs the agent with production-ready optimizations.
 
 ## Contributing
 
