@@ -16,7 +16,7 @@ import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError, tokenize, tts
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tokenize, tts
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
@@ -248,6 +248,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": inference.TTS(model="cartesia/sonic-3"),
+            "proxy-upstream": "agent-gateway.livekit.cloud:443",
+        },
+        id="inference-cartesia",
     ),
 ]
 

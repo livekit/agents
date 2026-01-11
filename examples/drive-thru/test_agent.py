@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents import AgentSession, ChatContext, llm
+from livekit.agents import AgentSession, ChatContext, inference, llm
 from livekit.agents.voice.run_result import mock_tools
-from livekit.plugins import openai
 
 from .agent import DriveThruAgent, new_userdata
 
 
 def _main_llm() -> llm.LLM | llm.RealtimeModel:
     # use any LLM or realtime model
-    return openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45)
+    return inference.LLM(
+        "openai/gpt-5.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+    )
 
 
 def _judge_llm() -> llm.LLM:
     # judge must be a text-based LLM
-    return openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45)
+    return inference.LLM(
+        "openai/gpt-5.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+    )
 
 
 @pytest.mark.asyncio

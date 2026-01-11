@@ -133,6 +133,21 @@ class TTS(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
 
+    def _synthesize_with_stream(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
+        """Helper method to implement synthesize() using stream() for TTS providers
+        that only support streaming inference.
+
+        This creates a stream, pushes the text as a single chunk, ends the input,
+        and returns a ChunkedStream wrapper around it.
+        """
+        return _ChunkedStreamFromStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
+
     def prewarm(self) -> None:
         """Pre-warm connection to the TTS service"""
         pass
@@ -341,6 +356,101 @@ class ChunkedStream(ABC):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+class _ChunkedStreamFromStream(ChunkedStream):
+    """Implementation of ChunkedStream that wraps a SynthesizeStream.
+
+    Used by TTS providers that only support streaming inference to implement
+    the synthesize() method.
+    """
+
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
+        # Don't call super().__init__ yet - we'll handle initialization differently
+        self._input_text = input_text
+        self._tts = tts
+        self._conn_options = conn_options
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._tee = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee
+        self._current_attempt_has_error = False
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
+        )
+        self._stream: SynthesizeStream | None = None
+
+        async def _traceable_main_task() -> None:
+            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
+                await self._main_task()
+
+        self._synthesize_task = asyncio.create_task(
+            _traceable_main_task(), name="TTS._synthesize_task"
+        )
+        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
+        self._tts_request_span: trace.Span | None = None
+
+    async def _main_task(self) -> None:
+        """Override main task to directly forward SynthesizedAudio events from stream"""
+        self._tts_request_span = current_span = trace.get_current_span()
+        current_span.set_attributes(
+            {
+                trace_types.ATTR_TTS_STREAMING: False,
+                trace_types.ATTR_TTS_LABEL: self._tts.label,
+            }
+        )
+
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    try:
+                        self._stream = self._tts.stream(conn_options=self._conn_options)
+                        self._stream.push_text(self._input_text)
+                        self._stream.end_input()
+
+                        audio_duration = 0.0
+                        async for audio in self._stream:
+                            audio_duration += audio.frame.duration
+                            self._event_ch.send_nowait(audio)
+
+                        if self._input_text.strip() and audio_duration <= 0.0:
+                            raise APIError(f"no audio frames were pushed for text: {self._input_text}")
+
+                    except Exception as e:
+                        telemetry_utils.record_exception(attempt_span, e)
+                        raise
+
+                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
+                return
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f"failed to synthesize speech, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                    )
+
+                await asyncio.sleep(retry_interval)
+                self._current_attempt_has_error = False
+            finally:
+                if self._stream is not None:
+                    await self._stream.aclose()
+                    self._stream = None
+
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        # This method is not used in our implementation
+        raise NotImplementedError("_run should not be called on _ChunkedStreamFromStream")
 
 
 class SynthesizeStream(ABC):

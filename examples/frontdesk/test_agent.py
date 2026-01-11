@@ -3,8 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from livekit.agents import AgentSession, beta, llm
-from livekit.plugins import openai
+from livekit.agents import AgentSession, beta, inference, llm
 
 from .calendar_api import AvailableSlot, FakeCalendar
 from .frontdesk_agent import FrontDeskAgent, Userdata
@@ -13,7 +12,9 @@ TIMEZONE = "UTC"
 
 
 def _llm_model() -> llm.LLM:
-    return openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45)
+    return inference.LLM(
+        model="openai/gpt-5.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+    )
 
 
 @pytest.mark.asyncio

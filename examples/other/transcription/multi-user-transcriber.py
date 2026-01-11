@@ -13,11 +13,12 @@ from livekit.agents import (
     JobProcess,
     StopResponse,
     cli,
+    inference,
     llm,
     room_io,
     utils,
 )
-from livekit.plugins import deepgram, silero
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -32,7 +33,7 @@ class Transcriber(Agent):
     def __init__(self, *, participant_identity: str):
         super().__init__(
             instructions="not-needed",
-            stt=deepgram.STT(),
+            stt=inference.STT("deepgram/nova-3"),
         )
         self.participant_identity = participant_identity
 
