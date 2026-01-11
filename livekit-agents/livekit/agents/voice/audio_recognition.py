@@ -182,9 +182,9 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_vad(None)
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
         self._sample_rate = frame.sample_rate
-        if self._stt_ch is not None:
+        if not skip_stt and self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
         if self._vad_ch is not None:
@@ -258,9 +258,8 @@ class AudioRecognition:
             return
 
         async def _commit_user_turn() -> None:
-            if (
-                self._last_final_transcript_time
-                and time.time() - self._last_final_transcript_time > 0.5
+            if self._last_final_transcript_time is None or (
+                time.time() - self._last_final_transcript_time > 0.5
             ):
                 # if the last final transcript is received more than 0.5s ago
                 # append a silence frame to the stt to flush the buffer

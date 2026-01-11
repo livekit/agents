@@ -34,6 +34,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient, RTZRStatusError
@@ -52,6 +53,7 @@ class _STTOptions:
     noise_threshold: float = 0.60
     active_threshold: float = 0.80
     use_punctuation: bool = False
+    keywords: list[str] | list[tuple[str, float]] | None = None
 
 
 class STT(stt.STT):
@@ -74,9 +76,18 @@ class STT(stt.STT):
         noise_threshold: float = 0.60,
         active_threshold: float = 0.80,
         use_punctuation: bool = False,
+        keywords: list[str] | list[tuple[str, float]] | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                # word timestamps don't seem to work despite the docs saying they do
+                aligned_transcript="chunk",
+                offline_recognize=False,
+            )
+        )
 
         self._params = _STTOptions(
             model_name=model,
@@ -87,8 +98,19 @@ class STT(stt.STT):
             noise_threshold=noise_threshold,
             active_threshold=active_threshold,
             use_punctuation=use_punctuation,
+            keywords=keywords,
         )
+        if keywords and model != "sommers_ko":
+            logger.warning("RTZR keyword boosting is only supported with sommers_ko model")
         self._client = RTZROpenAPIClient(http_session=http_session)
+
+    @property
+    def model(self) -> str:
+        return self._params.model_name
+
+    @property
+    def provider(self) -> str:
+        return "RTZR"
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""
@@ -131,6 +153,7 @@ class SpeechStream(stt.SpeechStream):
             noise_threshold=self._stt._params.noise_threshold,
             active_threshold=self._stt._params.active_threshold,
             use_punctuation=self._stt._params.use_punctuation,
+            keywords=self._stt._params.keywords,
         )
 
         try:
@@ -219,6 +242,11 @@ class SpeechStream(stt.SpeechStream):
                     logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
                     continue
 
+                # msec -> sec
+                start_time = data.get("start_at", 0) / 1000.0
+                duration = data.get("duration", 0) / 1000.0
+                words = data.get("words", [])
+
                 # Expected schema from reference: {"alternatives":[{"text": "..."}], "final": bool}
                 if "alternatives" in data and data["alternatives"]:
                     text = data["alternatives"][0].get("text", "")
@@ -241,7 +269,28 @@ class SpeechStream(stt.SpeechStream):
                             stt.SpeechEvent(
                                 type=event_type,
                                 alternatives=[
-                                    stt.SpeechData(text=text, language=self._stt._params.language)
+                                    stt.SpeechData(
+                                        text=text,
+                                        language=self._stt._params.language,
+                                        start_time=start_time + self.start_time_offset,
+                                        end_time=start_time + duration + self.start_time_offset,
+                                        words=[
+                                            TimedString(
+                                                text=word.get("text", ""),
+                                                start_time=word.get("start_at", 0) / 1000.0
+                                                + self.start_time_offset,
+                                                end_time=(
+                                                    word.get("start_at", 0)
+                                                    + word.get("duration", 0)
+                                                )
+                                                / 1000.0
+                                                + self.start_time_offset,
+                                            )
+                                            for word in words
+                                        ]
+                                        if words
+                                        else None,
+                                    )
                                 ],
                             )
                         )
