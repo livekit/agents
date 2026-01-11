@@ -87,6 +87,8 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
+    "user_interruption_detected",
+    "user_non_interruption_detected",
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
