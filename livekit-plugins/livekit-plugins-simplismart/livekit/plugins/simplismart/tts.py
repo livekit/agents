@@ -17,6 +17,8 @@ from livekit.agents import (
     utils,
 )
 
+from .models import TTSModels
+
 
 class SimplismartTTSOptions(BaseModel):
     temperature: float = 0.7
@@ -30,13 +32,22 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: str,
-        model: str | None = "Simplismart/orpheus-3b-0.1-ft",
+        model: TTSModels | str = "canopylabs/orpheus-3b-0.1-ft",
         voice="tara",
         api_key: str | None = None,
         params: dict[str, Any] | SimplismartTTSOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
         **kwargs: Any,
     ) -> None:
+        """
+        Configuration options for SimpliSmart TTS (Text-to-Speech).
+
+        Attributes:
+            temperature (float): Controls the randomness in the model output. Lower values make output more deterministic.
+            top_p (float): Nucleus sampling probability threshold. Limits the sampling pool of predicted tokens.
+            repetition_penalty (float): Penalty applied to repeated text to reduce repetition.
+            max_tokens (int): Maximum number of output tokens allowed in the synthesized speech.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=24000,
@@ -93,7 +104,7 @@ class ChunkedStream(tts.ChunkedStream):
         payload = self._opts.model_dump()
         payload["prompt"] = self._input_text
         payload["voice"] = self._tts._voice
-        payload["model"] = "Simplismart/orpheus-3b-0.1-ft"
+        payload["model"] = self._tts._model
 
         headers = {
             "Authorization": f"Bearer {self._tts._api_key}",
@@ -119,6 +130,7 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 async for audio_data, _ in resp.content.iter_chunks():
                     output_emitter.push(audio_data)
+                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
