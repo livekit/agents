@@ -59,7 +59,7 @@ lint: ## Run ruff linter
 	@if uv run ruff check .; then \
 		echo "$(BOLD)$(GREEN)✓ No linting issues found$(RESET)"; \
 	else \
-		echo "$(BOLD)$(RED)✗ Linting issues found$(RESET)"; \
+		echo "$(BOLD)$(RED)✗ Linting issues found. Run 'make fix' to automatically fix them.$(RESET)"; \
 		exit 1; \
 	fi
 
