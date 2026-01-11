@@ -181,13 +181,6 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": groq.TTS(),
-            "proxy-upstream": "api.groq.com:443",
-        },
-        id="groq",
-    ),
-    pytest.param(
-        lambda: {
             "tts": lmnt.TTS(),
             "proxy-upstream": "api.lmnt.com:443",
         },
@@ -456,6 +449,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld-stream-adapter",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/arcana")),
+            "proxy-upstream": "agent-gateway.livekit.cloud:443",
+        },
+        id="inference-rime",
     ),
 ]
 
