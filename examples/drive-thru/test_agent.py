@@ -11,7 +11,7 @@ from .agent import DriveThruAgent, new_userdata
 def _main_llm() -> llm.LLM | llm.RealtimeModel:
     # use any LLM or realtime model
     return inference.LLM(
-        "openai/gpt-5.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+        "openai/gpt-4.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
     )
 
 
@@ -297,9 +297,6 @@ async def test_conv():
 async def test_unknown_item():
     userdata = await new_userdata()
 
-    # remove the hamburger
-    userdata.regular_items = [item for item in userdata.regular_items if item.id != "hamburger"]
-
     async with (
         _main_llm() as llm,
         _judge_llm() as judge_llm,
@@ -308,13 +305,13 @@ async def test_unknown_item():
         agent = DriveThruAgent(userdata=userdata)
         await sess.start(agent)
 
-        result = await sess.run(user_input="Can I get an hamburger? No meal")
+        result = await sess.run(user_input="Can I get a double hamburger? No meal")
         await (
             result.expect.next_event()
             .is_message(role="assistant")
             .judge(
                 judge_llm,
-                intent="should say a plain hamburger isn't something they have, or suggest something similar",
+                intent="should say it isn't something they have, or suggest something similar",
             )
         )
         result.expect.no_more_events()

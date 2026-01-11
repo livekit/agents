@@ -420,7 +420,9 @@ class _ChunkedStreamFromStream(ChunkedStream):
                             self._event_ch.send_nowait(audio)
 
                         if self._input_text.strip() and audio_duration <= 0.0:
-                            raise APIError(f"no audio frames were pushed for text: {self._input_text}")
+                            raise APIError(
+                                f"no audio frames were pushed for text: {self._input_text}"
+                            )
 
                     except Exception as e:
                         telemetry_utils.record_exception(attempt_span, e)

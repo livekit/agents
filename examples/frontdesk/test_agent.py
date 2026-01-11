@@ -13,7 +13,7 @@ TIMEZONE = "UTC"
 
 def _llm_model() -> llm.LLM:
     return inference.LLM(
-        model="openai/gpt-5.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
+        model="openai/gpt-4.1", extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45}
     )
 
 
