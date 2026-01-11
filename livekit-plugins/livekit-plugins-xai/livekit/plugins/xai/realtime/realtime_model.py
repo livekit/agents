@@ -5,7 +5,6 @@ from typing import Any
 
 import aiohttp
 from openai.types.beta.realtime.session import TurnDetection
-from openai.types.realtime import SessionUpdateEvent
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import ProviderTool, llm
@@ -52,7 +51,7 @@ class XSearch(XAITool):
     allowed_x_handles: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        result = {"type": "x_search"}
+        result: dict[str, Any] = {"type": "x_search"}
         if self.allowed_x_handles:
             result["allowed_x_handles"] = self.allowed_x_handles
         return result
@@ -66,7 +65,7 @@ class FileSearch(XAITool):
     max_num_results: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        result = {
+        result: dict[str, Any] = {
             "type": "file_search",
             "vector_store_ids": self.vector_store_ids,
         }
@@ -83,7 +82,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         voice: NotGivenOr[GrokVoices | str | None] = "Ara",
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetection | None] = XAI_DEFAULT_TURN_DETECTION,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -95,13 +94,16 @@ class RealtimeModel(openai.realtime.RealtimeModel):
                 "to the client or by setting the XAI_API_KEY environment variable"
             )
 
+        resolved_voice = voice if is_given(voice) else "Ara"
         super().__init__(
             base_url=base_url if is_given(base_url) else XAI_BASE_URL,
             model="grok-4-1-fast-non-reasoning",
-            voice=voice,
+            voice=resolved_voice,  # type: ignore[arg-type]
             api_key=api_key,
             modalities=["audio"],
-            turn_detection=turn_detection,
+            turn_detection=turn_detection
+            if is_given(turn_detection)
+            else XAI_DEFAULT_TURN_DETECTION,
             http_session=http_session if is_given(http_session) else None,
             max_session_duration=max_session_duration if is_given(max_session_duration) else None,
             conn_options=conn_options,
@@ -120,11 +122,11 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super().__init__(realtime_model)
         self._xai_model: RealtimeModel = realtime_model
 
-    def _create_tools_update_event(self, tools: list[llm.Tool]) -> SessionUpdateEvent | dict:
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
         event = super()._create_tools_update_event(tools)
 
         # inject supported Toolset
-        xai_tools: list[dict] = []
+        xai_tools: list[dict[str, Any]] = []
         for tool in tools:
             if isinstance(tool, XAITool):
                 xai_tools.append(tool.to_dict())

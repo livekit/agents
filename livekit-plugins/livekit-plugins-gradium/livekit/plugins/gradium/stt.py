@@ -269,9 +269,9 @@ class SpeechStream(stt.SpeechStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            buffered_text = []
+            buffered_text: list[str] = []
             speaking = False
-            remaining_vad_steps = False
+            remaining_vad_steps: int | None = None
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
