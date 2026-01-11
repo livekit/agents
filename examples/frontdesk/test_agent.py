@@ -124,5 +124,8 @@ async def test_no_availability() -> None:
         await (
             result.expect.next_event()
             .is_message(role="assistant")
-            .judge(llm, intent="must say that there is no availability")
+            .judge(
+                llm,
+                intent="must say that there is no availability, especially in the requested time range. optionally, it can offer to look at other times",
+            )
         )
