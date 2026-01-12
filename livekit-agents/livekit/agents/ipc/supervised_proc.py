@@ -319,7 +319,8 @@ class SupervisedProc(ABC):
                 except Exception:
                     pass
             try:
-                self._proc.kill()
+                if self._proc.is_alive():
+                    self._proc.kill()
             except ValueError:
                 pass
 
