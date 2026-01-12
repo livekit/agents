@@ -1,11 +1,12 @@
 import functools
 import warnings
 from collections import defaultdict
+from typing import Any, Callable
 
 from livekit.agents.types import NOT_GIVEN
 
 
-def deprecate_params(mapping: dict[str, str]):
+def deprecate_params(mapping: dict[str, str]) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Args:
         mapping: {old_param: suggestion}
@@ -24,9 +25,9 @@ def deprecate_params(mapping: dict[str, str]):
     1
     """
 
-    def decorator(fn):
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             by_suggestion: defaultdict[str, list[str]] = defaultdict(list)
             for name, suggestion in mapping.items():
                 if kwargs.get(name, NOT_GIVEN) is not NOT_GIVEN:

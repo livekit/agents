@@ -90,8 +90,8 @@ class Agent:
         self._tts = tts
         self._vad = vad
 
-        self._interruption_detection = turn_handling.interruption.mode
-        self._allow_interruptions = turn_handling.interruption.mode is not False
+        self._interruption_detection = turn_handling.interruption_cfg.mode
+        self._allow_interruptions = turn_handling.interruption_cfg.mode is not False
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
@@ -142,7 +142,7 @@ class Agent:
         return _ReadOnlyChatContext(self._chat_ctx.items)
 
     @property
-    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"] | False]:
+    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad", False]]:
         return self._interruption_detection
 
     async def update_instructions(self, instructions: str) -> None:
@@ -672,32 +672,39 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        interruption_handling: NotGivenOr[Literal["adaptive", "vad"] | False] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingConfig] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
+        # deprecated
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
+        turn_handling = (
+            TurnHandlingConfig.migrate(
+                turn_detection=turn_detection,
+                allow_interruptions=allow_interruptions,
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            )
+            if not is_given(turn_handling)
+            else turn_handling
+        )
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
             tools=tools,
-            turn_detection=turn_detection,
             stt=stt,
             vad=vad,
             llm=llm,
             tts=tts,
             mcp_servers=mcp_servers,
-            interruption_handling=interruption_handling,
-            allow_interruptions=allow_interruptions,
-            min_endpointing_delay=min_endpointing_delay,
-            max_endpointing_delay=max_endpointing_delay,
+            turn_handling=turn_handling,
         )
 
         self.__started = False

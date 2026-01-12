@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar, Union
 
+from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 from typing_extensions import TypeAlias
 
@@ -49,7 +50,9 @@ class NotGiven:
         return "NOT_GIVEN"
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler) -> CoreSchema:
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
         return core_schema.is_instance_schema(cls)
 
 

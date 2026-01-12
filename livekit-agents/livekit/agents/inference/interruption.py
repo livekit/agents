@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum, unique
 from time import perf_counter_ns
-from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, cast, overload
 
 import aiohttp
 import numpy as np
@@ -1199,8 +1199,8 @@ class _BoundedCache(Generic[_K, _V]):
 def handle_deprecation(
     vad: NotGivenOr[VAD | None] = NOT_GIVEN,
     allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-    interruption_handling: NotGivenOr[Literal["adaptive", "vad"] | False] = NOT_GIVEN,
-) -> Literal["adaptive", "vad"] | False:
+    interruption_handling: NotGivenOr[Literal["adaptive", "vad", False]] = NOT_GIVEN,
+) -> Literal["adaptive", "vad", False]:
     if is_given(allow_interruptions):
         warnings.warn(
             "`allow_interruptions` is deprecated, use `interruption_handling` instead",
@@ -1219,9 +1219,9 @@ def handle_deprecation(
         return False
 
     if is_given(interruption_handling):
-        if vad is None and interruption_handling is not False:
+        if vad is None and interruption_handling in {"adaptive", "vad"}:
             raise ValueError("`vad` is not provided but `interruption_handling` is not False")
-        return interruption_handling
+        return cast(Literal["adaptive", "vad", False], interruption_handling)
 
     if vad is None:
         return False

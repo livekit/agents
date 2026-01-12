@@ -113,7 +113,7 @@ class TurnHandlingConfig(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    turn_detection: Annotated[NotGivenOr[TurnDetectionMode], SkipValidation()] = NOT_GIVEN
+    turn_detection: Annotated[NotGivenOr[TurnDetectionMode | None], SkipValidation()] = NOT_GIVEN
     endpointing: EndpointingConfig | EndpointingConfigDict = Field(
         default_factory=EndpointingConfig
     )
@@ -137,7 +137,7 @@ class TurnHandlingConfig(BaseModel):
         preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
         user_away_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         discard_audio_if_uninterruptible: NotGivenOr[bool] = NOT_GIVEN,
         min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
         min_interruption_words: NotGivenOr[int] = NOT_GIVEN,
@@ -151,10 +151,9 @@ class TurnHandlingConfig(BaseModel):
         if is_given(agent_false_interruption_timeout):
             false_interruption_timeout = agent_false_interruption_timeout
 
+        interruption_mode: NotGivenOr[Literal["adaptive", "vad", False]] = NOT_GIVEN
         if allow_interruptions is False:
             interruption_mode = False
-        else:
-            interruption_mode = NOT_GIVEN
 
         endpointing_kwargs = {}
         if is_given(min_endpointing_delay):
@@ -162,7 +161,7 @@ class TurnHandlingConfig(BaseModel):
         if is_given(max_endpointing_delay):
             endpointing_kwargs["max_delay"] = max_endpointing_delay
 
-        interruption_kwargs = {}
+        interruption_kwargs: dict[str, Any] = {}
         if is_given(interruption_mode):
             interruption_kwargs["mode"] = interruption_mode
         if is_given(discard_audio_if_uninterruptible):
@@ -178,7 +177,7 @@ class TurnHandlingConfig(BaseModel):
         if is_given(resume_false_interruption):
             interruption_kwargs["resume_false_interruption"] = resume_false_interruption
 
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if endpointing_kwargs:
             kwargs["endpointing"] = EndpointingConfig(**endpointing_kwargs)
         if interruption_kwargs:
@@ -192,3 +191,15 @@ class TurnHandlingConfig(BaseModel):
             kwargs["preemptive_generation"] = preemptive_generation
 
         return cls(**kwargs)
+
+    @property
+    def interruption_cfg(self) -> InterruptionConfig:
+        if isinstance(self.interruption, dict):
+            return InterruptionConfig(**self.interruption)
+        return self.interruption
+
+    @property
+    def endpointing_cfg(self) -> EndpointingConfig:
+        if isinstance(self.endpointing, dict):
+            return EndpointingConfig(**self.endpointing)
+        return self.endpointing
