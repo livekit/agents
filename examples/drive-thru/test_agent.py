@@ -121,7 +121,10 @@ async def test_failure() -> None:
             await (
                 result.expect.next_event()
                 .is_message(role="assistant")
-                .judge(judge_llm, intent="should inform the user that an error occurred")
+                .judge(
+                    judge_llm,
+                    intent="should inform the user that something went wrong, it's ok to ask them to try again",
+                )
             )
 
             # leaving this commented, some LLMs may occasionally try to retry.
