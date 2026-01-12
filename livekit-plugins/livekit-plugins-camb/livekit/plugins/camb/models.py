@@ -19,10 +19,17 @@ from typing import Literal
 
 # Speech models supported by Camb.ai MARS series
 SpeechModel = Literal[
-    "mars-flash",  # Faster inference
-    "mars-pro",  # Higher quality
-    "mars-instruct",  # Supports user_instructions
+    "mars-flash",  # Faster inference, 22.05kHz
+    "mars-pro",  # Higher quality, 48kHz
+    "mars-instruct",  # Supports user_instructions, 22.05kHz
 ]
+
+# Sample rates per model
+MODEL_SAMPLE_RATES: dict[str, int] = {
+    "mars-flash": 22050,
+    "mars-pro": 48000,
+    "mars-instruct": 22050,
+}
 
 # Audio output formats
 OutputFormat = Literal[
@@ -51,5 +58,4 @@ DEFAULT_VOICE_ID = 147320
 DEFAULT_LANGUAGE = "en-us"
 DEFAULT_MODEL: SpeechModel = "mars-flash"
 DEFAULT_OUTPUT_FORMAT: OutputFormat = "pcm_s16le"
-SAMPLE_RATE = 48000  # 48kHz for all models
 NUM_CHANNELS = 1

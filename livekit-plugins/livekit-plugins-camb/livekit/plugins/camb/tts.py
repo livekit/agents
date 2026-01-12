@@ -39,8 +39,8 @@ from .models import (
     DEFAULT_MODEL,
     DEFAULT_OUTPUT_FORMAT,
     DEFAULT_VOICE_ID,
+    MODEL_SAMPLE_RATES,
     NUM_CHANNELS,
-    SAMPLE_RATE,
     OutputFormat,
     SpeechModel,
     _TTSOptions,
@@ -66,7 +66,7 @@ class TTS(tts.TTS):
         # Audio configuration
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
         enhance_named_entities: bool = False,
-        sample_rate: int = SAMPLE_RATE,
+        sample_rate: int | None = None,
         # HTTP client
         http_session: httpx.AsyncClient | None = None,
     ) -> None:
@@ -87,12 +87,15 @@ class TTS(tts.TTS):
             user_instructions: Style/tone guidance (3-1000 chars, requires mars-instruct model).
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
-            sample_rate: Audio sample rate in Hz (default: 48000).
+            sample_rate: Audio sample rate in Hz. If None, auto-detected from model.
             http_session: Optional httpx.AsyncClient session to reuse.
         """
+        # Get sample rate from model if not specified
+        resolved_sample_rate = sample_rate or MODEL_SAMPLE_RATES.get(model, 22050)
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
-            sample_rate=sample_rate,
+            sample_rate=resolved_sample_rate,
             num_channels=NUM_CHANNELS,
         )
 
