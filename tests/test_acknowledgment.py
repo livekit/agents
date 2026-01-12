@@ -1,10 +1,12 @@
 import asyncio
+
 import pytest
-import time
-from livekit.agents import llm, utils
+
+from livekit.agents import llm
+from livekit.agents.voice import Agent
+
 from .fake_session import FakeActions, create_session, run_session
 from .test_agent_session import check_timestamp
-from livekit.agents.voice import Agent
 
 
 class AcknowledgmentAgent(Agent):
@@ -147,7 +149,7 @@ async def test_interruption_during_acknowledgment():
     conversation_events = []
     session.on("conversation_item_added", conversation_events.append)
 
-    t_origin = await run_session(session, agent)
+    await run_session(session, agent)
 
     texts = [e.item.text_content for e in conversation_events]
     assert "hello" in texts
@@ -156,7 +158,7 @@ async def test_interruption_during_acknowledgment():
     assert "Understood" in texts
 
     ok_msg = next(e.item for e in conversation_events if e.item.text_content == "OK")
-    assert ok_msg.interrupted == True
+    assert ok_msg.interrupted
 
     # "Hi!" should NOT be in texts because it was cancelled by the new user turn
     assert "Hi!" not in texts
