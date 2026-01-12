@@ -21,7 +21,7 @@ from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
-from ..utils import aio, audio, codecs, log_exceptions
+from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
     from ..voice.io import TimedString
@@ -372,87 +372,31 @@ class _ChunkedStreamFromStream(ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
-        # Don't call super().__init__ yet - we'll handle initialization differently
-        self._input_text = input_text
-        self._tts = tts
-        self._conn_options = conn_options
-        self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._tee = aio.itertools.tee(self._event_ch, 2)
-        self._event_aiter, monitor_aiter = self._tee
-        self._current_attempt_has_error = False
-        self._metrics_task = asyncio.create_task(
-            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
+        super().__init__(
+            tts=tts,
+            input_text=input_text,
+            conn_options=conn_options,
         )
-        self._stream: SynthesizeStream | None = None
-
-        async def _traceable_main_task() -> None:
-            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
-                await self._main_task()
-
-        self._synthesize_task = asyncio.create_task(
-            _traceable_main_task(), name="TTS._synthesize_task"
-        )
-        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
-        self._tts_request_span: trace.Span | None = None
-
-    async def _main_task(self) -> None:
-        """Override main task to directly forward SynthesizedAudio events from stream"""
-        self._tts_request_span = current_span = trace.get_current_span()
-        current_span.set_attributes(
-            {
-                trace_types.ATTR_TTS_STREAMING: False,
-                trace_types.ATTR_TTS_LABEL: self._tts.label,
-            }
-        )
-
-        for i in range(self._conn_options.max_retry + 1):
-            try:
-                with tracer.start_as_current_span("tts_request_run") as attempt_span:
-                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        self._stream = self._tts.stream(conn_options=self._conn_options)
-                        self._stream.push_text(self._input_text)
-                        self._stream.end_input()
-
-                        audio_duration = 0.0
-                        async for audio in self._stream:
-                            audio_duration += audio.frame.duration
-                            self._event_ch.send_nowait(audio)
-
-                        if self._input_text.strip() and audio_duration <= 0.0:
-                            raise APIError(
-                                f"no audio frames were pushed for text: {self._input_text}"
-                            )
-
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
-
-                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
-                return
-            except APIError as e:
-                retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
-                    self._emit_error(e, recoverable=False)
-                    raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                    )
-
-                await asyncio.sleep(retry_interval)
-                self._current_attempt_has_error = False
-            finally:
-                if self._stream is not None:
-                    await self._stream.aclose()
-                    self._stream = None
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
-        # This method is not used in our implementation
-        raise NotImplementedError("_run should not be called on _ChunkedStreamFromStream")
+        output_emitter.initialize(
+            request_id=shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+            stream=False,
+        )
+        async with self._tts.stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=self._conn_options.timeout)
+        ) as stream:
+            stream.push_text(self._input_text)
+            stream.end_input()
+            async for ev in stream:
+                output_emitter.push(ev.frame.data.tobytes())
+                if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                    output_emitter.push_timed_transcript(timed_transcripts)
+
+        output_emitter.flush()
 
 
 class SynthesizeStream(ABC):

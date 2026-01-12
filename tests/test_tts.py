@@ -25,6 +25,7 @@ from livekit.plugins import (
     deepgram,
     elevenlabs,
     google,
+    groq,
     hume,
     inworld,
     lmnt,
@@ -448,6 +449,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld-stream-adapter",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": tts.StreamAdapter(tts=groq.TTS()),
+            "proxy-upstream": "api.groq.com:443",
+        },
+        id="groq-stream-adapter",
     ),
     pytest.param(
         lambda: {
