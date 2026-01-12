@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
+import io
 import os
 import wave
-import io
-from typing import Optional, Tuple
+from typing import Any
 
 import aiohttp
 
@@ -41,7 +41,7 @@ def _decode_audio_payload(
     *,
     fallback_sample_rate: int = 24000,
     fallback_channels: int = 1,
-) -> Tuple[bytes, int, int]:
+) -> tuple[bytes, int, int]:
     """Convert a WAV/PCM payload into raw PCM samples for TTSAudioRawFrame."""
 
     try:
@@ -54,6 +54,7 @@ def _decode_audio_payload(
         # If the payload is already raw PCM, just pass it through.
         return audio_bytes, fallback_sample_rate, fallback_channels
 
+
 class TTS(tts.TTS):
     """This service supports several different text-to-speech models hosted by Hathora.
 
@@ -64,11 +65,11 @@ class TTS(tts.TTS):
         self,
         *,
         model: str,
-        voice: Optional[str] = None,
-        speed: Optional[float] = None,
-        model_config: Optional[list[ConfigOption]] = None,
-        api_key: Optional[str] = None,
-        base_url: str = "https://api.models.hathora.dev/inference/v1/tts"
+        voice: str | None = None,
+        speed: float | None = None,
+        model_config: list[ConfigOption] | None = None,
+        api_key: str | None = None,
+        base_url: str = "https://api.models.hathora.dev/inference/v1/tts",
     ):
         """Initialize the Hathora TTS service.
 
@@ -89,7 +90,7 @@ class TTS(tts.TTS):
                 streaming=False,
             ),
             sample_rate=24000,
-            num_channels=1
+            num_channels=1,
         )
 
         self._model = model
@@ -120,18 +121,15 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize chunked text using Hathora's unified TTS endpoint"""
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._text = input_text
         self._conn_options = conn_options
 
@@ -140,10 +138,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             url = f"{self._tts._base_url}"
 
-            payload = {
-                "model": self._tts._model,
-                "text": self._text
-            }
+            payload: dict[str, Any] = {"model": self._tts._model, "text": self._text}
 
             if self._tts._voice is not None:
                 payload["voice"] = self._tts._voice
@@ -151,7 +146,8 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["speed"] = self._tts._speed
             if self._tts._model_config is not None:
                 payload["model_config"] = [
-                    {"name": option.name, "value": option.value} for option in self._tts._model_config
+                    {"name": option.name, "value": option.value}
+                    for option in self._tts._model_config
                 ]
 
             output_emitter.initialize(
@@ -183,11 +179,8 @@ class ChunkedStream(tts.ChunkedStream):
 
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=f"Hathora error: {e}",
-                status_code=e.status,
-                request_id=None,
-                body=None
-            )
+                message=f"Hathora error: {e}", status_code=e.status, request_id=None, body=None
+            ) from e
         finally:
             if should_flush:
                 output_emitter.flush()

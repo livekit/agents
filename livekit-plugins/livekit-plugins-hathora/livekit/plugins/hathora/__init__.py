@@ -17,18 +17,12 @@
 See https://docs.livekit.io/agents/integrations/tts/hathora/ and https://docs.livekit.io/agents/integrations/stt/hathora/ for more information.
 """
 
-from .utils import ConfigOption
 from .stt import STT
 from .tts import TTS, ChunkedStream
+from .utils import ConfigOption
 from .version import __version__
 
-__all__ = [
-    "STT",
-    "TTS",
-    "ConfigOption",
-    "ChunkedStream",
-    "__version__"
-]
+__all__ = ["STT", "TTS", "ConfigOption", "ChunkedStream", "__version__"]
 
 from livekit.agents import Plugin
 

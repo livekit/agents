@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 
-import os
-from typing import Optional
 import base64
+import os
+from typing import Any
 
 import aiohttp
 
@@ -27,7 +27,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NotGivenOr, NOT_GIVEN
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .constants import (
     API_AUTH_HEADER,
@@ -46,10 +46,10 @@ class STT(stt.STT):
         self,
         *,
         model: str,
-        language: Optional[str] = None,
-        model_config: Optional[list[ConfigOption]] = None,
-        api_key: Optional[str] = None,
-        base_url: str = "https://api.models.hathora.dev/inference/v1/stt"
+        language: str | None = None,
+        model_config: list[ConfigOption] | None = None,
+        api_key: str | None = None,
+        base_url: str = "https://api.models.hathora.dev/inference/v1/stt",
     ):
         """Initialize the Hathora STT service.
 
@@ -104,7 +104,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         url = f"{self._base_url}"
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
         }
 
