@@ -26,7 +26,6 @@ This will test:
 - ✅ Voice listing (`list_voices()`)
 - ✅ Basic synthesis
 - ✅ MARS models (mars-flash, mars-pro, mars-instruct)
-- ✅ Speed control
 - ✅ Multi-language support (optional)
 
 ## Code Quality Tests
@@ -122,7 +121,6 @@ export CAMB_API_KEY=your_key
 - Voice listing
 - Basic synthesis
 - Model selection (MARS variants)
-- Speed control
 - Language selection
 - Error handling
 
@@ -151,7 +149,7 @@ The main test suite checks:
 - Format: PCM 16-bit (audio/wav)
 
 ### Voice Listing
-- Should return list of VoiceInfo objects
+- Should return list of voice dicts
 - Each voice has: id (int), name (str), gender, language
 
 ### MARS Models
@@ -166,12 +164,6 @@ The main test suite checks:
 - Connection failure → APIConnectionError
 
 ## Troubleshooting
-
-### "uv: command not found"
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
-```
 
 ### "CAMB_API_KEY not set"
 ```bash

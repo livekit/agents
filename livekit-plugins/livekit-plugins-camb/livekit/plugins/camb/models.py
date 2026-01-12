@@ -33,23 +33,6 @@ OutputFormat = Literal[
     "adts",  # Streaming format
 ]
 
-# Voice ID type (integers in Camb.ai API)
-CambVoiceId = int
-
-
-@dataclass
-class VoiceInfo:
-    """Voice metadata from Camb.ai API."""
-
-    id: int
-    """Unique voice identifier (integer)."""
-    name: str
-    """Human-readable voice name."""
-    gender: str | None = None
-    """Voice gender category (mapped from: 0=Not Specified, 1=Male, 2=Female, 9=Not Applicable)."""
-    language: int | None = None
-    """Language code (integer returned by API)."""
-
 
 @dataclass
 class _TTSOptions:

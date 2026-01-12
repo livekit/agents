@@ -21,30 +21,27 @@ from camb.core.api_error import ApiError
 from livekit.agents import APIStatusError, Plugin
 
 from .log import logger
-from .models import VoiceInfo
 from .tts import TTS
 from .version import __version__
+
+# Gender mapping from API integer to string
+GENDER_MAP = {0: "Not Specified", 1: "Male", 2: "Female", 9: "Not Applicable"}
 
 
 async def list_voices(
     *,
     api_key: str | None = None,
     base_url: str = "https://client.camb.ai/apis",
-) -> list[VoiceInfo]:
+) -> list[dict]:
     """
     List available voices from Camb.ai.
-
-    Returns voices categorized as:
-    - Public voices (pre-built)
-    - Shared voices
-    - Custom voices (user-created)
 
     Args:
         api_key: Camb.ai API key (or use CAMB_API_KEY env var).
         base_url: API base URL.
 
     Returns:
-        List of VoiceInfo objects with id, name, gender, language.
+        List of voice dicts with id, name, gender, age, language.
 
     Raises:
         ValueError: If no API key provided.
@@ -61,34 +58,20 @@ async def list_voices(
         voices = []
 
         for voice in voice_list:
-            # Handle both dict and Voice object responses
-            if isinstance(voice, dict):
-                voice_id = voice.get("id")
-                voice_name = voice.get("voice_name", "")
-                gender_int = voice.get("gender")
-                language = voice.get("language")
-            else:
-                voice_id = voice.id
-                voice_name = voice.voice_name
-                gender_int = voice.gender
-                language = voice.language
-
-            # Skip voices without an ID
+            voice_id = voice.get("id")
             if voice_id is None:
                 continue
 
-            # Map gender integer to string (0=Not Specified, 1=Male, 2=Female, 9=Not Applicable)
-            gender_map = {0: "Not Specified", 1: "Male", 2: "Female", 9: "Not Applicable"}
-            gender = gender_map.get(gender_int) if gender_int is not None else None
+            gender_int = voice.get("gender")
+            gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
 
-            voices.append(
-                VoiceInfo(
-                    id=voice_id,
-                    name=voice_name,
-                    gender=gender,
-                    language=language,
-                )
-            )
+            voices.append({
+                "id": voice_id,
+                "name": voice.get("voice_name", ""),
+                "gender": gender,
+                "age": voice.get("age"),
+                "language": voice.get("language"),
+            })
 
         return voices
 
@@ -106,4 +89,4 @@ class CambPlugin(Plugin):
 
 Plugin.register_plugin(CambPlugin())
 
-__all__ = ["TTS", "VoiceInfo", "list_voices", "__version__"]
+__all__ = ["TTS", "list_voices", "__version__"]

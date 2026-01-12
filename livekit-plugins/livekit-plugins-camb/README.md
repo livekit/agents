@@ -52,7 +52,7 @@ from livekit.plugins.camb import list_voices
 
 voices = await list_voices()
 for voice in voices:
-    print(f"{voice.name} ({voice.id}): {voice.gender}, {voice.language}")
+    print(f"{voice['name']} ({voice['id']}): {voice['gender']}, {voice['language']}")
 ```
 
 ## Select a Specific Voice
@@ -169,18 +169,10 @@ Main text-to-speech interface.
 async def list_voices(
     api_key: str | None = None,
     base_url: str = "https://client.camb.ai/apis",
-) -> list[VoiceInfo]
+) -> list[dict]
 ```
 
-Returns list of available voices with metadata.
-
-### VoiceInfo
-
-Voice metadata object with:
-- **id** (int): Unique voice identifier
-- **name** (str): Human-readable voice name
-- **gender** (str | None): Voice gender
-- **language** (str | None): BCP-47 locale
+Returns list of voice dicts with: id, name, gender, age, language.
 
 ## Multi-Language Support
 
