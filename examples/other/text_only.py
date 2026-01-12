@@ -8,9 +8,9 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
+    inference,
     room_io,
 )
-from livekit.plugins import openai
 
 logger = logging.getLogger("text-only")
 logger.setLevel(logging.INFO)
@@ -39,7 +39,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         # note that no TTS or STT are needed here
     )
     await session.start(

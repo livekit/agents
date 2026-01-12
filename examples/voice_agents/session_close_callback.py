@@ -55,7 +55,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt="assemblyai/universal-streaming",
         llm="openai/gpt-4.1-mini",
-        tts="elevenlabs",
+        tts="rime/arcana",
         vad=silero.VAD.load(),
     )
 
