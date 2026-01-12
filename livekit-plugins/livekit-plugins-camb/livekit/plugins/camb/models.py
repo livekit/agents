@@ -58,7 +58,6 @@ class _TTSOptions:
     voice_id: int
     language: str
     speech_model: str
-    speed: float
     output_format: str
     user_instructions: str | None
     enhance_named_entities: bool

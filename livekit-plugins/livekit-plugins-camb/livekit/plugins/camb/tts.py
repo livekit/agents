@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
-from typing import Any
 
 import httpx
 
@@ -63,7 +62,6 @@ class TTS(tts.TTS):
         # Model selection
         model: SpeechModel = DEFAULT_MODEL,
         # Voice parameters
-        speed: float = 1.0,
         user_instructions: str | None = None,
         # Audio configuration
         output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT,
@@ -86,7 +84,6 @@ class TTS(tts.TTS):
             voice_id: Voice ID to use. Use list_voices() to discover available voices.
             language: BCP-47 locale (e.g., 'en-us', 'fr-fr').
             model: MARS model to use ('mars-flash', 'mars-pro', 'mars-instruct').
-            speed: Speech rate (default: 1.0).
             user_instructions: Style/tone guidance (3-1000 chars, requires mars-instruct model).
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
@@ -125,7 +122,6 @@ class TTS(tts.TTS):
             voice_id=voice_id,
             language=language,
             speech_model=model,
-            speed=speed,
             output_format=output_format,
             user_instructions=user_instructions,
             enhance_named_entities=enhance_named_entities,
@@ -157,7 +153,6 @@ class TTS(tts.TTS):
         voice_id: int | None = None,
         language: str | None = None,
         model: SpeechModel | None = None,
-        speed: float | None = None,
         user_instructions: str | None = None,
     ) -> None:
         """Update TTS options dynamically."""
@@ -167,8 +162,6 @@ class TTS(tts.TTS):
             self._opts.language = language
         if model is not None:
             self._opts.speech_model = model
-        if speed is not None:
-            self._opts.speed = speed
         if user_instructions is not None:
             self._opts.user_instructions = user_instructions
 
@@ -232,28 +225,15 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type = "audio/aac"
 
         try:
-            # Build request options with timeout and speed parameter
-            # Speed is passed via additional_body_parameters since SDK doesn't have native support
-            timeout_seconds = max(self._conn_options.timeout, 60.0)
-            request_options: dict[str, Any] = {
-                "timeout_in_seconds": int(timeout_seconds),
-                "additional_body_parameters": {
-                    "voice_settings": {
-                        "speed": self._opts.speed,
-                    },
-                },
-            }
-
             # Call SDK's streaming TTS method
             stream = client.text_to_speech.tts(
                 text=self._input_text,
                 voice_id=self._opts.voice_id,
-                language=self._opts.language,  # type: ignore
-                speech_model=self._opts.speech_model,  # type: ignore
+                language=self._opts.language,
+                speech_model=self._opts.speech_model,
                 user_instructions=self._opts.user_instructions,
                 enhance_named_entities_pronunciation=self._opts.enhance_named_entities,
                 output_configuration=output_config,
-                request_options=request_options,
             )
 
             # Initialize audio emitter
@@ -278,7 +258,7 @@ class ChunkedStream(tts.ChunkedStream):
         except ApiError as e:
             raise APIStatusError(
                 f"Camb.ai TTS request failed: {e.body}",
-                status_code=e.status_code,
+                status_code=e.status_code or 500,
                 request_id=e.headers.get("x-request-id") if e.headers else None,
                 body=e.body,
             ) from e

@@ -73,6 +73,10 @@ async def list_voices(
                 gender_int = voice.gender
                 language = voice.language
 
+            # Skip voices without an ID
+            if voice_id is None:
+                continue
+
             # Map gender integer to string (0=Not Specified, 1=Male, 2=Female, 9=Not Applicable)
             gender_map = {0: "Not Specified", 1: "Male", 2: "Female", 9: "Not Applicable"}
             gender = gender_map.get(gender_int) if gender_int is not None else None
@@ -91,7 +95,7 @@ async def list_voices(
     except ApiError as e:
         raise APIStatusError(
             f"Failed to list voices: {e.body}",
-            status_code=e.status_code,
+            status_code=e.status_code or 500,
         ) from e
 
 
