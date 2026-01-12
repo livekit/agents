@@ -50,9 +50,9 @@ class URLContext(GeminiTool):
 
 @dataclass
 class FileSearch(GeminiTool):
-    file_search_store_names: Optional[list[str]]
-    top_k: Optional[int]
-    metadata_filter: Optional[str]
+    file_search_store_names: list[str]
+    top_k: Optional[int] = None
+    metadata_filter: Optional[str] = None
 
     def to_tool_config(self) -> types.Tool:
         return types.Tool(

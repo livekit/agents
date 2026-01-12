@@ -63,6 +63,7 @@ class DeepgramOptions(TypedDict, total=False):
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool
+    vad_events: bool  # default: False
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -250,7 +251,10 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript="word"
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
 
@@ -548,7 +552,9 @@ class SpeechStream(stt.SpeechStream):
         }
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(f"{base_url}/stt", headers=headers),
+                self._session.ws_connect(
+                    f"{base_url}/stt?model={self._opts.model}", headers=headers
+                ),
                 self._conn_options.timeout,
             )
             params["type"] = "session.create"

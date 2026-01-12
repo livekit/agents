@@ -105,7 +105,7 @@ class _DefaultLoadCalc:
         if cls._instance is None:
             cls._instance = _DefaultLoadCalc()
 
-        return cls._instance._m_avg.get_avg()
+        return cls._instance._get_avg()
 
 
 @dataclass

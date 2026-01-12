@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import aiohttp
 
@@ -128,11 +129,16 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, aligned_transcript=False
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                offline_recognize=False,
             )
         )
 
         self._api_key = api_key or os.getenv("SONIOX_API_KEY")
+        if not self._api_key:
+            raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
         self._base_url = base_url
         self._http_session = http_session
         self._params = params or STTOptions()
@@ -179,11 +185,11 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         """Set up state and queues for a WebSocket-based transcription stream."""
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
-        self._stt = stt
+        self._stt: STT = stt
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
 
-        self.audio_queue = asyncio.Queue()
+        self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
         self._reported_duration_ms = 0
 
@@ -194,15 +200,18 @@ class SpeechStream(stt.SpeechStream):
 
         return self._stt._http_session
 
-    async def _connect_ws(self):
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
         initial configuration."""
-        context = self._stt._params.context
-        if isinstance(context, ContextObject):
-            context = asdict(context)
+        context_raw = self._stt._params.context
+        context_value: dict[str, Any] | str | None
+        if isinstance(context_raw, ContextObject):
+            context_value = asdict(context_raw)
+        else:
+            context_value = context_raw
 
         # Create initial config object.
-        config = {
+        config: dict[str, Any] = {
             "api_key": self._stt._api_key,
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
@@ -211,7 +220,7 @@ class SpeechStream(stt.SpeechStream):
             "sample_rate": self._stt._params.sample_rate,
             "language_hints": self._stt._params.language_hints,
             "language_hints_strict": self._stt._params.language_hints_strict,
-            "context": context,
+            "context": context_value,
             "enable_speaker_diarization": self._stt._params.enable_speaker_diarization,
             "enable_language_identification": self._stt._params.enable_language_identification,
             "client_reference_id": self._stt._params.client_reference_id,
@@ -243,7 +252,7 @@ class SpeechStream(stt.SpeechStream):
             ),
         )
         self._event_ch.send_nowait(usage_event)
-        self._reported_duration_ms = total_audio_proc_ms
+        self._reported_duration_ms = int(total_audio_proc_ms)
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
@@ -252,16 +261,18 @@ class SpeechStream(stt.SpeechStream):
                 ws = await self._connect_ws()
                 self._ws = ws
                 # Create task for audio processing, voice turn detection and message handling.
-                tasks = [
+                tasks: list[asyncio.Task[None]] = [
                     asyncio.create_task(self._prepare_audio_task()),
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
                     asyncio.create_task(self._keepalive_task()),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -275,7 +286,9 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-            # Handle errors.
+                    tasks_group.cancel()
+                    tasks_group.exception()
+
             except asyncio.TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
@@ -306,7 +319,7 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.close()
                     self._ws = None
 
-    async def _keepalive_task(self):
+    async def _keepalive_task(self) -> None:
         """Periodically send keepalive messages (while no audio is being sent)
         to maintain the WebSocket connection."""
         try:
@@ -316,7 +329,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             logger.error(f"Error while sending keep alive message: {e}")
 
-    async def _prepare_audio_task(self):
+    async def _prepare_audio_task(self) -> None:
         """Read audio frames and enqueue PCM data for sending."""
         if not self._ws:
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
@@ -328,7 +341,7 @@ class SpeechStream(stt.SpeechStream):
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
 
-    async def _send_audio_task(self):
+    async def _send_audio_task(self) -> None:
         """Take queued audio data and transmit it over the WebSocket."""
         if not self._ws:
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
@@ -343,12 +356,12 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
 
-    async def _recv_messages_task(self):
+    async def _recv_messages_task(self) -> None:
         """Receive transcription messages, handle tokens, errors, and dispatch events."""
 
         # Transcription frame will be only sent after we get the "endpoint" event.
@@ -358,7 +371,7 @@ class SpeechStream(stt.SpeechStream):
 
         is_speaking = False
 
-        def send_endpoint_transcript():
+        def send_endpoint_transcript() -> None:
             nonlocal final_transcript_buffer, final_transcript_language, is_speaking
             if final_transcript_buffer:
                 event = stt.SpeechEvent(

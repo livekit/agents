@@ -230,15 +230,15 @@ class ChunkedStream(tts.ChunkedStream):
                         break
 
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        msg = json.loads(msg.data)
-                        type_ = msg.get("type")
+                        msg_data = json.loads(msg.data)
+                        type_ = msg_data.get("type")
                         if type_ == "text":
                             # TODO(laurent): handle text timestamps?
                             pass
                         elif type_ == "ready":
                             pass
                         elif type_ == "audio":
-                            audio = base64.b64decode(msg["audio"])
+                            audio = base64.b64decode(msg_data["audio"])
                             output_emitter.push(audio)
                         elif type_ == "end_of_stream":
                             break
@@ -355,15 +355,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    msg = json.loads(msg.data)
-                    type_ = msg.get("type")
+                    msg_data = json.loads(msg.data)
+                    type_ = msg_data.get("type")
                     if type_ == "text":
                         # TODO(laurent): handle text timestamps?
                         pass
                     elif type_ == "ready":
                         pass
                     elif type_ == "audio":
-                        audio = base64.b64decode(msg["audio"])
+                        audio = base64.b64decode(msg_data["audio"])
                         output_emitter.push(audio)
                     elif type_ == "end_of_stream":
                         output_emitter.end_segment()
