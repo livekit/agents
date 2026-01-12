@@ -6,6 +6,7 @@ from .fake_session import FakeActions, create_session, run_session
 from .test_agent_session import check_timestamp
 from livekit.agents.voice import Agent
 
+
 class AcknowledgmentAgent(Agent):
     def __init__(
         self,
