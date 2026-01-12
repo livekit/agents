@@ -87,7 +87,7 @@ class TTS(tts.TTS):
             user_instructions: Style/tone guidance (3-1000 chars, requires mars-instruct model).
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
-            sample_rate: Audio sample rate in Hz (default: 24000).
+            sample_rate: Audio sample rate in Hz (default: 48000).
             http_session: Optional httpx.AsyncClient session to reuse.
         """
         super().__init__(
@@ -212,7 +212,10 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         # Prepare output configuration
-        output_config = StreamTtsOutputConfiguration(format=self._opts.output_format)
+        output_config = StreamTtsOutputConfiguration(
+            format=self._opts.output_format,
+            sample_rate=self._tts._sample_rate,
+        )
 
         # Determine MIME type based on output format
         if self._opts.output_format in ("pcm_s16le", "pcm_s32le"):

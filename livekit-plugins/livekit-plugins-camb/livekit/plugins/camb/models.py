@@ -49,7 +49,7 @@ class _TTSOptions:
 # Constants
 DEFAULT_VOICE_ID = 147320
 DEFAULT_LANGUAGE = "en-us"
-DEFAULT_MODEL: SpeechModel = "mars-flash"  # Faster inference
+DEFAULT_MODEL: SpeechModel = "mars-flash"
 DEFAULT_OUTPUT_FORMAT: OutputFormat = "pcm_s16le"
-SAMPLE_RATE = 24000  # 24kHz - standard for Camb.ai PCM output
+SAMPLE_RATE = 48000  # 48kHz for all models
 NUM_CHANNELS = 1

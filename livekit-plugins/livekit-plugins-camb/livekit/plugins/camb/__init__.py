@@ -65,13 +65,15 @@ async def list_voices(
             gender_int = voice.get("gender")
             gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
 
-            voices.append({
-                "id": voice_id,
-                "name": voice.get("voice_name", ""),
-                "gender": gender,
-                "age": voice.get("age"),
-                "language": voice.get("language"),
-            })
+            voices.append(
+                {
+                    "id": voice_id,
+                    "name": voice.get("voice_name", ""),
+                    "gender": gender,
+                    "age": voice.get("age"),
+                    "language": voice.get("language"),
+                }
+            )
 
         return voices
 
