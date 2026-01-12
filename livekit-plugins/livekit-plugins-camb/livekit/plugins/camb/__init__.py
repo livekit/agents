@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
-
+from camb.client import AsyncCambAI
+from camb.core.api_error import ApiError
 from livekit.agents import APIStatusError, Plugin
 
 from .log import logger
@@ -54,44 +54,45 @@ async def list_voices(
     if not api_key:
         raise ValueError("api_key required (or set CAMB_API_KEY environment variable)")
 
-    headers = {
-        "x-api-key": api_key,
-        "Accept": "application/json",
-    }
+    client = AsyncCambAI(api_key=api_key, base_url=base_url)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{base_url}/list-voices",
-            headers=headers,
-        ) as response:
-            if response.status != 200:
-                error_body = await response.text()
-                raise APIStatusError(
-                    f"Failed to list voices: {error_body}",
-                    status_code=response.status,
+    try:
+        voice_list = await client.voice_cloning.list_voices()
+        voices = []
+
+        for voice in voice_list:
+            # Handle both dict and Voice object responses
+            if isinstance(voice, dict):
+                voice_id = voice.get("id")
+                voice_name = voice.get("voice_name", "")
+                gender_int = voice.get("gender")
+                language = voice.get("language")
+            else:
+                voice_id = voice.id
+                voice_name = voice.voice_name
+                gender_int = voice.gender
+                language = voice.language
+
+            # Map gender integer to string (0=Not Specified, 1=Male, 2=Female, 9=Not Applicable)
+            gender_map = {0: "Not Specified", 1: "Male", 2: "Female", 9: "Not Applicable"}
+            gender = gender_map.get(gender_int) if gender_int is not None else None
+
+            voices.append(
+                VoiceInfo(
+                    id=voice_id,
+                    name=voice_name,
+                    gender=gender,
+                    language=language,
                 )
+            )
 
-            data = await response.json()
-            voices = []
+        return voices
 
-            # Parse response - API returns a list directly
-            voice_list = data if isinstance(data, list) else data.get("voices", [])
-
-            for voice in voice_list:
-                # Map gender integer to string (0=Not Specified, 1=Male, 2=Female, 9=Not Applicable)
-                gender_map = {0: "Not Specified", 1: "Male", 2: "Female", 9: "Not Applicable"}
-                gender = gender_map.get(voice.get("gender"), None)
-
-                voices.append(
-                    VoiceInfo(
-                        id=voice["id"],
-                        name=voice["voice_name"],  # API uses "voice_name" not "name"
-                        gender=gender,
-                        language=voice.get("language"),  # Returns integer language code
-                    )
-                )
-
-            return voices
+    except ApiError as e:
+        raise APIStatusError(
+            f"Failed to list voices: {e.body}",
+            status_code=e.status_code,
+        ) from e
 
 
 class CambPlugin(Plugin):

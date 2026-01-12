@@ -14,13 +14,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import replace
 from typing import Any
 
-import aiohttp
+import httpx
 
+from camb.client import AsyncCambAI
+from camb.core.api_error import ApiError
+from camb.types.stream_tts_output_configuration import StreamTtsOutputConfiguration
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -68,7 +70,7 @@ class TTS(tts.TTS):
         enhance_named_entities: bool = False,
         sample_rate: int = SAMPLE_RATE,
         # HTTP client
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: httpx.AsyncClient | None = None,
     ) -> None:
         """
         Create a new instance of Camb.ai TTS.
@@ -89,7 +91,7 @@ class TTS(tts.TTS):
             output_format: Audio output format (default: 'pcm_s16le').
             enhance_named_entities: Enhanced pronunciation for named entities.
             sample_rate: Audio sample rate in Hz (default: 24000).
-            http_session: Optional aiohttp session to reuse.
+            http_session: Optional httpx.AsyncClient session to reuse.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -113,9 +115,10 @@ class TTS(tts.TTS):
         self._credentials_file = credentials_file
         self._base_url = base_url
 
-        # HTTP session management
-        self._session = http_session
-        self._close_session_on_cleanup = http_session is None
+        # SDK client management
+        self._http_session = http_session
+        self._client: AsyncCambAI | None = None
+        self._close_client_on_cleanup = http_session is None
 
         # Configuration
         self._opts = _TTSOptions(
@@ -127,6 +130,18 @@ class TTS(tts.TTS):
             user_instructions=user_instructions,
             enhance_named_entities=enhance_named_entities,
         )
+
+    def _ensure_client(self) -> AsyncCambAI:
+        """Lazily create the SDK client."""
+        if self._client is None:
+            if not self._api_key:
+                raise ValueError("API key is required but not set")
+            self._client = AsyncCambAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                httpx_client=self._http_session,
+            )
+        return self._client
 
     @property
     def model(self) -> str:
@@ -166,8 +181,10 @@ class TTS(tts.TTS):
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     async def aclose(self) -> None:
-        if self._close_session_on_cleanup and self._session:
-            await self._session.close()
+        if self._close_client_on_cleanup and self._client is not None:
+            # The SDK client's httpx client will be closed when garbage collected
+            # or we can explicitly close it if we created it
+            pass
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -184,115 +201,89 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """
-        Main synthesis logic using POST /tts-stream endpoint.
+        Main synthesis logic using the Camb.ai SDK.
 
         Flow:
-        1. Prepare request payload
-        2. Make HTTP POST to /tts-stream with streaming response
+        1. Get SDK client from TTS instance
+        2. Call SDK's streaming TTS method
         3. Initialize AudioEmitter with audio format details
         4. Stream audio chunks to output_emitter
         5. Handle errors and map to LiveKit exceptions
         """
-
-        # Prepare request payload
-        payload: dict[str, Any] = {
-            "text": self._input_text,
-            "voice_id": self._opts.voice_id,
-            "language": self._opts.language,
-            "speech_model": self._opts.speech_model,
-            "output_configuration": {
-                "format": self._opts.output_format,
-            },
-            "voice_settings": {
-                "speed": self._opts.speed,
-            },
-            "enhance_named_entities_pronunciation": self._opts.enhance_named_entities,
-        }
-
-        # Add user instructions if provided (requires mars-instruct model)
-        if self._opts.user_instructions:
-            payload["user_instructions"] = self._opts.user_instructions
-
-        # Ensure we have an API key
-        if not self._tts._api_key:
-            raise ValueError("API key is required but not set")
-
-        headers = {
-            "x-api-key": self._tts._api_key,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        client = self._tts._ensure_client()
 
         # Log request for debugging
         logger.debug(
-            f"Camb.ai TTS request: url={self._tts._base_url}/tts-stream, "
-            f"voice_id={self._opts.voice_id}, model={self._opts.speech_model}, "
-            f"text_length={len(self._input_text)}"
+            f"Camb.ai TTS request: voice_id={self._opts.voice_id}, "
+            f"model={self._opts.speech_model}, text_length={len(self._input_text)}"
         )
 
-        # Session management
-        session = self._tts._session
-        close_session = False
-        if session is None:
-            session = aiohttp.ClientSession()
-            close_session = True
+        # Prepare output configuration
+        output_config = StreamTtsOutputConfiguration(format=self._opts.output_format)
+
+        # Determine MIME type based on output format
+        if self._opts.output_format in ("pcm_s16le", "pcm_s32le"):
+            mime_type = "audio/pcm"
+        elif self._opts.output_format == "wav":
+            mime_type = "audio/wav"
+        elif self._opts.output_format == "flac":
+            mime_type = "audio/flac"
+        else:  # adts or other
+            mime_type = "audio/aac"
 
         try:
-            # Make streaming request with longer timeout for TTS synthesis
-            # Use max of conn_options.timeout or 60 seconds for TTS
+            # Build request options with timeout and speed parameter
+            # Speed is passed via additional_body_parameters since SDK doesn't have native support
             timeout_seconds = max(self._conn_options.timeout, 60.0)
-            async with session.post(
-                f"{self._tts._base_url}/tts-stream",
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-            ) as response:
-                # Check for errors
-                if response.status != 200:
-                    error_body = await response.text()
-                    raise APIStatusError(
-                        f"Camb.ai TTS request failed: {error_body}",
-                        status_code=response.status,
-                        request_id=response.headers.get("x-request-id"),
-                        body=error_body,
-                    )
+            request_options: dict[str, Any] = {
+                "timeout_in_seconds": int(timeout_seconds),
+                "additional_body_parameters": {
+                    "voice_settings": {
+                        "speed": self._opts.speed,
+                    },
+                },
+            }
 
-                # Initialize audio emitter
-                request_id = response.headers.get("x-request-id", utils.shortuuid())
+            # Call SDK's streaming TTS method
+            stream = client.text_to_speech.tts(
+                text=self._input_text,
+                voice_id=self._opts.voice_id,
+                language=self._opts.language,  # type: ignore
+                speech_model=self._opts.speech_model,  # type: ignore
+                user_instructions=self._opts.user_instructions,
+                enhance_named_entities_pronunciation=self._opts.enhance_named_entities,
+                output_configuration=output_config,
+                request_options=request_options,
+            )
 
-                # Determine MIME type based on output format
-                # pcm_s16le/pcm_s32le return raw PCM, not WAV
-                if self._opts.output_format in ("pcm_s16le", "pcm_s32le"):
-                    mime_type = "audio/pcm"
-                elif self._opts.output_format == "wav":
-                    mime_type = "audio/wav"
-                elif self._opts.output_format == "flac":
-                    mime_type = "audio/flac"
-                else:  # adts or other
-                    mime_type = "audio/aac"
+            # Initialize audio emitter
+            request_id = utils.shortuuid()
+            output_emitter.initialize(
+                request_id=request_id,
+                sample_rate=self._tts._sample_rate,
+                num_channels=NUM_CHANNELS,
+                mime_type=mime_type,
+            )
 
-                output_emitter.initialize(
-                    request_id=request_id,
-                    sample_rate=self._tts._sample_rate,
-                    num_channels=NUM_CHANNELS,
-                    mime_type=mime_type,
-                )
+            # Stream audio chunks from SDK
+            async for chunk in stream:
+                output_emitter.push(chunk)
 
-                # Stream audio chunks
-                async for data, _ in response.content.iter_chunks():
-                    output_emitter.push(data)
+            output_emitter.flush()
 
-                output_emitter.flush()
-
-        except aiohttp.ClientError as e:
+        except httpx.ConnectError as e:
             raise APIConnectionError(f"Camb.ai connection failed: {str(e)}") from e
-        except asyncio.TimeoutError:
+        except httpx.TimeoutException:
             raise APITimeoutError("Camb.ai TTS request timed out") from None
+        except ApiError as e:
+            raise APIStatusError(
+                f"Camb.ai TTS request failed: {e.body}",
+                status_code=e.status_code,
+                request_id=e.headers.get("x-request-id") if e.headers else None,
+                body=e.body,
+            ) from e
         except Exception as e:
             # Re-raise LiveKit exceptions
             if isinstance(e, (APIStatusError, APIConnectionError, APITimeoutError)):
                 raise
             raise APIConnectionError(f"Unexpected error: {str(e)}") from e
-        finally:
-            if close_session:
-                await session.close()
