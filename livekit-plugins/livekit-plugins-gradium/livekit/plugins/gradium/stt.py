@@ -270,9 +270,9 @@ class SpeechStream(stt.SpeechStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            buffered_text = []
+            buffered_text: list[str] = []
             speaking = False
-            remaining_vad_steps = False
+            remaining_vad_steps: int | None = None
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
@@ -381,7 +381,7 @@ class SpeechStream(stt.SpeechStream):
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
-                tasks_group: asyncio.Future[None] = asyncio.gather(*tasks)
+                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
                 try:
                     done, _ = await asyncio.wait(
                         [tasks_group, wait_reconnect_task],
