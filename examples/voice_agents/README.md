@@ -35,6 +35,7 @@ This directory contains a comprehensive collection of voice-based agent examples
 - [`inactive_user.py`](./inactive_user.py) - Handling inactive users with the `user_state_changed` event hook
 - [`resume_interrupted_agent.py`](./resume_interrupted_agent.py) - Resuming agent speech after false interruption detection
 - [`toggle_io.py`](./toggle_io.py) - Dynamically toggling audio input/output during conversations
+- [`acknowledgment.py`](./acknowledgment.py) - Using blocking acknowledgment to provide immediate feedback before LLM responses
 
 ### 🤖 Multi-agent & AgentTask Use Cases
 
