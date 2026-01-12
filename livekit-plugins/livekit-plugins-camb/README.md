@@ -7,7 +7,7 @@ Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS te
 - High-quality neural text-to-speech with MARS series models
 - Multiple model variants (mars-flash, mars-pro, mars-instruct)
 - User instructions for style and tone control
-- Speed control and enhanced pronunciation
+- Enhanced pronunciation for names and places
 - Support for 140+ languages
 - Real-time HTTP streaming
 - Pre-built voice library
@@ -88,7 +88,6 @@ tts = TTS(
     voice_id=147320,  # Voice ID from list-voices
     language="en-us",  # BCP-47 locale
     model="mars-instruct",  # MARS model variant
-    speed=1.0,  # Speech rate (0.5-2.0)
     user_instructions="Speak energetically with clear enunciation",
     output_format="pcm_s16le",  # Audio format
     enhance_named_entities=True,  # Better pronunciation for names/places
@@ -106,7 +105,7 @@ async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
 
     # Initialize TTS
-    tts = TTS(language="en-us", speed=1.1)
+    tts = TTS(language="en-us")
 
     # Synthesize and publish
     stream = tts.synthesize("Hello from LiveKit with Camb.ai!")
@@ -127,12 +126,11 @@ async def entrypoint(ctx: agents.JobContext):
 - **voice_id** (int): Voice ID to use (default: 147320)
 - **language** (str): BCP-47 locale (default: "en-us")
 - **model** (SpeechModel): MARS model variant (default: "mars-flash")
-- **speed** (float): Speech rate (default: 1.0)
 - **user_instructions** (str | None): Style/tone guidance (requires mars-instruct)
 - **output_format** (OutputFormat): Audio format (default: "pcm_s16le")
 - **enhance_named_entities** (bool): Enhanced pronunciation (default: False)
 - **base_url** (str): API base URL
-- **http_session** (aiohttp.ClientSession | None): Reusable HTTP session
+- **http_session** (httpx.AsyncClient | None): Reusable HTTP session
 
 ### Available Models
 
@@ -209,8 +207,8 @@ tts = TTS()
 # Change voice
 tts.update_options(voice_id=12345)
 
-# Change speed and model
-tts.update_options(speed=1.2, model="mars-pro")
+# Change model
+tts.update_options(model="mars-pro")
 
 # Add user instructions
 tts.update_options(
