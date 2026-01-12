@@ -25,7 +25,7 @@ uv run python examples/test_camb_tts.py
 This will test:
 - ✅ Voice listing (`list_voices()`)
 - ✅ Basic synthesis
-- ✅ MARS models (mars-flash, mars-pro, mars-instruct)
+- ✅ MARS models (mars-flash, mars-pro)
 - ✅ Multi-language support (optional)
 
 ## Code Quality Tests
@@ -143,19 +143,18 @@ The main test suite checks:
 ## Expected Test Results
 
 ### Basic Synthesis
-- Should generate valid WAV audio
-- Sample rate: 24000 Hz
+- Should generate valid audio
+- Sample rate: 22050 Hz (mars-flash) or 48000 Hz (mars-pro)
 - Channels: 1 (mono)
-- Format: PCM 16-bit (audio/wav)
+- Format: PCM 16-bit
 
 ### Voice Listing
 - Should return list of voice dicts
 - Each voice has: id (int), name (str), gender, language
 
 ### MARS Models
-- `mars-flash`: Faster inference (default)
-- `mars-pro`: Higher quality synthesis
-- `mars-instruct`: Supports user_instructions parameter
+- `mars-flash`: Faster inference, 22050 Hz (default)
+- `mars-pro`: Higher quality synthesis, 48000 Hz
 
 ### Error Cases
 - Invalid API key → APIStatusError (401)

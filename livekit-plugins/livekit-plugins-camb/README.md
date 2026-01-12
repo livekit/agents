@@ -5,8 +5,7 @@ Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS te
 ## Features
 
 - High-quality neural text-to-speech with MARS series models
-- Multiple model variants (mars-flash, mars-pro, mars-instruct)
-- User instructions for style and tone control
+- Multiple model variants (mars-flash, mars-pro)
 - Enhanced pronunciation for names and places
 - Support for 140+ languages
 - Real-time HTTP streaming
@@ -67,17 +66,11 @@ stream = tts.synthesize("Using a specific voice!")
 Camb.ai offers multiple MARS models for different use cases:
 
 ```python
-# Faster inference (default)
+# Faster inference, 22050 Hz (default)
 tts = TTS(model="mars-flash")
 
-# Higher quality
+# Higher quality, 48000 Hz
 tts = TTS(model="mars-pro")
-
-# Supports user instructions for style/tone
-tts = TTS(
-    model="mars-instruct",
-    user_instructions="Speak in a friendly, conversational tone"
-)
 ```
 
 ## Advanced Configuration
@@ -87,8 +80,7 @@ tts = TTS(
     api_key="your-api-key",  # Or use CAMB_API_KEY env var
     voice_id=147320,  # Voice ID from list-voices
     language="en-us",  # BCP-47 locale
-    model="mars-instruct",  # MARS model variant
-    user_instructions="Speak energetically with clear enunciation",
+    model="mars-pro",  # MARS model variant
     output_format="pcm_s16le",  # Audio format
     enhance_named_entities=True,  # Better pronunciation for names/places
 )
@@ -126,17 +118,16 @@ async def entrypoint(ctx: agents.JobContext):
 - **voice_id** (int): Voice ID to use (default: 147320)
 - **language** (str): BCP-47 locale (default: "en-us")
 - **model** (SpeechModel): MARS model variant (default: "mars-flash")
-- **user_instructions** (str | None): Style/tone guidance (requires mars-instruct)
 - **output_format** (OutputFormat): Audio format (default: "pcm_s16le")
 - **enhance_named_entities** (bool): Enhanced pronunciation (default: False)
+- **sample_rate** (int | None): Audio sample rate (auto-detected from model if None)
 - **base_url** (str): API base URL
 - **http_session** (httpx.AsyncClient | None): Reusable HTTP session
 
 ### Available Models
 
-- **mars-flash**: Faster inference, lower latency (default)
-- **mars-pro**: Higher quality synthesis
-- **mars-instruct**: Supports user_instructions for style control
+- **mars-flash**: Faster inference, 22050 Hz (default)
+- **mars-pro**: Higher quality synthesis, 48000 Hz
 
 ### Output Formats
 
@@ -160,7 +151,7 @@ Main text-to-speech interface.
 **Properties:**
 - `model` (str): Current MARS model name
 - `provider` (str): Provider name ("Camb.ai")
-- `sample_rate` (int): Audio sample rate (24000 Hz)
+- `sample_rate` (int): Audio sample rate (22050 or 48000 Hz depending on model)
 - `num_channels` (int): Number of audio channels (1)
 
 ### list_voices Function
@@ -201,12 +192,6 @@ tts.update_options(voice_id=12345)
 
 # Change model
 tts.update_options(model="mars-pro")
-
-# Add user instructions
-tts.update_options(
-    model="mars-instruct",
-    user_instructions="Speak warmly and enthusiastically"
-)
 ```
 
 ## Error Handling
