@@ -19,6 +19,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel.protocol import PregelProtocol
+from langgraph.typing import ContextT
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
@@ -37,11 +38,13 @@ class LLMAdapter(llm.LLM):
         graph: PregelProtocol,
         *,
         config: RunnableConfig | None = None,
+        context: ContextT | None = None,
         subgraphs: bool = False,
     ) -> None:
         super().__init__()
         self._graph = graph
         self._config = config
+        self._context = context
         self._subgraphs = subgraphs
 
     @property
@@ -70,6 +73,7 @@ class LLMAdapter(llm.LLM):
             graph=self._graph,
             conn_options=conn_options,
             config=self._config,
+            context=self._context,
             subgraphs=self._subgraphs,
         )
 
@@ -84,6 +88,7 @@ class LangGraphStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         graph: PregelProtocol,
         config: RunnableConfig | None = None,
+        context: ContextT | None = None,
         subgraphs: bool = False,
     ):
         super().__init__(
@@ -94,17 +99,19 @@ class LangGraphStream(llm.LLMStream):
         )
         self._graph = graph
         self._config = config
+        self._context = context
         self._subgraphs = subgraphs
 
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
 
-        # Some LangGraph versions don't accept the `subgraphs` kwarg yet.
-        # Try with it first; fall back gracefully if it's unsupported.
+        # Some LangGraph versions don't accept the `subgraphs` or `context` kwargs yet.
+        # Try with them first; fall back gracefully if unsupported.
         try:
             aiter = self._graph.astream(
                 state,
                 self._config,
+                context=self._context,
                 stream_mode="messages",
                 subgraphs=self._subgraphs,
             )
