@@ -51,6 +51,19 @@ class STT(stt.STT):
         api_key: Optional[str] = None,
         base_url: str = "https://api.models.hathora.dev/inference/v1/stt"
     ):
+        """Initialize the Hathora STT service.
+
+        Args:
+            model: Model to use; find available models
+                [here](https://models.hathora.dev).
+            language: Language code (if supported by model).
+            model_config: Some models support additional config, refer to
+                [docs](https://models.hathora.dev) for each model to see
+                what is supported.
+            api_key: API key for authentication with the Hathora service;
+                provision one [here](https://models.hathora.dev/tokens).
+            base_url: Base API URL for the Hathora STT service.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=False,
