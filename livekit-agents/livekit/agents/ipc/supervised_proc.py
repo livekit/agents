@@ -306,7 +306,8 @@ class SupervisedProc(ABC):
         logger.info("killing process", extra=self.logging_extra())
         if sys.platform == "win32":
             try:
-                self._proc.terminate()
+                if self._proc.is_alive():
+                    self._proc.terminate()
             except ValueError:
                 pass
         else:
