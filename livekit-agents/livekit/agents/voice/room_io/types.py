@@ -30,11 +30,10 @@ DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
 
 @dataclass
 class TextInputEvent:
-    type: Literal["text_input"] = "text_input"
-
     text: str
     info: rtc.TextStreamInfo
     participant: rtc.RemoteParticipant
+    type: Literal["text_input"] = "text_input"
 
 
 TextInputCallback = Callable[

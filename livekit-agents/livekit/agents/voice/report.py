@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from livekit.agents.tts import SynthesizedAudio
+from livekit.agents.types import TimedString
 from livekit.agents.vad import VADEvent, VADEventType
+from livekit.rtc import AudioFrame
 
 from ..llm import ChatContext
 from .agent_session import AgentSessionOptions
@@ -43,10 +47,29 @@ class SessionReport:
 
             events_dict.append(event.model_dump())
 
+        def _serialize_audio_frame(frame: AudioFrame) -> dict:
+            return {
+                "sample_rate": frame.sample_rate,
+                "num_channels": frame.num_channels,
+                "samples_per_channel": frame.samples_per_channel,
+                "data": base64.b64encode(frame.data).decode("utf-8"),
+            }
+
         if self.include_internal_events:
             for event in self.internal_events:
                 if isinstance(event, BaseModel):
                     internal_events_dict.append(event.model_dump())
+                elif isinstance(event, SynthesizedAudio):
+                    # coming from TTS
+                    data = asdict(event)
+                    data["frame"] = _serialize_audio_frame(event.frame)
+                    internal_events_dict.append(data)
+                elif isinstance(event, AudioFrame):
+                    # coming from Realtime Audio Output
+                    internal_events_dict.append(_serialize_audio_frame(event))
+                elif isinstance(event, (str, TimedString)):
+                    # sources: user transcript, agent response
+                    pass
                 else:
                     if isinstance(event, VADEvent):
                         event.frames = []

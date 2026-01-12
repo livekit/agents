@@ -390,6 +390,8 @@ class Agent:
                 forward_task = asyncio.create_task(_forward_input())
                 try:
                     async for event in stream:
+                        if activity.session._include_internal_events:
+                            activity.session.collect(event)
                         yield event
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
@@ -416,6 +418,8 @@ class Agent:
                 chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
             ) as stream:
                 async for chunk in stream:
+                    if activity.session._include_internal_events:
+                        activity.session.collect(chunk)
                     yield chunk
 
         @staticmethod
@@ -446,6 +450,8 @@ class Agent:
                 forward_task = asyncio.create_task(_forward_input())
                 try:
                     async for ev in stream:
+                        if activity.session._include_internal_events:
+                            activity.session.collect(ev)
                         yield ev.frame
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
@@ -455,7 +461,10 @@ class Agent:
             agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
         ) -> AsyncGenerator[str | TimedString, None]:
             """Default implementation for `Agent.transcription_node`"""
+            activity = agent._get_activity_or_raise()
             async for delta in text:
+                if activity.session._include_internal_events:
+                    activity.session.collect(delta)
                 yield delta
 
         @staticmethod
@@ -469,6 +478,8 @@ class Agent:
             )
 
             async for frame in audio:
+                if activity.session._include_internal_events:
+                    activity.session.collect(frame)
                 yield frame
 
     @property

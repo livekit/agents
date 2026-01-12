@@ -35,7 +35,7 @@ _T = TypeVar("_T")
 
 
 class FlushSentinel:
-    pass
+    type: Literal["flush_sentinel"] = "flush_sentinel"
 
 
 class NotGiven:
