@@ -1944,6 +1944,7 @@ class AgentActivity(RecognitionHooks):
             # reset the `created_at` to the start time of the tool execution
             fnc_call.created_at = time.time()
             speech_handle._item_added([fnc_call])
+            self._session._update_agent_state("processing")
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
@@ -2414,6 +2415,7 @@ class AgentActivity(RecognitionHooks):
         )
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            self._session._update_agent_state("processing")
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx.items.append(fnc_call)
             self._session._tool_items_added([fnc_call])
