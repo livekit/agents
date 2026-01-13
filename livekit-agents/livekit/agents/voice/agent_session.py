@@ -1161,8 +1161,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_agent_state(
         self, state: AgentState, *, otel_context: otel_context.Context | None = None
     ) -> None:
+        import logging
+        logger_debug = logging.getLogger("livekit.agents.voice.softacks")
+        logger_debug.warning(f"[AGENT_STATE_CHANGE] {self._agent_state} -> {state}")
+        
         if self._agent_state == state:
             return
+
+        old_state = self._agent_state
 
         if state == "speaking":
             self._llm_error_counts = 0
@@ -1178,6 +1184,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
                 # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
+        elif state == "listening":
+            pass
         elif self._agent_speaking_span is not None:
             # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
@@ -1188,12 +1196,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             self._cancel_user_away_timer()
 
-        old_state = self._agent_state
+        print(f"SESSION: Emitting agent_state_changed: {old_state} -> {state}, closing={self._closing}")
         self._agent_state = state
         self.emit(
             "agent_state_changed",
             AgentStateChangedEvent(old_state=old_state, new_state=state),
         )
+        print(f"SESSION: Emitted agent_state_changed event: {old_state} -> {state}")
 
     def _update_user_state(
         self, state: UserState, *, last_speaking_time: float | None = None

@@ -1,0 +1,80 @@
+# LiveKit Agents Framework - Complete Dependencies
+# Generated for running voice agents with Deepgram STT, Silero VAD, and Cartesia TTS
+# Python 3.13 Compatible
+# All dependencies verified against livekit-agents pyproject.toml
+
+# Core LiveKit Packages
+livekit>=1.0.19,<2
+livekit-api>=1.0.7,<2
+livekit-protocol>=1.1,<2
+livekit-agents>=1.3.6
+
+# LiveKit Plugin Dependencies - STT, VAD, TTS (REQUIRED)
+livekit-plugins-deepgram>=1.3.6
+livekit-plugins-silero>=1.3.6
+livekit-plugins-cartesia>=1.3.6
+
+# Additional LiveKit Plugins (Optional but recommended for full functionality)
+livekit-plugins-openai>=1.3.6
+livekit-plugins-google>=1.3.6
+livekit-plugins-anthropic>=1.3.6
+livekit-plugins-azure>=1.3.6
+livekit-plugins-aws>=1.3.6
+livekit-plugins-elevenlabs>=1.3.6
+livekit-plugins-groq>=1.3.6
+livekit-plugins-mistralai>=1.3.6
+livekit-plugins-nltk>=1.3.6
+livekit-plugins-langchain>=1.3.6
+
+# Core Framework Dependencies (REQUIRED)
+typer>=0.15.1
+click~=8.1
+certifi>=2025.6.15
+livekit-blingfire~=1.0
+protobuf>=3
+pyjwt>=2.0
+types-protobuf>=4
+watchfiles>=1.0
+psutil>=7.0
+aiohttp~=3.10
+typing-extensions>=4.12
+sounddevice>=0.5
+docstring_parser>=0.16
+eval-type-backport
+colorama>=0.4.6
+av>=14.0.0
+numpy>=1.26.0
+pydantic>=2.0,<3
+nest-asyncio>=1.6.0
+
+# OpenTelemetry for tracing and metrics
+opentelemetry-api~=1.39.0
+opentelemetry-sdk~=1.39.0
+opentelemetry-exporter-otlp~=1.39.0
+prometheus-client>=0.22
+
+# LLM and AI Libraries
+openai>=1.99.2
+aiofiles>=24
+
+# Audio Processing
+onnxruntime>=1.18,<=1.23.1
+
+# Environment Configuration (REQUIRED for .env loading)
+python-dotenv>=1.0.0
+
+# Optional: For MCP (Model Context Protocol) support on Python 3.10+
+# mcp>=1.10.0,<2; python_version >= '3.10'
+
+# Optional: For image processing
+# pillow>=10.3.0
+
+# Optional: For advanced codec support
+# scipy>=1.10.0
+
+# Optional: For additional LLM providers
+# livekit-plugins-lmnt>=1.3.6
+# livekit-plugins-rime>=1.3.6
+# livekit-plugins-fal>=1.3.6
+# livekit-plugins-neuphonic>=1.3.6
+# livekit-plugins-resemble>=1.3.6
