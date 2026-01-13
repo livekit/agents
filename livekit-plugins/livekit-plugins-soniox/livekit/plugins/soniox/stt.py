@@ -127,12 +127,14 @@ class STT(stt.STT):
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
+        params = params or STTOptions()
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
                 aligned_transcript=False,
                 offline_recognize=False,
+                diarization=params.enable_speaker_diarization,
             )
         )
 
@@ -141,7 +143,7 @@ class STT(stt.STT):
             raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
         self._base_url = base_url
         self._http_session = http_session
-        self._params = params or STTOptions()
+        self._params = params
 
     @property
     def model(self) -> str:
@@ -368,17 +370,24 @@ class SpeechStream(stt.SpeechStream):
         final_transcript_buffer = ""
         # Language code sent by Soniox if language detection is enabled (e.g. "en", "de", "fr")
         final_transcript_language: str = ""
+        final_speaker_id: str | None = None
 
         is_speaking = False
 
         def send_endpoint_transcript() -> None:
-            nonlocal final_transcript_buffer, final_transcript_language, is_speaking
+            nonlocal \
+                final_transcript_buffer, \
+                final_transcript_language, \
+                final_speaker_id, \
+                is_speaking
             if final_transcript_buffer:
                 event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
-                            text=final_transcript_buffer, language=final_transcript_language
+                            text=final_transcript_buffer,
+                            language=final_transcript_language,
+                            speaker_id=final_speaker_id,
                         )
                     ],
                 )
@@ -389,6 +398,7 @@ class SpeechStream(stt.SpeechStream):
                 # Reset buffers.
                 final_transcript_buffer = ""
                 final_transcript_language = ""
+                final_speaker_id = None
 
                 # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
                 is_speaking = False
@@ -405,6 +415,7 @@ class SpeechStream(stt.SpeechStream):
                             # We will only send the final tokens after we get the "endpoint" event.
                             non_final_transcription = ""
                             non_final_transcription_language: str = ""
+                            non_final_speaker_id: str | None = None
 
                             total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
 
@@ -424,6 +435,9 @@ class SpeechStream(stt.SpeechStream):
                                         # Current heuristic is to take the first language we see.
                                         if token.get("language") and not final_transcript_language:
                                             final_transcript_language = token.get("language")
+
+                                        if "speaker" in token and final_speaker_id is None:
+                                            final_speaker_id = str(token["speaker"])
                                 else:
                                     non_final_transcription += token["text"]
                                     if (
@@ -431,6 +445,9 @@ class SpeechStream(stt.SpeechStream):
                                         and not non_final_transcription_language
                                     ):
                                         non_final_transcription_language = token.get("language")
+
+                                    if "speaker" in token and non_final_speaker_id is None:
+                                        non_final_speaker_id = str(token["speaker"])
 
                             if final_transcript_buffer or non_final_transcription:
                                 if not is_speaking:
@@ -447,9 +464,16 @@ class SpeechStream(stt.SpeechStream):
                                     alternatives=[
                                         stt.SpeechData(
                                             text=final_transcript_buffer + non_final_transcription,
-                                            language=final_transcript_language
-                                            if final_transcript_language
-                                            else non_final_transcription_language,
+                                            language=(
+                                                final_transcript_language
+                                                if final_transcript_language
+                                                else non_final_transcription_language
+                                            ),
+                                            speaker_id=(
+                                                final_speaker_id
+                                                if final_speaker_id is not None
+                                                else non_final_speaker_id
+                                            ),
                                         )
                                     ],
                                 )
