@@ -116,7 +116,7 @@ class STT(stt.STT):
 
         if use_realtime and model_id != "scribe_v2_realtime":
             logger.warning(
-                "The currently selected model_id is not a realtime model but use_realtime is True so we will set it to scribe_v2_realtime"
+                "When use_realtime=True, the only supported model is currently scribe_v2_realtime, so setting model_id to scribe_v2_realtime"
             )
             model_id = "scribe_v2_realtime"
 
