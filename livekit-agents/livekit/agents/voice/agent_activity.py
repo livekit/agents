@@ -2215,6 +2215,7 @@ class AgentActivity(RecognitionHooks):
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
         ) as current_span:
+            self._session._update_agent_state("thinking")
             current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
             if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
@@ -2446,7 +2447,8 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
-            self._session._update_agent_state("listening")
+            if exe_task.done():
+                self._session._update_agent_state("listening")
             current_span.set_attribute(
                 trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
             )
