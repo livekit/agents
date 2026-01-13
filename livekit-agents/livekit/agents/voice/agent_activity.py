@@ -1609,7 +1609,7 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
     ) -> None:
-        current_span = trace.get_current_span()
+        current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
         tr_output = (
@@ -1664,7 +1664,11 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 started_speaking_at = time.time()
 
-            self._session._update_agent_state("speaking", start_time=started_speaking_at)
+            self._session._update_agent_state(
+                "speaking",
+                start_time=started_speaking_at,
+                otel_context=speech_handle._agent_turn_context,
+            )
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1812,7 +1816,7 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
-        current_span = trace.get_current_span()
+        current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
@@ -1943,7 +1947,11 @@ class AgentActivity(RecognitionHooks):
                 started_speaking_at = fut.result() or time.time()
             except BaseException:
                 started_speaking_at = time.time()
-            self._session._update_agent_state("speaking", start_time=started_speaking_at)
+            self._session._update_agent_state(
+                "speaking",
+                start_time=started_speaking_at,
+                otel_context=speech_handle._agent_turn_context,
+            )
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2254,7 +2262,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
     ) -> None:
-        current_span = trace.get_current_span()
+        current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
         room_io = self._session._room_io
@@ -2303,7 +2311,11 @@ class AgentActivity(RecognitionHooks):
                 started_speaking_at = fut.result() or time.time()
             except BaseException:
                 started_speaking_at = time.time()
-            self._session._update_agent_state("speaking", start_time=started_speaking_at)
+            self._session._update_agent_state(
+                "speaking",
+                start_time=started_speaking_at,
+                otel_context=speech_handle._agent_turn_context,
+            )
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []

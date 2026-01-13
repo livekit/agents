@@ -358,13 +358,13 @@ async def _audio_forwarding_task(
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
-    try:
-        audio_output.resume()
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
 
-        @audio_output.on("playback_started")
-        def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(ev.created_at)
+    try:
+        audio_output.on("playback_started", _on_playback_started)
+        audio_output.resume()
 
         async for frame in tts_output:
             out.audio.append(frame)
@@ -392,6 +392,11 @@ async def _audio_forwarding_task(
                 await audio_output.capture_frame(frame)
 
     finally:
+        audio_output.off("playback_started", _on_playback_started)
+
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.cancel()
+
         if isinstance(tts_output, _ACloseable):
             try:
                 await tts_output.aclose()
