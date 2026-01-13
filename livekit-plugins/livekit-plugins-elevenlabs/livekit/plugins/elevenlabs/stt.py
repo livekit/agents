@@ -57,10 +57,9 @@ class VADOptions(TypedDict, total=False):
     """Minimum silence duration in milliseconds. Default to 2500"""
 
 
-@dataclass
-class ElevenLabsSTTModels:
-    # https://elevenlabs.io/docs/overview/models#models-overview
-    id: Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
+
+# https://elevenlabs.io/docs/overview/models#models-overview
+type ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
 
 @dataclass
 class STTOptions:
@@ -115,9 +114,10 @@ class STT(stt.STT):
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
-        if use_realtime and not "realtime" in model_id:
-            logger.warning("The currently selected model is not a realtime model but use_realtime is True")
-        
+        if use_realtime and model_id != "scribe_v2_realtime":
+            logger.warning("The currently selected model_id is not a realtime model but use_realtime is True so we will set it to scribe_v2_realtime")
+            model_id = "scribe_v2_realtime"
+
         if not use_realtime and "realtime" in model_id:
             raise ValueError("The currently selected model is a realtime model but use_realtime is False")
 
