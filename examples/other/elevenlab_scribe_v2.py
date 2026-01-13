@@ -14,7 +14,7 @@ load_dotenv()
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
+def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
@@ -22,7 +22,7 @@ server.setup_fnc = prewarm
 
 
 @server.rtc_session()
-async def entrypoint(ctx: JobContext):
+async def entrypoint(ctx: JobContext) -> None:
     # Using ElevenLabs STT plugin directly for realtime mode support
     stt = elevenlabs.STT(
         use_realtime=True,
@@ -32,9 +32,10 @@ async def entrypoint(ctx: JobContext):
             "min_speech_duration_ms": 100,
             "min_silence_duration_ms": 300,
         },
+        model_id="scribe_v2_realtime",
     )
 
-    session = AgentSession(
+    session: AgentSession = AgentSession(
         allow_interruptions=True,
         vad=ctx.proc.userdata["vad"],
         stt=stt,
