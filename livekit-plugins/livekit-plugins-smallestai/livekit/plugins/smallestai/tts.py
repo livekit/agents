@@ -86,7 +86,6 @@ class TTS(tts.TTS):
             output_format: Output format of the audio.
             base_url: Base URL for the Smallest AI API.
             http_session: An existing aiohttp ClientSession to use.
-            tokenizer: The tokenizer to use for streaming.
         """
 
         super().__init__(
@@ -216,8 +215,8 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{self._opts.output_format}",
                 )
 
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+                async for chunk, _ in resp.content.iter_chunks():
+                    output_emitter.push(chunk)
 
                 output_emitter.flush()
 

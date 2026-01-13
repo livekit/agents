@@ -26,10 +26,10 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import (
+    AgentServer,
     AutoSubscribe,
     JobContext,
     JobRequest,
-    WorkerOptions,
     cli,
     llm,
     stt,
@@ -420,6 +420,17 @@ class RoomTranslator:
             track.set_languages(self.desired_languages, room=self.room)
 
 
+async def request_fnc(req: JobRequest):
+    await req.accept(
+        name="agent",
+        identity="agent",
+    )
+
+
+server = AgentServer()
+
+
+@server.rtc_session(agent_name="translator", on_request=request_fnc)
 async def entrypoint(ctx: JobContext):
     """Main entrypoint for the translation agent service."""
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -440,20 +451,5 @@ async def entrypoint(ctx: JobContext):
     room_translator.start()
 
 
-async def request_fnc(req: JobRequest):
-    await req.accept(
-        name="agent",
-        identity="agent",
-    )
-
-
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            request_fnc=request_fnc,
-            # paired with the right frontend, it should be dispatching the agent explicitly
-            # leaving it commented out to allow you testing with agent-starter-react
-            agent_name="translator",
-        )
-    )
+    cli.run_app(server)

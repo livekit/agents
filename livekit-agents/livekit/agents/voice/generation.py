@@ -4,9 +4,10 @@ import asyncio
 import functools
 import inspect
 import json
-from collections.abc import AsyncIterable, Sequence
+import time
+from collections.abc import AsyncGenerator, AsyncIterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
 
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -22,16 +23,14 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.tool_context import (
-    is_function_tool,
-    is_raw_function_tool,
-)
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
-from ..utils import aio
+from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
+from ..utils import aio, is_given
+from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
+from .transcription.filters import apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
@@ -46,12 +45,13 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str]
+    text_ch: aio.Chan[str | FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    ttft: float | None = None
 
 
 def perform_llm_inference(
@@ -61,7 +61,7 @@ def perform_llm_inference(
     tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[str]()
+    text_ch = aio.Chan[Union[str, FlushSentinel]]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
@@ -88,27 +88,33 @@ async def _llm_inference_task(
     model_settings: ModelSettings,
     data: _LLMGenerationData,
 ) -> bool:
+    start_time = time.perf_counter()
     current_span = trace.get_current_span()
     data.started_fut.set_result(None)
 
     text_ch, function_ch = data.text_ch, data.function_ch
-    tools = list(tool_ctx.function_tools.values())
+    tools = tool_ctx.flatten()
 
-    current_span.set_attribute(
-        trace_types.ATTR_CHAT_CTX,
-        json.dumps(
-            chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
-        ),
-    )
-    current_span.set_attribute(
-        trace_types.ATTR_FUNCTION_TOOLS, json.dumps(list(tool_ctx.function_tools.keys()))
+    current_span.set_attributes(
+        {
+            trace_types.ATTR_CHAT_CTX: json.dumps(
+                chat_ctx.to_dict(exclude_audio=True, exclude_image=True, exclude_timestamp=False)
+            ),
+            trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+            trace_types.ATTR_PROVIDER_TOOLS: [
+                type(tool).__name__ for tool in tool_ctx.provider_tools
+            ],
+            trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
+        }
     )
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
         llm_node = await llm_node
 
-    # update the tool context after llm node
+    # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
+    # are using the newer tools.
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations
     tool_ctx.update_tools(tools)
 
     if isinstance(llm_node, str):
@@ -123,6 +129,9 @@ async def _llm_inference_task(
     # forward llm stream to output channels
     try:
         async for chunk in llm_node:
+            if data.ttft is None:
+                data.ttft = time.perf_counter() - start_time
+
             # io.LLMNode can either return a string or a ChatChunk
             if isinstance(chunk, str):
                 data.generated_text += chunk
@@ -142,6 +151,7 @@ async def _llm_inference_task(
                             call_id=tool.call_id,
                             name=tool.name,
                             arguments=tool.arguments,
+                            extra=tool.extra or {},
                         )
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
@@ -149,6 +159,9 @@ async def _llm_inference_task(
                 if chunk.delta.content:
                     data.generated_text += chunk.delta.content
                     text_ch.send_nowait(chunk.delta.content)
+
+            elif isinstance(chunk, FlushSentinel):
+                text_ch.send_nowait(chunk)
             else:
                 logger.warning(
                     f"LLM node returned an unexpected type: {type(chunk)}",
@@ -171,12 +184,13 @@ async def _llm_inference_task(
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
     timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
+    ttfb: float | None = None
 
 
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str],
+    input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
@@ -184,12 +198,9 @@ def perform_tts_inference(
     timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
-    if text_transforms:
-        from .transcription.filters import apply_text_transforms
-
-        input = apply_text_transforms(input, text_transforms)
-
-    tts_task = asyncio.create_task(_tts_inference_task(node, input, model_settings, data))
+    tts_task = asyncio.create_task(
+        _tts_inference_task(node, input, model_settings, data, text_transforms)
+    )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
@@ -203,31 +214,87 @@ def perform_tts_inference(
 
 
 @utils.log_exceptions(logger=logger)
-@tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str],
+    input: AsyncIterable[str | FlushSentinel],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
+    text_transforms: Sequence[TextTransforms] | None,
 ) -> bool:
+    start_time: float | None = None
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
-    tts_node = node(input, model_settings)
-    if asyncio.iscoroutine(tts_node):
-        tts_node = await tts_node
 
-    if isinstance(tts_node, AsyncIterable):
-        timed_text_ch = aio.Chan[io.TimedString]()
-        timed_texts_fut.set_result(timed_text_ch)
+    @tracer.start_as_current_span("tts_node")
+    async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
+        if text_transforms:
+            input = apply_text_transforms(input, text_transforms)
+
+        tts_node = node(input, model_settings)
+        if asyncio.iscoroutine(tts_node):
+            tts_node = await tts_node
+
+        audio_duration: float = 0.0
+        if not isinstance(tts_node, AsyncIterable):
+            if not timed_texts_fut.done():
+                timed_texts_fut.set_result(None)
+            return audio_duration
+
+        if timed_texts_fut.done():
+            timed_text_ch = timed_texts_fut.result()
+        else:
+            timed_text_ch = aio.Chan[io.TimedString]()
+            timed_texts_fut.set_result(timed_text_ch)
 
         async for audio_frame in tts_node:
-            for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                timed_text_ch.send_nowait(text)
+            if start_time is not None and data.ttfb is None:
+                data.ttfb = time.perf_counter() - start_time
+
+            if timed_text_ch is not None:
+                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                    if isinstance(text, io.TimedString):
+                        if is_given(text.start_time):
+                            text.start_time += pushed_duration
+                        if is_given(text.end_time):
+                            text.end_time += pushed_duration
+                        timed_text_ch.send_nowait(text)
 
             audio_ch.send_nowait(audio_frame)
-        return True
+            audio_duration += audio_frame.duration
+        return audio_duration
 
-    timed_texts_fut.set_result(None)
-    return False
+    input_tee = itertools.tee(input, 2)
+    finished = False
+
+    async def _get_start_time() -> None:
+        nonlocal start_time
+        async for chunk in input_tee[0]:
+            if not isinstance(chunk, FlushSentinel):
+                start_time = time.perf_counter()
+                break
+
+    async def _input_segment() -> AsyncGenerator[str, None]:
+        async for chunk in input_tee[1]:
+            if isinstance(chunk, FlushSentinel):
+                return
+            yield chunk
+
+        nonlocal finished
+        finished = True
+
+    _start_time_task = asyncio.create_task(_get_start_time())
+    pushed_duration: float = 0.0
+    input_segment: AsyncGenerator[str, None] | None = None
+    try:
+        while not finished:
+            input_segment = _input_segment()
+            pushed_duration += await _tts_node_inference(input_segment, pushed_duration)
+    finally:
+        await aio.gracefully_cancel(_start_time_task)
+        if input_segment is not None:
+            await input_segment.aclose()
+        await input_tee.aclose()
+
+    return pushed_duration > 0
 
 
 @dataclass
@@ -269,7 +336,8 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut: asyncio.Future[None]
+    first_frame_fut: asyncio.Future[float]
+    """Future that will be set with the timestamp of the first frame's capture"""
 
 
 def perform_audio_forwarding(
@@ -289,8 +357,15 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
     try:
+        audio_output.on("playback_started", _on_playback_started)
         audio_output.resume()
+
         async for frame in tts_output:
             out.audio.append(frame)
 
@@ -312,16 +387,16 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
-            # set the first frame future if not already set
-            # (after completing the first frame)
-            if not out.first_frame_fut.done():
-                out.first_frame_fut.set_result(None)
-
         if resampler:
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
 
     finally:
+        audio_output.off("playback_started", _on_playback_started)
+
+        if not out.first_frame_fut.done():
+            out.first_frame_fut.cancel()
+
         if isinstance(tts_output, _ACloseable):
             try:
                 await tts_output.aclose()
@@ -410,7 +485,7 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+            if not isinstance(function_tool, (llm.FunctionTool, llm.RawFunctionTool)):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
@@ -517,19 +592,23 @@ async def _execute_tools_task(
                     function_callable: Callable, fnc_call: llm.FunctionCall
                 ) -> None:
                     current_span = trace.get_current_span()
-                    current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, fnc_call.name)
-                    current_span.set_attribute(
-                        trace_types.ATTR_FUNCTION_TOOL_ARGS, fnc_call.arguments
+                    current_span.set_attributes(
+                        {
+                            trace_types.ATTR_FUNCTION_TOOL_ID: fnc_call.call_id,
+                            trace_types.ATTR_FUNCTION_TOOL_NAME: fnc_call.name,
+                            trace_types.ATTR_FUNCTION_TOOL_ARGS: fnc_call.arguments,
+                        }
                     )
 
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
-                        logger.exception(
-                            "exception occurred while executing tool",
-                            extra={"function": fnc_call.name, "speech_id": speech_handle.id},
-                        )
+                        if not isinstance(e, StopResponse):
+                            logger.exception(
+                                "exception occurred while executing tool",
+                                extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                            )
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 

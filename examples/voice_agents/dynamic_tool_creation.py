@@ -8,16 +8,17 @@ from pydantic import BaseModel
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     ChatContext,
     FunctionTool,
     JobContext,
     ModelSettings,
-    WorkerOptions,
     cli,
     function_tool,
+    inference,
 )
-from livekit.plugins import openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("grok-agent")
 logger.setLevel(logging.INFO)
@@ -69,6 +70,10 @@ async def _get_course_list_from_db() -> list[str]:
     ]
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # Option 1: create tools when the agent is created
     courses = await _get_course_list_from_db()
@@ -111,12 +116,12 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         vad=silero.VAD.load(),
-        stt=openai.STT(use_realtime=True),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
     )
     await session.start(agent, room=ctx.room)
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

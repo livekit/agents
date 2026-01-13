@@ -11,10 +11,10 @@ from llama_index.core.schema import MetadataMode
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
-    WorkerOptions,
     cli,
     llm,
 )
@@ -88,6 +88,10 @@ class RetrievalAgent(Agent):
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
 
+server = AgentServer()
+
+
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -95,8 +99,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     await session.start(agent=agent, room=ctx.room)
 
-    await session.say("Hey, how can I help you today?", allow_interruptions=True)
+    await session.say("Hey, how can I help you today?", allow_interruptions=False)
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

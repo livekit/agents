@@ -16,7 +16,7 @@ from .. import utils
 from ..ipc import channel
 from ..log import DEV_LEVEL, logger
 from ..plugin import Plugin
-from ..worker import Worker
+from ..worker import AgentServer
 from . import proto
 
 
@@ -64,7 +64,8 @@ def _find_watchable_paths(main_file: pathlib.Path) -> list[pathlib.Path]:
 class WatchServer:
     def __init__(
         self,
-        worker_runner: Callable[[proto.CliArgs], Any],
+        worker_runner: Callable[[AgentServer, proto.CliArgs], Any],
+        server: AgentServer,
         main_file: pathlib.Path,
         cli_args: proto.CliArgs,
         loop: asyncio.AbstractEventLoop,
@@ -74,9 +75,11 @@ class WatchServer:
         self._worker_runner = worker_runner
         self._main_file = main_file
         self._loop = loop
+        self._server = server
 
         self._recv_jobs_fut = asyncio.Future[None]()
         self._worker_reloading = False
+        self._close_fut = asyncio.Future[None]()
 
     async def run(self) -> None:
         watch_paths = _find_watchable_paths(self._main_file)
@@ -86,17 +89,29 @@ class WatchServer:
         self._pch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_pch)
         read_ipc_task = self._loop.create_task(self._read_ipc_task())
 
-        try:
+        @utils.log_exceptions(logger=logger)
+        async def _run_task() -> None:
             await watchfiles.arun_process(
                 *watch_paths,
                 target=self._worker_runner,
-                args=(self._cli_args,),
+                args=(self._server, self._cli_args),
                 watch_filter=watchfiles.filters.PythonFilter(),
                 callback=self._on_reload,
             )
+            await self.aclose()
+
+        run_task = asyncio.create_task(_run_task())
+
+        try:
+            await self._close_fut
         finally:
+            await utils.aio.cancel_and_wait(run_task)
             await utils.aio.cancel_and_wait(read_ipc_task)
             await self._pch.aclose()
+
+    async def aclose(self) -> None:
+        if not self._close_fut.done():
+            self._close_fut.set_result(None)
 
     async def _on_reload(self, _: set[watchfiles.main.FileChange]) -> None:
         if self._worker_reloading:
@@ -134,7 +149,7 @@ class WatchServer:
 class WatchClient:
     def __init__(
         self,
-        worker: Worker,
+        worker: AgentServer,
         cli_args: proto.CliArgs,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:

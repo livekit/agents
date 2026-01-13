@@ -1,5 +1,6 @@
 from . import remote_chat_context, utils
 from .chat_context import (
+    AgentHandoff,
     AudioContent,
     ChatContent,
     ChatContext,
@@ -9,6 +10,7 @@ from .chat_context import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
+    MetricsReport,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .llm import (
@@ -35,11 +37,14 @@ from .realtime import (
 )
 from .tool_context import (
     FunctionTool,
+    ProviderTool,
     RawFunctionTool,
     StopResponse,
+    Tool,
     ToolChoice,
     ToolContext,
     ToolError,
+    Toolset,
     find_function_tools,
     function_tool,
     is_function_tool,
@@ -57,6 +62,8 @@ __all__ = [
     "FunctionCallOutput",
     "AudioContent",
     "ImageContent",
+    "AgentHandoff",
+    "MetricsReport",
     "ChatItem",
     "ChoiceDelta",
     "ChatChunk",
@@ -64,12 +71,15 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
+    "Tool",
+    "Toolset",
     "is_function_tool",
     "function_tool",
     "find_function_tools",
     "FunctionTool",
     "is_raw_function_tool",
     "RawFunctionTool",
+    "ProviderTool",
     "ToolContext",
     "ToolError",
     "StopResponse",

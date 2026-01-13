@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "mistralai"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "mistral"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -23,9 +23,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.2.14",
-    "livekit-plugins-openai>=1.2.5",
-    "mistralai>=1.9.3",
+    "livekit-agents>=1.3.10",
+    "mistralai>=1.9.11",
 ]
 
 [project.urls]

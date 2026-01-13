@@ -35,7 +35,7 @@ class AdditionalVocabEntry:
     """
 
     content: str
-    sounds_like: list[str] = field(default_factory=list)
+    sounds_like: list[str] | None = None
 
 
 @dataclass

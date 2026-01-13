@@ -15,16 +15,17 @@ from dotenv import load_dotenv
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     JobContext,
     RunContext,
     ToolError,
-    WorkerOptions,
     beta,
     cli,
     function_tool,
+    inference,
 )
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -60,6 +61,9 @@ class FrontDeskAgent(Agent):
         )
 
         self._slots_map: dict[str, AvailableSlot] = {}
+
+    async def on_enter(self) -> None:
+        await self.session.say("hello, I can help you to schedule an appointment")
 
     @function_tool
     async def schedule_appointment(
@@ -152,7 +156,20 @@ class FrontDeskAgent(Agent):
         return "\n".join(lines) or "No slots available at the moment."
 
 
-async def entrypoint(ctx: JobContext):
+server = AgentServer()
+
+
+async def on_session_end(ctx: JobContext) -> None:
+    # import json
+
+    # report = ctx.make_session_report()
+    # report_json = json.dumps(report.to_cloud_data(), indent=2)
+
+    pass
+
+
+@server.rtc_session(on_session_end=on_session_end)
+async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
     timezone = "utc"
@@ -170,9 +187,9 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession[Userdata](
         userdata=Userdata(cal=cal),
-        stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        tts=cartesia.TTS(voice="39b376fc-488e-4d0c-8b37-e00b72059fdd", speed="fast"),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("google/gemini-2.5-flash"),
+        tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,
@@ -182,4 +199,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

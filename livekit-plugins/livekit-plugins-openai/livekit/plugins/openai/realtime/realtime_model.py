@@ -18,12 +18,6 @@ from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
-from livekit.agents.llm.tool_context import (
-    get_function_info,
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -709,13 +703,13 @@ class RealtimeSession(
                 extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
             )
 
-            events: list[RealtimeClientEvent] = []
+            events: list[RealtimeClientEvent | dict[str, Any]] = []
 
             # options and instructions
             events.append(self._create_session_update_event())
 
             # tools
-            tools = list(self._tools.function_tools.values())
+            tools = self._tools.flatten()
             if tools:
                 events.append(self._create_tools_update_event(tools))
 
@@ -724,6 +718,7 @@ class RealtimeSession(
                 exclude_function_call=True,
                 exclude_instructions=True,
                 exclude_empty_message=True,
+                exclude_handoff=True,
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -731,9 +726,14 @@ class RealtimeSession(
 
             try:
                 for ev in events:
-                    msg = ev.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
-                    self.emit("openai_client_event_queued", msg)
-                    await ws_conn.send_str(json.dumps(msg))
+                    # certain events could already be in dict format
+                    if isinstance(ev, BaseModel):
+                        ev = ev.model_dump(
+                            by_alias=True, exclude_unset=True, exclude_defaults=False
+                        )
+
+                    self.emit("openai_client_event_queued", ev)
+                    await ws_conn.send_str(json.dumps(ev))
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
@@ -840,7 +840,7 @@ class RealtimeSession(
 
                         logger.debug(f">>> {msg_copy}")
                 except Exception:
-                    break
+                    logger.exception("failed to send event")
 
             closing = True
             await ws_conn.close()
@@ -1103,6 +1103,7 @@ class RealtimeSession(
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
+            chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_instructions=True)
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
 
@@ -1178,43 +1179,40 @@ class RealtimeSession(
 
         return events
 
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
         async with self._update_fnc_ctx_lock:
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
-            assert isinstance(ev.session, RealtimeSessionCreateRequest)
-            assert ev.session.tools is not None
             retained_tool_names: set[str] = set()
-            for t in ev.session.tools:
-                if isinstance(t, RealtimeFunctionTool) and t.name is not None:
-                    retained_tool_names.add(t.name)
+            for t in ev["session"]["tools"]:
+                if name := t.get("name"):
+                    retained_tool_names.add(name)
                 # TODO(dz): handle MCP tools
             retained_tools = [
                 tool
                 for tool in tools
-                if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
-                or (
-                    is_raw_function_tool(tool)
-                    and get_raw_function_info(tool).name in retained_tool_names
+                if (
+                    isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool))
+                    and tool.info.name in retained_tool_names
                 )
+                or isinstance(tool, llm.ProviderTool)
             ]
             self._tools = llm.ToolContext(retained_tools)
 
-    def _create_tools_update_event(
-        self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
-    ) -> SessionUpdateEvent:
+    # this function can be overrided
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
         oai_tools: list[RealtimeFunctionTool] = []
-        retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
-            if is_function_tool(tool):
+            if isinstance(tool, llm.FunctionTool):
                 tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            elif is_raw_function_tool(tool):
-                tool_info = get_raw_function_info(tool)
-                tool_desc = tool_info.raw_schema
+            elif isinstance(tool, llm.RawFunctionTool):
+                tool_desc = tool.info.raw_schema
                 tool_desc.pop("meta", None)  # meta is not supported by OpenAI Realtime API
                 tool_desc["type"] = "function"  # internally tagged
+            elif isinstance(tool, llm.ProviderTool):
+                continue  # currently only xAI supports ProviderTools
             else:
                 logger.error(
                     "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
@@ -1224,7 +1222,6 @@ class RealtimeSession(
             try:
                 session_tool = RealtimeFunctionTool.model_validate(tool_desc)
                 oai_tools.append(session_tool)
-                retained_tools.append(tool)
             except ValidationError:
                 logger.error(
                     "OpenAI Realtime API doesn't support this tool",
@@ -1232,7 +1229,7 @@ class RealtimeSession(
                 )
                 continue
 
-        return SessionUpdateEvent(
+        event = SessionUpdateEvent(
             type="session.update",
             session=RealtimeSessionCreateRequest.model_construct(
                 type="realtime",
@@ -1242,10 +1239,11 @@ class RealtimeSession(
             event_id=utils.shortuuid("tools_update_"),
         )
 
+        event_dict = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+        return event_dict
+
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")
-        # f = asyncio.Future()
-        # self._response_futures[event_id] = f
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
@@ -1340,7 +1338,9 @@ class RealtimeSession(
             )
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
-            chat_ctx = self.chat_ctx.copy()
+            chat_ctx = self.chat_ctx.copy(
+                exclude_handoff=True,
+            )
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
                 assert new_item.type == "message"
@@ -1648,7 +1648,7 @@ class RealtimeSession(
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
-            tokens_per_second=usage.get("output_tokens", 0) / duration,
+            tokens_per_second=usage.get("output_tokens", 0) / duration if duration > 0 else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=usage.get("input_token_details", {}).get("audio_tokens", 0),
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),
@@ -1664,12 +1664,12 @@ class RealtimeSession(
                     .get("cached_tokens_details", {})
                     .get("image_tokens", 0),
                 ),
-                image_tokens=0,
+                image_tokens=usage.get("input_token_details", {}).get("image_tokens", 0),
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
                 audio_tokens=usage.get("output_token_details", {}).get("audio_tokens", 0),
-                image_tokens=0,
+                image_tokens=usage.get("output_token_details", {}).get("image_tokens", 0),
             ),
             metadata=Metadata(
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider

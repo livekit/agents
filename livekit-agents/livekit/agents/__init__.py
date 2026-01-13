@@ -45,12 +45,13 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import FunctionTool, StopResponse, ToolError, function_tool
+from .llm.tool_context import FunctionTool, ProviderTool, StopResponse, ToolError, function_tool
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    FlushSentinel,
     NotGiven,
     NotGivenOr,
 )
@@ -75,6 +76,7 @@ from .voice import (
     UserStateChangedEvent,
     avatar,
     io,
+    room_io,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -91,8 +93,7 @@ from .voice.run_result import (
     mock_tools,
 )
 from .worker import (
-    SimulateJobInfo,
-    Worker,
+    AgentServer,
     WorkerOptions,
     WorkerPermissions,
     WorkerType,
@@ -113,7 +114,7 @@ def __getattr__(name: str) -> typing.Any:
 
 __all__ = [
     "__version__",
-    "Worker",
+    "AgentServer",
     "WorkerOptions",
     "WorkerType",
     "WorkerPermissions",
@@ -125,8 +126,10 @@ __all__ = [
     "AutoSubscribe",
     "FunctionTool",
     "function_tool",
+    "ProviderTool",
     "ChatContext",
     "ChatItem",
+    "room_io",
     "RoomIO",
     "RoomInputOptions",
     "RoomOutputOptions",
@@ -169,7 +172,7 @@ __all__ = [
     "BuiltinAudioClip",
     "AudioConfig",
     "PlayHandle",
-    "SimulateJobInfo",
+    "FlushSentinel",
     "io",
     "avatar",
     "cli",

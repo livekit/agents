@@ -54,7 +54,7 @@ from .types import (
     SpeakerFragments,
     SpeechFragment,
 )
-from .utils import get_endpoint_url
+from .utils import get_stt_url
 
 
 @dataclasses.dataclass
@@ -241,7 +241,11 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, diarization=enable_diarization
+                streaming=True,
+                interim_results=True,
+                diarization=enable_diarization,
+                aligned_transcript="chunk",
+                offline_recognize=False,
             ),
         )
 
@@ -250,37 +254,10 @@ class STT(stt.STT):
                 "`transcription_config` is deprecated. Use individual arguments instead (which override this argument)."
             )
 
-            config: TranscriptionConfig = transcription_config
-            language = language if is_given(language) else config.language
-            if not is_given(output_locale) and config.output_locale is not None:
-                output_locale = config.output_locale
-            if not is_given(domain) and config.domain is not None:
-                domain = config.domain
-            enable_diarization = enable_diarization or config.diarization == "speaker"
-            if not is_given(additional_vocab) and config.additional_vocab is not None:
-                additional_vocab = [
-                    AdditionalVocabEntry(content=k, sounds_like=v)
-                    for k, v in config.additional_vocab.items()
-                ]
-            if not is_given(punctuation_overrides) and config.punctuation_overrides is not None:
-                punctuation_overrides = config.punctuation_overrides
-            # Extract max_speakers from speaker_diarization_config if present
-            if (
-                not is_given(max_speakers)
-                and (dz_cfg := config.speaker_diarization_config)
-                and hasattr(dz_cfg, "max_speakers")
-                and dz_cfg.max_speakers is not None
-            ):
-                max_speakers = dz_cfg.max_speakers
-
         if is_given(audio_settings):
             logger.warning(
                 "`audio_settings` is deprecated. Use individual arguments instead (which override this argument)."
             )
-
-            audio: AudioSettings = audio_settings
-            sample_rate = sample_rate or audio.sample_rate
-            audio_encoding = audio_encoding or AudioEncoding(audio.encoding)
 
         self._stt_options = STTOptions(
             operating_point=operating_point,
@@ -385,8 +362,11 @@ class STT(stt.STT):
 
         if self._stt_options.additional_vocab:
             # API expects list of dicts, not dict format
-            transcription_config.additional_vocab = [  # type: ignore
-                {"content": e.content, "sounds_like": e.sounds_like}
+            transcription_config.additional_vocab = [
+                {
+                    "content": e.content,
+                    **({"sounds_like": e.sounds_like} if e.sounds_like else {}),
+                }
                 for e in self._stt_options.additional_vocab
             ]
 
@@ -472,7 +452,7 @@ class SpeechStream(stt.RecognizeStream):
         """Run the STT stream."""
         self._client = AsyncClient(
             api_key=self._stt._api_key,
-            url=get_endpoint_url(self._stt._base_url),
+            url=get_stt_url(self._stt._base_url),
         )
 
         logger.debug("Connected to Speechmatics STT service")
@@ -647,8 +627,8 @@ class SpeechStream(stt.RecognizeStream):
             alt = result.get("alternatives", [{}])[0]
             if alt.get("content", None):
                 fragment = SpeechFragment(
-                    start_time=result.get("start_time", 0),
-                    end_time=result.get("end_time", 0),
+                    start_time=result.get("start_time", 0) + self.start_time_offset,
+                    end_time=result.get("end_time", 0) + self.start_time_offset,
                     language=alt.get("language", "en"),
                     is_eos=alt.get("is_eos", False),
                     is_final=is_final,

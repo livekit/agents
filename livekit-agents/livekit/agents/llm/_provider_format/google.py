@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from livekit.agents import llm
 from livekit.agents.log import logger
@@ -17,7 +17,10 @@ class GoogleFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    thought_signatures: dict[str, bytes] | None = None,
 ) -> tuple[list[dict], GoogleFormatData]:
     turns: list[dict] = []
     system_messages: list[str] = []
@@ -53,15 +56,17 @@ def to_chat_ctx(
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content))
         elif msg.type == "function_call":
-            parts.append(
-                {
-                    "function_call": {
-                        "id": msg.call_id,
-                        "name": msg.name,
-                        "args": json.loads(msg.arguments or "{}"),
-                    }
+            fc_part: dict[str, Any] = {
+                "function_call": {
+                    "id": msg.call_id,
+                    "name": msg.name,
+                    "args": json.loads(msg.arguments or "{}"),
                 }
-            )
+            }
+            # Inject thought_signature if available (Gemini 3 multi-turn function calling)
+            if thought_signatures and (sig := thought_signatures.get(msg.call_id)):
+                fc_part["thought_signature"] = sig
+            parts.append(fc_part)
         elif msg.type == "function_call_output":
             response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
             parts.append(
@@ -83,7 +88,8 @@ def to_chat_ctx(
             turn["role"] = "user"
 
     # Gemini requires the last message to end with user's turn before they can generate
-    if inject_dummy_user_message and current_role != "user":
+    # allow tool role since we update it to user in the previous step
+    if inject_dummy_user_message and current_role not in ("user", "tool"):
         turns.append({"role": "user", "parts": [{"text": "."}]})
 
     return turns, GoogleFormatData(system_messages=system_messages)
@@ -104,3 +110,42 @@ def _to_image_part(image: llm.ImageContent) -> dict[str, Any]:
         return {"file_data": {"file_uri": img.external_url, "mime_type": mime_type}}
 
     return {"inline_data": {"data": img.data_bytes, "mime_type": img.mime_type}}
+
+
+TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
+
+
+def to_fnc_ctx(
+    tool_ctx: llm.ToolContext,
+    *,
+    tool_behavior: TOOL_BEHAVIOR | None = None,
+) -> list[dict[str, Any]]:
+    tools: list[dict[str, Any]] = []
+    for tool in tool_ctx.function_tools.values():
+        if isinstance(tool, llm.RawFunctionTool):
+            info = tool.info
+            schema = {
+                "name": info.name,
+                "description": info.raw_schema.get("description", ""),
+                "parameters_json_schema": info.raw_schema.get("parameters", {}),
+            }
+            if tool_behavior is not None:
+                schema["behavior"] = tool_behavior
+            tools.append(schema)
+
+        elif isinstance(tool, llm.FunctionTool):
+            from livekit.plugins.google.utils import _GeminiJsonSchema
+
+            fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
+
+            schema = {
+                "name": fnc["name"],
+                "description": fnc["description"],
+                "parameters": json_schema or None,
+            }
+            if tool_behavior is not None:
+                schema["behavior"] = tool_behavior
+            tools.append(schema)
+
+    return tools

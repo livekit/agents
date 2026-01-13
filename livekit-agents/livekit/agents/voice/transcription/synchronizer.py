@@ -130,7 +130,7 @@ class _TextData:
 class _SegmentSynchronizerImpl:
     """Synchronizes one text segment with one audio segment"""
 
-    def __init__(self, options: _TextSyncOptions, *, next_in_chain: io.TextOutput) -> None:
+    def __init__(self, options: _TextSyncOptions, *, next_in_chain: io.TextOutput | None) -> None:
         self._opts = options
         self._text_data = _TextData(word_stream=self._opts.word_tokenizer.stream())
         self._audio_data = _AudioData(sr_stream=self._opts.speaking_rate_detector.stream())
@@ -288,9 +288,11 @@ class _SegmentSynchronizerImpl:
     async def _capture_task(self) -> None:
         try:
             async for text in self._out_ch:
-                await self._next_in_chain.capture_text(text)
+                if self._next_in_chain:
+                    await self._next_in_chain.capture_text(text)
         finally:
-            self._next_in_chain.flush()
+            if self._next_in_chain:
+                self._next_in_chain.flush()
 
     @utils.log_exceptions(logger=logger)
     async def _speaking_rate_task(self) -> None:
@@ -396,7 +398,7 @@ class TranscriptSynchronizer:
         self,
         *,
         next_in_chain_audio: io.AudioOutput,
-        next_in_chain_text: io.TextOutput,
+        next_in_chain_text: io.TextOutput | None,
         speed: float = 1.0,
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
@@ -422,7 +424,7 @@ class TranscriptSynchronizer:
 
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
-        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task(None))
+        self._rotate_segment_atask: asyncio.Task[None] | None = None
 
     @property
     def audio_output(self) -> _SyncedAudioOutput:
@@ -446,7 +448,7 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
-        if enabled or not self._rotate_segment_atask or self._rotate_segment_atask.done():
+        if not self._rotate_segment_atask or self._rotate_segment_atask.done():
             # avoid calling rotate_segment twice when closing the session during agent speaking
             # first time when speech interrupted, second time here when output detached
             self.rotate_segment()
@@ -478,7 +480,7 @@ class TranscriptSynchronizer:
         if self._closed:
             return
 
-        if not self._rotate_segment_atask.done():
+        if self._rotate_segment_atask and not self._rotate_segment_atask.done():
             logger.warning("rotate_segment called while previous segment is still being rotated")
 
         self._rotate_segment_atask = asyncio.create_task(
@@ -507,7 +509,6 @@ class _SyncedAudioOutput(io.AudioOutput):
         )
         self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
-        self._capturing = False
         self._pushed_duration: float = 0.0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -515,9 +516,8 @@ class _SyncedAudioOutput(io.AudioOutput):
         # capture_frame isn't completed
         await self._synchronizer.barrier()
 
-        self._capturing = True
-        await super().capture_frame(frame)
         await self._next_in_chain.capture_frame(frame)  # passthrough audio
+        await super().capture_frame(frame)
         self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
@@ -545,12 +545,10 @@ class _SyncedAudioOutput(io.AudioOutput):
             self._synchronizer.rotate_segment()
             return
 
-        self._capturing = False
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
         self._next_in_chain.clear_buffer()
-        self._capturing = False
 
     # this is going to be automatically called by the next_in_chain
     def on_playback_finished(
@@ -599,10 +597,10 @@ class _SyncedAudioOutput(io.AudioOutput):
 
 class _SyncedTextOutput(io.TextOutput):
     def __init__(
-        self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput
+        self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput | None
     ) -> None:
         super().__init__(label="TranscriptSynchronizer", next_in_chain=next_in_chain)
-        self._next_in_chain: io.TextOutput = next_in_chain  # redefined for better typing
+        self._next_in_chain: io.TextOutput | None = next_in_chain
         self._synchronizer = synchronizer
         self._capturing = False
 
@@ -610,7 +608,8 @@ class _SyncedTextOutput(io.TextOutput):
         await self._synchronizer.barrier()
 
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
-            await self._next_in_chain.capture_text(text)
+            if self._next_in_chain:
+                await self._next_in_chain.capture_text(text)
             return
 
         self._capturing = True
@@ -626,7 +625,8 @@ class _SyncedTextOutput(io.TextOutput):
 
     def flush(self) -> None:
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
-            self._next_in_chain.flush()
+            if self._next_in_chain:
+                self._next_in_chain.flush()
             return
 
         if not self._capturing:

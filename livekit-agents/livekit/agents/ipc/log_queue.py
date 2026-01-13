@@ -64,6 +64,10 @@ class LogQueueHandler(logging.Handler):
         self._send_thread = threading.Thread(target=self._forward_logs, name="ipc_log_forwarder")
         self._send_thread.start()
 
+    @property
+    def thread(self) -> threading.Thread:
+        return self._send_thread
+
     def _forward_logs(self) -> None:
         while True:
             serialized_record = self._send_q.get()
@@ -90,7 +94,8 @@ class LogQueueHandler(logging.Handler):
             record.msg = msg
             record.args = None
             record.exc_info = None
-            record.exc_text = None
+            # pass formatted exc_text since stack trace is not pickleable
+            record.exc_text = record.exc_text
             record.stack_info = None
 
             # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json

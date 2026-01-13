@@ -69,6 +69,12 @@ class Voice:
     category: str
 
 
+@dataclass
+class PronunciationDictionaryLocator:
+    pronunciation_dictionary_id: str
+    version_id: str
+
+
 DEFAULT_VOICE_ID = "bIHbv24MWmeRgasZH58o"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
@@ -91,11 +97,15 @@ class TTS(tts.TTS):
         apply_text_normalization: Literal["auto", "off", "on"] = "auto",
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
+        enable_logging: bool = True,
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
         sync_alignment: bool = True,
         preferred_alignment: Literal["normalized", "original"] = "normalized",
+        pronunciation_dictionary_locators: NotGivenOr[
+            list[PronunciationDictionaryLocator]
+        ] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -109,13 +119,15 @@ class TTS(tts.TTS):
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Sentence tokenizer will be used to synthesize one sentence at a time. Defaults to True.
-            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer when auto_mode=False, `livekit.agents.tokenize.blingfire.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
+            enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized".
+            pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators to use for pronunciation control.
         """  # noqa: E501
 
         if not is_given(encoding):
@@ -162,12 +174,14 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
+            enable_logging=enable_logging,
             language=language,
             inactivity_timeout=inactivity_timeout,
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
             apply_text_normalization=apply_text_normalization,
             preferred_alignment=preferred_alignment,
+            pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -202,6 +216,9 @@ class TTS(tts.TTS):
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        pronunciation_dictionary_locators: NotGivenOr[
+            list[PronunciationDictionaryLocator]
+        ] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -209,6 +226,7 @@ class TTS(tts.TTS):
             voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (NotGivenOr[TTSModels | str]): TTS model to use.
             language (NotGivenOr[str]): Language code for the TTS model.
+            pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators.
         """
         changed = False
 
@@ -226,6 +244,10 @@ class TTS(tts.TTS):
 
         if is_given(language) and language != self._opts.language:
             self._opts.language = language
+            changed = True
+
+        if is_given(pronunciation_dictionary_locators):
+            self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
         if changed and self._current_connection:
@@ -455,11 +477,13 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
+    enable_logging: bool
     inactivity_timeout: int
     sync_alignment: bool
     apply_text_normalization: Literal["auto", "on", "off"]
     preferred_alignment: Literal["normalized", "original"]
     auto_mode: NotGivenOr[bool]
+    pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
 
 
 @dataclass
@@ -559,21 +583,25 @@ class _Connection:
                 if isinstance(msg, _SynthesizeContent):
                     is_new_context = msg.context_id not in self._active_contexts
 
-                    # If not current and this is a new context, ignore it
-                    if not self._is_current and is_new_context:
-                        continue
-
                     if is_new_context:
                         voice_settings = (
                             _strip_nones(dataclasses.asdict(self._opts.voice_settings))
                             if is_given(self._opts.voice_settings)
                             else {}
                         )
-                        init_pkt = {
+                        init_pkt: dict[str, Any] = {
                             "text": " ",
                             "voice_settings": voice_settings,
                             "context_id": msg.context_id,
                         }
+                        if is_given(self._opts.pronunciation_dictionary_locators):
+                            init_pkt["pronunciation_dictionary_locators"] = [
+                                {
+                                    "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
+                                    "version_id": locator.version_id,
+                                }
+                                for locator in self._opts.pronunciation_dictionary_locators
+                            ]
                         await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
@@ -614,7 +642,8 @@ class _Connection:
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._closed:
+                    if not self._closed and len(self._context_data) > 0:
+                        # websocket will be closed after all contexts are closed
                         logger.warning("websocket closed unexpectedly")
                     break
 
@@ -624,20 +653,23 @@ class _Connection:
 
                 data = json.loads(msg.data)
                 context_id = data.get("contextId")
-
-                if not context_id or context_id not in self._context_data:
-                    continue
-
-                ctx = self._context_data[context_id]
+                ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
                     logger.error(
                         "elevenlabs tts returned error",
-                        extra={"context_id": context_id, "error": error},
+                        extra={"context_id": context_id, "error": error, "data": data},
                     )
-                    if not ctx.waiter.done():
-                        ctx.waiter.set_exception(APIError(message=error))
-                    self._cleanup_context(context_id)
+                    if context_id is not None:
+                        if ctx and not ctx.waiter.done():
+                            ctx.waiter.set_exception(APIError(message=error))
+                        self._cleanup_context(context_id)
+                    continue
+
+                if ctx is None:
+                    logger.warning(
+                        "unexpected message received from elevenlabs tts", extra={"data": data}
+                    )
                     continue
 
                 emitter = ctx.emitter
@@ -793,6 +825,7 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     if is_given(opts.language):
         params.append(f"language_code={opts.language}")
     params.append(f"enable_ssml_parsing={str(opts.enable_ssml_parsing).lower()}")
+    params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")
     params.append(f"apply_text_normalization={opts.apply_text_normalization}")
     if opts.sync_alignment:

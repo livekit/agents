@@ -8,19 +8,18 @@ import httpx
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.voice import Agent, AgentSession
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomOutputOptions
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins import openai
+
+load_dotenv()
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
 
-load_dotenv()
-
-
+server = AgentServer()
 AVATAR_IDENTITY = "avatar_worker"
 
 
@@ -47,7 +46,7 @@ async def launch_avatar(ctx: JobContext, avatar_dispatcher_url: str, avatar_iden
         .with_name("Avatar Runner")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
         .with_kind("agent")
-        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.token_claims().identity})
+        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.local_participant_identity})
         .to_jwt()
     )
 
@@ -66,7 +65,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(),
         # stt=deepgram.STT(),
-        # llm=openai.LLM(model="gpt-4o-mini"),
+        # llm=openai.LLM(model="gpt-4.1-mini"),
         # tts=cartesia.TTS(),
         resume_false_interruption=False,
     )
@@ -83,10 +82,6 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_output_options=RoomOutputOptions(
-            audio_enabled=False,
-            transcription_enabled=True,
-        ),
     )
 
     @session.output.audio.on("playback_finished")
@@ -107,9 +102,5 @@ if __name__ == "__main__":
     args, remaining_args = parser.parse_known_args()
     sys.argv = sys.argv[:1] + remaining_args
 
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=partial(entrypoint, avatar_dispatcher_url=args.avatar_url),
-            worker_type=WorkerType.ROOM,
-        )
-    )
+    server.rtc_session(partial(entrypoint, avatar_dispatcher_url=args.avatar_url))
+    cli.run_app(server)
