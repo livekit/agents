@@ -1662,7 +1662,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 started_speaking_at = fut.result() or time.time()
             except BaseException:
-                started_speaking_at = time.time()
+                return
 
             self._session._update_agent_state(
                 "speaking",
@@ -1741,7 +1741,11 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted and audio_output is not None:
             playback_ev = await audio_output.wait_for_playout()
 
-            if audio_out is not None and audio_out.first_frame_fut.done():
+            if (
+                audio_out is not None
+                and audio_out.first_frame_fut.done()
+                and not audio_out.first_frame_fut.cancelled()
+            ):
                 if playback_ev.synchronized_transcript is not None:
                     forwarded_text = playback_ev.synchronized_transcript
             else:
@@ -1946,7 +1950,8 @@ class AgentActivity(RecognitionHooks):
             try:
                 started_speaking_at = fut.result() or time.time()
             except BaseException:
-                started_speaking_at = time.time()
+                return
+
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2034,7 +2039,11 @@ class AgentActivity(RecognitionHooks):
                 audio_output.clear_buffer()
 
                 playback_ev = await audio_output.wait_for_playout()
-                if audio_out is not None and audio_out.first_frame_fut.done():
+                if (
+                    audio_out is not None
+                    and audio_out.first_frame_fut.done()
+                    and not audio_out.first_frame_fut.cancelled()
+                ):
                     # playback_ev is valid only if the first frame was already played
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
@@ -2310,7 +2319,8 @@ class AgentActivity(RecognitionHooks):
             try:
                 started_speaking_at = fut.result() or time.time()
             except BaseException:
-                started_speaking_at = time.time()
+                return
+
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2523,7 +2533,11 @@ class AgentActivity(RecognitionHooks):
 
                     playback_ev = await audio_output.wait_for_playout()
                     playback_position = playback_ev.playback_position
-                    if audio_out is not None and audio_out.first_frame_fut.done():
+                    if (
+                        audio_out is not None
+                        and audio_out.first_frame_fut.done()
+                        and not audio_out.first_frame_fut.cancelled()
+                    ):
                         # playback_ev is valid only if the first frame was already played
                         if playback_ev.synchronized_transcript is not None:
                             forwarded_text = playback_ev.synchronized_transcript
