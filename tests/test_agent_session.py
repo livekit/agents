@@ -513,10 +513,10 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[3].role == "assistant"
     assert agent.chat_ctx.items[3].text_content == "session.say from on_user_turn_completed"
     assert agent.chat_ctx.items[4].type == "function_call"
-    assert agent.chat_ctx.items[5].type == "function_call_output"
-    assert agent.chat_ctx.items[6].type == "message"
-    assert agent.chat_ctx.items[6].role == "assistant"
-    assert agent.chat_ctx.items[6].text_content == "Goodbye! have a nice day!"
+    assert agent.chat_ctx.items[5].type == "message"
+    assert agent.chat_ctx.items[5].role == "assistant"
+    assert agent.chat_ctx.items[5].text_content == "Goodbye! have a nice day!"
+    assert agent.chat_ctx.items[6].type == "function_call_output"
 
 
 @pytest.mark.parametrize(

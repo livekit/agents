@@ -78,11 +78,14 @@ class STT(stt.STT):
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=False, aligned_transcript="word"
+                streaming=True,
+                interim_results=False,
+                aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
-        if assemblyai_api_key is None:
+        if not assemblyai_api_key:
             raise ValueError(
                 "AssemblyAI API key is required. "
                 "Pass one in via the `api_key` parameter, "

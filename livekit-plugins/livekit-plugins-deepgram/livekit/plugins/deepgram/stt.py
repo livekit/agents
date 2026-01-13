@@ -65,6 +65,7 @@ class STTOptions:
     keyterms: list[str]
     profanity_filter: bool
     endpoint_url: str
+    vad_events: bool = True
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
@@ -95,6 +96,7 @@ class STT(stt.STT):
         base_url: str = "https://api.deepgram.com/v1/listen",
         numerals: bool = False,
         mip_opt_out: bool = False,
+        vad_events: bool = True,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -121,6 +123,8 @@ class STT(stt.STT):
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
+            vad_events: Whether to enable VAD (Voice Activity Detection) events.
+                       When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -165,6 +169,7 @@ class STT(stt.STT):
             profanity_filter=profanity_filter,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
+            vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
             endpoint_url=base_url,
         )
@@ -277,6 +282,7 @@ class STT(stt.STT):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -310,6 +316,8 @@ class STT(stt.STT):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(vad_events):
+            self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
@@ -331,6 +339,7 @@ class STT(stt.STT):
                 profanity_filter=profanity_filter,
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
+                vad_events=vad_events,
                 endpoint_url=endpoint_url,
             )
 
@@ -400,6 +409,7 @@ class SpeechStream(stt.SpeechStream):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -433,6 +443,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(vad_events):
+            self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
@@ -558,7 +570,7 @@ class SpeechStream(stt.SpeechStream):
             "no_delay": self._opts.no_delay,
             "interim_results": self._opts.interim_results,
             "encoding": "linear16",
-            "vad_events": True,
+            "vad_events": self._opts.vad_events,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
             "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,

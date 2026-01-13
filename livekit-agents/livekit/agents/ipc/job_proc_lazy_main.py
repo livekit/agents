@@ -80,6 +80,7 @@ def proc_main(args: ProcStartArgs) -> None:
     try:
         client.initialize()
     except Exception:
+        log_handler.close()
         return  # initialization failed, exit (initialize will send an error to the worker)
 
     client.run()
