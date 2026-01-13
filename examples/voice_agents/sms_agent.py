@@ -1,4 +1,5 @@
 import logging
+from typing import Any, override
 
 from dotenv import load_dotenv
 
@@ -11,6 +12,7 @@ from livekit.agents import (
     TextMessageContext,
     cli,
 )
+from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -24,7 +26,7 @@ load_dotenv()
 
 
 class MyAgent(Agent):
-    def __init__(self, *, greet_on_enter: bool = True) -> None:
+    def __init__(self, *, text_mode: bool) -> None:
         super().__init__(
             instructions="Your name is Kelly. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
@@ -32,10 +34,16 @@ class MyAgent(Agent):
             "You are curious and friendly, and have a sense of humor."
             "you will speak english to the user",
         )
-        self._greet_on_enter = greet_on_enter
+        self._text_mode = text_mode
+
+    @override
+    def get_init_kwargs(self) -> dict[str, Any]:
+        return {
+            "text_mode": self._text_mode,
+        }
 
     async def on_enter(self):
-        if self._greet_on_enter:
+        if not self._text_mode:
             logger.debug("greeting the user")
             self.session.generate_reply(allow_interruptions=False)
 
@@ -63,6 +71,26 @@ class MyAgent(Agent):
 
         return "sunny with a temperature of 70 degrees."
 
+    @function_tool
+    async def register_for_weather(self, context: RunContext):
+        """Called when the user wants to register for the weather event."""
+
+        email_result = await GetEmailTask(
+            extra_instructions=(
+                "You are communicate to the user via text messages, "
+                "so there is no need to verify the email address with the user multiple times."
+            )
+            if self._text_mode
+            else ""
+        )
+
+        # TODO: serialize durable function calls
+        email_address = email_result.email_address
+
+        logger.info(f"User's email address: {email_address}")
+
+        return "You are now registered for the weather event."
+
 
 server = AgentServer()
 
@@ -78,7 +106,7 @@ async def sms_handler(ctx: TextMessageContext):
     if ctx.session_data:
         await session.rehydrate(ctx.session_data)
     else:
-        await session.start(agent=MyAgent(greet_on_enter=False))
+        await session.start(agent=MyAgent(text_mode=True))
 
     async for ev in session.run(user_input=ctx.text):
         await ctx.send_response(ev)
@@ -95,7 +123,7 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    await session.start(agent=MyAgent(), room=ctx.room)
+    await session.start(agent=MyAgent(text_mode=False), room=ctx.room)
 
 
 if __name__ == "__main__":

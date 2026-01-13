@@ -891,7 +891,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             _state_passphrase_ctx.reset(token)
 
         tool_ctx = llm.ToolContext(self.tools)
-        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
+        valid_tools: list[llm.Tool | llm.Toolset] = []
         for name in state_dict["tools"]:
             # TODO: support provider tools
             if name in tool_ctx.function_tools:

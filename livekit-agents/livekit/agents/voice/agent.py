@@ -387,7 +387,7 @@ class Agent:
             # only use get_init_kwargs if it's defined directly on type(self), not inherited
             init_kwargs = self.get_init_kwargs()
         return (
-            self._reconstruct,
+            self._reconstruct,  # type: ignore
             (self.__class__, init_kwargs, self.__getstate__()),
         )
 
@@ -411,7 +411,7 @@ class Agent:
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         tool_ctx = llm.ToolContext(self.tools)
-        valid_tools: list[llm.FunctionTool | llm.RawFunctionTool | llm.ProviderTool] = []
+        valid_tools: list[llm.Tool | llm.Toolset] = []
         for name in state["tools"]:
             # TODO: support provider tools
             if name in tool_ctx.function_tools:
@@ -771,6 +771,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
+        self.__awaited: bool = False
+        self._old_agent: Agent | None = None
+        self._update_agent_task: asyncio.Task[None] | None = None
+
     def done(self) -> bool:
         return self.__fut.done()
 
@@ -794,6 +798,15 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # if not self.__inline_mode:
         #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
+
+        # workaround before durable functions are implemented
+        # the AgentTask is rehydrated without being awaited, switch to the old agent when it's done
+        if not self.__awaited and self._old_agent:
+            self._update_agent_task = asyncio.create_task(
+                self.__switch_to_old_agent(
+                    old_agent=self._old_agent, session=self.session, speech_handle=speech_handle
+                )
+            )
 
     async def __await_impl(self) -> TaskResult_T:
         if self.__started:
@@ -838,7 +851,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         speech_handle = _SpeechHandleContextVar.get(None)
         old_activity = _AgentActivityContextVar.get()
-        old_agent = old_activity.agent
+        self._old_agent = old_activity.agent
         session = old_activity.session
 
         blocked_tasks = [current_task]
@@ -875,32 +888,54 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             return await asyncio.shield(self.__fut)
 
         finally:
-            # run_state could have changed after self.__fut
-            run_state = session._global_run_state
+            await self.__switch_to_old_agent(
+                old_agent=self._old_agent, session=session, speech_handle=speech_handle
+            )
 
-            if session.current_agent != self:
-                logger.warning(
-                    f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                    "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
-                )
-                await old_activity.aclose()
-            else:
-                if speech_handle and run_state and not run_state.done():
-                    run_state._watch_handle(speech_handle)
+    async def __switch_to_old_agent(
+        self, *, old_agent: Agent, session: AgentSession, speech_handle: SpeechHandle | None
+    ) -> None:
+        # run_state could have changed after self.__fut
+        run_state = session._global_run_state
 
-                merged_chat_ctx = old_agent.chat_ctx.merge(
-                    self.chat_ctx, exclude_function_call=True, exclude_instructions=True
-                )
-                # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
-                old_agent._chat_ctx.items[:] = merged_chat_ctx.items
-                # await old_agent.update_chat_ctx(merged_chat_ctx)
+        if session.current_agent != self:
+            logger.warning(
+                f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+            )
+            if old_agent._activity:
+                await old_agent._activity.aclose()
+        else:
+            if speech_handle and run_state and not run_state.done():
+                run_state._watch_handle(speech_handle)
 
-                await session._update_activity(
-                    old_agent, new_activity="resume", wait_on_enter=False
-                )
+            merged_chat_ctx = old_agent.chat_ctx.merge(
+                self.chat_ctx, exclude_function_call=True, exclude_instructions=True
+            )
+            # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
+            old_agent._chat_ctx.items[:] = merged_chat_ctx.items
+            # await old_agent.update_chat_ctx(merged_chat_ctx)
+
+            await session._update_activity(
+                old_agent,
+                new_activity="resume" if old_agent._activity else "start",
+                wait_on_enter=False,
+            )
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
+        self.__awaited = True
         return self.__await_impl().__await__()
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = super().__getstate__()
+        state["_old_agent"] = self._old_agent
+        state["_started"] = self.__started
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        super().__setstate__(state)
+        self._old_agent = state["_old_agent"]
+        self.__started = state["_started"]
 
 
 @dataclass
