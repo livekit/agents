@@ -61,8 +61,7 @@ class InterruptionEventType(str, Enum):
     OVERLAP_SPEECH_ENDED = "overlap_speech_ended"
 
 
-@dataclass
-class InterruptionEvent:
+class InterruptionEvent(BaseModel):
     """
     Represents an event detected by the tnterruption detection model.
     """

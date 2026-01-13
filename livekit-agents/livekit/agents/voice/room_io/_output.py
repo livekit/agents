@@ -99,15 +99,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await self._flush_task
 
         for f in self._audio_bstream.push(frame.data):
-            await self._audio_buf.send(f)
             self._pushed_duration += f.duration
+            await self._audio_buf.send(f)
 
     def flush(self) -> None:
         super().flush()
 
         for f in self._audio_bstream.flush():
-            self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
+            self._audio_buf.send_nowait(f)
 
         if not self._pushed_duration:
             return
