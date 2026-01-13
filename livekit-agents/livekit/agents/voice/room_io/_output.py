@@ -106,8 +106,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         super().flush()
 
         for f in self._audio_bstream.flush():
-            self._pushed_duration += f.duration
             self._audio_buf.send_nowait(f)
+            self._pushed_duration += f.duration
 
         if not self._pushed_duration:
             return
