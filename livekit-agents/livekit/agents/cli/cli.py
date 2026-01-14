@@ -680,11 +680,18 @@ class AgentsConsole:
             self._apm.process_reverse_stream(render_frame_for_aec)
 
 
+AUDIO_SHORTCUTS = [
+    ("Ctrl+T", "text mode"),
+    ("Ctrl+C", "exit"),
+]
+
+
 class FrequencyVisualizer:
     def __init__(self, agents_console: AgentsConsole, *, label: str = "Unlabeled microphone"):
         self.label = label
         self.height_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         self.c = agents_console
+        self.show_shortcuts = False
 
     def update(self) -> None:
         with self.c._input_lock:
@@ -692,11 +699,13 @@ class FrequencyVisualizer:
             self._levels_idx = [max(0, min(7, int(round(v * 7)))) for v in lv]
 
     def __rich__(self) -> RenderableType:
+        table = Table.grid(padding=0)
+        table.add_column()
+
         label = f"   {self.label}  "
-        table = Table.grid(
+        inner_table = Table.grid(
             Column(width=len(label), no_wrap=True),
             Column(no_wrap=True, overflow="fold"),
-            Column(),
             padding=(0, 0, 0, 0),
             collapse_padding=True,
             pad_edge=False,
@@ -706,11 +715,16 @@ class FrequencyVisualizer:
         label_seg = Text(label, style=style)
 
         bar = "".join(f" {self.height_chars[i]}" for i in self._levels_idx)
-        table.add_row(
-            Group(label_seg),
-            Group(bar),
-            Text.from_markup("  [bold]<Ctrl+T>[/bold] Text Mode", style="dim"),
-        )
+        inner_table.add_row(Group(label_seg), Group(bar))
+        table.add_row(inner_table)
+        table.add_row(Text(""))
+
+        if self.show_shortcuts:
+            for shortcut_key, desc in AUDIO_SHORTCUTS:
+                table.add_row(Text.assemble(("   ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim")))
+        else:
+            table.add_row(Text("   ? for shortcuts", style="dim"))
+
         return table
 
 
@@ -932,6 +946,12 @@ def _print_audio_devices() -> None:
     console.print(table)
 
 
+TEXT_SHORTCUTS = [
+    ("Ctrl+T", "audio mode"),
+    ("Ctrl+C", "exit"),
+]
+
+
 def prompt(
     message: str | Text,
     *,
@@ -948,27 +968,21 @@ def prompt(
         table = Table.grid(padding=0)
         table.add_column()
 
-        # Top border
         table.add_row(Text(line_char * width, style="dim"))
 
-        # Input line - always show block cursor at the end
         input_text = "".join(buffer)
         if input_text:
-            # Show user input with cursor
-            table.add_row(Text.assemble(("\u276f ", "bold"), (input_text, ""), ("\u2588", "dim")))
+            table.add_row(Text.assemble(("\u276f ", "bold"), (input_text, ""), ("\u2588", "white")))
         else:
-            # Show placeholder with cursor at start
             table.add_row(
-                Text.assemble(("\u276f ", "bold"), ("\u2588", "dim"), (" ", ""), (placeholder, "dim italic"))
+                Text.assemble(("\u276f ", "bold"), ("\u2588", "white"), (" ", ""), (placeholder, "dim italic"))
             )
 
-        # Bottom border
         table.add_row(Text(line_char * width, style="dim"))
 
-        # Hints - only show "? for shortcuts" when buffer is empty
         if show_shortcuts:
-            table.add_row(Text.assemble(("  Ctrl+T", "bold"), ("  audio mode", "dim")))
-            table.add_row(Text.assemble(("  Ctrl+C", "bold"), ("  exit", "dim")))
+            for shortcut_key, desc in TEXT_SHORTCUTS:
+                table.add_row(Text.assemble(("  ", ""), (shortcut_key, "dim bold"), (f"  {desc}", "dim")))
         elif not buffer:
             table.add_row(Text("  ? for shortcuts", style="dim"))
 
@@ -1207,15 +1221,20 @@ def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
 
 def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: str | None) -> None:
     ctrl_t_e = threading.Event()
+    visualizer: FrequencyVisualizer | None = None
 
-    def _listen_for_toggle() -> None:
+    def _listen_for_keys() -> None:
         while not ctrl_t_e.is_set():
             ch = readkey()
             if ch == key.CTRL_T:
                 ctrl_t_e.set()
                 break
+            elif ch == "?" and visualizer is not None:
+                visualizer.show_shortcuts = not visualizer.show_shortcuts
+            elif ch == key.ESC and visualizer is not None:
+                visualizer.show_shortcuts = False
 
-    listener = threading.Thread(target=_listen_for_toggle, daemon=True)
+    listener = threading.Thread(target=_listen_for_keys, daemon=True)
     listener.start()
 
     c.set_microphone_enabled(True, device=input_device)
