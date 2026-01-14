@@ -58,7 +58,7 @@ class VADOptions(TypedDict, total=False):
 
 
 # https://elevenlabs.io/docs/overview/models#models-overview
-type ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
+ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
 
 
 @dataclass
