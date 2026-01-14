@@ -1,6 +1,5 @@
 import asyncio
 import os
-from typing import Any
 
 import aiohttp
 
@@ -19,6 +18,8 @@ from livekit.agents import (
 
 from .models import TTSModels
 
+SIMPLISMART_BASE_URL = "https://api.simplismart.live/tts"
+
 
 class SimplismartTTSOptions(BaseModel):
     temperature: float = 0.7
@@ -31,13 +32,15 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        base_url: str,
+        base_url: str = SIMPLISMART_BASE_URL,
         model: TTSModels | str = "canopylabs/orpheus-3b-0.1-ft",
-        voice="tara",
+        voice: str = "tara",
         api_key: str | None = None,
-        params: dict[str, Any] | SimplismartTTSOptions | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        **kwargs: Any,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        repetition_penalty: float = 1.5,
+        max_tokens: int = 1000,
     ) -> None:
         """
         Configuration options for SimpliSmart TTS (Text-to-Speech).
@@ -63,13 +66,12 @@ class TTS(tts.TTS):
 
         self._session = http_session
 
-        if params is None:
-            params = SimplismartTTSOptions()
-
-        if isinstance(params, SimplismartTTSOptions):
-            self._opts = params
-        else:
-            self._opts = SimplismartTTSOptions(**params)
+        self._opts = SimplismartTTSOptions(
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            max_tokens=max_tokens,
+        )
 
     @property
     def model(self) -> str:

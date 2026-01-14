@@ -47,10 +47,10 @@ from .models import (
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
     PerplexityChatModels,
+    SimplismartChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
-    SimplismartChatModels,
     _supports_reasoning_effort,
 )
 from .utils import AsyncAzureADTokenProvider

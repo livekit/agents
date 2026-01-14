@@ -291,29 +291,29 @@ XAIChatModels = Literal[
 ]
 
 SimplismartChatModels = Literal[
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
-    "meta-llama/Llama-3.2-1B-Instruct"
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-    "meta-llama/Llama-3.1-8B-Instruct"
-    "openai/gpt-oss-120b"
-    "google/gemma-3-27b-it"
-    "meta-llama/Llama-3.2-11B-Vision-Instruct"
-    "mistralai/Mixtral-8x7B-Instruct-v0.1"
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
-    "Qwen/Qwen2.5-VL-72B-Instruct"
-    "meta-llama/Llama-3.2-90B-Vision-Instruct"
-    "meta-llama/Meta-Llama-3.1-70B-Instruct"
-    "meta-llama/Llama-3.3-70B-Instruct"
-    "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    "google/gemma-3-1b-it"
-    "google/gemma-3-4b-it"
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
-    "Qwen/QwQ-32B"
-    "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
-    "mistralai/Devstral-Small-2505"
-    "Qwen/Qwen3-14B-FP8"
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "meta-llama/Llama-3.2-1B-Instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "openai/gpt-oss-120b",
+    "google/gemma-3-27b-it",
+    "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "Qwen/Qwen2.5-VL-72B-Instruct",
+    "meta-llama/Llama-3.2-90B-Vision-Instruct",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "google/gemma-3-1b-it",
+    "google/gemma-3-4b-it",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    "Qwen/QwQ-32B",
+    "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    "mistralai/Devstral-Small-2505",
+    "Qwen/Qwen3-14B-FP8",
     "Qwen/Qwen3-14B"
 ]
 
