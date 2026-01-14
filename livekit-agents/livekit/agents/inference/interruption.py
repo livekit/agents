@@ -62,6 +62,7 @@ class InterruptionEventType(str, Enum):
 
 
 class InterruptionEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     """
     Represents an event detected by the tnterruption detection model.
     """

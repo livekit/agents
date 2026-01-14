@@ -1,8 +1,8 @@
 import functools
-import warnings
 from collections import defaultdict
 from typing import Any, Callable
 
+from livekit.agents.log import logger
 from livekit.agents.types import NOT_GIVEN
 
 
@@ -18,7 +18,7 @@ def deprecate_params(mapping: dict[str, str]) -> Callable[[Callable[..., Any]], 
     ... def my_function(old_param: NotGivenOr[int] = NOT_GIVEN, new_param: int = 0):
     ...     print(old_param)
     >>> my_function(old_param=1)
-    DeprecationWarning: old_param is deprecated. Use new_param instead
+    WARNING: old_param is deprecated. Use new_param instead
     1
     >>> my_function(new_param=1)
     >>> print(my_function(new_param=1))
@@ -35,9 +35,8 @@ def deprecate_params(mapping: dict[str, str]) -> Callable[[Callable[..., Any]], 
 
             for suggestion, names in by_suggestion.items():
                 params = ", ".join(names)
-                warnings.warn(
+                logger.warning(
                     f"{params} {'are' if len(names) > 1 else 'is'} deprecated. {suggestion}",
-                    DeprecationWarning,
                     stacklevel=2,
                 )
             return fn(*args, **kwargs)
