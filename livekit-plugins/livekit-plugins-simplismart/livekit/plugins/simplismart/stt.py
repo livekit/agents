@@ -19,14 +19,13 @@ This module provides an STT implementation that uses the SimpliSmart API.
 
 import asyncio
 import base64
-import enum
 import json
 import os
 import weakref
 from typing import Any, Literal
 from urllib.parse import urlparse
+
 import aiohttp
-from aiohttp import ClientTimeout
 from pydantic import BaseModel
 
 from livekit.agents import (
@@ -44,15 +43,7 @@ from livekit.agents.utils.misc import is_given
 from .log import logger
 from .models import STTModels
 
-
-class ConnectionState(enum.Enum):
-    """WebSocket connection states."""
-
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    RECONNECTING = "reconnecting"
-    FAILED = "failed"
+SIMPLISMART_BASE_URL = "https://api.simplismart.live/predict"
 
 
 class SimplismartSTTOptions(BaseModel):
@@ -78,7 +69,6 @@ class SimplismartSTTOptions(BaseModel):
     log_prob_threshold: float | None = -1.0
     length_penalty: int = 1
     repetition_penalty: float = 1.01
-    suppress_tokens: list[int] = [-1]
     strict_hallucination_reduction: bool = False
 
 
@@ -86,45 +76,70 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        base_url: str | None = None,
+        base_url: str = SIMPLISMART_BASE_URL,
         api_key: str | None = None,
         streaming: bool = False,
         model: STTModels | str = "openai/whisper-large-v3-turbo",
-        params: dict[str, Any] | SimplismartSTTOptions | None = None,
+        language: str = "en",
+        task: Literal["transcribe", "translate"] = "transcribe",
+        without_timestamps: bool = True,
+        vad_model: Literal["silero", "frame"] = "frame",
+        vad_filter: bool = True,
+        vad_onset: float | None = 0.5,
+        vad_offset: float | None = None,
+        min_speech_duration_ms: int = 0,
+        max_speech_duration_s: float = 30,
+        min_silence_duration_ms: int = 2000,
+        speech_pad_ms: int = 400,
+        initial_prompt: str | None = None,
+        hotwords: str | None = None,
+        num_speakers: int = 0,
+        compression_ratio_threshold: float | None = 2.4,
+        beam_size: int = 4,
+        temperature: float = 0.0,
+        multilingual: bool = False,
+        max_tokens: float | None = 400,
+        log_prob_threshold: float | None = -1.0,
+        length_penalty: int = 1,
+        repetition_penalty: float = 1.01,
+        strict_hallucination_reduction: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ):
         """
-        Configuration options for the Simplismart STT (Speech-to-Text) engine.
+        Configuration options for the SimpliSmart STT (Speech-to-Text) engine.
 
-        Attributes:
-            language: Language code for transcription (default: None for auto-detect).
-            task: Operation to perform, either "transcribe" or "translate".
-            without_timestamps: If True, disables timestamp generation in transcripts.
-            vad_model: Voice Activity Detection model to use ("silero" or "frame").
-            vad_filter: Whether to apply VAD to filter input audio.
-            model: Model identifier for the backend STT model.
-            vad_onset: Time (in seconds) for VAD onset boundary.
-            vad_offset: Time (in seconds) for VAD offset boundary.
-            min_speech_duration_ms: Minimum duration (ms) for a valid speech segment.
-            max_speech_duration_s: Maximum speech segment duration (seconds).
-            min_silence_duration_ms: Minimum silence duration (ms) to split speech.
-            speech_pad_ms: Padding (ms) added to boundaries of detected speech.
-            initial_prompt: An optional initial prompt for contextual biasing.
-            hotwords: Comma-separated list of hotwords to bias recognition.
-            num_speakers: Number of speakers for diarization.
-            compression_ratio_threshold: Threshold for output compression ratio.
-            beam_size: Beam size for the decoder.
-            temperature: Decoding temperature (affects randomness).
-            multilingual: Whether to permit multilingual recognition.
-            max_tokens: Maximum number of output tokens for the model.
-            log_prob_threshold: Log probability threshold for word filtering.
-            length_penalty: Penalty for longer transcriptions.
-            repetition_penalty: Penalty for repeated words during decoding.
-            suppress_tokens: List of token IDs to suppress in output.
-            strict_hallucination_reduction: Whether to apply hallucination reduction.
+        Note:
+            Streaming transcription is not publicly available at this time.
+
+        Args:
+            language (str): Language code for transcription (default: "en").
+            task (Literal["transcribe", "translate"]): Operation to perform, either "transcribe" or "translate".
+            model (STTModels | str): Model identifier for the backend STT model.
+            without_timestamps (bool): If True, disables timestamp generation in transcripts.
+            vad_model (Literal["silero", "frame"]): Voice Activity Detection model to use ("silero" or "frame").
+            vad_filter (bool): Whether to apply VAD to filter input audio.
+            vad_onset (float | None): Time (in seconds) for VAD onset boundary.
+            vad_offset (float | None): Time (in seconds) for VAD offset boundary.
+            min_speech_duration_ms (int): Minimum duration (ms) for a valid speech segment.
+            max_speech_duration_s (float): Maximum speech segment duration (seconds).
+            min_silence_duration_ms (int): Minimum silence duration (ms) to split speech.
+            speech_pad_ms (int): Padding (ms) added to boundaries of detected speech.
+            initial_prompt (str | None): Optional initial prompt for contextual biasing.
+            hotwords (str | None): Comma-separated list of hotwords to bias recognition.
+            num_speakers (int): Number of speakers for diarization.
+            compression_ratio_threshold (float | None): Threshold for output compression ratio.
+            beam_size (int): Beam size for the decoder.
+            temperature (float): Decoding temperature (affects randomness).
+            multilingual (bool): Whether to permit multilingual recognition.
+            max_tokens (float | None): Maximum number of output tokens for the model.
+            log_prob_threshold (float | None): Log probability threshold for word filtering.
+            length_penalty (int): Penalty for longer transcriptions.
+            repetition_penalty (float): Penalty for repeated words during decoding.
+            strict_hallucination_reduction (bool): Whether to apply hallucination reduction.
         """
         if streaming:
             base_url = f"wss://{urlparse(base_url).netloc}/ws/audio"
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=streaming,
@@ -137,14 +152,32 @@ class STT(stt.STT):
         if not self._api_key:
             raise ValueError("SIMPLISMART_API_KEY is not set")
 
-        if params is None:
-            params = SimplismartSTTOptions()
-
         self._model = model
-        if isinstance(params, SimplismartSTTOptions):
-            self._opts = params
-        else:
-            self._opts = SimplismartSTTOptions(**params)
+        self._opts = SimplismartSTTOptions(
+            language=language,
+            task=task,
+            without_timestamps=without_timestamps,
+            vad_model=vad_model,
+            vad_filter=vad_filter,
+            vad_onset=vad_onset,
+            vad_offset=vad_offset,
+            min_speech_duration_ms=min_speech_duration_ms,
+            max_speech_duration_s=max_speech_duration_s,
+            min_silence_duration_ms=min_silence_duration_ms,
+            speech_pad_ms=speech_pad_ms,
+            initial_prompt=initial_prompt,
+            hotwords=hotwords,
+            num_speakers=num_speakers,
+            compression_ratio_threshold=compression_ratio_threshold,
+            beam_size=beam_size,
+            temperature=temperature,
+            multilingual=multilingual,
+            max_tokens=max_tokens,
+            log_prob_threshold=log_prob_threshold,
+            length_penalty=length_penalty,
+            repetition_penalty=repetition_penalty,
+            strict_hallucination_reduction=strict_hallucination_reduction,
+        )
         self._base_url = base_url
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -156,6 +189,11 @@ class STT(stt.STT):
     @property
     def model(self) -> str:
         return self._model
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+        return self._session
 
     async def _recognize_impl(
         self,
@@ -175,48 +213,48 @@ class STT(stt.STT):
         payload["model"] = self._model
 
         try:
-            async with aiohttp.ClientSession(
-                timeout=ClientTimeout(total=conn_options.timeout)
-            ) as session:
-                async with session.post(
-                    self._base_url,
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                ) as res:
-                    if res.status != 200:
-                        error_text = await res.text()
-                        logger.error(f"Simplismart API error: {res.status} - {error_text}")
-                        raise APIStatusError(
-                            message=f"Simplismart API Error: {error_text}",
-                            status_code=res.status,
-                        )
-
-                    response_json = await res.json()
-
-                    detected_language = response_json["info"]["language"]
-
-                    start_time = response_json["timestamps"][0][0]
-                    end_time = response_json["timestamps"][-1][1]
-                    request_id = response_json.get("request_id", "")
-                    text = "".join(response_json["transcription"])
-
-                    alternatives = [
-                        stt.SpeechData(
-                            language=detected_language,
-                            text=text,
-                            start_time=start_time,
-                            end_time=end_time,
-                        ),
-                    ]
-
-                    return stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=request_id,
-                        alternatives=alternatives,
+            async with self._ensure_session().post(
+                self._base_url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=aiohttp.ClientTimeout(
+                    total=conn_options.timeout,
+                ),
+            ) as res:
+                if res.status != 200:
+                    error_text = await res.text()
+                    logger.error(f"Simplismart API error: {res.status} - {error_text}")
+                    raise APIStatusError(
+                        message=f"Simplismart API Error: {error_text}",
+                        status_code=res.status,
                     )
+
+                response_json = await res.json()
+
+                detected_language = response_json["info"]["language"]
+
+                start_time = response_json["timestamps"][0][0]
+                end_time = response_json["timestamps"][-1][1]
+                request_id = response_json.get("request_id", "")
+                text = "".join(response_json["transcription"])
+
+                alternatives = [
+                    stt.SpeechData(
+                        language=detected_language,
+                        text=text,
+                        start_time=start_time,
+                        end_time=end_time,
+                    ),
+                ]
+
+                return stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    request_id=request_id,
+                    alternatives=alternatives,
+                )
         except asyncio.TimeoutError as e:
             logger.error(f"Simplismart API timeout: {e}")
             raise APITimeoutError("Simplismart API request timed out") from e
