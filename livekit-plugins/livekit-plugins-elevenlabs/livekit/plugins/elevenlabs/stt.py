@@ -156,7 +156,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "Scribe"
+        return self._opts.model_id
 
     @property
     def provider(self) -> str:
