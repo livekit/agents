@@ -937,14 +937,44 @@ def prompt(
     *,
     console: Console,
     key_read_cb: Callable[[str], Any] | None = None,
+    placeholder: str = "",
 ) -> str:
     buffer: list[str] = []
+    width = console.size.width
+    line_char = "\u2500"
+    show_shortcuts = False
 
-    def render_prompt() -> Text:
-        return Text.assemble(message, ("".join(buffer), "bold blue"))
+    def render_prompt() -> Table:
+        table = Table.grid(padding=0)
+        table.add_column()
 
-    with Live(render_prompt(), console=console, transient=True) as live:
-        console.show_cursor(True)
+        # Top border
+        table.add_row(Text(line_char * width, style="dim"))
+
+        # Input line - always show block cursor at the end
+        input_text = "".join(buffer)
+        if input_text:
+            # Show user input with cursor
+            table.add_row(Text.assemble(("\u276f ", "bold"), (input_text, ""), ("\u2588", "dim")))
+        else:
+            # Show placeholder with cursor at start
+            table.add_row(
+                Text.assemble(("\u276f ", "bold"), ("\u2588", "dim"), (" ", ""), (placeholder, "dim italic"))
+            )
+
+        # Bottom border
+        table.add_row(Text(line_char * width, style="dim"))
+
+        # Hints - only show "? for shortcuts" when buffer is empty
+        if show_shortcuts:
+            table.add_row(Text.assemble(("  Ctrl+T", "bold"), ("  audio mode", "dim")))
+            table.add_row(Text.assemble(("  Ctrl+C", "bold"), ("  exit", "dim")))
+        elif not buffer:
+            table.add_row(Text("  ? for shortcuts", style="dim"))
+
+        return table
+
+    with Live(render_prompt(), console=console, transient=True, refresh_per_second=30) as live:
         while True:
             ch = readkey()
 
@@ -954,20 +984,27 @@ def prompt(
             if ch == key.ENTER:
                 break
 
+            # Toggle shortcuts menu with ? (only when buffer is empty) or close with Escape
+            if ch == "?" and not buffer:
+                show_shortcuts = not show_shortcuts
+                live.update(render_prompt())
+                continue
+
+            if ch == key.ESC:
+                if show_shortcuts:
+                    show_shortcuts = False
+                    live.update(render_prompt())
+                continue
+
             if ch == key.BACKSPACE:
                 if buffer:
                     buffer.pop()
                     live.update(render_prompt())
-                    live.refresh()
-
                 continue
 
             if len(ch) == 1 and ch.isprintable():
                 buffer.append(ch)
                 live.update(render_prompt())
-                live.refresh()
-
-        live.update(render_prompt())
 
     return "".join(buffer)
 
@@ -1018,6 +1055,7 @@ def _text_mode(c: AgentsConsole) -> None:
                 Text.from_markup("  [bold]User input[/bold]: "),
                 console=c.console,
                 key_read_cb=_key_read,
+                placeholder="Type to talk to your agent",
             )
         except KeyboardInterrupt:
             break
@@ -1043,10 +1081,17 @@ def _text_mode(c: AgentsConsole) -> None:
         h: asyncio.Future[list[RunEvent]] = asyncio.Future()
         c.io_loop.call_soon_threadsafe(_generate_with_context, text, h, context=c.io_context)
 
-        # h = asyncio.run_coroutine_threadsafe(_generate(text), loop=c.io_loop)
-        c.print(text, tag="You")
+        c.console.print()
+        c.console.print(
+            Text.assemble(
+                ("  \u25cf ", "#1FD5F9"),
+                ("You", "bold #1FD5F9"),
+            )
+        )
+        for line in text.split("\n"):
+            c.console.print(Text(f"    {line}"))
 
-        with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
+        with live_status(c.console, Text.from_markup("  [dim]Thinking...[/dim]")):
             while not h.done():
                 time.sleep(0.1)
 
@@ -1085,43 +1130,77 @@ def _truncate_text(text: str, max_lines: int = 2, width: int = 80) -> str:
 
 def _print_run_event(c: AgentsConsole, event: RunEvent) -> None:
     if event.type == "function_call":
-        c.print(
-            Text.from_markup(
-                f"[bold]{event.item.name}[/bold] [dim](arguments: {event.item.arguments})[/dim]"
-            ),
-            tag="Tool",
-            tag_style=Style.parse("black on #6E9DFE"),
+        c.console.print()
+        c.console.print(
+            Text.assemble(
+                ("  \u279c ", "#1FD5F9"),
+                (event.item.name, "bold #1FD5F9"),
+            )
         )
     elif event.type == "function_call_output":
-        truncated_output = _truncate_text(event.item.output)
-        c.print(
-            Text.from_markup(f"Tool output: [dim]{event.item.name}\n {truncated_output}[/dim]"),
-            tag="Tool",
-            tag_style=Style.parse("black on #6E9DFE"),
-        )
+        output = event.item.output
+        display_output = output
+        is_error = output.lower().startswith("error") or output.lower().startswith("exception")
+
+        if not is_error:
+            try:
+                import json
+                json_start = output.find("{")
+                if json_start >= 0:
+                    json_str = output[json_start:]
+                    data = json.loads(json_str)
+                    if isinstance(data, dict):
+                        summary_parts = []
+                        for k, v in data.items():
+                            if v is not None and k != "type":
+                                summary_parts.append(f"{k}={v}")
+                        display_output = ", ".join(summary_parts[:3])
+                        if len(summary_parts) > 3:
+                            display_output += ", ..."
+            except (json.JSONDecodeError, TypeError, ValueError):
+                display_output = _truncate_text(output, max_lines=2)
+
+        if is_error:
+            c.console.print(
+                Text.assemble(
+                    ("    \u2717 ", "#EF4444"),
+                    (_truncate_text(output, max_lines=2), "#EF4444"),
+                )
+            )
+        else:
+            c.console.print(
+                Text.assemble(
+                    ("    \u2713 ", "#6BCB77"),
+                    (display_output, "dim"),
+                )
+            )
     elif event.type == "agent_handoff":
         old_agent = event.old_agent
         new_agent = event.new_agent
 
         old_style = _agent_style(old_agent.__class__.__name__)
         new_style = _agent_style(new_agent.__class__.__name__)
-        c.print(
+        c.console.print(
             Text.assemble(
+                ("  \u25cf ", "#FFD93D"),
+                ("Handoff: ", "bold #FFD93D"),
                 Text(f"{old_agent.__class__.__name__}", style=old_style),
-                Text.from_markup(" [dim]->[/dim] "),
+                (" \u2192 ", "dim"),
                 Text(f"{new_agent.__class__.__name__}", style=new_style),
-            ),
-            tag="Handoff",
-            tag_style=Style.parse("black on #6E9DFE"),
+            )
         )
 
     elif event.type == "message":
         if event.item.text_content:
-            c.print(
-                event.item.text_content,
-                tag="Agent",
-                tag_style=Style.parse("black on #B11FF9"),
+            c.console.print()
+            c.console.print(
+                Text.assemble(
+                    ("  \u25cf ", "#6BCB77"),
+                    ("Agent", "bold #6BCB77"),
+                )
             )
+            for line in event.item.text_content.split("\n"):
+                c.console.print(Text(f"    {line}"))
     else:
         logger.warning(f"unknown RunEvent type {event.type}")
 
