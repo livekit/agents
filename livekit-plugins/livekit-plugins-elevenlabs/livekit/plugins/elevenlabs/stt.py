@@ -81,7 +81,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         tag_audio_events: bool = True,
-        use_realtime: bool = False,
+        use_realtime: NotGivenOr[bool] = NOT_GIVEN,  # Deprecated
         sample_rate: STTRealtimeSampleRates = 16000,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
@@ -97,11 +97,32 @@ class STT(stt.STT):
             language_code (NotGivenOr[str]): Language code for the STT model. Optional.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription.
                 Only supported for Scribe v1 model. Default is True.
-            use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is False.
+            use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is NOT_GIVEN.
+                Note that this flag is deprecated in favour of explicitly specifying the model id.
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-        """  # noqa: E501
+        """
+
+        if is_given(use_realtime):
+            if use_realtime is True:
+                logger.warning(
+                    "`use_realtime` parameter is deprecated. "
+                    "Specify a realtime model_id to enable streaming. "
+                    "Defaulting model_id to 'scribe_v2_realtime' "
+                )
+                model_id = "scribe_v2_realtime"
+            else:
+                logger.warning(
+                    "`use_realtime` parameter is deprecated. Instead set model_id to determine if streaming is enabled."
+                )
+                if "realtime" in model_id:
+                    raise ValueError(
+                        "The currently selected model is a realtime model but use_realtime is False"
+                    )
+
+        else:
+            use_realtime = True if "realtime" in model_id else False
 
         super().__init__(
             capabilities=STTCapabilities(
@@ -113,17 +134,6 @@ class STT(stt.STT):
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
-
-        if use_realtime and model_id != "scribe_v2_realtime":
-            logger.warning(
-                "When use_realtime=True, the only supported model is currently scribe_v2_realtime, so setting model_id to scribe_v2_realtime"
-            )
-            model_id = "scribe_v2_realtime"
-
-        if not use_realtime and "realtime" in model_id:
-            raise ValueError(
-                "The currently selected model is a realtime model but use_realtime is False"
-            )
 
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
