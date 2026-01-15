@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 import aiohttp
 
@@ -63,7 +63,7 @@ ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
 
 @dataclass
 class STTOptions:
-    model_id: ElevenLabsSTTModels
+    model_id: ElevenLabsSTTModels | str
     api_key: str
     base_url: str
     language_code: str | None
@@ -152,6 +152,7 @@ class STT(stt.STT):
                 "ElevenLabs API key is required, either as argument or "
                 "set ELEVEN_API_KEY environmental variable"
             )
+
         self._opts = STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
