@@ -164,6 +164,7 @@ class ConsoleAudioOutput(io.AudioOutput):
 
         if not self._pushed_duration:
             self._capture_start = time.monotonic()
+            self.on_playback_started(created_at=time.time())
 
         self._pushed_duration += frame.duration
         with self._audio_lock:
