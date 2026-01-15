@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Generic
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -32,10 +32,10 @@ from livekit.agents.types import (
 )
 
 
-class LLMAdapter(llm.LLM):
+class LLMAdapter(llm.LLM, Generic[ContextT]):
     def __init__(
         self,
-        graph: PregelProtocol,
+        graph: PregelProtocol[Any, ContextT, Any, Any],
         *,
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
@@ -65,7 +65,7 @@ class LLMAdapter(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> LangGraphStream:
+    ) -> LangGraphStream[ContextT]:
         return LangGraphStream(
             self,
             chat_ctx=chat_ctx,
@@ -78,15 +78,15 @@ class LLMAdapter(llm.LLM):
         )
 
 
-class LangGraphStream(llm.LLMStream):
+class LangGraphStream(llm.LLMStream, Generic[ContextT]):
     def __init__(
         self,
-        llm: LLMAdapter,
+        llm: LLMAdapter[ContextT],
         *,
         chat_ctx: ChatContext,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions,
-        graph: PregelProtocol,
+        graph: PregelProtocol[Any, ContextT, Any, Any],
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
