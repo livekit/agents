@@ -94,7 +94,7 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
         llm="openai/gpt-4.1-mini",
         stt="assemblyai/universal-streaming",
-        tts="elevenlabs",
+        tts="cartesia/sonic-3",
         turn_detection=MultilingualModel(),
     )
 

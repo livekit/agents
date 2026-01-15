@@ -409,6 +409,11 @@ def _create_speech_recognizer(
 
     kwargs: dict[str, Any] = {}
     if config.language and len(config.language) > 1:
+        # Enable Continuous Language ID for multiple languages
+        # This ensures language detection updates throughout the streaming session
+        speech_config.set_property(
+            speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
+        )
         kwargs["auto_detect_source_language_config"] = (
             speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
         )

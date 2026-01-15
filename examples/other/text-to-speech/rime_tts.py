@@ -4,10 +4,9 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
+from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli, inference
 from livekit.agents.tokenize import blingfire
 from livekit.agents.tts import StreamAdapter
-from livekit.plugins import rime
 
 # Initialize environment and logging
 load_dotenv()
@@ -41,13 +40,8 @@ async def entrypoint(ctx: JobContext) -> None:
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
         await ctx.wait_for_participant()
         logger.info("Connected to LiveKit room successfully And participant joined")
-        # Initialize Rime TTS with specific voice and generation parameters
-        # For available models: https://docs.rime.ai/api-reference/models
-        # For available voices: https://docs.rime.ai/api-reference/voices
-        tts = rime.TTS(
-            model="arcana",  # The TTS model to use
-            speaker="astra",  # Voice ID to use for synthesis
-        )
+        # Initialize Rime TTS via LiveKit inference
+        tts = inference.TTS("rime/arcana", voice="Astra")
 
         logger.info("TTS initialized successfully")
 
@@ -94,7 +88,7 @@ async def entrypoint(ctx: JobContext) -> None:
         chunk_size = 15
         for i in range(0, len(streaming_text), chunk_size):
             chunk = streaming_text[i : i + chunk_size]
-            logger.info("Processing chunk: %s...", chunk[:50])  # Log first 50 chars
+            logger.debug("Processing chunk: %s...", chunk[:50])  # Log first 50 chars
             stream.push_text(chunk)
             await asyncio.sleep(0.1)
 

@@ -51,6 +51,7 @@ class FakeAudioOutput(AudioOutput):
 
         if not self._pushed_duration:
             self._start_time = time.time()
+            self.on_playback_started(created_at=self._start_time)
         self._pushed_duration += frame.duration
 
     def flush(self) -> None:

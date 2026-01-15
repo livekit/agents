@@ -63,6 +63,7 @@ class DeepgramOptions(TypedDict, total=False):
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool
+    vad_events: bool  # default: False
 
 
 class AssemblyaiOptions(TypedDict, total=False):

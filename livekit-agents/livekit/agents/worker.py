@@ -895,9 +895,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     async def aclose(self) -> None:
         async with self._lock:
             if self._closed:
-                raise RuntimeError("cannot simulate job, the worker is closed")
-
-            if self._closed:
                 if self._close_future is not None:
                     await self._close_future
                 return

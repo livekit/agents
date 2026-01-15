@@ -11,9 +11,9 @@ import time
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
-import socketio
+import socketio  # type: ignore[import-not-found]
 
 from livekit.agents import (
     APIConnectionError,
@@ -50,7 +50,7 @@ DEFAULT_OUTPUT_FORMAT: OutputFormat = "MP3_22050_32"
 WEBSOCKET_NAMESPACE = "/text-to-speech/multi-stream"
 
 
-def get_content_type_from_output_format(output_format: OutputFormat):
+def get_content_type_from_output_format(output_format: OutputFormat) -> str:
     """Get MIME type based on output format"""
     if output_format == "PCM_22050_16":
         return "audio/pcm"
@@ -131,27 +131,34 @@ class TTS(tts.TTS):
         )
 
         # Get configuration from environment if not provided
-        base_url = (
+        resolved_base_url: str = (
             base_url
             if is_given(base_url)
             else os.environ.get("UPLIFTAI_BASE_URL", DEFAULT_BASE_URL)
         )
-        api_key = api_key if is_given(api_key) else os.environ.get("UPLIFTAI_API_KEY")
+        resolved_api_key: str | None = (
+            api_key if is_given(api_key) else os.environ.get("UPLIFTAI_API_KEY")
+        )
 
-        if not api_key:
+        if not resolved_api_key:
             raise ValueError(
                 "API key is required, either as argument or set UPLIFTAI_API_KEY environment variable"
             )
 
         # Use provided tokenizer or create default
-        if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+        resolved_word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
+        if is_given(word_tokenizer):
+            resolved_word_tokenizer = cast(
+                tokenize.WordTokenizer | tokenize.SentenceTokenizer, word_tokenizer
+            )
+        else:
+            resolved_word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
-            base_url=base_url,
-            api_key=api_key,
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
             voice_settings=VoiceSettings(voice_id=voice_id, output_format=output_format),
-            word_tokenizer=word_tokenizer,
+            word_tokenizer=resolved_word_tokenizer,
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=num_channels,
         )
@@ -175,7 +182,7 @@ class TTS(tts.TTS):
         if is_given(voice_id):
             self._opts.voice_settings.voice_id = voice_id
         if is_given(output_format):
-            self._opts.voice_settings.output_format = output_format
+            self._opts.voice_settings.output_format = cast(OutputFormat, output_format)
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -210,7 +217,7 @@ class WebSocketClient:
         self.opts = opts
         self.sio: socketio.AsyncClient | None = None
         self.connected = False
-        self.audio_callbacks: dict[str, asyncio.Queue] = {}
+        self.audio_callbacks: dict[str, asyncio.Queue[bytes | None]] = {}
         self.active_requests: dict[str, bool] = {}
 
     async def connect(self) -> bool:
@@ -259,7 +266,9 @@ class WebSocketClient:
             logger.error(f"Connection failed: {e}")
             return False
 
-    async def synthesize(self, text: str, request_id: str | None = None) -> asyncio.Queue:
+    async def synthesize(
+        self, text: str, request_id: str | None = None
+    ) -> asyncio.Queue[bytes | None]:
         """Send synthesis request and return audio queue"""
         if not self.sio or not self.connected:
             if not await self.connect():
@@ -269,7 +278,7 @@ class WebSocketClient:
             request_id = str(uuid.uuid4())
 
         # Create audio queue
-        audio_queue = asyncio.Queue()
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.audio_callbacks[request_id] = audio_queue
         self.active_requests[request_id] = True
 
@@ -285,7 +294,8 @@ class WebSocketClient:
         logger.debug(f"Sending synthesis request {request_id[:8]} for text: '{text[:50]}...'")
 
         try:
-            await self.sio.emit("synthesize", message, namespace=WEBSOCKET_NAMESPACE)
+            if self.sio is not None:
+                await self.sio.emit("synthesize", message, namespace=WEBSOCKET_NAMESPACE)
         except Exception as e:
             logger.error(f"Failed to emit synthesis: {e}")
             del self.audio_callbacks[request_id]
@@ -294,17 +304,17 @@ class WebSocketClient:
 
         return audio_queue
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Disconnect from service"""
         if self.sio and self.connected:
             await self.sio.disconnect()
             self.connected = False
 
-    async def _on_connect(self):
+    async def _on_connect(self) -> None:
         """Handle connection"""
         logger.debug("WebSocket connected")
 
-    async def _on_message(self, data):
+    async def _on_message(self, data: Any) -> None:
         """Handle messages"""
         message_type = data.get("type")
 
@@ -340,7 +350,7 @@ class WebSocketClient:
                 if request_id in self.active_requests:
                     del self.active_requests[request_id]
 
-    async def _on_disconnect(self):
+    async def _on_disconnect(self) -> None:
         """Handle disconnection"""
         self.connected = False
         for queue in self.audio_callbacks.values():

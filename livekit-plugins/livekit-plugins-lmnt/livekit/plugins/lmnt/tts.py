@@ -179,15 +179,15 @@ class TTS(tts.TTS):
             top_p: Controls the stability of the generated speech. A number between 0.0 and 1.0.
         """
         if is_given(model):
-            self._opts.model = model
+            self._opts.model = model  # type: ignore[assignment]
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language
+            self._opts.language = language  # type: ignore[assignment]
         if is_given(format):
-            self._opts.format = format
+            self._opts.format = format  # type: ignore[assignment]
         if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate
+            self._opts.sample_rate = sample_rate  # type: ignore[assignment]
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(top_p):
@@ -211,7 +211,7 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -246,8 +246,8 @@ class ChunkedStream(tts.ChunkedStream):
                     num_channels=NUM_CHANNELS,
                     mime_type=MIME_TYPE[self._opts.format],
                 )
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+                async for chunk, _ in resp.content.iter_chunks():
+                    output_emitter.push(chunk)
 
                 output_emitter.flush()
         except asyncio.TimeoutError:

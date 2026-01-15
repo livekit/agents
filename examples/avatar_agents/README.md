@@ -11,6 +11,7 @@ These providers work with pre-configured avatars using unique avatar identifiers
 - **[Anam](./anam/)** - [Platform](https://anam.ai/) | [Integration Guide](https://docs.anam.ai/third-party-integrations/livekit)
 - **[Beyond Presence (Bey)](./bey/)** - [Platform](https://bey.dev/) | [Integration Guide](https://docs.bey.dev/integration/livekit)
 - **[BitHuman](./bithuman/)** (Cloud mode) - [Platform](https://bithuman.ai/) | [Integration Guide](https://sdk.docs.bithuman.ai/#/preview/livekit-cloud-plugin)
+- **[LiveAvatar](./liveavatar/)** - [Platform](https://www.liveavatar.com/)
 - **[Simli](./simli/)** - [Platform](https://app.simli.com/)
 - **[Tavus](./tavus/)** - [Platform](https://www.tavus.io/)
 

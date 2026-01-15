@@ -5,9 +5,8 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
+from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli, inference
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
-from livekit.plugins import inworld
 
 load_dotenv()
 
@@ -21,11 +20,10 @@ server = AgentServer()
 async def entrypoint(job: JobContext):
     logger.info("starting tts example agent")
 
-    tts = inworld.TTS(
-        # voice="Alex",  # Voice ID (or custom cloned voice ID)
-        # timestamp_type="WORD",  # CHARACTER or WORD
-        # text_normalization="ON",  # ON or OFF
-    )
+    # Using LiveKit inference for TTS, to use inworld with your own API key, you can change it to:
+    # from livekit.plugins import inworld
+    # tts = inworld.TTS(model="inworld/inworld-tts-1", voice="Alex")
+    tts = inference.TTS("inworld/inworld-tts-1", voice="Alex")
 
     source = rtc.AudioSource(tts.sample_rate, tts.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)

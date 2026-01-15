@@ -305,7 +305,11 @@ class SupervisedProc(ABC):
 
         logger.info("killing process", extra=self.logging_extra())
         if sys.platform == "win32":
-            self._proc.terminate()
+            try:
+                if self._proc.is_alive():
+                    self._proc.terminate()
+            except ValueError:
+                pass
         else:
             if hasattr(signal, "SIGUSR1"):
                 try:
@@ -314,7 +318,11 @@ class SupervisedProc(ABC):
                     await asyncio.sleep(0.5)
                 except Exception:
                     pass
-            self._proc.kill()
+            try:
+                if self._proc.is_alive():
+                    self._proc.kill()
+            except ValueError:
+                pass
 
         self._kill_sent = True
 

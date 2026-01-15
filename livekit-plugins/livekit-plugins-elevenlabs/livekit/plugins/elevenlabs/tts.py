@@ -583,10 +583,6 @@ class _Connection:
                 if isinstance(msg, _SynthesizeContent):
                     is_new_context = msg.context_id not in self._active_contexts
 
-                    # If not current and this is a new context, ignore it
-                    if not self._is_current and is_new_context:
-                        continue
-
                     if is_new_context:
                         voice_settings = (
                             _strip_nones(dataclasses.asdict(self._opts.voice_settings))

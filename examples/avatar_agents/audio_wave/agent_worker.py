@@ -65,7 +65,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(),
         # stt=deepgram.STT(),
-        # llm=openai.LLM(model="gpt-4o-mini"),
+        # llm=openai.LLM(model="gpt-4.1-mini"),
         # tts=cartesia.TTS(),
         resume_false_interruption=False,
     )
