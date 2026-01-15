@@ -11,6 +11,7 @@ TTSModels = Literal[
     "eleven_v3",
 ]
 
+# https://elevenlabs.io/docs/api-reference/text-to-speech/convert#request.query.output_format
 TTSEncoding = Literal[
     "mp3_22050_32",
     "mp3_24000_48",
