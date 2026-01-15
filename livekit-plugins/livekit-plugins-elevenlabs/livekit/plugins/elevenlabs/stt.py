@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict
 
 import aiohttp
 
