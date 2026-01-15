@@ -86,7 +86,7 @@ class STT(stt.STT):
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
-        model_id: ElevenLabsSTTModels = "scribe_v1",
+        model_id: ElevenLabsSTTModels = NotGivenOr[ElevenLabsSTTModels | str],
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -104,6 +104,7 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
         """
 
+        # handle use_realtime defaults and validation
         if is_given(use_realtime):
             if use_realtime is True:
                 logger.warning(
@@ -120,9 +121,17 @@ class STT(stt.STT):
                     raise ValueError(
                         "The currently selected model is a realtime model but use_realtime is False"
                     )
-
         else:
             use_realtime = True if "realtime" in model_id else False
+
+        # Handle model_id defaults
+        if not is_given(model_id):
+            if use_realtime:
+                logger.warning("model_id is not provided. Defaulting to 'scribe_v2_realtime'.")
+                model_id = "scribe_v2_realtime"
+            else:
+                logger.warning("model_id is not provided. Defaulting to 'scribe_v1'.")
+                model_id = "scribe_v1"
 
         super().__init__(
             capabilities=STTCapabilities(
