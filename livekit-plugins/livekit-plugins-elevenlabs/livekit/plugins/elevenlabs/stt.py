@@ -102,6 +102,8 @@ class STT(stt.STT):
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
+                be selected based on parameters provided.
         """
 
         # handle use_realtime defaults and validation
