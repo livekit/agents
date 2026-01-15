@@ -86,7 +86,7 @@ class STT(stt.STT):
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
-        model_id: ElevenLabsSTTModels = NotGivenOr[ElevenLabsSTTModels | str],
+        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -119,12 +119,12 @@ class STT(stt.STT):
                 logger.warning(
                     "`use_realtime` parameter is deprecated. Instead set model_id to determine if streaming is enabled."
                 )
-                if "realtime" in model_id:
+                if is_given(model_id) and "realtime" in model_id:
                     raise ValueError(
                         "The currently selected model is a realtime model but use_realtime is False"
                     )
         else:
-            use_realtime = True if "realtime" in model_id else False
+            use_realtime = True if (is_given(model_id) and "realtime" in model_id) else False
 
         # Handle model_id defaults
         if not is_given(model_id):
