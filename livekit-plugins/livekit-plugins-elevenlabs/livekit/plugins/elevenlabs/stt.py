@@ -106,34 +106,24 @@ class STT(stt.STT):
                 be selected based on parameters provided.
         """
 
-        # handle use_realtime defaults and validation
         if is_given(use_realtime):
-            if use_realtime is True:
+            if is_given(model_id):
+                logger.warning(
+                    "both `use_realtime` and `model_id` parameters are provided. `use_realtime` will be ignored."
+                )
+            else:
                 logger.warning(
                     "`use_realtime` parameter is deprecated. "
                     "Specify a realtime model_id to enable streaming. "
-                    "Defaulting model_id to 'scribe_v2_realtime' "
+                    "Defaulting model_id to one based on use_realtime parameter. "
                 )
-                model_id = "scribe_v2_realtime"
-            else:
-                logger.warning(
-                    "`use_realtime` parameter is deprecated. Instead set model_id to determine if streaming is enabled."
-                )
-                if is_given(model_id) and "realtime" in model_id:
-                    raise ValueError(
-                        "The currently selected model is a realtime model but use_realtime is False"
-                    )
-        else:
-            use_realtime = True if (is_given(model_id) and "realtime" in model_id) else False
+                model_id = "scribe_v2_realtime" if use_realtime else "scribe_v1"
+        model_id = model_id if is_given(model_id) else "scribe_v1"
+        use_realtime = model_id == "scribe_v2_realtime"
 
-        # Handle model_id defaults
-        if not is_given(model_id):
-            if use_realtime:
-                logger.warning("model_id is not provided. Defaulting to 'scribe_v2_realtime'.")
-                model_id = "scribe_v2_realtime"
-            else:
-                logger.warning("model_id is not provided. Defaulting to 'scribe_v1'.")
-                model_id = "scribe_v1"
+        if not use_realtime and is_given(server_vad):
+            logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
+
 
         super().__init__(
             capabilities=STTCapabilities(
@@ -142,9 +132,6 @@ class STT(stt.STT):
                 aligned_transcript="word" if include_timestamps and use_realtime else False,
             )
         )
-
-        if not use_realtime and is_given(server_vad):
-            logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
