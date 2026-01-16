@@ -23,15 +23,17 @@ from .room_io import (
 )
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer
+from .interruption_filter import InterruptionFilter
 
 __all__ = [
     "AgentSession",
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "AgentTask",
+    "AgentTask",\
     "SpeechHandle",
     "RunContext",
+    "InterruptionFilter",
     "UserInputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",
