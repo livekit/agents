@@ -22,7 +22,7 @@ import time
 import weakref
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, Union, cast
+from typing import Any, Callable, Literal, Union, cast
 from urllib.parse import urljoin
 
 import aiohttp
@@ -138,8 +138,17 @@ class _InworldConnection:
 
     MAX_CONTEXTS = 5
 
-    def __init__(self, tts_instance: "TTS") -> None:
-        self._tts = tts_instance
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        ws_url: str,
+        authorization: str,
+        on_capacity_available: Callable[[], None] | None = None,
+    ) -> None:
+        self._session = session
+        self._ws_url = ws_url
+        self._authorization = authorization
+        self._on_capacity_available = on_capacity_available
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
         # Context pool
@@ -152,11 +161,37 @@ class _InworldConnection:
         # Connection state
         self._closed = False
         self._connect_lock = asyncio.Lock()
+        self._acquire_lock = asyncio.Lock()  # Ensures atomic capacity check + context creation
+        self._last_activity: float = time.time()
 
         # Background tasks
         self._send_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
+
+    @property
+    def context_count(self) -> int:
+        """Number of contexts using server resources.
+
+        Includes all states (CREATING, ACTIVE, CLOSING) until contextClosed is received
+        from the server and the context is removed from _contexts.
+        """
+        return len(self._contexts)
+
+    @property
+    def has_capacity(self) -> bool:
+        """Whether this connection can accept more contexts."""
+        return self.context_count < self.MAX_CONTEXTS
+
+    @property
+    def is_idle(self) -> bool:
+        """Whether this connection has no active contexts."""
+        return self.context_count == 0
+
+    @property
+    def last_activity(self) -> float:
+        """Timestamp of last context acquisition or release."""
+        return self._last_activity
 
     async def connect(self) -> None:
         """Establish WebSocket connection and start background loops."""
@@ -164,10 +199,9 @@ class _InworldConnection:
             if self._ws is not None or self._closed:
                 return
 
-            session = self._tts._ensure_session()
-            url = urljoin(self._tts._ws_url, "/tts/v1/voice:streamBidirectional")
-            self._ws = await session.ws_connect(
-                url, headers={"Authorization": self._tts._authorization}
+            url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
+            self._ws = await self._session.ws_connect(
+                url, headers={"Authorization": self._authorization}
             )
             logger.debug("Established Inworld TTS WebSocket connection (shared)")
 
@@ -181,33 +215,46 @@ class _InworldConnection:
         opts: _TTSOptions,
         timeout: float,
     ) -> tuple[str, asyncio.Future[None]]:
-        """Acquire a new context for TTS synthesis."""
+        """Acquire a new context for TTS synthesis.
+
+        Note: Caller should check has_capacity before calling this method when using
+        a connection pool. This method will still wait if at capacity, but the pool
+        should route to connections with available capacity first.
+        """
         await self.connect()
 
-        # Always create a fresh context (context reuse is problematic with interruptions)
-        # The main optimization is connection reuse, which we get by sharing the WebSocket
+        start_time = time.time()
 
-        # Wait if we're at the context limit
-        while len([c for c in self._contexts.values() if c.state != _ContextState.CLOSING]) >= self.MAX_CONTEXTS:
+        while True:
+            # Use lock to ensure atomic capacity check + context creation
+            async with self._acquire_lock:
+                if self.has_capacity:
+                    self._last_activity = time.time()
+                    ctx_id = utils.shortuuid()
+                    waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+
+                    ctx_info = _ContextInfo(
+                        context_id=ctx_id,
+                        state=_ContextState.CREATING,
+                        emitter=emitter,
+                        waiter=waiter,
+                    )
+                    self._contexts[ctx_id] = ctx_info
+
+                    await self._outbound_queue.put(_CreateContextMsg(context_id=ctx_id, opts=opts))
+                    return ctx_id, waiter
+
+            # No capacity - wait outside the lock
+            elapsed = time.time() - start_time
+            remaining = timeout - elapsed
+            if remaining <= 0:
+                raise APITimeoutError()
+
             try:
                 self._context_available.clear()
-                await asyncio.wait_for(self._context_available.wait(), timeout=timeout)
+                await asyncio.wait_for(self._context_available.wait(), timeout=remaining)
             except asyncio.TimeoutError:
                 raise APITimeoutError() from None
-
-        ctx_id = utils.shortuuid()
-        waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-
-        ctx_info = _ContextInfo(
-            context_id=ctx_id,
-            state=_ContextState.CREATING,
-            emitter=emitter,
-            waiter=waiter,
-        )
-        self._contexts[ctx_id] = ctx_info
-
-        await self._outbound_queue.put(_CreateContextMsg(context_id=ctx_id, opts=opts))
-        return ctx_id, waiter
 
     def send_text(self, context_id: str, text: str) -> None:
         """Queue text to be sent to a context."""
@@ -352,7 +399,10 @@ class _InworldConnection:
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
                     self._contexts.pop(context_id, None)
+                    self._last_activity = time.time()
                     self._context_available.set()
+                    if self._on_capacity_available:
+                        self._on_capacity_available()
                     continue
 
         except Exception as e:
@@ -369,7 +419,10 @@ class _InworldConnection:
             for ctx in list(self._contexts.values()):
                 if ctx.state == _ContextState.CLOSING and now - ctx.created_at > 120.0:
                     self._contexts.pop(ctx.context_id, None)
+                    self._last_activity = now
                     self._context_available.set()
+                    if self._on_capacity_available:
+                        self._on_capacity_available()
 
     async def _handle_connection_error(self, error: Exception) -> None:
         """Handle connection-level error by failing all active contexts."""
@@ -404,6 +457,162 @@ class _InworldConnection:
             self._ws = None
 
 
+DEFAULT_MAX_CONNECTIONS = 20
+DEFAULT_IDLE_CONNECTION_TIMEOUT = 300.0  # 5 minutes
+
+
+class _ConnectionPool:
+    """Manages a pool of _InworldConnection instances for high-concurrency scenarios.
+
+    Each connection supports up to 5 concurrent contexts. The pool automatically creates
+    new connections when all existing ones are at capacity, up to max_connections (default 20).
+    Idle connections are automatically cleaned up after idle_timeout seconds.
+    """
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        ws_url: str,
+        authorization: str,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        idle_timeout: float = DEFAULT_IDLE_CONNECTION_TIMEOUT,
+    ) -> None:
+        self._session = session
+        self._ws_url = ws_url
+        self._authorization = authorization
+        self._max_connections = max_connections
+        self._idle_timeout = idle_timeout
+
+        self._connections: list[_InworldConnection] = []
+        self._pool_lock = asyncio.Lock()
+        self._closed = False
+
+        # Event signaled when any connection has capacity available
+        self._capacity_available = asyncio.Event()
+        self._capacity_available.set()  # Initially available since we can create connections
+
+        # Cleanup task
+        self._cleanup_task: asyncio.Task[None] | None = None
+
+    async def acquire_context(
+        self,
+        emitter: tts.AudioEmitter,
+        opts: _TTSOptions,
+        timeout: float,
+    ) -> tuple[str, asyncio.Future[None], _InworldConnection]:
+        """Acquire a context from the pool, creating new connections as needed.
+
+        Returns:
+            tuple of (context_id, waiter future, connection) - the connection is returned
+            so the caller can call send_text/flush_context/close_context on it.
+        """
+        if self._closed:
+            raise APIConnectionError("Connection pool is closed")
+
+        start_time = time.time()
+        remaining_timeout = timeout
+
+        while True:
+            async with self._pool_lock:
+                # Start cleanup task if not already running
+                if self._cleanup_task is None:
+                    self._cleanup_task = asyncio.create_task(self._cleanup_idle_connections())
+
+                # First, try to find a connection with capacity
+                for conn in self._connections:
+                    if not conn._closed and conn.has_capacity:
+                        ctx_id, waiter = await conn.acquire_context(
+                            emitter, opts, remaining_timeout
+                        )
+                        return ctx_id, waiter, conn
+
+                # No available capacity - can we create a new connection?
+                if len(self._connections) < self._max_connections:
+                    conn = _InworldConnection(
+                        session=self._session,
+                        ws_url=self._ws_url,
+                        authorization=self._authorization,
+                        on_capacity_available=self.notify_capacity_available,
+                    )
+                    self._connections.append(conn)
+                    logger.debug(
+                        "Created new Inworld connection",
+                        extra={"pool_size": len(self._connections)},
+                    )
+                    ctx_id, waiter = await conn.acquire_context(emitter, opts, remaining_timeout)
+                    return ctx_id, waiter, conn
+
+                # At max connections and all at capacity - wait for one to free up
+                self._capacity_available.clear()
+
+            # Wait outside the lock
+            elapsed = time.time() - start_time
+            remaining_timeout = timeout - elapsed
+            if remaining_timeout <= 0:
+                raise APITimeoutError("Timed out waiting for available connection capacity")
+
+            try:
+                await asyncio.wait_for(
+                    self._capacity_available.wait(),
+                    timeout=remaining_timeout,
+                )
+            except asyncio.TimeoutError:
+                raise APITimeoutError(
+                    "Timed out waiting for available connection capacity"
+                ) from None
+
+    def notify_capacity_available(self) -> None:
+        """Called when a context is released and capacity may be available."""
+        self._capacity_available.set()
+
+    async def _cleanup_idle_connections(self) -> None:
+        """Periodically close idle connections that have been unused for a while."""
+        while not self._closed:
+            await asyncio.sleep(60.0)  # Check every minute
+
+            async with self._pool_lock:
+                now = time.time()
+                # Keep at least one connection, close others if idle
+                connections_to_close: list[_InworldConnection] = []
+
+                for conn in self._connections:
+                    if (
+                        conn.is_idle
+                        and now - conn.last_activity > self._idle_timeout
+                        and len(self._connections) > 1  # Keep at least one connection
+                    ):
+                        connections_to_close.append(conn)
+
+                for conn in connections_to_close:
+                    self._connections.remove(conn)
+                    logger.debug(
+                        "Closing idle Inworld connection",
+                        extra={"pool_size": len(self._connections)},
+                    )
+
+            # Close connections outside the lock
+            for conn in connections_to_close:
+                await conn.aclose()
+
+    async def aclose(self) -> None:
+        """Close all connections in the pool."""
+        self._closed = True
+
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+
+        async with self._pool_lock:
+            connections = list(self._connections)
+            self._connections.clear()
+
+        for conn in connections:
+            await conn.aclose()
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -425,6 +634,8 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         retain_format: NotGivenOr[bool] = NOT_GIVEN,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        idle_connection_timeout: float = DEFAULT_IDLE_CONNECTION_TIMEOUT,
     ) -> None:
         """
         Create a new instance of Inworld TTS.
@@ -460,6 +671,10 @@ class TTS(tts.TTS):
                 Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
                 Defaults to True.
+            max_connections (int, optional): Maximum number of concurrent WebSocket connections.
+                Each connection supports up to 5 concurrent synthesis streams. Defaults to 20.
+            idle_connection_timeout (float, optional): Time in seconds after which idle connections
+                are closed. Defaults to 300 (5 minutes).
         """
         if not is_given(sample_rate):
             sample_rate = DEFAULT_SAMPLE_RATE
@@ -500,8 +715,10 @@ class TTS(tts.TTS):
             else DEFAULT_MAX_BUFFER_DELAY_MS,
         )
 
-        self._connection: _InworldConnection | None = None
-        self._connection_lock = asyncio.Lock()
+        self._max_connections = max_connections
+        self._idle_connection_timeout = idle_connection_timeout
+        self._pool: _ConnectionPool | None = None
+        self._pool_lock = asyncio.Lock()
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
             tokenizer
@@ -519,12 +736,18 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Inworld"
 
-    async def _get_connection(self) -> _InworldConnection:
-        """Get the shared connection, creating if needed."""
-        async with self._connection_lock:
-            if self._connection is None or self._connection._closed:
-                self._connection = _InworldConnection(self)
-            return self._connection
+    async def _get_pool(self) -> _ConnectionPool:
+        """Get the connection pool, creating if needed."""
+        async with self._pool_lock:
+            if self._pool is None or self._pool._closed:
+                self._pool = _ConnectionPool(
+                    session=self._ensure_session(),
+                    ws_url=self._ws_url,
+                    authorization=self._authorization,
+                    max_connections=self._max_connections,
+                    idle_timeout=self._idle_connection_timeout,
+                )
+            return self._pool
 
     def update_options(
         self,
@@ -591,8 +814,8 @@ class TTS(tts.TTS):
         asyncio.create_task(self._prewarm_impl())
 
     async def _prewarm_impl(self) -> None:
-        conn = await self._get_connection()
-        await conn.connect()
+        # Just ensure the pool is created - first acquire will establish a connection
+        await self._get_pool()
 
     def synthesize(
         self,
@@ -614,9 +837,9 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        if self._connection:
-            await self._connection.aclose()
-            self._connection = None
+        if self._pool:
+            await self._pool.aclose()
+            self._pool = None
 
     async def list_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """
@@ -751,8 +974,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        connection = await self._tts._get_connection()
-        context_id, waiter = await connection.acquire_context(
+        pool = await self._tts._get_pool()
+        context_id, waiter, connection = await pool.acquire_context(
             emitter=output_emitter,
             opts=self._opts,
             timeout=self._conn_options.timeout,
