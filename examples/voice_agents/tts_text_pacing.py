@@ -2,8 +2,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, function_tool, tts
-from livekit.plugins import cartesia, deepgram, openai, silero  # noqa: F401
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, function_tool, inference, tts
+from livekit.plugins import deepgram, openai, cartesia, silero
 
 logger = logging.getLogger("tts-text-pacing")
 

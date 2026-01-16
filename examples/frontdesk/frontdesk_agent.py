@@ -23,8 +23,9 @@ from livekit.agents import (
     beta,
     cli,
     function_tool,
+    inference,
 )
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
@@ -183,9 +184,16 @@ async def frontdesk_agent(ctx: JobContext):
 
     session = AgentSession[Userdata](
         userdata=Userdata(cal=cal),
-        stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
-        tts=cartesia.TTS(voice="39b376fc-488e-4d0c-8b37-e00b72059fdd", speed="fast"),
+        stt=inference.STT(model="deepgram/nova-3", language="en"),
+        llm=inference.LLM(
+            model="openai/gpt-5.2-chat-latest",
+            extra_kwargs={"parallel_tool_calls": False, "temperature": 0.45},
+        ),
+        tts=inference.TTS(
+            model="cartesia/sonic-3",
+            voice="39b376fc-488e-4d0c-8b37-e00b72059fdd",
+            extra_kwargs={"speed": "fast"},
+        ),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,

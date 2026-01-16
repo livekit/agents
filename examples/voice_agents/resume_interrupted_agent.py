@@ -2,8 +2,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.plugins import silero
 
 logger = logging.getLogger("resume-agent")
 
@@ -22,9 +22,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(),
-        tts=cartesia.TTS(),
+        llm=inference.LLM(model="openai/gpt-4o-mini"),
+        stt=inference.STT(model="deepgram/nova-3", language="en"),
+        tts=inference.TTS(model="cartesia/sonic-3"),
         false_interruption_timeout=1.0,
         resume_false_interruption=True,
     )

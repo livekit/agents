@@ -15,6 +15,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
+    inference,
     llm,
     metrics,
 )
@@ -108,9 +109,9 @@ class FastResponseAgent(Agent):
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
-        llm="openai/gpt-4.1-mini",
-        stt="assemblyai/universal-streaming",
-        tts="elevenlabs",
+        llm=inference.LLM(model="openai/gpt-4.1-mini"),
+        stt=inference.STT(model="deepgram/nova-3", language="en"),
+        tts=inference.TTS(model="elevenlabs/eleven_turbo_v2_5"),
     )
 
     @session.on("metrics_collected")

@@ -6,9 +6,9 @@ import datetime
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
 from livekit.agents.stt import MultiSpeakerAdapter
-from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
+from livekit.plugins import deepgram, silero, speechmatics  # noqa: F401
 
 # Load environment variables from .env file
 # Required: SPEECHMATICS_API_KEY, OPENAI_API_KEY
@@ -55,8 +55,8 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(),
-        tts=openai.TTS(),
+        llm=inference.LLM(model="openai/gpt-4o"),
+        tts=inference.TTS(model="cartesia/sonic-3"),
         stt=MultiSpeakerAdapter(
             stt=speechmatics.STT(enable_diarization=True, end_of_utterance_silence_trigger=0.3),
             # stt=deepgram.STT(model="nova-3", enable_diarization=True),

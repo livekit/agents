@@ -9,6 +9,7 @@ from livekit.agents import (
     CloseEvent,
     JobContext,
     cli,
+    inference,
     room_io,
     utils,
 )
@@ -53,9 +54,9 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        stt="assemblyai/universal-streaming",
-        llm="openai/gpt-4.1-mini",
-        tts="elevenlabs",
+        stt=inference.STT(model="assemblyai/universal-streaming", language="en"),
+        llm=inference.LLM(model="openai/gpt-4.1-mini"),
+        tts=inference.TTS(model="elevenlabs/eleven_turbo_v2_5"),
         vad=silero.VAD.load(),
     )
 

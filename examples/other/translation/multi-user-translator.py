@@ -31,6 +31,7 @@ from livekit.agents import (
     JobContext,
     JobRequest,
     cli,
+    inference,
     llm,
     stt,
     tokenize,
@@ -43,7 +44,7 @@ from livekit.agents.types import (
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     TOPIC_TRANSCRIPTION,
 )
-from livekit.plugins import deepgram, elevenlabs, google
+from livekit.plugins import deepgram
 
 load_dotenv()
 
@@ -99,8 +100,8 @@ class Translator:
         self._playout_ch = utils.aio.Chan[PlayoutData]()
         self._llm_stream = utils.aio.Chan[str]()
 
-        self._llm = google.LLM()
-        self._tts = elevenlabs.TTS()
+        self._llm = inference.LLM(model="google/gemini-2.5-flash")
+        self._tts = inference.TTS(model="elevenlabs/eleven_turbo_v2_5")
         self._resampler = rtc.AudioResampler(22050, 48000)
 
     def start(self):

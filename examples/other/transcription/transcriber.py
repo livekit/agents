@@ -11,11 +11,12 @@ from livekit.agents import (
     MetricsCollectedEvent,
     StopResponse,
     cli,
+    inference,
     llm,
     metrics,
     room_io,
 )
-from livekit.plugins import openai, silero
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -30,7 +31,7 @@ class Transcriber(Agent):
     def __init__(self):
         super().__init__(
             instructions="not-needed",
-            stt=openai.STT(),
+            stt=inference.STT(model="deepgram/nova-3", language="en"),
         )
 
     async def on_user_turn_completed(self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage):

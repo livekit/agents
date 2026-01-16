@@ -3,9 +3,8 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobRequest, RoomIO, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobRequest, RoomIO, cli, inference
 from livekit.agents.llm import ChatContext, ChatMessage, StopResponse
-from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("push-to-talk")
 logger.setLevel(logging.INFO)
@@ -22,9 +21,9 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a helpful assistant.",
-            stt=deepgram.STT(),
-            llm=openai.LLM(model="gpt-4o-mini"),
-            tts=cartesia.TTS(),
+            stt=inference.STT(model="deepgram/nova-3", language="en"),
+            llm=inference.LLM(model="openai/gpt-4o-mini"),
+            tts=inference.TTS(model="cartesia/sonic-3"),
             # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
 

@@ -14,8 +14,9 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     cli,
+    inference,
 )
-from livekit.plugins import deepgram, langchain, silero
+from livekit.plugins import langchain, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
@@ -72,8 +73,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=deepgram.TTS(),
+        stt=inference.STT(model="deepgram/nova-3", language="multi"),
+        tts=inference.TTS(model="deepgram/aura-2"),
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )

@@ -16,10 +16,11 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     cli,
+    inference,
     llm,
 )
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 load_dotenv()
 
@@ -47,9 +48,9 @@ class RetrievalAgent(Agent):
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
             vad=silero.VAD.load(),
-            stt=deepgram.STT(),
-            llm=openai.LLM(),
-            tts=openai.TTS(),
+            stt=inference.STT(model="deepgram/nova-3", language="en"),
+            llm=inference.LLM(model="openai/gpt-4o"),
+            tts=inference.TTS(model="cartesia/sonic-3"),
         )
         self.index = index
 

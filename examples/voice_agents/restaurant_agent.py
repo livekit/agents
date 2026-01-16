@@ -6,10 +6,10 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import Field
 
-from livekit.agents import AgentServer, JobContext, cli
+from livekit.agents import AgentServer, JobContext, cli, inference
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 # from livekit.plugins import noise_cancellation
 
@@ -156,8 +156,8 @@ class Greeter(BaseAgent):
                 "Your jobs are to greet the caller and understand if they want to "
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            llm=openai.LLM(parallel_tool_calls=False),
-            tts=cartesia.TTS(voice=voices["greeter"]),
+            llm=inference.LLM(model="openai/gpt-4o", extra_kwargs={"parallel_tool_calls": False}),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["greeter"]),
         )
         self.menu = menu
 
@@ -184,7 +184,7 @@ class Reservation(BaseAgent):
             "the reservation time, then customer's name, and phone number. Then "
             "confirm the reservation details with the customer.",
             tools=[update_name, update_phone, to_greeter],
-            tts=cartesia.TTS(voice=voices["reservation"]),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["reservation"]),
         )
 
     @function_tool()
@@ -221,7 +221,7 @@ class Takeaway(BaseAgent):
                 "Clarify special requests and confirm the order with the customer."
             ),
             tools=[to_greeter],
-            tts=cartesia.TTS(voice=voices["takeaway"]),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["takeaway"]),
         )
 
     @function_tool()
@@ -255,7 +255,7 @@ class Checkout(BaseAgent):
                 "information, including the card number, expiry date, and CVV step by step."
             ),
             tools=[update_name, update_phone, to_greeter],
-            tts=cartesia.TTS(voice=voices["checkout"]),
+            tts=inference.TTS(model="cartesia/sonic-3", voice=voices["checkout"]),
         )
 
     @function_tool()
@@ -325,9 +325,9 @@ async def entrypoint(ctx: JobContext):
     )
     session = AgentSession[UserData](
         userdata=userdata,
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        stt=inference.STT(model="deepgram/nova-3", language="en"),
+        llm=inference.LLM(model="openai/gpt-4o"),
+        tts=inference.TTS(model="cartesia/sonic-3"),
         vad=silero.VAD.load(),
         max_tool_steps=5,
         # to use realtime model, replace the stt, llm, tts and vad with the following

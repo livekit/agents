@@ -6,9 +6,9 @@ from typing import Annotated, Literal  # noqa: F401
 from dotenv import load_dotenv
 from pydantic import Field  # noqa: F401
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("annotated-tool-args")
 logger.setLevel(logging.INFO)
@@ -93,9 +93,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     agent = AgentSession(
         vad=silero.VAD.load(),
-        stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=cartesia.TTS(),
+        stt=inference.STT(model="deepgram/nova-3", language="en"),
+        llm=inference.LLM(model="openai/gpt-4o-mini"),
+        tts=inference.TTS(model="cartesia/sonic-3"),
     )
 
     await agent.start(agent=MyAgent(), room=ctx.room)
