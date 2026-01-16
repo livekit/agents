@@ -65,6 +65,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
+from .interruption_filter import InterruptionFilter
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -134,6 +135,10 @@ class AgentActivity(RecognitionHooks):
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
+        self._interruption_filter = InterruptionFilter(
+            ignore_words=self._session.options.interruption_ignore_words,
+            enabled=self._session.options.interruption_filter_enabled,
+        )
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -1168,17 +1173,33 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
+        transcript = ""
+        if self.stt is not None and self._audio_recognition is not None:
+            transcript = self._audio_recognition.current_transcript
 
         if (
             self.stt is not None
             and opt.min_interruption_words > 0
             and self._audio_recognition is not None
         ):
-            text = self._audio_recognition.current_transcript
-
             # TODO(long): better word splitting for multi-language
-            if len(split_words(text, split_character=True)) < opt.min_interruption_words:
+            if len(split_words(transcript, split_character=True)) < opt.min_interruption_words:
                 return
+        agent_is_speaking = (
+            self._current_speech is not None
+            and not self._current_speech.interrupted
+        )
+
+        if self._interruption_filter.should_ignore_interruption(
+            transcribed_text=transcript,
+            agent_is_speaking=agent_is_speaking,
+        ):
+            # This is backchanneling while agent is speaking - ignore it
+            logger.debug(
+                f"Ignoring backchanneling interruption: '{transcript}' "
+                f"(agent_speaking={agent_is_speaking})"
+            )
+            return
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
