@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
 ]
 
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
