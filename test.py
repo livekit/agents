@@ -1,103 +1,102 @@
-import sys
 import os
 
-# Read and execute the interruption_filter.py file directly
-filter_path = os.path.join('livekit-agents', 'livekit', 'agents', 'voice', 'interruption_filter.py')
+import pytest
 
-with open(filter_path, 'r') as f:
-    code = f.read()
+from livekit.agents.voice import InterruptionFilter
 
-# Create a namespace for the module
-namespace = {}
-exec(code, namespace)
 
-# Get the InterruptionFilter class
-InterruptionFilter = namespace['InterruptionFilter']
+class TestInterruptionFilter:
+    """Unit tests for the InterruptionFilter class."""
 
-print("="*60)
-print("LiveKit Interruption Filter - Direct Test")
-print("="*60)
+    def test_default_initialization(self):
+        filter = InterruptionFilter()
+        assert filter.enabled is True
+        assert len(filter.ignore_words) > 0
+        assert "yeah" in filter.ignore_words
+        assert "ok" in filter.ignore_words
 
-# Create filter
-f = InterruptionFilter()
-print(f"\n Filter created successfully")
-print(f"  - Enabled: {f.enabled}")
-print(f"  - Ignore words count: {len(f.ignore_words)}")
-print(f"  - Sample ignore words: {list(f.ignore_words)[:5]}")
+    def test_custom_ignore_words(self):
+        custom_words = ["yeah", "ok", "sure"]
+        filter = InterruptionFilter(ignore_words=custom_words)
+        assert filter.ignore_words == {"yeah", "ok", "sure"}
 
-# Test 1: Backchanneling while speaking (should be ignored)
-result1 = f.should_ignore_interruption("yeah", True)
-print(f"\n Test 1 - Backchanneling while speaking")
-print(f"  Input: 'yeah', Agent speaking: True")
-print(f"  Should ignore: {result1} (expected: True)")
-assert result1 == True, "FAILED: Should ignore 'yeah' when agent is speaking"
+    def test_disabled_filter(self):
+        filter = InterruptionFilter(enabled=False)
 
-# Test 2: Backchanneling while silent (should NOT be ignored)
-result2 = f.should_ignore_interruption("yeah", False)
-print(f"\n Test 2 - Backchanneling while silent")
-print(f"  Input: 'yeah', Agent speaking: False")
-print(f"  Should ignore: {result2} (expected: False)")
-assert result2 == False, "FAILED: Should NOT ignore 'yeah' when agent is silent"
+        assert filter.should_ignore_interruption("yeah", agent_is_speaking=True) is False
+        assert filter.should_ignore_interruption("stop", agent_is_speaking=True) is False
 
-# Test 3: Real interruption (should NOT be ignored)
-result3 = f.should_ignore_interruption("stop", True)
-print(f"\n Test 3 - Real interruption")
-print(f"  Input: 'stop', Agent speaking: True")
-print(f"  Should ignore: {result3} (expected: False)")
-assert result3 == False, "FAILED: Should NOT ignore 'stop' even when agent is speaking"
+    def test_backchanneling_while_speaking(self):
+        filter = InterruptionFilter()
 
-# Test 4: Mixed input (should NOT be ignored)
-result4 = f.should_ignore_interruption("yeah wait", True)
-print(f"\n Test 4 - Mixed input")
-print(f"  Input: 'yeah wait', Agent speaking: True")
-print(f"  Should ignore: {result4} (expected: False)")
-assert result4 == False, "FAILED: Should NOT ignore 'yeah wait' (contains command)"
+        assert filter.should_ignore_interruption("yeah", True) is True
+        assert filter.should_ignore_interruption("ok", True) is True
+        assert filter.should_ignore_interruption("hmm", True) is True
+        assert filter.should_ignore_interruption("uh-huh", True) is True
 
-# Test 5: Multiple backchanneling words
-result5 = f.should_ignore_interruption("yeah okay hmm", True)
-print(f"\n Test 5 - Multiple backchanneling words")
-print(f"  Input: 'yeah okay hmm', Agent speaking: True")
-print(f"  Should ignore: {result5} (expected: True)")
-assert result5 == True, "FAILED: Should ignore multiple backchanneling words"
+        assert filter.should_ignore_interruption("yeah okay", True) is True
+        assert filter.should_ignore_interruption("hmm right", True) is True
 
-# Test 6: Case insensitivity
-result6 = f.should_ignore_interruption("YEAH", True)
-print(f"\n Test 6 - Case insensitivity")
-print(f"  Input: 'YEAH', Agent speaking: True")
-print(f"  Should ignore: {result6} (expected: True)")
-assert result6 == True, "FAILED: Should be case-insensitive by default"
+    def test_backchanneling_while_silent(self):
+        filter = InterruptionFilter()
 
-print("\n" + "="*60)
-print(" All 6 tests passed! The interruption filter is working correctly.")
-print("="*60)
+        assert filter.should_ignore_interruption("yeah", False) is False
+        assert filter.should_ignore_interruption("ok", False) is False
+        assert filter.should_ignore_interruption("hmm", False) is False
 
-print("\n" + "Assignment Test Scenarios:")
-print("-"*60)
+    def test_real_interruptions(self):
+        filter = InterruptionFilter()
 
-# Scenario 1: Long explanation
-print("\n Scenario 1: Long Explanation")
-print("  Agent speaking, user says 'okay yeah uh-huh'")
-assert f.should_ignore_interruption("okay yeah uh-huh", True) == True
-print("  Result: PASS - Agent continues speaking")
+        assert filter.should_ignore_interruption("wait", True) is False
+        assert filter.should_ignore_interruption("stop", True) is False
+        assert filter.should_ignore_interruption("no", True) is False
+        assert filter.should_ignore_interruption("hold on", True) is False
 
-# Scenario 2: Passive affirmation
-print("\n Scenario 2: Passive Affirmation")
-print("  Agent silent, user says 'yeah'")
-assert f.should_ignore_interruption("yeah", False) == False
-print("  Result: PASS - Agent processes as answer")
+    def test_mixed_input(self):
+        filter = InterruptionFilter()
 
-# Scenario 3: The correction
-print("\n Scenario 3: The Correction")
-print("  Agent speaking, user says 'no stop'")
-assert f.should_ignore_interruption("no stop", True) == False
-print("  Result: PASS - Agent stops immediately")
+        assert filter.should_ignore_interruption("yeah wait", True) is False
+        assert filter.should_ignore_interruption("ok but stop", True) is False
+        assert filter.should_ignore_interruption("hmm no", True) is False
 
-# Scenario 4: Mixed input
-print("\n Scenario 4: Mixed Input")
-print("  Agent speaking, user says 'yeah okay but wait'")
-assert f.should_ignore_interruption("yeah okay but wait", True) == False
-print("  Result: PASS - Agent stops (contains 'wait')")
+    def test_case_insensitivity(self):
+        filter = InterruptionFilter(case_sensitive=False)
 
-print("\n" + "="*60)
-print(" All assignment scenarios passed!")
-print("="*60)
+        assert filter.should_ignore_interruption("YEAH", True) is True
+        assert filter.should_ignore_interruption("Yeah", True) is True
+        assert filter.should_ignore_interruption("yEaH", True) is True
+
+    def test_case_sensitivity(self):
+        filter = InterruptionFilter(ignore_words=["yeah", "ok"], case_sensitive=True)
+
+        assert filter.should_ignore_interruption("yeah", True) is True
+        assert filter.should_ignore_interruption("YEAH", True) is False
+
+    def test_empty_input(self):
+        filter = InterruptionFilter()
+
+        assert filter.should_ignore_interruption("", True) is False
+        assert filter.should_ignore_interruption("   ", True) is False
+
+    def test_punctuation_handling(self):
+        filter = InterruptionFilter()
+
+        assert filter.should_ignore_interruption("yeah.", True) is True
+        assert filter.should_ignore_interruption("ok!", True) is True
+        assert filter.should_ignore_interruption("hmm?", True) is True
+        assert filter.should_ignore_interruption("yeah, ok", True) is True
+
+    def test_add_remove_ignore_word(self):
+        filter = InterruptionFilter(ignore_words=["yeah"])
+
+        assert filter.should_ignore_interruption("ok", True) is False
+
+        filter.add_ignore_word("ok")
+        assert filter.should_ignore_interruption("ok", True) is True
+
+        filter.remove_ignore_word("yeah")
+        assert filter.should_ignore_interruption("yeah", True) is False
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
