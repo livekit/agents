@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Uni
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
+from ..inference.interruption import InterruptionEvent
 from ..llm import (
     LLM,
     ChatMessage,
@@ -239,6 +240,7 @@ AgentEvent = Annotated[
         SpeechCreatedEvent,
         ErrorEvent,
         CloseEvent,
+        InterruptionEvent,
     ],
     Field(discriminator="type"),
 ]

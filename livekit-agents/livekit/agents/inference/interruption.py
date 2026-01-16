@@ -191,7 +191,7 @@ class AdaptiveInterruptionDetector(
             min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
             max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
-            detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.2s.
+            detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.1s.
             inference_timeout (float, optional): The timeout for the interruption detection, defaults to 1 second.
             base_url (str, optional): The base URL for the interruption detection, defaults to the LIVEKIT_INTERRUPTION_INFERENCE_URL environment variable.
             api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.

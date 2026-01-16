@@ -137,8 +137,8 @@ DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
         {
-            "min_endpointing_delay": "Use turn_detection=TurnDetectionConfig(...) instead",
-            "max_endpointing_delay": "Use turn_detection=TurnDetectionConfig(...) instead",
+            "min_endpointing_delay": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "max_endpointing_delay": "Use turn_handling=TurnHandlingConfig(...) instead",
             "preemptive_generation": "Use turn_handling=TurnHandlingConfig(...) instead",
             "user_away_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
             "false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
@@ -214,9 +214,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 automatically falls back if the necessary model is missing.
             stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
-            interruption_handling (Literal["adaptive", "vad"] | False, optional): Interruption handling strategy.
-                Requires VAD, non-realtime LLM, and STT supporting aligned transcript.
-                Set to ``False`` to disable. Default ``"adaptive"``.
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of

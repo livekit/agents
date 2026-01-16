@@ -22,9 +22,7 @@ def deprecate_params(mapping: dict[str, str]) -> Callable[[Callable[..., Any]], 
     >>> my_function(old_param=1)
     WARNING: old_param is deprecated. Use new_param instead
     1
-    >>> my_function(new_param=1)
-    >>> print(my_function(new_param=1))
-    1
+    >>> my_function(new_param=1) # no warning
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
