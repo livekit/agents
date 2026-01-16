@@ -405,25 +405,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
 
-    def _count_system_messages(self, chat_ctx: llm.ChatContext) -> int:
-        """
-        Count the number of system and developer messages in the chat context.
-
-        These messages will be dropped by Gemini Realtime API as it only supports
-        'user' and 'model' roles.
-
-        Args:
-            chat_ctx: The chat context to analyze
-
-        Returns:
-            Number of system/developer messages that will be dropped
-        """
-        return sum(
-            1
-            for item in chat_ctx.items
-            if item.type == "message" and item.role in ["system", "developer"]
-        )
-
     async def _close_active_session(self) -> None:
         async with self._session_lock:
             if self._active_session:
@@ -491,7 +472,11 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # Check for system/developer messages that will be dropped
-        system_msg_count = self._count_system_messages(chat_ctx)
+        system_msg_count = sum(
+            1
+            for item in chat_ctx.items
+            if item.type == "message" and item.role in ["system", "developer"]
+        )
         if system_msg_count > 0:
             logger.warning(
                 f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
@@ -712,7 +697,11 @@ class RealtimeSession(llm.RealtimeSession):
                         self._active_session = session
 
                         # Check for system/developer messages in initial chat context
-                        system_msg_count = self._count_system_messages(self._chat_ctx)
+                        system_msg_count = sum(
+                            1
+                            for item in self._chat_ctx.items
+                            if item.type == "message" and item.role in ["system", "developer"]
+                        )
                         if system_msg_count > 0:
                             logger.warning(
                                 f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
