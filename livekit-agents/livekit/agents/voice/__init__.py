@@ -1,6 +1,11 @@
+# IO / results
 from . import io, run_result
+
+# Core agent
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, VoiceActivityVideoSampler
+
+# Events
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -16,14 +21,20 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
+
+# Speech / transcription
+from .speech_handle import SpeechHandle
+from .transcription import TranscriptSynchronizer
+
+# Interruption handling
 from .interruption_filter import InterruptionFilter
+
+# Internal outputs (intentionally exported)
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
-from .speech_handle import SpeechHandle
-from .transcription import TranscriptSynchronizer
 
 __all__ = [
     # Core agent
@@ -65,11 +76,12 @@ __all__ = [
     "_ParticipantStreamTranscriptionOutput",
 ]
 
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
+# ------------------------------------------------------------------
+# Hide everything not explicitly exported from documentation (pdoc)
+# ------------------------------------------------------------------
 
-__pdoc__: dict[str, bool] = {}
+__pdoc__ = {}
 
-for name in NOT_IN_ALL:
-    __pdoc__[name] = False
+for name in list(globals()):
+    if name not in __all__ and not name.startswith("_"):
+        __pdoc__[name] = False
