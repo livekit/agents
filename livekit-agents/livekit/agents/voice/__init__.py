@@ -22,10 +22,6 @@ from .events import (
     UserStateChangedEvent,
 )
 
-# Speech / transcription
-from .speech_handle import SpeechHandle
-from .transcription import TranscriptSynchronizer
-
 # Interruption handling
 from .interruption_filter import InterruptionFilter
 
@@ -35,6 +31,10 @@ from .room_io import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
+
+# Speech / transcription
+from .speech_handle import SpeechHandle
+from .transcription import TranscriptSynchronizer
 
 __all__ = [
     # Core agent
@@ -70,16 +70,13 @@ __all__ = [
     "io",
     "run_result",
 
-    # Internal outputs (intentionally exported)
+    # Internal outputs
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
 ]
 
-# ------------------------------------------------------------------
-# Hide everything not explicitly exported from documentation (pdoc)
-# ------------------------------------------------------------------
-
+# Hide non-exported symbols from docs (pdoc)
 __pdoc__ = {}
 
 for name in list(globals()):
