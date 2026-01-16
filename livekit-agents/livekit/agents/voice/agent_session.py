@@ -134,23 +134,23 @@ class VoiceActivityVideoSampler:
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
-@deprecate_params(
-    {
-        "min_endpointing_delay": "Use turn_detection=TurnDetectionConfig(...) instead",
-        "max_endpointing_delay": "Use turn_detection=TurnDetectionConfig(...) instead",
-        "preemptive_generation": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "user_away_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "resume_false_interruption": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "allow_interruptions": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "min_interruption_duration": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "min_interruption_words": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "turn_detection": "Use turn_handling=TurnHandlingConfig(...) instead",
-        "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
-    }
-)
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+    @deprecate_params(
+        {
+            "min_endpointing_delay": "Use turn_detection=TurnDetectionConfig(...) instead",
+            "max_endpointing_delay": "Use turn_detection=TurnDetectionConfig(...) instead",
+            "preemptive_generation": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "user_away_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "resume_false_interruption": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "allow_interruptions": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "min_interruption_duration": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "min_interruption_words": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "turn_detection": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
+        }
+    )
     def __init__(
         self,
         *,

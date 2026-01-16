@@ -1,9 +1,11 @@
 import functools
+import inspect
 from collections import defaultdict
 from typing import Any, Callable
 
-from livekit.agents.log import logger
-from livekit.agents.types import NOT_GIVEN
+from ..log import logger
+from ..types import NOT_GIVEN
+from .misc import is_given
 
 
 def deprecate_params(mapping: dict[str, str]) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -26,11 +28,14 @@ def deprecate_params(mapping: dict[str, str]) -> Callable[[Callable[..., Any]], 
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        signature = inspect.signature(fn)
+
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            bound = signature.bind_partial(*args, **kwargs)
             by_suggestion: defaultdict[str, list[str]] = defaultdict(list)
             for name, suggestion in mapping.items():
-                if kwargs.get(name, NOT_GIVEN) is not NOT_GIVEN:
+                if is_given(bound.arguments.get(name, NOT_GIVEN)):
                     by_suggestion[suggestion].append(name)
 
             for suggestion, names in by_suggestion.items():

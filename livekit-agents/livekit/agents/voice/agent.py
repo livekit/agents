@@ -91,11 +91,9 @@ class Agent:
         self._vad = vad
 
         self._interruption_detection = turn_handling.interruption_cfg.mode
-        self._allow_interruptions: NotGivenOr[bool] = (
-            True
-            if is_given(turn_handling.interruption_cfg.mode) and turn_handling.interruption_cfg.mode
-            else turn_handling.interruption_cfg.mode
-        )
+        self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
+        if is_given(turn_handling.interruption_cfg.mode):
+            self._allow_interruptions = bool(turn_handling.interruption_cfg.mode)
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
