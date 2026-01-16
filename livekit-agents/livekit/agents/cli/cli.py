@@ -1088,8 +1088,6 @@ def _text_mode(c: AgentsConsole) -> None:
 
     initial_run_fut = c._io_initial_run_fut
     if initial_run_fut is not None:
-        # Don't clear _io_initial_run_fut yet - _set_initial_run needs it to set the result
-        # We'll clear it after receiving the result
 
         async def _await_initial_run() -> list[RunEvent]:
             run_result = await initial_run_fut
@@ -1107,7 +1105,6 @@ def _text_mode(c: AgentsConsole) -> None:
                         raise _ExitCli()
                     try:
                         events = cf.result(timeout=0.1)
-                        # Clear after receiving to prevent re-display on mode toggle
                         c._io_initial_run_fut = None
                         for event in events:
                             _print_run_event(c, event)
