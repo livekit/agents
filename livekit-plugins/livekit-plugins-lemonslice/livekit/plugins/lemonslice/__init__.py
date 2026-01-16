@@ -14,7 +14,7 @@
 
 """LemonSlice virtual avatar plugin for LiveKit Agents
 
-See https://https://docs.livekit.io/agents/models/avatar/plugins//lemonslice/ for more information.
+See https://https://docs.livekit.io/agents/models/avatar/plugins/lemonslice/ for more information.
 """
 
 from .api import LemonSliceException
