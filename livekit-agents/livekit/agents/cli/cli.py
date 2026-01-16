@@ -1086,16 +1086,15 @@ def _text_mode(c: AgentsConsole) -> None:
         if ch == key.CTRL_T:
             raise _ToggleMode()
 
-    # wait for and display the initial agent response from on_enter (only once)
     initial_run_fut = c._io_initial_run_fut
     if initial_run_fut is not None:
-        # consume the future so we don't wait again on re-entry
-        c._io_initial_run_fut = None
+        # Don't clear _io_initial_run_fut yet - _set_initial_run needs it to set the result
+        # We'll clear it after receiving the result
 
-        async def _await_initial_run() -> RunResult:
+        async def _await_initial_run() -> list[RunEvent]:
             run_result = await initial_run_fut
             await run_result
-            return run_result
+            return run_result.events.copy()
 
         cf = asyncio.run_coroutine_threadsafe(_await_initial_run(), c.io_loop)
         try:
@@ -1103,19 +1102,25 @@ def _text_mode(c: AgentsConsole) -> None:
                 while True:
                     if c.should_exit:
                         cf.cancel()
+                        with contextlib.suppress(Exception):
+                            cf.result()
                         raise _ExitCli()
                     try:
-                        result = cf.result(timeout=0.1)
-                        for event in result.events:
+                        events = cf.result(timeout=0.1)
+                        # Clear after receiving to prevent re-display on mode toggle
+                        c._io_initial_run_fut = None
+                        for event in events:
                             _print_run_event(c, event)
                         break
                     except TimeoutError:
                         continue
         except KeyboardInterrupt:
             cf.cancel()
+            with contextlib.suppress(Exception):
+                cf.result()
             raise _ExitCli() from None
         except Exception:
-            pass  # ignore errors from initial run
+            pass
 
     while True:
         if c.should_exit:
