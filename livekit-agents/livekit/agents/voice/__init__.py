@@ -16,6 +16,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
+from .interruption_filter import InterruptionFilter
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
@@ -23,33 +24,42 @@ from .room_io import (
 )
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer
-from .interruption_filter import InterruptionFilter
 
 __all__ = [
+    # Core agent
+    "Agent",
+    "AgentTask",
+    "ModelSettings",
     "AgentSession",
     "VoiceActivityVideoSampler",
-    "Agent",
-    "ModelSettings",
-    "AgentTask",\
+
+    # Speech / transcription
     "SpeechHandle",
-    "RunContext",
+    "TranscriptSynchronizer",
+
+    # Interruption handling
     "InterruptionFilter",
-    "UserInputTranscribedEvent",
+
+    # Events
     "AgentEvent",
-    "MetricsCollectedEvent",
+    "AgentFalseInterruptionEvent",
+    "AgentStateChangedEvent",
     "ConversationItemAddedEvent",
     "SpeechCreatedEvent",
+    "UserInputTranscribedEvent",
+    "UserStateChangedEvent",
+    "FunctionToolsExecutedEvent",
+    "MetricsCollectedEvent",
     "ErrorEvent",
     "CloseEvent",
     "CloseReason",
-    "UserStateChangedEvent",
-    "AgentStateChangedEvent",
-    "FunctionToolsExecutedEvent",
-    "AgentFalseInterruptionEvent",
-    "TranscriptSynchronizer",
+
+    # IO / results
+    "RunContext",
     "io",
-    "room_io",
     "run_result",
+
+    # Internal outputs (intentionally exported)
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
@@ -59,7 +69,7 @@ __all__ = [
 _module = dir()
 NOT_IN_ALL = [m for m in _module if m not in __all__]
 
-__pdoc__ = {}
+__pdoc__: dict[str, bool] = {}
 
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
+for name in NOT_IN_ALL:
+    __pdoc__[name] = False
