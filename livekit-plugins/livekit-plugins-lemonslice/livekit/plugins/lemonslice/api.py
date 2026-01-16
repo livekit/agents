@@ -59,7 +59,7 @@ class LemonSliceAPI:
         if utils.is_given(agent_id) and utils.is_given(agent_image_url):
             raise LemonSliceException("Only one of agent_id or agent_image_url can be provided")
 
-        payload = {
+        payload: dict[str, Any] = {
             "transport_type": "livekit",
             "properties": {
                 "livekit_url": livekit_url,
