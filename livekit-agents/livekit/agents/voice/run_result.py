@@ -139,6 +139,7 @@ class RunResult(Generic[Run_T]):
         try:
             val = await self._recorded_items_ch.__anext__()
         except StopAsyncIteration:
+            # TODO(long): this may raise a ToolError, maybe we should handle it differently?
             if self._done_fut.done() and (exc := self._done_fut.exception()):
                 raise exc  # noqa: B904
 

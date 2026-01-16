@@ -75,7 +75,7 @@ class MyAgent(Agent):
     async def register_for_weather(self, context: RunContext):
         """Called when the user wants to register for the weather event."""
 
-        email_result = await GetEmailTask(
+        get_email_task = GetEmailTask(
             extra_instructions=(
                 "You are communicate to the user via text messages, "
                 "so there is no need to verify the email address with the user multiple times."
@@ -83,6 +83,9 @@ class MyAgent(Agent):
             if self._text_mode
             else ""
         )
+        get_email_task.configure(llm="openai/gpt-4.1")
+
+        email_result = await get_email_task
 
         # TODO: serialize durable function calls
         email_address = email_result.email_address

@@ -106,6 +106,49 @@ class Agent:
             "max_endpointing_delay": self._max_endpointing_delay,
         }
 
+    def configure(
+        self,
+        *,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
+    ) -> None:
+        restart_required = False
+        if is_given(turn_detection):
+            self._turn_detection = turn_detection
+            restart_required = True
+        if is_given(stt):
+            if isinstance(stt, str):
+                stt = inference.STT.from_model_string(stt)
+            self._stt = stt
+            restart_required = True
+        if is_given(vad):
+            self._vad = vad
+            restart_required = True
+
+        if is_given(llm):
+            if isinstance(llm, str):
+                llm = inference.LLM.from_model_string(llm)
+            self._llm = llm
+        if is_given(tts):
+            if isinstance(tts, str):
+                tts = inference.TTS.from_model_string(tts)
+            self._tts = tts
+
+        if is_given(mcp_servers):
+            if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
+                mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
+            self._mcp_servers = mcp_servers
+            restart_required = True
+
+        if self._activity and not self._activity._scheduling_paused and restart_required:
+            logger.warning(
+                "Agent is already running, to apply the changes, call `session.update_agent` to restart the agent"
+            )
+
     @property
     def id(self) -> str:
         return self._id
