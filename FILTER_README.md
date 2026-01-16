@@ -91,7 +91,7 @@ yeah, ok, okay, hmm, mhm, mm-hmm, uh-huh, right, aha, ah, oh, sure, yep, yup, go
 
 Run the test:
 ```bash
-python direct_test.py
+python test.py
 ```
 
 All 4 test scenarios should pass.
