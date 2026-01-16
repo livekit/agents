@@ -27,7 +27,7 @@ async def entrypoint(ctx: JobContext):
     lemonslice_image_url = os.getenv("LEMONSLICE_IMAGE_URL")
     avatar = lemonslice.AvatarSession(
         agent_image_url=lemonslice_image_url,
-        agent_prompt="Be expressive in your movements and use your hands while talking.", # Prompt to guide the avatar's movements
+        agent_prompt="Be expressive in your movements and use your hands while talking.",  # Prompt to guide the avatar's movements
     )
     await avatar.start(session, room=ctx.room)
 

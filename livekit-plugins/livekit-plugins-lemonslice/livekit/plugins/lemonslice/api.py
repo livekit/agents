@@ -1,9 +1,9 @@
 import asyncio
 import os
+from typing import Any, Optional
 
 import aiohttp
 
-from typing import Any, Optional
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -13,6 +13,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+
 from .log import logger
 
 
@@ -52,10 +53,9 @@ class LemonSliceAPI:
         livekit_token: NotGivenOr[str] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
-
         if not utils.is_given(agent_id) and not utils.is_given(agent_image_url):
             raise LemonSliceException("Missing agent_id or agent_image_url")
-        
+
         if utils.is_given(agent_id) and utils.is_given(agent_image_url):
             raise LemonSliceException("Only one of agent_id or agent_image_url can be provided")
 
@@ -106,7 +106,9 @@ class LemonSliceAPI:
                 ) as response:
                     if not response.ok:
                         text = await response.text()
-                        raise APIStatusError("Server returned an error", status_code=response.status, body=text)
+                        raise APIStatusError(
+                            "Server returned an error", status_code=response.status, body=text
+                        )
                     return await response.json()  # type: ignore
             except Exception as e:
                 if isinstance(e, APIConnectionError):

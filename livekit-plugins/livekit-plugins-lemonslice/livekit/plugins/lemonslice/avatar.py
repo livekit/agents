@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+
 import aiohttp
 
 from livekit import api, rtc
@@ -17,7 +18,6 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LemonSliceAPI, LemonSliceException
-
 
 SAMPLE_RATE = 16000
 _AVATAR_AGENT_IDENTITY = "lemonslice-avatar-agent"

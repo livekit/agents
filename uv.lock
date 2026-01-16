@@ -46,6 +46,7 @@ members = [
     "livekit-plugins-hume",
     "livekit-plugins-inworld",
     "livekit-plugins-langchain",
+    "livekit-plugins-lemonslice",
     "livekit-plugins-liveavatar",
     "livekit-plugins-lmnt",
     "livekit-plugins-minimal",
@@ -1879,7 +1880,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=1.0.23,<2" },
+    { name = "livekit", specifier = "==1.0.23" },
     { name = "livekit-api", specifier = ">=1.0.7,<2" },
     { name = "livekit-blingfire", specifier = "~=1.0" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
@@ -2323,6 +2324,16 @@ requires-dist = [
     { name = "langgraph", specifier = ">=0.6.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-lemonslice"
+source = { editable = "livekit-plugins/livekit-plugins-lemonslice" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-liveavatar"
