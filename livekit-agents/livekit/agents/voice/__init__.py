@@ -40,6 +40,7 @@ __all__ = [
     # Core agent
     "Agent",
     "AgentTask",
+    "ModelSettings",
     "AgentSession",
     "VoiceActivityVideoSampler",
 
@@ -59,6 +60,7 @@ __all__ = [
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
     "FunctionToolsExecutedEvent",
+    "MetricsCollectedEvent",
     "ErrorEvent",
     "CloseEvent",
     "CloseReason",
