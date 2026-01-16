@@ -1423,8 +1423,8 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.commit_audio()
 
-        if self._current_speech is not None:
-            if not self._current_speech.allow_interruptions:
+        if (current_speech := self._current_speech) is not None:
+            if not current_speech.allow_interruptions:
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"user_input": info.new_transcript},
@@ -1432,8 +1432,7 @@ class AgentActivity(RecognitionHooks):
                 return
             await self._interrupt_paused_speech(self._interrupt_paused_speech_task)
 
-            if self._current_speech:
-                await self._current_speech.interrupt()
+            await current_speech.interrupt()
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
