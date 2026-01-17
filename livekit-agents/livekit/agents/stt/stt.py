@@ -163,6 +163,23 @@ class STT(
                 )
                 if self._recognize_metrics_needed:
                     duration = time.perf_counter() - start_time
+
+                    # Extract token usage if available
+                    input_tokens = 0
+                    output_tokens = 0
+                    total_tokens = 0
+                    audio_tokens = 0
+                    text_tokens = 0
+                    
+                    if hasattr(event, '_token_usage') and event._token_usage:
+                        usage = event._token_usage
+                        input_tokens = usage.get('input_tokens', 0)
+                        output_tokens = usage.get('output_tokens', 0)
+                        total_tokens = usage.get('total_tokens', 0)
+                        audio_tokens = usage.get('audio_tokens', 0)
+                        text_tokens = usage.get('text_tokens', 0)
+
+                    
                     stt_metrics = STTMetrics(
                         request_id=event.request_id,
                         timestamp=time.time(),
@@ -170,6 +187,11 @@ class STT(
                         label=self._label,
                         audio_duration=calculate_audio_duration(buffer),
                         streamed=False,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=total_tokens,
+                        audio_tokens=audio_tokens,
+                        text_tokens=text_tokens,
                         metadata=Metadata(
                             model_name=self.model,
                             model_provider=self.provider,
