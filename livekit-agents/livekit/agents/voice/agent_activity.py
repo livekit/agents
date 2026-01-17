@@ -52,6 +52,7 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
+from .filter import InterruptionFilter
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
@@ -65,7 +66,6 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
-from .filter import InterruptionFilter
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
