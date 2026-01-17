@@ -39,19 +39,24 @@ To avoid confusion with previous sentences, the system calculates the "Delta":
 
 ## ⚙️ Configuration
 
-The logic is contained in `backchannel_patch.py`. You can customize the word lists there:
+The agent now uses an external configuration file for easy editing. You do not need to touch the code.
 
-```python
-# Words that will NOT interrupt the agent
-BACKCHANNEL_WORDS = {
-    "yeah", "ok", "okay", "mhmm", "uh-huh", "right", "sure", ...
-}
+### `filter_config.json`
+This file is located in the same directory as the agent. You can modify the lists of words directly.
 
-# Words that will ALWAYS interrupt the agent (even if mixed with backchannel)
-COMMAND_WORDS = {
-    "stop", "wait", "hold", "pause", "no", "nope"
+```json
+{
+    "backchannel_words": [
+        "yeah", "ok", "okay", "mhmm", "uh-huh", "right", "sure"
+    ],
+    "command_words": [
+        "stop", "wait", "hold", "pause", "no", "nope", "don't"
+    ]
 }
 ```
+
+*   **`backchannel_words`**: Words that will be **IGNORED** by the interruption filter (agent keeps speaking).
+*   **`command_words`**: Words that will **ALWAYS** interrupt the agent.
 
 ## 🧪 Testing
 

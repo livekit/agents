@@ -1,0 +1,13 @@
+{
+    "backchannel_words": [
+        "yeah", "yea", "yes", "yep", "yup",
+        "ok", "okay", "alright", "aight",
+        "hmm", "hm", "mhm", "mmhmm", "uh-huh", "uhuh", "uh", "huh",
+        "right", "sure", "gotcha",
+        "aha", "ah", "oh", "ooh",
+        "mm", "mhmm", "mmm", "hey"
+    ],
+    "command_words": [
+        "stop", "wait", "hold", "pause", "no", "nope", "don't"
+    ]
+}

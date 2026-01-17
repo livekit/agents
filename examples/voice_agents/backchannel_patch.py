@@ -1,5 +1,7 @@
 import logging
 import re
+import json
+import os
 from livekit.agents.tokenize.basic import split_words
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import _EndOfTurnInfo
@@ -9,18 +11,29 @@ logger = logging.getLogger("backchannel-patch")
 # =============================================================================
 # BACKCHANNEL WORD CONFIG
 # =============================================================================
-BACKCHANNEL_WORDS = {
-    "yeah", "yea", "yes", "yep", "yup",
-    "ok", "okay", "alright", "aight",
-    "hmm", "hm", "mhm", "mmhmm", "uh-huh", "uhuh", "uh", "huh",
-    "right", "sure", "gotcha",
-    "aha", "ah", "oh", "ooh",
-    "mm", "mhmm", "mmm", "hey"
-}
+CONFIG_FILE = "filter_config.json"
+BACKCHANNEL_WORDS = set()
+COMMAND_WORDS = set()
 
-COMMAND_WORDS = {
-    "stop", "wait", "hold", "pause", "no", "nope", "don't"
-}
+def load_config():
+    global BACKCHANNEL_WORDS, COMMAND_WORDS
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                BACKCHANNEL_WORDS = set(data.get("backchannel_words", []))
+                COMMAND_WORDS = set(data.get("command_words", []))
+            logger.info(f"Loaded {len(BACKCHANNEL_WORDS)} ignored words from {CONFIG_FILE}")
+        else:
+            logger.warning(f"{CONFIG_FILE} not found! Using empty defaults.")
+            # Fallback defaults if verification fails
+            BACKCHANNEL_WORDS = {"yeah", "ok", "mhmm", "okay"}
+            COMMAND_WORDS = {"stop", "wait", "no"}
+    except Exception as e:
+        logger.error(f"Failed to load {CONFIG_FILE}: {e}")
+
+# Load immediately on import
+load_config()
 
 # Global tracking for delta calculation
 _last_processed_transcript = ""
