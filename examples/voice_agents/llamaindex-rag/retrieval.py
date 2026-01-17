@@ -80,10 +80,9 @@ class RetrievalAgent(Agent):
             system_msg.content.append(instructions)
         else:
             chat_ctx.items.insert(0, llm.ChatMessage(role="system", content=[instructions]))
-        # New code
-        debug_text = instructions[:100].replace('\n', '\\n')
+        # Debug: log truncated instructions
+        debug_text = instructions[:100].replace("\n", "\\n")
         print(f"update instructions: {debug_text}...")
-
 
         # update the instructions for agent
         # await self.update_instructions(instructions)
