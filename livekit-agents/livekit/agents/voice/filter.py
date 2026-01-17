@@ -110,6 +110,11 @@ class InterruptionFilter:
         words = normalized_text.split()
         if not words:
             return False
+        normalized_phrase = " ".join(words)
+        if normalized_phrase in self._ignore_words:
+            logger.debug("Detected backchanneling: '%s' - ignoring interruption", text)
+        return True
+
 
         for word in words:
             if word not in self._ignore_words:
