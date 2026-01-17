@@ -6,7 +6,6 @@ import string
 
 logger = logging.getLogger(__name__)
 
-
 class InterruptionFilter:
     """
     Filters interruptions based on what the user said and whether the agent is speaking.
@@ -106,9 +105,8 @@ class InterruptionFilter:
         if not self._case_sensitive:
             normalized_text = normalized_text.lower()
 
-        normalized_text = normalized_text.translate(
-            str.maketrans("", "", string.punctuation)
-        )
+        translator: dict[int, int | None] = str.maketrans("", "", string.punctuation)
+        normalized_text = normalized_text.translate(translator)
 
         words = normalized_text.split()
         if not words:
