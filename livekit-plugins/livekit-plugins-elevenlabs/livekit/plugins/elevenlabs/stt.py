@@ -124,7 +124,6 @@ class STT(stt.STT):
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
-
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=use_realtime,
