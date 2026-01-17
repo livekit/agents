@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import string
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,6 @@ class InterruptionFilter:
     Allows all input when agent is silent.
     """
 
-    # Default words that should be ignored when agent is speaking
     DEFAULT_IGNORE_WORDS: set[str] = {
         "yeah",
         "ok",
@@ -42,10 +42,18 @@ class InterruptionFilter:
         enabled: bool = True,
         case_sensitive: bool = False,
     ) -> None:
+        """Initialize the InterruptionFilter.
+
+        Args:
+            ignore_words: Custom list of words to ignore. If None, loads from
+                LIVEKIT_INTERRUPTION_IGNORE_WORDS environment variable or
+                DEFAULT_IGNORE_WORDS.
+            enabled: Whether the interruption filter is active. Defaults to True.
+            case_sensitive: Whether word matching is case-sensitive. Defaults to False.
+        """
         self._enabled = enabled
         self._case_sensitive = case_sensitive
 
-        # Load ignore words from parameter, environment variable, or default
         if ignore_words is not None:
             self._ignore_words = set(ignore_words)
         else:
@@ -84,10 +92,7 @@ class InterruptionFilter:
         transcribed_text: str,
         agent_is_speaking: bool,
     ) -> bool:
-        if not self._enabled:
-            return False
-
-        if not agent_is_speaking:
+        if not self._enabled or not agent_is_speaking:
             return False
 
         return self._is_backchanneling(transcribed_text)
@@ -107,11 +112,12 @@ class InterruptionFilter:
         words = normalized_text.split()
         if not words:
             return False
+
         normalized_phrase = " ".join(words)
+
         if normalized_phrase in self._ignore_words:
             logger.debug("Detected backchanneling: '%s' - ignoring interruption", text)
             return True
-
 
         for word in words:
             if word not in self._ignore_words:
