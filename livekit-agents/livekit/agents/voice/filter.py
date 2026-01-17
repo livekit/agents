@@ -31,7 +31,8 @@ class InterruptionFilter:
         "yep",
         "yup",
         "gotcha",
-        "got it",
+        "got",
+        "it",
         "alright",
         "cool",
     }
