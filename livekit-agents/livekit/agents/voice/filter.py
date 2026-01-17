@@ -100,11 +100,8 @@ class InterruptionFilter:
         if not self._case_sensitive:
             normalized_text = normalized_text.lower()
 
-        normalized_text = (
-            normalized_text.replace(".", "")
-            .replace(",", "")
-            .replace("!", "")
-            .replace("?", "")
+        normalized_text = normalized_text.translate(
+            str.maketrans("", "", string.punctuation)
         )
 
         words = normalized_text.split()
@@ -113,7 +110,7 @@ class InterruptionFilter:
         normalized_phrase = " ".join(words)
         if normalized_phrase in self._ignore_words:
             logger.debug("Detected backchanneling: '%s' - ignoring interruption", text)
-        return True
+            return True
 
 
         for word in words:
