@@ -776,6 +776,9 @@ def _streaming_recognize_response_to_speech_data(
     min_confidence_threshold: float,
     start_time_offset: float,
 ) -> stt.SpeechData | None:
+    if not resp.results:
+        return None
+
     text = ""
     confidence = 0.0
     final_result = None
