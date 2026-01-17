@@ -80,8 +80,12 @@ class FakeAudioOutput(AudioOutput):
             self._flush_handle.cancel()
 
         self._flush_handle = None
+        elapsed_time = time.time() - self._start_time
         self.on_playback_finished(
-            playback_position=min(self._pushed_duration, time.time() - self._start_time),
+            playback_position=min(
+                self._pushed_duration,
+                self._pushed_duration - max(0.0, self._pushed_duration - elapsed_time),
+            ),
             interrupted=True,
             synchronized_transcript=None,
         )
