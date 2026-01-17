@@ -442,32 +442,32 @@ class STT(stt.STT):
             total_tokens = 0
             audio_tokens = 0
             text_tokens = 0
-            if hasattr(resp, 'usage') and resp.usage:
+            if hasattr(resp, "usage") and resp.usage:
                 usage = resp.usage
-                input_tokens = getattr(usage, 'input_tokens', 0)
-                output_tokens = getattr(usage, 'output_tokens', 0)
-                total_tokens = getattr(usage, 'total_tokens', 0)
-                
-                # Extract detailed token breakdown
-                if hasattr(usage, 'input_token_details') and usage.input_token_details:
-                    details = usage.input_token_details
-                    audio_tokens = getattr(details, 'audio_tokens', 0)
-                    text_tokens = getattr(details, 'text_tokens', 0)
+                input_tokens = getattr(usage, "input_tokens", 0)
+                output_tokens = getattr(usage, "output_tokens", 0)
+                total_tokens = getattr(usage, "total_tokens", 0)
 
-                # Create the speech event with token usage
+                # Extract detailed token breakdown
+                if hasattr(usage, "input_token_details") and usage.input_token_details:
+                    details = usage.input_token_details
+                    audio_tokens = getattr(details, "audio_tokens", 0)
+                    text_tokens = getattr(details, "text_tokens", 0)
+
+            # Create the speech event with token usage
             speech_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[sd],
+                token_usage={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                    "audio_tokens": audio_tokens,
+                    "text_tokens": text_tokens,
+                }
+                if (input_tokens > 0 or output_tokens > 0 or total_tokens > 0)
+                else None,
             )
-            # Store token usage in the event for metrics collection
-            # We'll attach this as a custom attribute
-            speech_event._token_usage = {
-                'input_tokens': input_tokens,
-                'output_tokens': output_tokens,
-                'total_tokens': total_tokens,
-                'audio_tokens': audio_tokens,
-                'text_tokens': text_tokens,
-            }
             return speech_event
 
         except openai.APITimeoutError:
