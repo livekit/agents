@@ -98,7 +98,7 @@ All 4 test scenarios should pass.
 
 ## Implementation Details
 
-The filter is in `interruption_filter.py`. It's integrated into `agent_activity.py` in the `_interrupt_by_audio_activity()` method.
+The filter is in `filter.py`. It's integrated into `agent_activity.py` in the `_interrupt_by_audio_activity()` method.
 
 When an interruption is detected, it checks the transcript and agent state before deciding whether to actually interrupt.
 
