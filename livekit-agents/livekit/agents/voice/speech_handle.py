@@ -171,7 +171,9 @@ class SpeechHandle:
             asyncio.gather(*aw, return_exceptions=True),
             self._interrupt_fut,
         ]
-        await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
+        _, pending = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
+        if pending:
+            await utils.aio.cancel_and_wait(*pending)
 
     def _cancel(self) -> SpeechHandle:
         if self.done():

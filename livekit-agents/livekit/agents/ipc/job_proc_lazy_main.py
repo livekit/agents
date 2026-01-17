@@ -131,12 +131,11 @@ class _InfClient(InferenceExecutor):
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         request_id = shortuuid("inference_job_")
         fut = asyncio.Future[InferenceResponse]()
+        self._active_requests[request_id] = fut
 
         await self._client.send(
             InferenceRequest(request_id=request_id, method=method, data=data),
         )
-
-        self._active_requests[request_id] = fut
 
         inf_resp = await fut
         if inf_resp.error:
