@@ -29,7 +29,6 @@ class UsageSummary:
     stt_audio_tokens: int = 0
     stt_text_tokens: int = 0
 
-    
     # properties for naming consistency: prompt = input, completion = output
     @property
     def llm_input_tokens(self) -> int:
