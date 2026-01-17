@@ -65,7 +65,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
-from .interruption_filter import InterruptionFilter
+from .filter import InterruptionFilter
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
