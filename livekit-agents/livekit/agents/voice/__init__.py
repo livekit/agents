@@ -32,14 +32,11 @@ __all__ = [
     "ModelSettings",
     "AgentSession",
     "VoiceActivityVideoSampler",
-
     # Speech / transcription
     "SpeechHandle",
     "TranscriptSynchronizer",
-
     # Interruption handling
     "InterruptionFilter",
-
     # Events
     "AgentEvent",
     "AgentFalseInterruptionEvent",
@@ -53,12 +50,10 @@ __all__ = [
     "ErrorEvent",
     "CloseEvent",
     "CloseReason",
-
     # IO / results
     "RunContext",
     "io",
     "run_result",
-
     # Internal outputs (intentionally exported)
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",

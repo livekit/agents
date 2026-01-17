@@ -1186,8 +1186,7 @@ class AgentActivity(RecognitionHooks):
             if len(split_words(transcript, split_character=True)) < opt.min_interruption_words:
                 return
         agent_is_speaking = (
-            self._current_speech is not None
-            and not self._current_speech.interrupted
+            self._current_speech is not None and not self._current_speech.interrupted
         )
 
         if self._interruption_filter.should_ignore_interruption(

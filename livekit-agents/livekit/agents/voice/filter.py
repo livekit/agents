@@ -59,11 +59,7 @@ class InterruptionFilter:
             else:
                 raw_words = self.DEFAULT_IGNORE_WORDS.copy()
 
-        self._ignore_words = {
-            self._normalize_text(word)
-            for word in raw_words
-            if word.strip()
-        }
+        self._ignore_words = {self._normalize_text(word) for word in raw_words if word.strip()}
 
         logger.info(
             "InterruptionFilter initialized with %d ignore words, enabled=%s, case_sensitive=%s",
