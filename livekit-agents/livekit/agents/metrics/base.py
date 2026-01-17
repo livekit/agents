@@ -38,6 +38,19 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    
+    # NEW: Token usage fields
+    input_tokens: int = 0
+    """Total input tokens used (audio + text tokens)."""
+    output_tokens: int = 0
+    """Total output tokens generated."""
+    total_tokens: int = 0
+    """Total tokens used (input + output)."""
+    audio_tokens: int = 0
+    """Number of audio tokens in input."""
+    text_tokens: int = 0
+    """Number of text tokens in input (e.g., from prompt)."""
+
     metadata: Metadata | None = None
 
 
