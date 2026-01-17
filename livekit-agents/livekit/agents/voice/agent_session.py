@@ -253,6 +253,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
+            interruption_filter_enabled (bool): Whether to enable the interruption
+                filter that ignores backchanneling words (e.g., "yeah", "ok")
+                when the agent is speaking. Default ``True``.
+
+            interruption_ignore_words (list[str], optional): Custom list of
+                backchanneling words to ignore. If ``None``, the default
+                ignore-word set is used.
+
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
