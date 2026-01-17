@@ -142,7 +142,7 @@ ignore_missing_imports = true
 module = "speechmatics.*"
 follow_untyped_imports = true
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "examples/**" = ["UP045", "UP007", "F541"]
 "livekit-agents/livekit/agents/cli/**" = ["UP045", "UP007"]
 
