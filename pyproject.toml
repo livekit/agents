@@ -141,3 +141,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "speechmatics.*"
 follow_untyped_imports = true
+
+[tool.ruff.per-file-ignores]
+"examples/**" = ["UP045", "UP007"]
+"livekit-agents/livekit/agents/cli/**" = ["UP045", "UP007"]
+
