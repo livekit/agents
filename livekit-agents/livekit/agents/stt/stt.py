@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import TypedDict
 
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
@@ -66,12 +67,32 @@ class RecognitionUsage:
     audio_duration: float
 
 
+class STTTokenUsage(TypedDict, total=False):
+    """Token usage information from STT transcription.
+
+    All fields are optional as not all STT providers support token usage tracking.
+    """
+
+    input_tokens: int
+    """Total input tokens used (audio + text tokens)."""
+    output_tokens: int
+    """Total output tokens generated."""
+    total_tokens: int
+    """Total tokens used (input + output)."""
+    audio_tokens: int
+    """Number of audio tokens in input."""
+    text_tokens: int
+    """Number of text tokens in input (e.g., from prompt)."""
+
+
 @dataclass
 class SpeechEvent:
     type: SpeechEventType
     request_id: str = ""
     alternatives: list[SpeechData] = field(default_factory=list)
     recognition_usage: RecognitionUsage | None = None
+    token_usage: STTTokenUsage | None = None
+    """Token usage information from STT transcription, if available."""
 
 
 @dataclass
@@ -170,16 +191,15 @@ class STT(
                     total_tokens = 0
                     audio_tokens = 0
                     text_tokens = 0
-                    
-                    if hasattr(event, '_token_usage') and event._token_usage:
-                        usage = event._token_usage
-                        input_tokens = usage.get('input_tokens', 0)
-                        output_tokens = usage.get('output_tokens', 0)
-                        total_tokens = usage.get('total_tokens', 0)
-                        audio_tokens = usage.get('audio_tokens', 0)
-                        text_tokens = usage.get('text_tokens', 0)
 
-                    
+                    if event.token_usage:
+                        usage = event.token_usage
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+                        total_tokens = usage.get("total_tokens", 0)
+                        audio_tokens = usage.get("audio_tokens", 0)
+                        text_tokens = usage.get("text_tokens", 0)
+
                     stt_metrics = STTMetrics(
                         request_id=event.request_id,
                         timestamp=time.time(),
