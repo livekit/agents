@@ -602,10 +602,14 @@ class SpeechStream(stt.SpeechStream):
                     )
                     has_started = True
 
-                if resp.speech_event_type == (
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
-                    if self._config.version == 2
-                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                if (
+                    resp.speech_event_type
+                    == (
+                        cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                        if self._config.version == 2
+                        else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
+                    )
+                    and resp.results
                 ):
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(
@@ -776,9 +780,6 @@ def _streaming_recognize_response_to_speech_data(
     min_confidence_threshold: float,
     start_time_offset: float,
 ) -> stt.SpeechData | None:
-    if not resp.results:
-        return None
-
     text = ""
     confidence = 0.0
     final_result = None

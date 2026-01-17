@@ -133,9 +133,15 @@ class _InfClient(InferenceExecutor):
         fut = asyncio.Future[InferenceResponse]()
         self._active_requests[request_id] = fut
 
-        await self._client.send(
-            InferenceRequest(request_id=request_id, method=method, data=data),
-        )
+        try:
+            await self._client.send(
+                InferenceRequest(request_id=request_id, method=method, data=data),
+            )
+        except Exception:
+            if not fut.done():
+                fut.cancel()
+            self._active_requests.pop(request_id, None)
+            raise
 
         inf_resp = await fut
         if inf_resp.error:

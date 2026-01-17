@@ -172,8 +172,8 @@ class SpeechHandle:
             self._interrupt_fut,
         ]
         _, pending = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
-        if pending:
-            await utils.aio.cancel_and_wait(*pending)
+        if cancellable := [fut for fut in pending if fut is not self._interrupt_fut]:
+            await utils.aio.cancel_and_wait(*cancellable)
 
     def _cancel(self) -> SpeechHandle:
         if self.done():
