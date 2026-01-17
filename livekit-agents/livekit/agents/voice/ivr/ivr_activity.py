@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -25,8 +25,8 @@ class IVRActivity:
         self._max_silence_duration = max_silence_duration
         self._loop_detector = TfidfLoopDetector()
 
-        self._current_user_state: Optional[str] = None  # noqa: UP007
-        self._current_agent_state: Optional[str] = None  # noqa: UP007
+        self._current_user_state: str | None = None  # noqa: UP007
+        self._current_agent_state: str | None = None  # noqa: UP007
         self._debounced_silence = Debounced(self._on_silence_detected, max_silence_duration)
         self._last_should_schedule_check: bool | None = None
 

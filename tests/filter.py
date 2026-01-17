@@ -101,10 +101,7 @@ class InterruptionFilter:
             normalized_text = normalized_text.lower()
 
         normalized_text = (
-            normalized_text.replace(".", "")
-            .replace(",", "")
-            .replace("!", "")
-            .replace("?", "")
+            normalized_text.replace(".", "").replace(",", "").replace("!", "").replace("?", "")
         )
 
         words = normalized_text.split()
