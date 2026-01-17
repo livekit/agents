@@ -16,7 +16,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
-from .interruption_filter import InterruptionFilter
+from .filter import InterruptionFilter
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
