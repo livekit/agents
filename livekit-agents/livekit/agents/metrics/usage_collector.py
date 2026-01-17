@@ -22,6 +22,14 @@ class UsageSummary:
     tts_audio_duration: float = 0.0
     stt_audio_duration: float = 0.0
 
+    # STT token usage tracking fields
+    stt_input_tokens: int = 0
+    stt_output_tokens: int = 0
+    stt_total_tokens: int = 0
+    stt_audio_tokens: int = 0
+    stt_text_tokens: int = 0
+
+    
     # properties for naming consistency: prompt = input, completion = output
     @property
     def llm_input_tokens(self) -> int:
@@ -87,6 +95,11 @@ class UsageCollector:
 
         elif isinstance(metrics, STTMetrics):
             self._summary.stt_audio_duration += metrics.audio_duration
+            self._summary.stt_input_tokens += metrics.input_tokens
+            self._summary.stt_output_tokens += metrics.output_tokens
+            self._summary.stt_total_tokens += metrics.total_tokens
+            self._summary.stt_audio_tokens += metrics.audio_tokens
+            self._summary.stt_text_tokens += metrics.text_tokens
 
     def get_summary(self) -> UsageSummary:
         return deepcopy(self._summary)
