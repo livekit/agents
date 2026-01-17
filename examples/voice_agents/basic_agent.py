@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -21,6 +22,13 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
 
+# Import our custom interruption filter
+from interruption_filter import InterruptionFilter
+
+# Apply Backchannel Monkeypatch
+import backchannel_patch
+backchannel_patch.apply_patch()
+
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
@@ -35,11 +43,87 @@ class MyAgent(Agent):
             "You are curious and friendly, and have a sense of humor."
             "you will speak english to the user",
         )
+        
+        # Initialize the interruption filter
+        self.interruption_filter = InterruptionFilter()
+        
+        # Track agent speaking state
+        self.agent_is_speaking = False
+        
+        # Queue for pending interruption checks
+        self.pending_interruption_check = None
+        self.interruption_check_delay = 0.15  # 150ms buffer for STT to produce transcript
 
     async def on_enter(self):
+        # Set up event listeners for intelligent interruption handling
+        self.session.on("agent_state_changed", self._on_agent_state_changed)
+        self.session.on("user_input_transcribed", self._on_user_input_transcribed)
+        
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
         self.session.generate_reply()
+    
+    def _on_agent_state_changed(self, event):
+        """Track when the agent starts/stops speaking."""
+        old_state = event.old_state
+        new_state = event.new_state
+        
+        # Update our speaking state tracker
+        self.agent_is_speaking = (new_state == "speaking")
+        
+        logger.debug(
+            f"Agent state changed: {old_state} -> {new_state}, "
+            f"is_speaking={self.agent_is_speaking}"
+        )
+    
+    def _on_user_input_transcribed(self, event):
+        """Handle user transcription and filter interruptions intelligently."""
+        transcript = event.transcript
+        is_final = event.is_final
+        
+        # Log the transcription
+        logger.debug(
+            f"User transcript: '{transcript}' (final={is_final}, "
+            f"agent_speaking={self.agent_is_speaking})"
+        )
+        
+        # For interim transcripts, we can do early filtering
+        # This helps reduce latency in blocking unwanted interruptions
+        if not is_final and self.agent_is_speaking:
+            # Quick check: if this is clearly backchannel, we can preemptively
+            # signal that we don't want to interrupt
+            should_interrupt = self.interruption_filter.should_interrupt(
+                transcript, self.agent_is_speaking
+            )
+            
+            if not should_interrupt:
+                logger.info(
+                    f"FILTERING: Interim transcript '{transcript}' identified as "
+                    f"backchannel during agent speech - will suppress interruption"
+                )
+        
+        # For final transcripts, make the definitive decision
+        if is_final:
+            should_interrupt = self.interruption_filter.should_interrupt(
+                transcript, self.agent_is_speaking
+            )
+            
+            if not should_interrupt and self.agent_is_speaking:
+                logger.info(
+                    f"🚫 BLOCKING INTERRUPTION: Final transcript '{transcript}' is "
+                    f"backchannel - agent will continue speaking"
+                )
+                # Clear the user turn to prevent further processing
+                try:
+                    self.session.clear_user_turn()
+                    logger.debug("✓ Cleared user turn - interruption blocked")
+                except Exception as e:
+                    logger.warning(f"Could not clear user turn: {e}")
+            else:
+                logger.debug(
+                    f"ALLOWING INTERRUPTION: transcript='{transcript}', "
+                    f"agent_speaking={self.agent_is_speaking}"
+                )
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -100,6 +184,8 @@ async def entrypoint(ctx: JobContext):
         # when it's detected, you may resume the agent's speech
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
+        # Enable backchannel filtering: require at least 1 word to trigger the filter
+        min_interruption_words=1,
     )
 
     # log metrics as they are emitted, and total usage after session is over

@@ -38,6 +38,128 @@ from ..metrics import (
 from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+
+# =============================================================================
+# BACKCHANNEL WORD FILTERING
+# These words are ignored when the agent is speaking to prevent unwanted interruptions
+# =============================================================================
+BACKCHANNEL_WORDS = {
+    "yeah", "yea", "yes", "yep", "yup",
+    "ok", "okay", "alright", "aight",
+    "hmm", "hm", "mhm", "mmhmm", "uh-huh", "uhuh", "uh", "huh",
+    "right", "sure", "gotcha",
+    "aha", "ah", "oh", "ooh",
+    "mm", "mhmm", "mmm", "hey"
+}
+
+# Command words that ALWAYS trigger interruption even during agent speech
+COMMAND_WORDS = {
+    "stop", "wait", "hold", "pause", "no", "nope", "don't"
+}
+
+# Track the last processed transcript to extract delta
+_last_processed_transcript: str = ""
+
+def _extract_words(text: str) -> list:
+    """Extract words from text, removing punctuation."""
+    import re
+    if not text:
+        return []
+    normalized = text.lower().strip()
+    return [w for w in re.sub(r'[^\w\s-]', ' ', normalized).split() if w]
+
+def _get_transcript_delta(full_transcript: str) -> str:
+    """
+    Get only the NEW portion of the transcript since the last processed turn.
+    This is crucial for detecting backchannel in accumulated transcripts.
+    """
+    global _last_processed_transcript
+    
+    if not full_transcript:
+        return ""
+    
+    # Normalize both transcripts
+    full_words = _extract_words(full_transcript)
+    last_words = _extract_words(_last_processed_transcript)
+    
+    if not full_words:
+        return ""
+    
+    if not last_words:
+        # No previous transcript, return last few words (typical backchannel length)
+        return " ".join(full_words[-3:])
+    
+    # Find where the new words start
+    # The new words are whatever comes AFTER the last processed words
+    last_len = len(last_words)
+    full_len = len(full_words)
+    
+    if full_len <= last_len:
+        # Nothing new or same length, return last few words
+        return " ".join(full_words[-3:])
+    
+    # Extract delta (new words only)
+    delta_words = full_words[last_len:]
+    return " ".join(delta_words)
+
+def _update_last_transcript(transcript: str) -> None:
+    """Update the last processed transcript."""
+    global _last_processed_transcript
+    _last_processed_transcript = transcript
+
+def _is_backchannel_only(text: str) -> bool:
+    """Check if the transcript contains only backchannel words."""
+    if not text or not text.strip():
+        return True
+    
+    words = _extract_words(text)
+    
+    if not words:
+        return True
+    
+    # Check for command words first - these always interrupt
+    for word in words:
+        if word in COMMAND_WORDS:
+            return False  # Contains command, NOT backchannel-only
+    
+    # Check if ALL words are backchannel
+    for word in words:
+        if word in BACKCHANNEL_WORDS:
+            continue
+        # Handle hyphenated words like "uh-huh"
+        if '-' in word:
+            parts = word.split('-')
+            if all(p in BACKCHANNEL_WORDS for p in parts if p):
+                continue
+        # Word is not backchannel
+        return False
+    
+    return True
+
+def _check_backchannel_delta(full_transcript: str) -> bool:
+    """
+    Check if the DELTA (new words) in the transcript is backchannel-only.
+    Returns True if delta is backchannel, False if it should interrupt.
+    """
+    delta = _get_transcript_delta(full_transcript)
+    
+    if not delta:
+        # No new words, treat as backchannel (don't interrupt)
+        return True
+    
+    is_bc = _is_backchannel_only(delta)
+    
+    if is_bc:
+        logger.info(
+            f"🛡️ [DELTA FILTER] Transcript delta '{delta}' is backchannel - blocking turn"
+        )
+    else:
+        logger.debug(
+            f"✅ [DELTA FILTER] Transcript delta '{delta}' is NOT backchannel - allowing turn"
+        )
+    
+    return is_bc
+# =============================================================================
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
@@ -1184,6 +1306,13 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < opt.min_interruption_words:
                 return
+            
+            # BACKCHANNEL FILTERING: Block interruption if transcript delta is only backchannel words
+            if _check_backchannel_delta(text):
+                logger.debug(
+                    f"🚫 [AUDIO FILTER] Blocking audio interruption - delta is backchannel"
+                )
+                return
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -1378,6 +1507,22 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             # avoid interruption if the new_transcript is too short
             return False
+        
+        # BACKCHANNEL FILTERING: Skip turn if the DELTA (new words since last turn)
+        # contains only backchannel words and agent is currently speaking
+        if (
+            self._current_speech is not None
+            and not self._current_speech.interrupted
+            and _check_backchannel_delta(info.new_transcript)
+        ):
+            self._cancel_preemptive_generation()
+            logger.info(
+                f"🚫 [BACKCHANNEL FILTER] Ignoring turn - delta is backchannel during agent speech"
+            )
+            return False
+        
+        # Update the last processed transcript for delta calculation
+        _update_last_transcript(info.new_transcript)
 
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(
