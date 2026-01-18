@@ -91,12 +91,6 @@ class FakeAudioOutput(AudioOutput):
             synchronized_transcript=None,
         )
         self._pushed_duration = 0.0
-        self.on_playback_finished(
-            playback_position=played_duration,
-            interrupted=True,
-            synchronized_transcript=None,
-        )
-        self._pushed_duration = 0.0
 
 
 class FakeTextOutput(TextOutput):
