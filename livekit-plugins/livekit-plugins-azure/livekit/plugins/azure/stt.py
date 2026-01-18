@@ -282,6 +282,8 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = self._opts.language[0]
 
+        audio_duration = evt.result.duration / 10**7  # Convert from 100ns ticks to seconds
+
         # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
         final_data = stt.SpeechData(
             language=detected_lg,
@@ -296,6 +298,27 @@ class SpeechStream(stt.SpeechStream):
                 self._event_ch.send_nowait,
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
+                ),
+            )
+            # Emit usage metrics after final transcript
+            # Azure doesn't provide token counts, so we set them to 0
+            # but track audio duration for billing purposes
+            self._loop.call_soon_threadsafe(
+                self._emit_recognition_usage,
+                evt.result.result_id,
+                audio_duration,
+            )
+
+    def _emit_recognition_usage(self, request_id: str, audio_duration: float) -> None:
+        """Emit usage metrics for Azure STT (duration-based, no tokens)"""
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(
+                self._event_ch.send_nowait,
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    request_id=request_id,
+                    alternatives=[],
+                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
                 ),
             )
 
