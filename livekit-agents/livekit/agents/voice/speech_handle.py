@@ -168,7 +168,7 @@ class SpeechHandle:
 
     async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future[Any]]) -> None:
         fs: list[asyncio.Future[Any]] = [
-            asyncio.gather(*aw, return_exceptions=True),
+            asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True),
             self._interrupt_fut,
         ]
         _, pending = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
