@@ -311,16 +311,14 @@ class SpeechStream(stt.SpeechStream):
 
     def _emit_recognition_usage(self, request_id: str, audio_duration: float) -> None:
         """Emit usage metrics for Azure STT (duration-based, no tokens)"""
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    request_id=request_id,
-                    alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
-                ),
-            )
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                request_id=request_id,
+                alternatives=[],
+                recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+            ),
+        )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
