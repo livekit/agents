@@ -1208,7 +1208,10 @@ class AgentActivity(RecognitionHooks):
     # region recognition hooks
 
     def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
-        self._session._update_user_state("speaking")
+        speech_start_time = time.time()
+        if ev:
+            speech_start_time = speech_start_time - ev.speech_duration
+        self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         self._user_silence_event.clear()
 
         if self._false_interruption_timer:
@@ -1421,8 +1424,8 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.commit_audio()
 
-        if self._current_speech is not None:
-            if not self._current_speech.allow_interruptions:
+        if (current_speech := self._current_speech) is not None:
+            if not current_speech.allow_interruptions:
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"user_input": info.new_transcript},
@@ -1430,8 +1433,7 @@ class AgentActivity(RecognitionHooks):
                 return
             await self._interrupt_paused_speech(self._interrupt_paused_speech_task)
 
-            if self._current_speech:
-                await self._current_speech.interrupt()
+            await current_speech.interrupt()
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
@@ -1607,7 +1609,7 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
     ) -> None:
-        current_span = trace.get_current_span()
+        current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
         tr_output = (
@@ -1650,10 +1652,23 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            try:
+                started_speaking_at = fut.result() or time.time()
+            except BaseException:
+                return
+
+            self._session._update_agent_state(
+                "speaking",
+                start_time=started_speaking_at,
+                otel_context=speech_handle._agent_turn_context,
+            )
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1726,7 +1741,11 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted and audio_output is not None:
             playback_ev = await audio_output.wait_for_playout()
 
-            if audio_out is not None and audio_out.first_frame_fut.done():
+            if (
+                audio_out is not None
+                and audio_out.first_frame_fut.done()
+                and not audio_out.first_frame_fut.cancelled()
+            ):
                 if playback_ev.synchronized_transcript is not None:
                     forwarded_text = playback_ev.synchronized_transcript
             else:
@@ -1801,7 +1820,7 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
-        current_span = trace.get_current_span()
+        current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
@@ -1921,10 +1940,23 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            try:
+                started_speaking_at = fut.result() or time.time()
+            except BaseException:
+                return
+
+            self._session._update_agent_state(
+                "speaking",
+                start_time=started_speaking_at,
+                otel_context=speech_handle._agent_turn_context,
+            )
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2007,7 +2039,11 @@ class AgentActivity(RecognitionHooks):
                 audio_output.clear_buffer()
 
                 playback_ev = await audio_output.wait_for_playout()
-                if audio_out is not None and audio_out.first_frame_fut.done():
+                if (
+                    audio_out is not None
+                    and audio_out.first_frame_fut.done()
+                    and not audio_out.first_frame_fut.cancelled()
+                ):
                     # playback_ev is valid only if the first frame was already played
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
@@ -2235,7 +2271,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
     ) -> None:
-        current_span = trace.get_current_span()
+        current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
 
         room_io = self._session._room_io
@@ -2273,10 +2309,23 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
 
-        def _on_first_frame(_: asyncio.Future[None]) -> None:
+        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+            """
+            Callback to update the agent state when the first frame is captured:
+            1. _AudioOutput.first_frame_fut (float)
+            2. _TextOutput.first_text_fut (None)
+            """
             nonlocal started_speaking_at
-            started_speaking_at = time.time()
-            self._session._update_agent_state("speaking")
+            try:
+                started_speaking_at = fut.result() or time.time()
+            except BaseException:
+                return
+
+            self._session._update_agent_state(
+                "speaking",
+                start_time=started_speaking_at,
+                otel_context=speech_handle._agent_turn_context,
+            )
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -2484,7 +2533,11 @@ class AgentActivity(RecognitionHooks):
 
                     playback_ev = await audio_output.wait_for_playout()
                     playback_position = playback_ev.playback_position
-                    if audio_out is not None and audio_out.first_frame_fut.done():
+                    if (
+                        audio_out is not None
+                        and audio_out.first_frame_fut.done()
+                        and not audio_out.first_frame_fut.cancelled()
+                    ):
                         # playback_ev is valid only if the first frame was already played
                         if playback_ev.synchronized_transcript is not None:
                             forwarded_text = playback_ev.synchronized_transcript
@@ -2676,7 +2729,8 @@ class AgentActivity(RecognitionHooks):
                 and not self._paused_speech.done()
             ):
                 self._session._update_agent_state(
-                    "speaking", otel_context=self._paused_speech._agent_turn_context
+                    "speaking",
+                    otel_context=self._paused_speech._agent_turn_context,
                 )
                 audio_output.resume()
                 resumed = True
