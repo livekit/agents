@@ -710,6 +710,11 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
 
+        if self.mcp_servers:
+            await asyncio.gather(
+                *(mcp_server.aclose() for mcp_server in self.mcp_servers), return_exceptions=True
+            )
+
         await self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
         self._interrupt_paused_speech_task = None
 
