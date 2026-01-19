@@ -167,13 +167,19 @@ class SpeechHandle:
         self._done_callbacks.discard(callback)
 
     async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future[Any]]) -> None:
-        fs: list[asyncio.Future[Any]] = [
-            asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True),
-            self._interrupt_fut,
-        ]
-        _, pending = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
-        if cancellable := [fut for fut in pending if fut is not self._interrupt_fut]:
-            await utils.aio.cancel_and_wait(*cancellable)
+        # wrap each future in shield so we don't cancel them when we cancel the gather future
+        gather_fut = asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True)
+        _, pending = await asyncio.wait(
+            [
+                gather_fut,
+                self._interrupt_fut,
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if gather_fut in pending:
+            with contextlib.suppress(asyncio.CancelledError):
+                gather_fut.cancel()
+                await gather_fut
 
     def _cancel(self) -> SpeechHandle:
         if self.done():
