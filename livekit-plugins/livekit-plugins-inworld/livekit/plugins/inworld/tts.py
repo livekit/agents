@@ -106,6 +106,7 @@ class _ContextInfo:
     waiter: asyncio.Future[None] | None = None
     segment_started: bool = False
     created_at: float = field(default_factory=time.time)
+    close_started_at: float | None = None
 
 
 @dataclass
@@ -251,8 +252,9 @@ class _InworldConnection:
                 raise APITimeoutError()
 
             try:
-                self._context_available.clear()
                 await asyncio.wait_for(self._context_available.wait(), timeout=remaining)
+                # Clear after wait returns to avoid lost-wakeup race
+                self._context_available.clear()
             except asyncio.TimeoutError:
                 raise APITimeoutError() from None
 
@@ -275,6 +277,7 @@ class _InworldConnection:
         ctx = self._contexts.get(context_id)
         if ctx:
             ctx.state = _ContextState.CLOSING
+            ctx.close_started_at = time.time()
         try:
             self._outbound_queue.put_nowait(_CloseContextMsg(context_id=context_id))
         except asyncio.QueueFull:
@@ -366,8 +369,15 @@ class _InworldConnection:
                 status = result.get("status", {})
                 if status.get("code", 0) != 0:
                     error = APIError(f"Inworld error: {status.get('message', 'Unknown error')}")
-                    if ctx and ctx.waiter and not ctx.waiter.done():
-                        ctx.waiter.set_exception(error)
+                    if ctx:
+                        if ctx.waiter and not ctx.waiter.done():
+                            ctx.waiter.set_exception(error)
+                        # Release the stuck context and signal capacity
+                        self._contexts.pop(context_id, None)
+                        self._last_activity = time.time()
+                        self._context_available.set()
+                        if self._on_capacity_available:
+                            self._on_capacity_available()
                     continue
 
                 if not ctx:
@@ -417,7 +427,12 @@ class _InworldConnection:
             await asyncio.sleep(60.0)
             now = time.time()
             for ctx in list(self._contexts.values()):
-                if ctx.state == _ContextState.CLOSING and now - ctx.created_at > 120.0:
+                # Use close_started_at if available, otherwise fall back to created_at
+                close_time = ctx.close_started_at or ctx.created_at
+                if ctx.state == _ContextState.CLOSING and now - close_time > 120.0:
+                    # Resolve waiter before evicting
+                    if ctx.waiter and not ctx.waiter.done():
+                        ctx.waiter.set_result(None)
                     self._contexts.pop(ctx.context_id, None)
                     self._last_activity = now
                     self._context_available.set()
@@ -518,6 +533,9 @@ class _ConnectionPool:
                 if self._cleanup_task is None:
                     self._cleanup_task = asyncio.create_task(self._cleanup_idle_connections())
 
+                # Prune closed connections first
+                self._connections = [c for c in self._connections if not c._closed]
+
                 # First, try to find a connection with capacity
                 for conn in self._connections:
                     if not conn._closed and conn.has_capacity:
@@ -543,7 +561,7 @@ class _ConnectionPool:
                     return ctx_id, waiter, conn
 
                 # At max connections and all at capacity - wait for one to free up
-                self._capacity_available.clear()
+                pass
 
             # Wait outside the lock
             elapsed = time.time() - start_time
@@ -556,6 +574,8 @@ class _ConnectionPool:
                     self._capacity_available.wait(),
                     timeout=remaining_timeout,
                 )
+                # Clear after wait returns to avoid lost-wakeup race
+                self._capacity_available.clear()
             except asyncio.TimeoutError:
                 raise APITimeoutError(
                     "Timed out waiting for available connection capacity"
