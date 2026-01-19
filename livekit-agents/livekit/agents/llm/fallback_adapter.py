@@ -92,6 +92,7 @@ class FallbackAdapter(
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         return FallbackLLMStream(
@@ -101,6 +102,7 @@ class FallbackAdapter(
             tools=tools or [],
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            response_format=response_format,
             extra_kwargs=extra_kwargs,
         )
 
@@ -124,12 +126,14 @@ class FallbackLLMStream(LLMStream):
         conn_options: APIConnectOptions,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._fallback_adapter = llm
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
+        self._response_format = response_format
         self._extra_kwargs = extra_kwargs
 
         self._current_stream: LLMStream | None = None
@@ -164,6 +168,7 @@ class FallbackLLMStream(LLMStream):
                 tools=self._tools,
                 parallel_tool_calls=self._parallel_tool_calls,
                 tool_choice=self._tool_choice,
+                response_format=self._response_format,
                 extra_kwargs=self._extra_kwargs,
                 conn_options=dataclasses.replace(
                     self._conn_options,

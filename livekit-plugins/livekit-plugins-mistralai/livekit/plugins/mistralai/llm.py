@@ -90,9 +90,6 @@ class LLM(llm.LLM):
         if is_given(tool_choice):
             extra["tool_choice"] = tool_choice
 
-        if is_given(response_format):
-            extra["response_format"] = response_format
-
         return LLMStream(
             self,
             model=self._opts.model,
