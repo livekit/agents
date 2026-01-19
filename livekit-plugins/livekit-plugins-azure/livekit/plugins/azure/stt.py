@@ -83,23 +83,23 @@ class STT(stt.STT):
         true_text_post_processing: bool = False,
     ):
         """
-                Create a new instance of Azure STT.
+        Create a new instance of Azure STT.
 
-                Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
-                ``speech_auth_token`` and ``speech_region`` or
-                ``speech_key`` and ``speech_endpoint``
-                must be set using arguments.
-                    Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
-                and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
-                ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
+        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
+        ``speech_auth_token`` and ``speech_region`` or
+        ``speech_key`` and ``speech_endpoint``
+        must be set using arguments.
+         Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
+        and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
+        ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
 
-                Args:
-                    phrase_list: List of words or phrases to boost recognition accuracy.
-                                Azure will give higher priority to these phrases during recognition.
-                    explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
-                                where punctuation marks are added explicitly. If False (default), uses Azure's
-                                default punctuation behavior.
-        +           true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
+        Args:
+            phrase_list: List of words or phrases to boost recognition accuracy.
+                        Azure will give higher priority to these phrases during recognition.
+            explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
+                        where punctuation marks are added explicitly. If False (default), uses Azure's
+                        default punctuation behavior.
+            true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
         """
 
         super().__init__(
