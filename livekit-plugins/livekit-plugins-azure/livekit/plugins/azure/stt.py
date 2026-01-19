@@ -58,6 +58,7 @@ class STTOptions:
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
+    true_text_post_processing: bool = False
 
 
 class STT(stt.STT):
@@ -79,6 +80,7 @@ class STT(stt.STT):
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
+        true_text_post_processing: bool = False,
     ):
         """
         Create a new instance of Azure STT.
@@ -151,6 +153,7 @@ class STT(stt.STT):
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
             explicit_punctuation=explicit_punctuation,
+            true_text_post_processing=true_text_post_processing,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -406,6 +409,8 @@ def _create_speech_recognizer(
         speech_config.set_service_property(
             "punctuation", "explicit", speechsdk.ServicePropertyChannel.UriQueryParameter
         )
+    if config.true_text_post_processing:
+        speech_config.set_property(speechsdk.enums.PropertyId.PostProcessingOption, "TrueText")
 
     kwargs: dict[str, Any] = {}
     if config.language and len(config.language) > 1:
