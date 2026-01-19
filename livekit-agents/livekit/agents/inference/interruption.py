@@ -6,6 +6,7 @@ import math
 import os
 import struct
 import time
+import warnings
 import weakref
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -13,7 +14,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum, unique
 from time import perf_counter_ns
-from typing import Any, Callable, Generic, Literal, TypeVar, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, cast, overload
 
 import aiohttp
 import numpy as np
@@ -30,11 +31,14 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..utils import aio, http_context, is_given, log_exceptions, shortuuid
 from ._utils import create_access_token
 
+if TYPE_CHECKING:
+    from ..vad import VAD
+
 SAMPLE_RATE = 16000
 THRESHOLD = 0.65
-MIN_BARGEIN_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
+MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
-DETECTION_INTERVAL = 0.2  # 0.2 second
+DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 0.5  # 0.5 second
 REMOTE_INFERENCE_TIMEOUT = 1
 DEFAULT_BASE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -45,31 +49,32 @@ MSG_SESSION_CREATE = "session.create"
 MSG_SESSION_CLOSE = "session.close"
 MSG_SESSION_CREATED = "session.created"
 MSG_SESSION_CLOSED = "session.closed"
-MSG_BARGEIN_DETECTED = "bargein_detected"
+# fun fact: this was called bargein during development
+MSG_INTERRUPTION_DETECTED = "bargein_detected"
 MSG_INFERENCE_DONE = "inference_done"
 MSG_ERROR = "error"
 
 
 @unique
-class BargeinEventType(str, Enum):
-    BARGEIN = "bargein"
+class InterruptionEventType(str, Enum):
+    INTERRUPTION = "interruption"
     OVERLAP_SPEECH_ENDED = "overlap_speech_ended"
 
 
-@dataclass
-class BargeinEvent:
+class InterruptionEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     """
-    Represents an event detected by the Bargein detection model.
+    Represents an event detected by the tnterruption detection model.
     """
 
-    type: BargeinEventType
-    """Type of the bargein event (e.g., bargein inference done, bargein)."""
+    type: InterruptionEventType
+    """Type of the interruption event (e.g., interruption, overlap speech ended)."""
 
     timestamp: float
     """Timestamp (in seconds) when the event was fired."""
 
-    is_bargein: bool = False
-    """Whether bargein is detected."""
+    is_interruption: bool = False
+    """Whether interruption is detected."""
 
     total_duration: float = 0.0
     """RTT (Round Trip Time) time taken to perform the inference, in seconds."""
@@ -87,15 +92,15 @@ class BargeinEvent:
     """The audio input that was used for the inference."""
 
     probabilities: npt.NDArray[np.float32] | None = None
-    """The raw probabilities for the bargein detection."""
+    """The raw probabilities for the interruption detection."""
 
     probability: float = 0.0
-    """The conservative estimated probability of the bargein event."""
+    """The conservative estimated probability of the interruption event."""
 
 
-class BargeinError(BaseModel):
+class InterruptionDetectionError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["bargein_error"] = "bargein_error"
+    type: Literal["interruption_detection_error"] = "interruption_detection_error"
     timestamp: float
     label: str
     error: Exception = Field(..., exclude=True)
@@ -103,21 +108,21 @@ class BargeinError(BaseModel):
 
 
 @dataclass
-class BargeinOptions:
+class InterruptionOptions:
     sample_rate: int
     """The sample rate of the audio frames, defaults to 16000Hz"""
     threshold: float
-    """The threshold for the bargein detection, defaults to 0.65"""
+    """The threshold for the interruption detection, defaults to 0.65"""
     min_frames: int
-    """The minimum number of frames to detect a bargein, defaults to 50ms/2 frames"""
+    """The minimum number of frames to detect a interruption, defaults to 50ms/2 frames"""
     max_audio_duration: float
-    """The maximum audio duration for the bargein detection, including the audio prefix, defaults to 3 seconds"""
+    """The maximum audio duration for the interruption detection, including the audio prefix, defaults to 3 seconds"""
     audio_prefix_duration: float
-    """The audio prefix duration for the bargein detection, defaults to 0.5 seconds"""
+    """The audio prefix duration for the interruption detection, defaults to 0.5 seconds"""
     detection_interval: float
-    """The interval between detections, defaults to 0.2 seconds"""
+    """The interval between detections, defaults to 0.1 seconds"""
     inference_timeout: float
-    """The timeout for the bargein detection, defaults to 1 second"""
+    """The timeout for the interruption detection, defaults to 1 second"""
     base_url: str
     api_key: str
     api_secret: str
@@ -126,8 +131,8 @@ class BargeinOptions:
 
 
 @dataclass
-class BargeinCacheEntry:
-    """Typed cache entry for bargein inference results."""
+class InterruptionCacheEntry:
+    """Typed cache entry for interruption inference results."""
 
     created_at: int
     speech_input: npt.NDArray[np.int16] | None = None
@@ -135,7 +140,7 @@ class BargeinCacheEntry:
     prediction_duration: float | None = None
     detection_delay: float | None = None
     probabilities: npt.NDArray[np.float32] | None = None
-    is_bargein: bool | None = None
+    is_interruption: bool | None = None
 
     def get_total_duration(self, default: float = 0.0) -> float:
         """RTT (Round Trip Time) time taken to perform the inference, in seconds."""
@@ -150,24 +155,24 @@ class BargeinCacheEntry:
         return self.detection_delay if self.detection_delay is not None else default
 
     def get_probability(self, default: float = 0.0) -> float:
-        """The conservative estimated probability of the bargein event."""
+        """The conservative estimated probability of the interruption event."""
         return (
             _estimate_probability(self.probabilities) if self.probabilities is not None else default
         )
 
 
 # Default empty entry used when cache misses occur
-_EMPTY_CACHE_ENTRY = BargeinCacheEntry(created_at=0)
+_EMPTY_CACHE_ENTRY = InterruptionCacheEntry(created_at=0)
 
 
-class BargeinDetector(
-    rtc.EventEmitter[Literal["bargein_detected", "overlap_speech_ended", "error"]],
+class AdaptiveInterruptionDetector(
+    rtc.EventEmitter[Literal["interruption_detected", "overlap_speech_ended", "error"]],
 ):
     def __init__(
         self,
         *,
         threshold: float = THRESHOLD,
-        min_bargein_duration: float = MIN_BARGEIN_DURATION,
+        min_interruption_duration: float = MIN_INTERRUPTION_DURATION,
         max_audio_duration: float = MAX_AUDIO_DURATION,
         audio_prefix_duration: float = AUDIO_PREFIX_DURATION,
         detection_interval: float = DETECTION_INTERVAL,
@@ -179,19 +184,19 @@ class BargeinDetector(
         use_proxy: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
-        Initialize a BargeinDetector instance.
+        Initialize a AdaptiveInterruptionDetector instance.
 
         Args:
-            threshold (float, optional): The threshold for the bargein detection, defaults to 0.65.
-            min_bargein_duration (float, optional): The minimum duration, in seconds, of the bargein event, defaults to 50ms.
-            max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the bargein detection, defaults to 3s.
-            audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the bargein detection, defaults to 0.5s.
-            detection_interval (float, optional): The interval between detections, in seconds, for the bargein detection, defaults to 0.2s.
-            inference_timeout (float, optional): The timeout for the bargein detection, defaults to 1 second.
-            base_url (str, optional): The base URL for the bargein detection, defaults to the LIVEKIT_BARGEIN_INFERENCE_URL environment variable.
-            api_key (str, optional): The API key for the bargein detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
-            api_secret (str, optional): The API secret for the bargein detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.
-            http_session (aiohttp.ClientSession, optional): The HTTP session to use for the bargein detection.
+            threshold (float, optional): The threshold for the interruption detection, defaults to 0.65.
+            min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
+            max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
+            audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
+            detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.1s.
+            inference_timeout (float, optional): The timeout for the interruption detection, defaults to 1 second.
+            base_url (str, optional): The base URL for the interruption detection, defaults to the LIVEKIT_INTERRUPTION_INFERENCE_URL environment variable.
+            api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
+            api_secret (str, optional): The API secret for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.
+            http_session (aiohttp.ClientSession, optional): The HTTP session to use for the interruption detection.
             use_proxy (bool, optional): Whether to use the inference instead of the hosted API, defaults to False.
         """
         super().__init__()
@@ -229,10 +234,10 @@ class BargeinDetector(
         else:
             use_proxy = False
 
-        self._opts = BargeinOptions(
+        self._opts = InterruptionOptions(
             sample_rate=SAMPLE_RATE,
             threshold=threshold,
-            min_frames=math.ceil(min_bargein_duration * _FRAMES_PER_SECOND),
+            min_frames=math.ceil(min_interruption_duration * _FRAMES_PER_SECOND),
             max_audio_duration=max_audio_duration,
             audio_prefix_duration=audio_prefix_duration,
             detection_interval=detection_interval,
@@ -245,10 +250,12 @@ class BargeinDetector(
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._sample_rate = SAMPLE_RATE
         self._session = http_session
-        self._streams = weakref.WeakSet[Union[BargeinHttpStream, BargeinWebSocketStream]]()
+        self._streams = weakref.WeakSet[
+            Union[InterruptionHttpStream, InterruptionWebSocketStream]
+        ]()
 
         logger.info(
-            "bargein detector initialized",
+            "adaptive interruption detector initialized",
             extra={
                 "base_url": self._opts.base_url,
                 "detection_interval": self._opts.detection_interval,
@@ -263,7 +270,7 @@ class BargeinDetector(
 
     @property
     def model(self) -> str:
-        return "bargein"
+        return "adaptive interruption"
 
     @property
     def provider(self) -> str:
@@ -280,7 +287,7 @@ class BargeinDetector(
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self.emit(
             "error",
-            BargeinError(
+            InterruptionDetectionError(
                 timestamp=time.time(),
                 label=self._label,
                 error=api_error,
@@ -295,12 +302,12 @@ class BargeinDetector(
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> BargeinHttpStream | BargeinWebSocketStream:
-        stream: BargeinHttpStream | BargeinWebSocketStream
+    ) -> InterruptionHttpStream | InterruptionWebSocketStream:
+        stream: InterruptionHttpStream | InterruptionWebSocketStream
         if self._opts.use_proxy:
-            stream = BargeinWebSocketStream(model=self, conn_options=conn_options)
+            stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
         else:
-            stream = BargeinHttpStream(model=self, conn_options=conn_options)
+            stream = InterruptionHttpStream(model=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -308,18 +315,20 @@ class BargeinDetector(
         self,
         *,
         threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_bargein_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
-        if is_given(min_bargein_duration):
-            self._opts.min_frames = math.ceil(min_bargein_duration * _FRAMES_PER_SECOND)
+        if is_given(min_interruption_duration):
+            self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
 
         for stream in self._streams:
-            stream.update_options(threshold=threshold, min_bargein_duration=min_bargein_duration)
+            stream.update_options(
+                threshold=threshold, min_interruption_duration=min_interruption_duration
+            )
 
 
-class BargeinStreamBase(ABC):
+class InterruptionStreamBase(ABC):
     class _AgentSpeechStartedSentinel:
         pass
 
@@ -341,7 +350,9 @@ class BargeinStreamBase(ABC):
     class _FlushSentinel:
         pass
 
-    def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
+    ) -> None:
         self._model = model
         self._opts = model._opts
         self._session = model._ensure_session()
@@ -349,14 +360,14 @@ class BargeinStreamBase(ABC):
         self._input_ch = aio.Chan[
             Union[
                 rtc.AudioFrame,
-                BargeinStreamBase._AgentSpeechStartedSentinel,
-                BargeinStreamBase._AgentSpeechEndedSentinel,
-                BargeinStreamBase._OverlapSpeechStartedSentinel,
-                BargeinStreamBase._OverlapSpeechEndedSentinel,
-                BargeinStreamBase._FlushSentinel,
+                InterruptionStreamBase._AgentSpeechStartedSentinel,
+                InterruptionStreamBase._AgentSpeechEndedSentinel,
+                InterruptionStreamBase._OverlapSpeechStartedSentinel,
+                InterruptionStreamBase._OverlapSpeechEndedSentinel,
+                InterruptionStreamBase._FlushSentinel,
             ]
         ]()
-        self._event_ch = aio.Chan[BargeinEvent]()
+        self._event_ch = aio.Chan[InterruptionEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._num_retries = 0
@@ -383,14 +394,14 @@ class BargeinStreamBase(ABC):
                 elif self._num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
-                        f"failed to detect bargein after {self._num_retries} attempts",
+                        f"failed to detect interruption after {self._num_retries} attempts",
                     ) from e
                 else:
                     self._emit_error(e, recoverable=True)
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to detect bargein, retrying in {retry_interval}s",
+                        f"failed to detect interruption, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "model": self._model._label,
@@ -408,7 +419,7 @@ class BargeinStreamBase(ABC):
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._model.emit(
             "error",
-            BargeinError(
+            InterruptionDetectionError(
                 timestamp=time.time(),
                 label=self._model._label,
                 error=api_error,
@@ -419,17 +430,17 @@ class BargeinStreamBase(ABC):
     def push_frame(
         self,
         frame: rtc.AudioFrame
-        | BargeinStreamBase._AgentSpeechStartedSentinel
-        | BargeinStreamBase._AgentSpeechEndedSentinel
-        | BargeinStreamBase._OverlapSpeechStartedSentinel
-        | BargeinStreamBase._OverlapSpeechEndedSentinel,
+        | InterruptionStreamBase._AgentSpeechStartedSentinel
+        | InterruptionStreamBase._AgentSpeechEndedSentinel
+        | InterruptionStreamBase._OverlapSpeechStartedSentinel
+        | InterruptionStreamBase._OverlapSpeechEndedSentinel,
     ) -> None:
         """Push some audio frame to be analyzed"""
         self._check_input_not_ended()
         self._check_not_closed()
 
         if not isinstance(frame, rtc.AudioFrame):
-            if isinstance(frame, BargeinStreamBase._OverlapSpeechStartedSentinel):
+            if isinstance(frame, InterruptionStreamBase._OverlapSpeechStartedSentinel):
                 self._overlap_speech_started_at = time.time() - frame._speech_duration
             self._input_ch.send_nowait(frame)
             return
@@ -469,7 +480,7 @@ class BargeinStreamBase(ABC):
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
 
-    async def __anext__(self) -> BargeinEvent:
+    async def __anext__(self) -> InterruptionEvent:
         try:
             val = await self._event_ch.__anext__()
         except StopAsyncIteration:
@@ -480,7 +491,7 @@ class BargeinStreamBase(ABC):
 
         return val
 
-    def __aiter__(self) -> AsyncIterator[BargeinEvent]:
+    def __aiter__(self) -> AsyncIterator[InterruptionEvent]:
         return self
 
     def _check_not_closed(self) -> None:
@@ -494,42 +505,48 @@ class BargeinStreamBase(ABC):
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     @staticmethod
-    def _update_user_speech_span(user_speech_span: trace.Span, entry: BargeinCacheEntry) -> None:
-        user_speech_span.set_attribute(trace_types.ATTR_IS_BARGEIN, str(entry.is_bargein).lower())
+    def _update_user_speech_span(
+        user_speech_span: trace.Span, entry: InterruptionCacheEntry
+    ) -> None:
         user_speech_span.set_attribute(
-            trace_types.ATTR_BARGEIN_PROBABILITY, entry.get_probability()
+            trace_types.ATTR_IS_INTERRUPTION, str(entry.is_interruption).lower()
         )
         user_speech_span.set_attribute(
-            trace_types.ATTR_BARGEIN_TOTAL_DURATION, entry.get_total_duration()
+            trace_types.ATTR_INTERRUPTION_PROBABILITY, entry.get_probability()
         )
         user_speech_span.set_attribute(
-            trace_types.ATTR_BARGEIN_PREDICTION_DURATION, entry.get_prediction_duration()
+            trace_types.ATTR_INTERRUPTION_TOTAL_DURATION, entry.get_total_duration()
         )
         user_speech_span.set_attribute(
-            trace_types.ATTR_BARGEIN_DETECTION_DELAY, entry.get_detection_delay()
+            trace_types.ATTR_INTERRUPTION_PREDICTION_DURATION, entry.get_prediction_duration()
+        )
+        user_speech_span.set_attribute(
+            trace_types.ATTR_INTERRUPTION_DETECTION_DELAY, entry.get_detection_delay()
         )
 
 
-class BargeinHttpStream(BargeinStreamBase):
-    def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
+class InterruptionHttpStream(InterruptionStreamBase):
+    def __init__(
+        self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
+    ) -> None:
         super().__init__(model=model, conn_options=conn_options)
 
     def update_options(
         self,
         *,
         threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_bargein_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
-        if is_given(min_bargein_duration):
-            self._opts.min_frames = math.ceil(min_bargein_duration * _FRAMES_PER_SECOND)
+        if is_given(min_interruption_duration):
+            self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
 
     @log_exceptions(logger=logger)
     async def _run(self) -> None:
         data_chan = aio.Chan[npt.NDArray[np.int16]]()
         overlap_speech_started: bool = False
-        cache: _BoundedCache[int, BargeinCacheEntry] = _BoundedCache(max_len=10)
+        cache: _BoundedCache[int, InterruptionCacheEntry] = _BoundedCache(max_len=10)
 
         @log_exceptions(logger=logger)
         async def _forward_data() -> None:
@@ -546,7 +563,7 @@ class BargeinHttpStream(BargeinStreamBase):
 
             async for input_frame in self._input_ch:
                 # start accumulating user speech when agent starts speaking
-                if isinstance(input_frame, BargeinStreamBase._AgentSpeechStartedSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._AgentSpeechStartedSentinel):
                     agent_speech_started = True
                     overlap_speech_started = False
                     accumulated_samples = 0
@@ -555,7 +572,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     continue
 
                 # reset state when agent stops speaking
-                if isinstance(input_frame, BargeinStreamBase._AgentSpeechEndedSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._AgentSpeechEndedSentinel):
                     agent_speech_started = False
                     overlap_speech_started = False
                     accumulated_samples = 0
@@ -565,11 +582,11 @@ class BargeinHttpStream(BargeinStreamBase):
 
                 # start inferencing against the overlap speech
                 if (
-                    isinstance(input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel)
+                    isinstance(input_frame, InterruptionStreamBase._OverlapSpeechStartedSentinel)
                     and agent_speech_started
                 ):
                     self._user_speech_span = input_frame._user_speaking_span
-                    logger.debug("overlap speech started, starting barge-in inference")
+                    logger.debug("overlap speech started, starting interruption inference")
                     overlap_speech_started = True
                     accumulated_samples = 0
                     # include the audio prefix in the window
@@ -585,7 +602,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     cache.clear()
                     continue
 
-                if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
                         self._user_speech_span = None
                         _, last_entry = cache.pop(
@@ -594,10 +611,10 @@ class BargeinHttpStream(BargeinStreamBase):
                         if last_entry is None:
                             logger.debug("no request made for overlap speech")
                         entry = last_entry or _EMPTY_CACHE_ENTRY
-                        ev = BargeinEvent(
-                            type=BargeinEventType.OVERLAP_SPEECH_ENDED,
+                        ev = InterruptionEvent(
+                            type=InterruptionEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
-                            is_bargein=False,
+                            is_interruption=False,
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=entry.speech_input,
                             probabilities=entry.probabilities,
@@ -614,7 +631,7 @@ class BargeinHttpStream(BargeinStreamBase):
                     # we don't clear the cache here since responses might be in flight
                     continue
 
-                if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._FlushSentinel):
                     continue
 
                 if not agent_speech_started or not isinstance(input_frame, rtc.AudioFrame):
@@ -647,24 +664,24 @@ class BargeinHttpStream(BargeinStreamBase):
                     continue
                 resp = await self.predict(data)
                 created_at = resp["created_at"]
-                cache[created_at] = entry = BargeinCacheEntry(
+                cache[created_at] = entry = InterruptionCacheEntry(
                     created_at=created_at,
                     total_duration=(time.perf_counter_ns() - created_at) / 1e9,
                     speech_input=data,
                     detection_delay=time.time() - self._overlap_speech_started_at,
                     probabilities=resp["probabilities"],
                     prediction_duration=resp["prediction_duration"],
-                    is_bargein=resp["is_bargein"],
+                    is_interruption=resp["is_bargein"],
                 )
-                if overlap_speech_started and entry.is_bargein:
+                if overlap_speech_started and entry.is_interruption:
                     if self._user_speech_span:
                         self._update_user_speech_span(self._user_speech_span, entry)
                         self._user_speech_span = None
-                    ev = BargeinEvent(
-                        type=BargeinEventType.BARGEIN,
+                    ev = InterruptionEvent(
+                        type=InterruptionEventType.INTERRUPTION,
                         timestamp=time.time(),
                         overlap_speech_started_at=self._overlap_speech_started_at,
-                        is_bargein=entry.is_bargein,
+                        is_interruption=entry.is_interruption,
                         speech_input=entry.speech_input,
                         probabilities=entry.probabilities,
                         total_duration=entry.get_total_duration(),
@@ -673,7 +690,7 @@ class BargeinHttpStream(BargeinStreamBase):
                         probability=entry.get_probability(),
                     )
                     self._event_ch.send_nowait(ev)
-                    self._model.emit("bargein_detected", ev)
+                    self._model.emit("interruption_detected", ev)
                     overlap_speech_started = False
 
         tasks = [
@@ -712,46 +729,48 @@ class BargeinHttpStream(BargeinStreamBase):
                         data.get("probabilities", []), dtype=np.float32
                     )
                     logger.trace(
-                        "bargein inference done",
+                        "interruption inference done",
                         extra={
                             "created_at": created_at,
-                            "is_bargein": data["is_bargein"],
+                            "is_interruption": data["is_bargein"],
                             "prediction_duration": data["prediction_duration"],
                         },
                     )
                     return data
                 except Exception as e:
                     msg = await resp.text()
-                    raise APIError(f"error during bargein prediction: {e}", body=msg) from e
+                    raise APIError(f"error during interruption prediction: {e}", body=msg) from e
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-            raise APIError(f"bargein inference timeout: {e}") from e
+            raise APIError(f"interruption inference timeout: {e}") from e
         except Exception as e:
-            raise APIError(f"error during bargein prediction: {e}") from e
+            raise APIError(f"error during interruption prediction: {e}") from e
 
 
-class BargeinWebSocketStream(BargeinStreamBase):
-    def __init__(self, *, model: BargeinDetector, conn_options: APIConnectOptions) -> None:
+class InterruptionWebSocketStream(InterruptionStreamBase):
+    def __init__(
+        self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
+    ) -> None:
         super().__init__(model=model, conn_options=conn_options)
-        self._request_id = str(shortuuid("bargein_request_"))
+        self._request_id = str(shortuuid("interruption_request_"))
         self._reconnect_event = asyncio.Event()
 
     def update_options(
         self,
         *,
         threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_bargein_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(threshold):
             self._opts.threshold = threshold
-        if is_given(min_bargein_duration):
-            self._opts.min_frames = math.ceil(min_bargein_duration * _FRAMES_PER_SECOND)
+        if is_given(min_interruption_duration):
+            self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
         self._reconnect_event.set()
 
     @log_exceptions(logger=logger)
     async def _run(self) -> None:
         closing_ws = False
         overlap_speech_started: bool = False
-        cache: _BoundedCache[int, BargeinCacheEntry] = _BoundedCache(max_len=10)
+        cache: _BoundedCache[int, InterruptionCacheEntry] = _BoundedCache(max_len=10)
         self._user_speech_span = None
 
         @log_exceptions(logger=logger)
@@ -769,7 +788,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
             async for input_frame in self._input_ch:
                 # start accumulating user speech when agent starts speaking
-                if isinstance(input_frame, BargeinStreamBase._AgentSpeechStartedSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._AgentSpeechStartedSentinel):
                     agent_speech_started = True
                     overlap_speech_started = False
                     accumulated_samples = 0
@@ -778,7 +797,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     continue
 
                 # reset state when agent stops speaking
-                if isinstance(input_frame, BargeinStreamBase._AgentSpeechEndedSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._AgentSpeechEndedSentinel):
                     agent_speech_started = False
                     overlap_speech_started = False
                     accumulated_samples = 0
@@ -788,10 +807,10 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
                 # start inferencing against the overlap speech
                 if (
-                    isinstance(input_frame, BargeinStreamBase._OverlapSpeechStartedSentinel)
+                    isinstance(input_frame, InterruptionStreamBase._OverlapSpeechStartedSentinel)
                     and agent_speech_started
                 ):
-                    logger.trace("overlap speech started, starting barge-in inference")
+                    logger.trace("overlap speech started, starting interruption inference")
                     self._user_speech_span = input_frame._user_speaking_span
                     overlap_speech_started = True
                     accumulated_samples = 0
@@ -808,19 +827,19 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     continue
 
                 # end inferencing against the overlap speech
-                if isinstance(input_frame, BargeinStreamBase._OverlapSpeechEndedSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
-                        logger.trace("overlap speech ended, stopping barge-in inference")
+                        logger.trace("overlap speech ended, stopping interruption inference")
                         self._user_speech_span = None
                         # only pop the last complete request
                         _, last_entry = cache.pop(lambda x: x.get_total_duration() > 0)
                         if last_entry is None:
                             logger.trace("no request made for overlap speech")
                         entry = last_entry or _EMPTY_CACHE_ENTRY
-                        ev = BargeinEvent(
-                            type=BargeinEventType.OVERLAP_SPEECH_ENDED,
+                        ev = InterruptionEvent(
+                            type=InterruptionEventType.OVERLAP_SPEECH_ENDED,
                             timestamp=time.time(),
-                            is_bargein=False,
+                            is_interruption=False,
                             overlap_speech_started_at=self._overlap_speech_started_at,
                             speech_input=entry.speech_input,
                             probabilities=entry.probabilities,
@@ -836,7 +855,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     start_idx = 0
                     continue
 
-                if isinstance(input_frame, BargeinStreamBase._FlushSentinel):
+                if isinstance(input_frame, InterruptionStreamBase._FlushSentinel):
                     continue
 
                 if not agent_speech_started or not isinstance(input_frame, rtc.AudioFrame):
@@ -861,7 +880,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     created_at = perf_counter_ns()
                     header = struct.pack("<Q", created_at)  # 8 bytes
                     await ws.send_bytes(header + inference_s16_data[:start_idx].tobytes())
-                    cache[created_at] = BargeinCacheEntry(
+                    cache[created_at] = InterruptionCacheEntry(
                         created_at=created_at,
                         speech_input=inference_s16_data[:start_idx].copy(),
                     )
@@ -889,11 +908,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     if closing_ws or self._session.closed:
                         return
                     raise APIStatusError(
-                        message=f"LiveKit Bargein connection closed unexpectedly: {msg.data}"
+                        message=f"LiveKit Interruption connection closed unexpectedly: {msg.data}"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected LiveKit Bargein message type %s", msg.type)
+                    logger.warning("unexpected LiveKit Interruption message type %s", msg.type)
                     continue
 
                 data = json.loads(msg.data)
@@ -901,15 +920,15 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
                 if msg_type == MSG_SESSION_CREATED:
                     pass
-                elif msg_type == MSG_BARGEIN_DETECTED:
+                elif msg_type == MSG_INTERRUPTION_DETECTED:
                     created_at = int(data["created_at"])
                     if overlap_speech_started and self._overlap_speech_started_at is not None:
                         entry = cache.set_or_update(
                             created_at,
-                            lambda c=created_at: BargeinCacheEntry(created_at=c),  # type: ignore[misc]
+                            lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                             total_duration=(perf_counter_ns() - created_at) / 1e9,
                             probabilities=np.array(data.get("probabilities", []), dtype=np.float32),
-                            is_bargein=True,
+                            is_interruption=True,
                             prediction_duration=data.get("prediction_duration", 0.0),
                             detection_delay=time.time() - self._overlap_speech_started_at,
                         )
@@ -917,7 +936,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             self._update_user_speech_span(self._user_speech_span, entry)
                             self._user_speech_span = None
                         logger.debug(
-                            "bargein detected",
+                            "interruption detected",
                             extra={
                                 "total_duration": entry.get_total_duration(),
                                 "prediction_duration": entry.get_prediction_duration(),
@@ -925,10 +944,10 @@ class BargeinWebSocketStream(BargeinStreamBase):
                                 "probability": entry.get_probability(),
                             },
                         )
-                        ev = BargeinEvent(
-                            type=BargeinEventType.BARGEIN,
+                        ev = InterruptionEvent(
+                            type=InterruptionEventType.INTERRUPTION,
                             timestamp=time.time(),
-                            is_bargein=True,
+                            is_interruption=True,
                             total_duration=entry.get_total_duration(),
                             prediction_duration=entry.get_prediction_duration(),
                             overlap_speech_started_at=self._overlap_speech_started_at,
@@ -938,7 +957,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
                             probability=entry.get_probability(),
                         )
                         self._event_ch.send_nowait(ev)
-                        self._model.emit("bargein_detected", ev)
+                        self._model.emit("interruption_detected", ev)
                         overlap_speech_started = False
 
                 elif msg_type == MSG_INFERENCE_DONE:
@@ -946,15 +965,15 @@ class BargeinWebSocketStream(BargeinStreamBase):
                     if self._overlap_speech_started_at is not None:
                         entry = cache.set_or_update(
                             created_at,
-                            lambda c=created_at: BargeinCacheEntry(created_at=c),  # type: ignore[misc]
+                            lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                             total_duration=(perf_counter_ns() - created_at) / 1e9,
                             prediction_duration=data.get("prediction_duration", 0.0),
                             probabilities=np.array(data.get("probabilities", []), dtype=np.float32),
-                            is_bargein=data.get("is_bargein", False),
+                            is_interruption=data.get("is_bargein", False),
                             detection_delay=time.time() - self._overlap_speech_started_at,
                         )
                         logger.trace(
-                            "bargein inference done",
+                            "interruption inference done",
                             extra={
                                 "total_duration": entry.get_total_duration(),
                                 "prediction_duration": entry.get_prediction_duration(),
@@ -963,9 +982,11 @@ class BargeinWebSocketStream(BargeinStreamBase):
                 elif msg_type == MSG_SESSION_CLOSED:
                     pass
                 elif msg_type == MSG_ERROR:
-                    raise APIError(f"LiveKit Bargein returned error: {msg.data}")
+                    raise APIError(f"LiveKit Interruption returned error: {msg.data}")
                 else:
-                    logger.warning("received unexpected message from LiveKit Bargein: %s", data)
+                    logger.warning(
+                        "received unexpected message from LiveKit Interruption: %s", data
+                    )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -1012,7 +1033,7 @@ class BargeinWebSocketStream(BargeinStreamBase):
 
     @log_exceptions(logger=logger)
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the LiveKit Bargein WebSocket."""
+        """Connect to the LiveKit Interruption WebSocket."""
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": self._opts.sample_rate,
@@ -1040,8 +1061,10 @@ class BargeinWebSocketStream(BargeinStreamBase):
             aiohttp.ClientResponseError,
         ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
-                raise APIStatusError("LiveKit Bargein quota exceeded", status_code=e.status) from e
-            raise APIConnectionError("failed to connect to LiveKit Bargein") from e
+                raise APIStatusError(
+                    "LiveKit Interruption quota exceeded", status_code=e.status
+                ) from e
+            raise APIConnectionError("failed to connect to LiveKit Interruption") from e
 
         try:
             params["type"] = MSG_SESSION_CREATE
@@ -1049,17 +1072,17 @@ class BargeinWebSocketStream(BargeinStreamBase):
         except Exception as e:
             await ws.close()
             raise APIConnectionError(
-                "failed to send session.create message to LiveKit Bargein"
+                "failed to send session.create message to LiveKit Interruption"
             ) from e
 
         return ws
 
 
 def _estimate_probability(
-    probabilities: npt.NDArray[np.float32] | None, window_size: float = MIN_BARGEIN_DURATION
+    probabilities: npt.NDArray[np.float32] | None, window_size: float = MIN_INTERRUPTION_DURATION
 ) -> float:
     """
-    Estimate the probability of the bargein event based on the probabilities of the frames.
+    Estimate the probability of the interruption event based on the probabilities of the frames.
     The estimated probability is the maximum of the minimum of every window_size consecutive frames.
     """
     if probabilities is None:
@@ -1171,3 +1194,36 @@ class _BoundedCache(Generic[_K, _V]):
 
     def keys(self) -> list[_K]:
         return list(self._cache.keys())
+
+
+def handle_deprecation(
+    vad: NotGivenOr[VAD | None] = NOT_GIVEN,
+    allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    interruption_handling: NotGivenOr[Literal["adaptive", "vad", False]] = NOT_GIVEN,
+) -> Literal["adaptive", "vad", False]:
+    if is_given(allow_interruptions):
+        warnings.warn(
+            "`allow_interruptions` is deprecated, use `interruption_handling` instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if is_given(interruption_handling):
+            raise ValueError(
+                "both `allow_interruptions` and `interruption_handling` are provided,"
+                " please only use `interruption_handling` instead"
+            )
+        if allow_interruptions:
+            if vad is None:
+                raise ValueError("`allow_interruptions` is True but `vad` is not provided")
+            return "adaptive"
+        return False
+
+    if is_given(interruption_handling):
+        if vad is None and interruption_handling in {"adaptive", "vad"}:
+            raise ValueError("`vad` is not provided but `interruption_handling` is not False")
+        return cast(Literal["adaptive", "vad", False], interruption_handling)
+
+    if vad is None:
+        return False
+
+    return "adaptive"

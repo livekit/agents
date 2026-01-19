@@ -35,6 +35,7 @@ from ..types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
@@ -57,6 +58,7 @@ from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .run_result import RunResult
 from .speech_handle import SpeechHandle
+from .turn import TurnHandlingConfig
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
@@ -133,37 +135,57 @@ DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+    @deprecate_params(
+        {
+            "min_endpointing_delay": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "max_endpointing_delay": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "preemptive_generation": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "user_away_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "resume_false_interruption": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "allow_interruptions": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "discard_audio_if_uninterruptible": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "min_interruption_duration": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "min_interruption_words": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "turn_detection": "Use turn_handling=TurnHandlingConfig(...) instead",
+            "agent_false_interruption_timeout": "Use turn_handling=TurnHandlingConfig(...) instead",
+        }
+    )
     def __init__(
         self,
         *,
-        turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        bargein_detection: NotGivenOr[inference.BargeinDetector | bool] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingConfig] = NOT_GIVEN,
+        # Tool settings
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
-        userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
-        allow_interruptions: bool = True,
-        discard_audio_if_uninterruptible: bool = True,
-        min_interruption_duration: float = 0.5,
-        min_interruption_words: int = 0,
-        min_endpointing_delay: float = 0.5,
-        max_endpointing_delay: float = 3.0,
         max_tool_steps: int = 3,
-        video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
-        user_away_timeout: float | None = 15.0,
-        false_interruption_timeout: float | None = 2.0,
-        resume_false_interruption: bool = True,
-        min_consecutive_speech_delay: float = 0.0,
+        # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
-        preemptive_generation: bool = False,
+        min_consecutive_speech_delay: float = 0.0,
+        # Misc settings
+        userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
+        video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         ivr_detection: bool = False,
+        # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
+        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
+        user_away_timeout: NotGivenOr[float | None] = NOT_GIVEN,
+        false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
+        discard_audio_if_uninterruptible: NotGivenOr[bool] = NOT_GIVEN,
+        min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_interruption_words: NotGivenOr[int] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
         agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -192,8 +214,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 automatically falls back if the necessary model is missing.
             stt (stt.STT | str, optional): Speech-to-text backend.
             vad (vad.VAD, optional): Voice-activity detector
-            bargein_detection (inference.BargeinDetector | bool, optional): Barge-in detector. Requires
-                VAD, non-realtime LLM, and STT supporting aligned transcript. Set to ``False`` to disable.
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
@@ -201,22 +221,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
-            allow_interruptions (bool): Whether the user can interrupt the
-                agent mid-utterance. Default ``True``.
-            discard_audio_if_uninterruptible (bool): When ``True``, buffered
-                audio is dropped while the agent is speaking and cannot be
-                interrupted. Default ``True``.
-            min_interruption_duration (float): Minimum speech length (s) to
-                register as an interruption. Default ``0.5`` s.
-            min_interruption_words (int): Minimum number of words to consider
-                an interruption, only used if stt enabled. Default ``0``.
-            min_endpointing_delay (float): Minimum time-in-seconds since the
-                last detected speech before the agent declares the user’s turn
-                complete. In VAD mode this effectively behaves like
-                max(VAD silence, min_endpointing_delay); in STT mode it is
-                applied after the STT end-of-speech signal, so it can be
-                additive with the STT provider’s endpointing delay. Default
-                ``0.5`` s.
+            turn_handling (TurnHandlingConfig, optional): Configuration for turn handling.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
@@ -225,15 +230,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
                 when silent by default.
-            user_away_timeout (float, optional): If set, set the user state as
-                "away" after this amount of time after user and agent are silent.
-                Default ``15.0`` s, set to ``None`` to disable.
-            false_interruption_timeout (float, optional): If set, emit an
-                `agent_false_interruption` event after this amount of time if
-                the user is silent and no user transcript is detected after
-                the interruption. Set to ``None`` to disable. Default ``2.0`` s.
-            resume_false_interruption (bool): Whether to resume the false interruption
-                after the false_interruption_timeout. Default ``True``.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
@@ -243,13 +239,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
                 to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
-            preemptive_generation (bool):
-                Whether to speculatively begin LLM and TTS requests before an end-of-turn is
-                detected. When True, the agent sends inference calls as soon as a user
-                transcript is received rather than waiting for a definitive turn boundary. This
-                can reduce response latency by overlapping model inference with user audio,
-                but may incur extra compute if the user interrupts or revises mid-utterance.
-                Defaults to ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -259,38 +248,51 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+        self._video_sampler = (
+            video_sampler
+            if is_given(video_sampler)
+            else VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
+        )
 
-        if is_given(agent_false_interruption_timeout):
-            logger.warning(
-                "`agent_false_interruption_timeout` is deprecated, use `false_interruption_timeout` instead"  # noqa: E501
+        turn_handling = (
+            TurnHandlingConfig.migrate(
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+                preemptive_generation=preemptive_generation,
+                user_away_timeout=user_away_timeout,
+                false_interruption_timeout=false_interruption_timeout,
+                turn_detection=turn_detection,
+                discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
+                min_interruption_duration=min_interruption_duration,
+                min_interruption_words=min_interruption_words,
+                allow_interruptions=allow_interruptions,
+                resume_false_interruption=resume_false_interruption,
+                agent_false_interruption_timeout=agent_false_interruption_timeout,
             )
-            false_interruption_timeout = agent_false_interruption_timeout
-
-        if not is_given(video_sampler):
-            video_sampler = VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
-
-        self._video_sampler = video_sampler
+            if not is_given(turn_handling)
+            else turn_handling
+        )
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
-            allow_interruptions=allow_interruptions,
-            discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
-            min_interruption_duration=min_interruption_duration,
-            min_interruption_words=min_interruption_words,
-            min_endpointing_delay=min_endpointing_delay,
-            max_endpointing_delay=max_endpointing_delay,
+            allow_interruptions=turn_handling.interruption_cfg.mode is not False,
+            discard_audio_if_uninterruptible=turn_handling.interruption_cfg.discard_audio_if_uninterruptible,
+            min_interruption_duration=turn_handling.interruption_cfg.min_duration,
+            min_interruption_words=turn_handling.interruption_cfg.min_words,
+            min_endpointing_delay=turn_handling.endpointing_cfg.min_delay,
+            max_endpointing_delay=turn_handling.endpointing_cfg.max_delay,
             max_tool_steps=max_tool_steps,
-            user_away_timeout=user_away_timeout,
-            false_interruption_timeout=false_interruption_timeout,
-            resume_false_interruption=resume_false_interruption,
+            user_away_timeout=turn_handling.user_away_timeout,
+            false_interruption_timeout=turn_handling.interruption_cfg.false_interruption_timeout,
+            resume_false_interruption=turn_handling.interruption_cfg.resume_false_interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
                 if is_given(tts_text_transforms)
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
-            preemptive_generation=preemptive_generation,
+            preemptive_generation=turn_handling.preemptive_generation,
             ivr_detection=ivr_detection,
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
@@ -298,7 +300,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
-        self._turn_detection = turn_detection or None
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -313,10 +314,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+        self._turn_detection = turn_handling.turn_detection or None
+        self._interruption_detection = turn_handling.interruption_cfg.mode
         self._mcp_servers = mcp_servers or None
         self._tools = tools if is_given(tools) else []
-
-        self._bargein_detection: NotGivenOr[inference.BargeinDetector | bool] = bargein_detection
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
@@ -1274,8 +1275,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._vad
 
     @property
-    def bargein_detection(self) -> NotGivenOr[inference.BargeinDetector | bool]:
-        return self._bargein_detection
+    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad", False]]:
+        return self._interruption_detection
 
     # -- User changed input/output streams/sinks --
 
