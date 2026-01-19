@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
@@ -15,9 +15,10 @@ from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .speech_handle import SpeechHandle
+from .turn import TurnHandlingConfig
 
 if TYPE_CHECKING:
-    from ..inference import BargeinDetector, LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
@@ -39,18 +40,19 @@ class Agent:
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        bargein_detection: NotGivenOr[BargeinDetector | bool] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingConfig] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        # deprecated
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         if type(self) is Agent:
@@ -58,10 +60,21 @@ class Agent:
         else:
             self._id = id or misc.camel_to_snake_case(type(self).__name__)
 
+        turn_handling = (
+            TurnHandlingConfig.migrate(
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+                turn_detection=turn_detection,
+                allow_interruptions=allow_interruptions,
+            )
+            if not is_given(turn_handling)
+            else turn_handling
+        )
+
         self._instructions = instructions
         self._tools = tools.copy() + find_function_tools(self)
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
-        self._turn_detection = turn_detection
+        self._turn_detection = turn_handling.turn_detection
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -76,12 +89,15 @@ class Agent:
         self._llm = llm
         self._tts = tts
         self._vad = vad
-        self._allow_interruptions = allow_interruptions
+
+        self._interruption_detection = turn_handling.interruption_cfg.mode
+        self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
+        if is_given(turn_handling.interruption_cfg.mode):
+            self._allow_interruptions = bool(turn_handling.interruption_cfg.mode)
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         self._min_endpointing_delay = min_endpointing_delay
         self._max_endpointing_delay = max_endpointing_delay
-        self._bargein_detection: NotGivenOr[inference.BargeinDetector | bool] = bargein_detection
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -126,6 +142,10 @@ class Agent:
             update_chat_ctx: Method to update the internal chat context.
         """
         return _ReadOnlyChatContext(self._chat_ctx.items)
+
+    @property
+    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad", False]]:
+        return self._interruption_detection
 
     async def update_instructions(self, instructions: str) -> None:
         """
@@ -654,32 +674,39 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        bargein_detection: NotGivenOr[BargeinDetector | bool] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingConfig] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
+        # deprecated
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
+        turn_handling = (
+            TurnHandlingConfig.migrate(
+                turn_detection=turn_detection,
+                allow_interruptions=allow_interruptions,
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
+            )
+            if not is_given(turn_handling)
+            else turn_handling
+        )
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
             tools=tools,
-            turn_detection=turn_detection,
             stt=stt,
             vad=vad,
-            bargein_detection=bargein_detection,
             llm=llm,
             tts=tts,
             mcp_servers=mcp_servers,
-            allow_interruptions=allow_interruptions,
-            min_endpointing_delay=min_endpointing_delay,
-            max_endpointing_delay=max_endpointing_delay,
+            turn_handling=turn_handling,
         )
 
         self.__started = False

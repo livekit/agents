@@ -1,8 +1,8 @@
-from .bargein import (
-    BargeinDetector,
-    BargeinError,
-    BargeinEvent,
-    BargeinEventType,
+from .interruption import (
+    AdaptiveInterruptionDetector,
+    InterruptionDetectionError,
+    InterruptionEvent,
+    InterruptionEventType,
 )
 from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
@@ -16,8 +16,8 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "LLMModels",
-    "BargeinDetector",
-    "BargeinEvent",
-    "BargeinError",
-    "BargeinEventType",
+    "AdaptiveInterruptionDetector",
+    "InterruptionEvent",
+    "InterruptionDetectionError",
+    "InterruptionEventType",
 ]
