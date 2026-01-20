@@ -77,7 +77,15 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
+        endpoint_url: Literal[
+            "wss://streaming.assemblyai.com/v3/ws", "wss://streaming.eu.assemblyai.com/v3/ws"
+        ] = "wss://streaming.assemblyai.com/v3/ws",
     ):
+        """
+        Args:
+            endpoint_url: The AssemblyAI streaming WebSocket endpoint URL. Use the EU endpoint
+                (wss://streaming.eu.assemblyai.com/v3/ws) for streaming in the EU. Defaults to US
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -86,6 +94,7 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
+        self._endpoint_url = endpoint_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
         if not assemblyai_api_key:
             raise ValueError(
@@ -145,6 +154,7 @@ class STT(stt.STT):
             opts=config,
             api_key=self._api_key,
             http_session=self.session,
+            endpoint_url=self._endpoint_url,
         )
         self._streams.add(stream)
         return stream
@@ -189,12 +199,14 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
+        endpoint_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
+        self._endpoint_url = endpoint_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
         self._reconnect_event = asyncio.Event()
@@ -346,13 +358,12 @@ class SpeechStream(stt.SpeechStream):
             "User-Agent": "AssemblyAI/1.0 (integration=Livekit)",
         }
 
-        ws_url = "wss://streaming.assemblyai.com/v3/ws"
         filtered_config = {
             k: ("true" if v else "false") if isinstance(v, bool) else v
             for k, v in live_config.items()
             if v is not None
         }
-        url = f"{ws_url}?{urlencode(filtered_config)}"
+        url = f"{self._endpoint_url}?{urlencode(filtered_config)}"
         ws = await self._session.ws_connect(url, headers=headers)
         return ws
 
