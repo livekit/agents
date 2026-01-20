@@ -360,7 +360,14 @@ async def _audio_forwarding_task(
 
     def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
         if not out.first_frame_fut.done():
+            logger.info(
+                f"[AUDIO_FORWARDING] ✅ playback_started event received - setting first_frame_fut result: {ev.created_at}"
+            )
             out.first_frame_fut.set_result(ev.created_at)
+        else:
+            logger.debug(
+                f"[AUDIO_FORWARDING] playback_started event received but first_frame_fut already done"
+            )
 
     try:
         audio_output.on("playback_started", _on_playback_started)
@@ -395,6 +402,10 @@ async def _audio_forwarding_task(
         audio_output.off("playback_started", _on_playback_started)
 
         if not out.first_frame_fut.done():
+            logger.warning(
+                f"[AUDIO_FORWARDING] ⚠️ first_frame_fut not done when audio forwarding task completes - "
+                f"cancelling future. This may indicate playback_started event was not triggered."
+            )
             out.first_frame_fut.cancel()
 
         if isinstance(tts_output, _ACloseable):
