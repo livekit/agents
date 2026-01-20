@@ -93,7 +93,7 @@ class LemonSliceAPI:
         Raises:
             APIConnectionError: If the request fails after all retries
         """
-        for i in range(self._conn_options.max_retry):
+        for i in range(self._conn_options.max_retry + 1):
             try:
                 async with self._session.post(
                     self._api_url,
@@ -111,12 +111,17 @@ class LemonSliceAPI:
                         )
                     return await response.json()  # type: ignore
             except Exception as e:
+                if isinstance(e, APIStatusError) and not e.retryable:
+                    raise APIConnectionError(
+                        "Failed to call LemonSlice API with non-retryable error", retryable=False
+                    ) from e
+
                 if isinstance(e, APIConnectionError):
                     logger.warning("failed to call LemonSlice api", extra={"error": str(e)})
                 else:
                     logger.exception("failed to call lemonslice api")
 
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+                if i < self._conn_options.max_retry:
+                    await asyncio.sleep(self._conn_options._interval_for_retry(i))
 
         raise APIConnectionError("Failed to call LemonSlice API after all retries")
