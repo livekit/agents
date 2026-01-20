@@ -1980,8 +1980,10 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 # Check future state before getting result
+                # Note: This callback is registered via add_done_callback, so fut.done() should always be True
                 fut_done = fut.done()
-                fut_cancelled = fut.cancelled() if hasattr(fut, 'cancelled') else False
+                fut_cancelled = fut.cancelled()  # asyncio.Future always has cancelled() method
+                
                 logger.info(
                     f"[AGENT_ACTIVITY] _on_first_frame called (location: _realtime_generation_task) - "
                     f"fut.done: {fut_done}, fut.cancelled: {fut_cancelled}, "
@@ -1997,7 +1999,7 @@ class AgentActivity(RecognitionHooks):
                 if not fut_done:
                     logger.warning(
                         f"[AGENT_ACTIVITY] ⚠️ First frame future not done yet (location: _realtime_generation_task) - "
-                        f"this should not happen in callback"
+                        f"this should not happen in done callback"
                     )
                     return
                 
@@ -2006,16 +2008,15 @@ class AgentActivity(RecognitionHooks):
                     f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _realtime_generation_task) - "
                     f"updating to speaking state (started_at: {started_speaking_at})"
                 )
-            except asyncio.CancelledError as e:
+            except asyncio.CancelledError:
                 logger.warning(
-                    f"[AGENT_ACTIVITY] ⚠️ First frame future cancelled (location: _realtime_generation_task): {e}"
+                    f"[AGENT_ACTIVITY] ⚠️ First frame future cancelled (location: _realtime_generation_task)"
                 )
                 return
             except Exception as e:
                 logger.error(
                     f"[AGENT_ACTIVITY] ❌ Failed to get first frame result (location: _realtime_generation_task): "
-                    f"{type(e).__name__}: {e}, fut.done: {fut.done() if hasattr(fut, 'done') else 'N/A'}, "
-                    f"fut.cancelled: {fut.cancelled() if hasattr(fut, 'cancelled') else 'N/A'}",
+                    f"{type(e).__name__}: {e}, fut.done: {fut.done()}, fut.cancelled: {fut.cancelled()}",
                     exc_info=True
                 )
                 return
@@ -2398,42 +2399,52 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 # Check future state before getting result
+                # Note: This callback is registered via add_done_callback, so fut.done() should always be True
+                # However, we check anyway for safety
                 fut_done = fut.done()
-                fut_cancelled = fut.cancelled() if hasattr(fut, 'cancelled') else False
+                
+                # asyncio.Future always has cancelled() method, no need for hasattr check
+                fut_cancelled = fut.cancelled()
+                
                 logger.info(
                     f"[AGENT_ACTIVITY] _on_first_frame called (location: _realtime_generation_task_impl) - "
                     f"fut.done: {fut_done}, fut.cancelled: {fut_cancelled}, "
                     f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted}"
                 )
                 
+                # If cancelled, don't try to get result (would raise CancelledError)
                 if fut_cancelled:
                     logger.warning(
                         f"[AGENT_ACTIVITY] ⚠️ First frame future was cancelled (location: _realtime_generation_task_impl)"
                     )
                     return
                 
+                # This should never happen in a done callback, but check anyway
                 if not fut_done:
                     logger.warning(
                         f"[AGENT_ACTIVITY] ⚠️ First frame future not done yet (location: _realtime_generation_task_impl) - "
-                        f"this should not happen in callback"
+                        f"this should not happen in done callback"
                     )
                     return
                 
+                # Get result - this may raise CancelledError or other exceptions if Future completed with exception
+                # We catch these below
                 started_speaking_at = fut.result() or time.time()
                 logger.info(
                     f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _realtime_generation_task_impl) - "
                     f"updating to speaking state (started_at: {started_speaking_at})"
                 )
-            except asyncio.CancelledError as e:
+            except asyncio.CancelledError:
+                # Future was cancelled (should be caught by fut_cancelled check above, but handle anyway)
                 logger.warning(
-                    f"[AGENT_ACTIVITY] ⚠️ First frame future cancelled (location: _realtime_generation_task_impl): {e}"
+                    f"[AGENT_ACTIVITY] ⚠️ First frame future cancelled (location: _realtime_generation_task_impl)"
                 )
                 return
             except Exception as e:
+                # Future completed with an exception, or other error occurred
                 logger.error(
                     f"[AGENT_ACTIVITY] ❌ Failed to get first frame result (location: _realtime_generation_task_impl): "
-                    f"{type(e).__name__}: {e}, fut.done: {fut.done() if hasattr(fut, 'done') else 'N/A'}, "
-                    f"fut.cancelled: {fut.cancelled() if hasattr(fut, 'cancelled') else 'N/A'}",
+                    f"{type(e).__name__}: {e}, fut.done: {fut.done()}, fut.cancelled: {fut.cancelled()}",
                     exc_info=True
                 )
                 return
