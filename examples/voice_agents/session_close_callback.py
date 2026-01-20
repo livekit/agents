@@ -16,8 +16,6 @@ load_dotenv()
 # or when the worker is shutting down. When closing the session, agent will be interrupted
 # and the last agent message will be added to the chat context.
 
-server = AgentServer()
-
 
 class MyAgent(Agent):
     def __init__(self):
