@@ -2,7 +2,6 @@ from .interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDetectionError,
     InterruptionEvent,
-    InterruptionEventType,
 )
 from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
@@ -19,5 +18,4 @@ __all__ = [
     "AdaptiveInterruptionDetector",
     "InterruptionEvent",
     "InterruptionDetectionError",
-    "InterruptionEventType",
 ]

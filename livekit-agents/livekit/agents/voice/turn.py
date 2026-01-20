@@ -85,7 +85,7 @@ class TurnHandlingConfig(BaseModel):
 
     Args:
         turn_detection (TurnDetectionMode, optional): Strategy for deciding
-            when the user has finifshed speaking.
+            when the user has finished speaking.
 
             * ``"stt"`` – rely on speech-to-text end-of-utterance cues
             * ``"vad"`` – rely on Voice Activity Detection start/stop cues

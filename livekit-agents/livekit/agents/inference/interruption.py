@@ -12,7 +12,6 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from enum import Enum, unique
 from time import perf_counter_ns
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, cast, overload
 
@@ -55,20 +54,15 @@ MSG_INFERENCE_DONE = "inference_done"
 MSG_ERROR = "error"
 
 
-@unique
-class InterruptionEventType(str, Enum):
-    INTERRUPTION = "interruption"
-    OVERLAP_SPEECH_ENDED = "overlap_speech_ended"
-
-
 class InterruptionEvent(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
     """
-    Represents an event detected by the tnterruption detection model.
+    Represents an event detected by the interruption detection model.
     """
 
-    type: InterruptionEventType
-    """Type of the interruption event (e.g., interruption, overlap speech ended)."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["user_interruption_detected", "user_non_interruption_detected"]
+    """Type of the interruption event (e.g., interruption or non-interruption)."""
 
     timestamp: float
     """Timestamp (in seconds) when the event was fired."""
@@ -166,7 +160,9 @@ _EMPTY_CACHE_ENTRY = InterruptionCacheEntry(created_at=0)
 
 
 class AdaptiveInterruptionDetector(
-    rtc.EventEmitter[Literal["interruption_detected", "overlap_speech_ended", "error"]],
+    rtc.EventEmitter[
+        Literal["user_interruption_detected", "user_non_interruption_detected", "error"]
+    ],
 ):
     def __init__(
         self,
@@ -612,7 +608,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                             logger.debug("no request made for overlap speech")
                         entry = last_entry or _EMPTY_CACHE_ENTRY
                         ev = InterruptionEvent(
-                            type=InterruptionEventType.OVERLAP_SPEECH_ENDED,
+                            type="user_non_interruption_detected",
                             timestamp=time.time(),
                             is_interruption=False,
                             overlap_speech_started_at=self._overlap_speech_started_at,
@@ -678,7 +674,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         self._update_user_speech_span(self._user_speech_span, entry)
                         self._user_speech_span = None
                     ev = InterruptionEvent(
-                        type=InterruptionEventType.INTERRUPTION,
+                        type="user_interruption_detected",
                         timestamp=time.time(),
                         overlap_speech_started_at=self._overlap_speech_started_at,
                         is_interruption=entry.is_interruption,
@@ -690,7 +686,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                         probability=entry.get_probability(),
                     )
                     self._event_ch.send_nowait(ev)
-                    self._model.emit("interruption_detected", ev)
+                    self._model.emit("user_interruption_detected", ev)
                     overlap_speech_started = False
 
         tasks = [
@@ -837,7 +833,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                             logger.trace("no request made for overlap speech")
                         entry = last_entry or _EMPTY_CACHE_ENTRY
                         ev = InterruptionEvent(
-                            type=InterruptionEventType.OVERLAP_SPEECH_ENDED,
+                            type="user_non_interruption_detected",
                             timestamp=time.time(),
                             is_interruption=False,
                             overlap_speech_started_at=self._overlap_speech_started_at,
@@ -849,7 +845,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                             probability=entry.get_probability(),
                         )
                         self._event_ch.send_nowait(ev)
-                        self._model.emit("overlap_speech_ended", ev)
+                        self._model.emit("user_non_interruption_detected", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
@@ -945,7 +941,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                             },
                         )
                         ev = InterruptionEvent(
-                            type=InterruptionEventType.INTERRUPTION,
+                            type="user_interruption_detected",
                             timestamp=time.time(),
                             is_interruption=True,
                             total_duration=entry.get_total_duration(),
@@ -957,7 +953,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                             probability=entry.get_probability(),
                         )
                         self._event_ch.send_nowait(ev)
-                        self._model.emit("interruption_detected", ev)
+                        self._model.emit("user_interruption_detected", ev)
                         overlap_speech_started = False
 
                 elif msg_type == MSG_INFERENCE_DONE:
@@ -1118,7 +1114,7 @@ def _write_to_inference_s16_data(
         ).reshape(-1, frame.num_channels)
         slice_[:] = (np.sum(arr_i16, axis=1, dtype=np.int32) // frame.num_channels).astype(np.int16)
     else:
-        slice_[:] = frame.data
+        slice_[:] = np.frombuffer(frame.data, dtype=np.int16, count=frame.samples_per_channel)
     start_idx += frame.samples_per_channel
     return start_idx, frame.samples_per_channel
 

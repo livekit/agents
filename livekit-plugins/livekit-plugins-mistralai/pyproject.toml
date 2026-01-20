@@ -1,6 +1,6 @@
 [project]
 name = "livekit-plugins-mistralai"
-description = "LiveKit Agents Plugin for services from AWS"
+description = "LiveKit Agents Plugin for services from Mistral AI"
 readme = "README.md"
 requires-python = ">=3.9.0"
 license = "Apache-2.0"
