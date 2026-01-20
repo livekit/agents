@@ -45,8 +45,8 @@ class LemonSliceAPI:
             conn_options: Connection options for the aiohttp session.
             session: An optional existing aiohttp.ClientSession to use for requests.
         """
-        ls_api_key = api_key or os.getenv("LEMONSLICE_API_KEY")
-        if ls_api_key is None:
+        ls_api_key = api_key if utils.is_given(api_key) else os.getenv("LEMONSLICE_API_KEY")
+        if not ls_api_key:
             raise LemonSliceException("LEMONSLICE_API_KEY must be set")
         self._api_key = ls_api_key
 
@@ -69,24 +69,24 @@ class LemonSliceAPI:
     async def start_agent_session(
         self,
         *,
+        livekit_url: str,
+        livekit_token: str,
         agent_id: NotGivenOr[str] = NOT_GIVEN,
         agent_image_url: NotGivenOr[str] = NOT_GIVEN,
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
-        livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_token: NotGivenOr[str] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
         """
         Initiates a new LemonSlice agent session.
 
         Args:
+            livekit_url: The LiveKit Cloud server URL.
+            livekit_token: The LiveKit access token for the agent.
             agent_id: The ID of the LemonSlice agent to add to the session.
             agent_image_url: The URL of the image to use as the agent's avatar.
             agent_prompt: A prompt that subtly influences the avatar's movements and expressions.
             idle_timeout: The idle timeout, in seconds.
-            livekit_url: The LiveKit Cloud server URL.
-            livekit_token: The LiveKit access token for the agent.
             extra_payload: Additional payload to include in the request.
 
         Returns:
@@ -98,15 +98,12 @@ class LemonSliceAPI:
         if utils.is_given(agent_id) and utils.is_given(agent_image_url):
             raise LemonSliceException("Only one of agent_id or agent_image_url can be provided")
 
-        properties: dict[str, Any] = {}
-        if utils.is_given(livekit_url):
-            properties["livekit_url"] = livekit_url
-        if utils.is_given(livekit_token):
-            properties["livekit_token"] = livekit_token
-
         payload: dict[str, Any] = {
             "transport_type": "livekit",
-            "properties": properties,
+            "properties": {
+                "livekit_url": livekit_url,
+                "livekit_token": livekit_token,
+            },
         }
 
         if utils.is_given(agent_id):
