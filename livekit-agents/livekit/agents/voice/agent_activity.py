@@ -2902,11 +2902,11 @@ class AgentActivity(RecognitionHooks):
             detector = inference.AdaptiveInterruptionDetector()
 
         detector.on(
-            "interruption_detected",
+            "user_interruption_detected",
             lambda ev: self._session.emit("user_interruption_detected", ev),
         )
         detector.on(
-            "overlap_speech_ended",
+            "user_non_interruption_detected",
             lambda ev: self._session.emit("user_non_interruption_detected", ev),
         )
         return detector

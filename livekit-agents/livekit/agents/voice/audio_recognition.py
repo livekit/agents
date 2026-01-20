@@ -763,7 +763,7 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     async def _on_interruption_event(self, ev: inference.InterruptionEvent) -> None:
-        if ev.type == inference.InterruptionEventType.INTERRUPTION:
+        if ev.type == "user_interruption_detected":
             self._hooks.on_interruption(ev)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
