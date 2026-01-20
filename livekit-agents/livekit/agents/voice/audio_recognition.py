@@ -108,6 +108,8 @@ class AudioRecognition:
         turn_detection: TurnDetectionMode | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
+        stt_model: str | None = None,
+        stt_provider: str | None = None,
     ) -> None:
         self._session = session
         self._hooks = hooks
@@ -121,6 +123,8 @@ class AudioRecognition:
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
+        self._stt_model = stt_model
+        self._stt_provider = stt_provider
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
@@ -1014,5 +1018,15 @@ class AudioRecognition:
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
+
+        # add STT model/provider attributes
+        if self._stt_model:
+            self._user_turn_span.set_attribute(
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._stt_model
+            )
+        if self._stt_provider:
+            self._user_turn_span.set_attribute(
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME, self._stt_provider
+            )
 
         return self._user_turn_span

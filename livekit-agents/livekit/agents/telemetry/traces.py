@@ -329,7 +329,7 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    return MessageToDict(item_pb)
+    return MessageToDict(item_pb, preserving_proto_field_name=True)
 
 
 async def _upload_session_report(
@@ -370,6 +370,7 @@ async def _upload_session_report(
             "session.options": vars(report.options),
             "session.report_timestamp": report.timestamp,
             "agent_name": agent_name,
+            "usage": [u.to_dict() for u in report.usage] if report.usage else None,
         },
     )
 

@@ -15,6 +15,7 @@ from livekit.agents import (
     metrics,
     room_io,
 )
+from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.turn import TurnHandlingConfig
 from livekit.plugins import silero
@@ -36,6 +37,7 @@ class MyAgent(Agent):
             "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor."
             "you will speak english to the user",
+            tools=[EndCallTool()],
         )
 
     async def on_enter(self) -> None:
@@ -110,16 +112,12 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     # log metrics as they are emitted, and total usage after session is over
-    usage_collector = metrics.UsageCollector()
-
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
 
-    async def log_usage() -> None:
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+    async def log_usage():
+        logger.info(f"Usage: {session.usage}")
 
     # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)

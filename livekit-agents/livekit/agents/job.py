@@ -274,6 +274,7 @@ class JobContext:
             started_at=session._started_at,
             events=session._recorded_events,
             chat_history=session.history.copy(),
+            usage=session.usage,
         )
 
         if recorder_io:
