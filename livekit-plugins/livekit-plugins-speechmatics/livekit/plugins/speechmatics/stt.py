@@ -91,7 +91,9 @@ class STTOptions:
     known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
 
     # Custom dictionary
-    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
+    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(
+        default_factory=list
+    )
 
     # -------------------
     # Advanced features
@@ -270,10 +272,10 @@ class STT(stt.STT):
 
         # Create STT options from parameters
         self._stt_options = STTOptions(
-            language=_set(language),
+            language=language,
             output_locale=_set(output_locale),
             domain=_set(domain),
-            turn_detection_mode=_set(turn_detection_mode),
+            turn_detection_mode=turn_detection_mode,
             speaker_active_format=_set(speaker_active_format),
             speaker_passive_format=_set(speaker_passive_format),
             focus_speakers=_set(focus_speakers) or [],
@@ -287,14 +289,16 @@ class STT(stt.STT):
             end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
             punctuation_overrides=_set(punctuation_overrides),
             include_partials=_set(include_partials),
-            enable_diarization=_set(enable_diarization),
+            enable_diarization=enable_diarization,
             speaker_sensitivity=_set(speaker_sensitivity),
             max_speakers=_set(max_speakers),
             prefer_current_speaker=_set(prefer_current_speaker),
         )
 
         # Set API key
-        self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
+        self._api_key: str = (
+            api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
+        )
 
         # Set base URL
         self._base_url: str = (
@@ -316,10 +320,6 @@ class STT(stt.STT):
         # Initialize config and stream
         self._config: VoiceAgentConfig | None = None
         self._stream: SpeechStream | None = None
-
-    @property
-    def model(self) -> str:
-        return str(self._stt_options.turn_detection_mode) if self._stt_options else "UNKNOWN"
 
     @property
     def provider(self) -> str:
@@ -354,7 +354,9 @@ class STT(stt.STT):
         # Return the new stream
         return self._stream
 
-    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> VoiceAgentConfig:
+    def _prepare_config(
+        self, language: NotGivenOr[str] = NOT_GIVEN
+    ) -> VoiceAgentConfig:
         """Prepare VoiceAgentConfig from STTOptions."""
 
         # Reference to STT options
@@ -469,7 +471,9 @@ class STT(stt.STT):
         self._stream._speaker_result_event.clear()
 
         # Send message to client
-        await self._stream._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
+        await self._stream._client.send_message(
+            {"message": ClientMessageType.GET_SPEAKERS.value}
+        )
 
         # Wait the result (5 second timeout)
         try:
@@ -542,6 +546,12 @@ class SpeechStream(stt.RecognizeStream):
         ):
             messages.append(AgentServerMessageType.SPEAKERS_RESULT)
 
+        # Optional debug messages to log
+        if True:
+            messages.append(AgentServerMessageType.END_OF_UTTERANCE)
+            messages.append(AgentServerMessageType.END_OF_TURN_PREDICTION)
+            messages.append(AgentServerMessageType.DIAGNOSTICS)
+
         # Add message handlers
         for event in messages:
             self._client.on(event, add_message)  # type: ignore[arg-type]
@@ -579,11 +589,11 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 message = await self._msg_queue.get()
-                await self._handle_message(message)
+                self._handle_message(message)
         except asyncio.CancelledError:
             pass
 
-    async def _handle_message(self, message: dict[str, Any]) -> None:
+    def _handle_message(self, message: dict[str, Any]) -> None:
         """Handle a message from the STT client."""
 
         # Get the message type
@@ -606,51 +616,55 @@ class SpeechStream(stt.RecognizeStream):
 
         # Handle the messages
         elif event == AgentServerMessageType.ADD_PARTIAL_SEGMENT:
-            await self._handle_partial_segment(message)
+            self._handle_partial_segment(message)
         elif event == AgentServerMessageType.ADD_SEGMENT:
-            await self._handle_segment(message)
+            self._handle_segment(message)
         elif event == AgentServerMessageType.START_OF_TURN:
-            await self._handle_start_of_turn(message)
+            self._handle_start_of_turn(message)
         elif event == AgentServerMessageType.END_OF_TURN:
-            await self._handle_end_of_turn(message)
+            self._handle_end_of_turn(message)
 
         # Handle the speaker result message
         elif event == AgentServerMessageType.SPEAKERS_RESULT:
-            await self._handle_speakers_result(message)
+            self._handle_speakers_result(message)
 
         # Log all other messages
         else:
             logger.debug(f"{event} -> {message}")
 
-    async def _handle_partial_segment(self, message: dict[str, Any]) -> None:
+    def _handle_partial_segment(self, message: dict[str, Any]) -> None:
         """Handle AddPartialSegment events."""
         segments: list[dict[str, Any]] = message.get("segments", [])
         if segments:
-            await self._send_frames(segments, is_final=False)
+            self._send_frames(segments, is_final=False)
 
-    async def _handle_segment(self, message: dict[str, Any]) -> None:
+    def _handle_segment(self, message: dict[str, Any]) -> None:
         """Handle AddSegment events."""
         segments: list[dict[str, Any]] = message.get("segments", [])
         if segments:
-            await self._send_frames(segments, is_final=True)
+            self._send_frames(segments, is_final=True)
 
-    async def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
+    def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+        )
 
-    async def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
+    def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+        )
 
-    async def _handle_speakers_result(self, message: dict[str, Any]) -> None:
+    def _handle_speakers_result(self, message: dict[str, Any]) -> None:
         """Handle SpeakersResult events."""
         logger.debug("SpeakersResult received")
         self._speaker_result = message.get("speakers", [])
         self._speaker_result_event.set()
 
-    async def _send_frames(self, segments: list[dict[str, Any]], is_final: bool) -> None:
+    def _send_frames(self, segments: list[dict[str, Any]], is_final: bool) -> None:
         """Send frames to the pipeline."""
 
         # Check for empty segments
