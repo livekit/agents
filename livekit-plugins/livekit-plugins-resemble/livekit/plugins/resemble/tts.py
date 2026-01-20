@@ -48,7 +48,7 @@ class _TTSOptions:
     voice_uuid: str
     sample_rate: int
     tokenizer: tokenize.SentenceTokenizer
-    model: str
+    model: str | None
 
 
 class TTS(tts.TTS):
@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         voice_uuid: str | None = None,
-        model: TTSModels | str = "resemble",
+        model: TTSModels | str | None = None,
         tokenizer: tokenize.SentenceTokenizer | None = None,
         sample_rate: int = 44100,
         http_session: aiohttp.ClientSession | None = None,
@@ -70,7 +70,7 @@ class TTS(tts.TTS):
 
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice. Defaults to None.
-            model (TTSModels | str, optional): The model to use for synthesis. Can be "resemble", "chatterbox", or "chatterbox-turbo". Defaults to "resemble".
+            model (TTSModels | str | None, optional): The model to use for synthesis. Can be "chatterbox" or "chatterbox-turbo". Defaults to None.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 44100.
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
@@ -113,7 +113,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return self._opts.model
+        return self._opts.model or "unknown"
 
     @property
     def provider(self) -> str:
@@ -144,14 +144,14 @@ class TTS(tts.TTS):
         self,
         *,
         voice_uuid: str | None = None,
-        model: TTSModels | str = "resemble",
+        model: TTSModels | str | None = None,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
 
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice.
-            model (TTSModels | str, optional): The model to use for synthesis.
+            model (TTSModels | str | None, optional): The model to use for synthesis.
         """  # noqa: E501
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
         self._opts.model = model if model is not None else self._opts.model
@@ -191,8 +191,9 @@ class ChunkedStream(tts.ChunkedStream):
                 "data": self._input_text,
                 "sample_rate": self._opts.sample_rate,
                 "precision": "PCM_16",
-                "model": self._opts.model,
             }
+            if self._opts.model is not None:
+                payload["model"] = self._opts.model
 
             async with self._tts._ensure_session().post(
                 RESEMBLE_REST_API_URL,
@@ -326,8 +327,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "sample_rate": self._opts.sample_rate,
                     "precision": "PCM_16",
                     "output_format": "mp3",
-                    "model": self._opts.model,
                 }
+                if self._opts.model is not None:
+                    payload["model"] = self._opts.model
                 self._mark_started()
                 await ws.send_str(json.dumps(payload))
 
