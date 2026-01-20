@@ -32,6 +32,9 @@ class MyAgent(Agent):
             tools=[EndCallTool(on_end_call=on_end_call)],
         )
 
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="say hello to the user")
+
 
 server = AgentServer()
 

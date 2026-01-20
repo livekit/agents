@@ -35,6 +35,14 @@ class EndCallTool(Toolset):
         delete_room: bool = True,
         on_end_call: Callable[[RunContext], Awaitable[None]] | None = _default_on_end_call,
     ):
+        """
+        This tool allows the agent to end the call and disconnect from the room.
+
+        Args:
+            extra_instructions: Additional instructions to add to the end call tool.
+            delete_room: Whether to delete the room when the user ends the call.
+            on_end_call: Callback to be called when the user ends the call.
+        """
         super().__init__()
         self._delete_room = delete_room
         self._extra_instructions = extra_instructions
