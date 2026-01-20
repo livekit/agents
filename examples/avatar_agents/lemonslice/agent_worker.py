@@ -25,6 +25,8 @@ async def entrypoint(ctx: JobContext):
     )
 
     lemonslice_image_url = os.getenv("LEMONSLICE_IMAGE_URL")
+    if lemonslice_image_url is None:
+        raise ValueError("LEMONSLICE_IMAGE_URL must be set")
     avatar = lemonslice.AvatarSession(
         agent_image_url=lemonslice_image_url,
         agent_prompt="Be expressive in your movements and use your hands while talking.",  # Prompt to guide the avatar's movements
