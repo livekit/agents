@@ -1668,9 +1668,21 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
-            except BaseException:
+                logger.info(
+                    f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _pipeline_reply_task) - "
+                    f"updating to speaking state (started_at: {started_speaking_at}, "
+                    f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted})"
+                )
+            except BaseException as e:
+                logger.warning(
+                    f"[AGENT_ACTIVITY] ⚠️ Failed to get first frame result (location: _pipeline_reply_task): {e}"
+                )
                 return
 
+            logger.info(
+                f"[AGENT_ACTIVITY] 🔄 Calling _update_agent_state('speaking') "
+                f"with start_time={started_speaking_at} (location: _pipeline_reply_task)"
+            )
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -1968,9 +1980,21 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
-            except BaseException:
+                logger.info(
+                    f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _realtime_generation_task) - "
+                    f"updating to speaking state (started_at: {started_speaking_at}, "
+                    f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted})"
+                )
+            except BaseException as e:
+                logger.warning(
+                    f"[AGENT_ACTIVITY] ⚠️ Failed to get first frame result (location: _realtime_generation_task): {e}"
+                )
                 return
 
+            logger.info(
+                f"[AGENT_ACTIVITY] 🔄 Calling _update_agent_state('speaking') "
+                f"with start_time={started_speaking_at} (location: _realtime_generation_task)"
+            )
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2345,9 +2369,21 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
-            except BaseException:
+                logger.info(
+                    f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _realtime_generation_task_impl) - "
+                    f"updating to speaking state (started_at: {started_speaking_at}, "
+                    f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted})"
+                )
+            except BaseException as e:
+                logger.warning(
+                    f"[AGENT_ACTIVITY] ⚠️ Failed to get first frame result (location: _realtime_generation_task_impl): {e}"
+                )
                 return
 
+            logger.info(
+                f"[AGENT_ACTIVITY] 🔄 Calling _update_agent_state('speaking') "
+                f"with start_time={started_speaking_at} (location: _realtime_generation_task_impl)"
+            )
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
