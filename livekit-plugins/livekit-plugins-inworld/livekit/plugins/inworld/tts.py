@@ -224,9 +224,17 @@ class _InworldConnection:
         """
         await self.connect()
 
+        # Fail fast if connection is closed
+        if self._closed or self._ws is None:
+            raise APIConnectionError("Connection is closed")
+
         start_time = time.time()
 
         while True:
+            # Check closed state at start of each iteration
+            if self._closed or self._ws is None:
+                raise APIConnectionError("Connection is closed")
+
             # Use lock to ensure atomic capacity check + context creation
             async with self._acquire_lock:
                 if self.has_capacity:
@@ -255,6 +263,10 @@ class _InworldConnection:
                 await asyncio.wait_for(self._context_available.wait(), timeout=remaining)
                 # Clear after wait returns to avoid lost-wakeup race
                 self._context_available.clear()
+
+                # Check closed state after waking
+                if self._closed or self._ws is None:
+                    raise APIConnectionError("Connection is closed")
             except asyncio.TimeoutError:
                 raise APITimeoutError() from None
 
@@ -447,6 +459,13 @@ class _InworldConnection:
         self._contexts.clear()
         self._closed = True
 
+        # Wake local waiters so they can fail fast
+        self._context_available.set()
+
+        # Notify pool so callers blocked on capacity can create replacement connections
+        if self._on_capacity_available:
+            self._on_capacity_available()
+
     async def aclose(self) -> None:
         """Close the connection and all contexts."""
         self._closed = True
@@ -528,6 +547,9 @@ class _ConnectionPool:
         remaining_timeout = timeout
 
         while True:
+            conn: _InworldConnection | None = None
+            created_new = False
+
             async with self._pool_lock:
                 # Start cleanup task if not already running
                 if self._cleanup_task is None:
@@ -537,39 +559,44 @@ class _ConnectionPool:
                 self._connections = [c for c in self._connections if not c._closed]
 
                 # First, try to find a connection with capacity
-                for conn in self._connections:
-                    if not conn._closed and conn.has_capacity:
-                        ctx_id, waiter = await conn.acquire_context(
-                            emitter, opts, remaining_timeout
-                        )
-                        return ctx_id, waiter, conn
+                for existing in self._connections:
+                    if not existing._closed and existing.has_capacity:
+                        conn = existing
+                        break
 
                 # No available capacity - can we create a new connection?
-                if len(self._connections) < self._max_connections:
+                if conn is None and len(self._connections) < self._max_connections:
                     conn = _InworldConnection(
                         session=self._session,
                         ws_url=self._ws_url,
                         authorization=self._authorization,
                         on_capacity_available=self.notify_capacity_available,
                     )
-                    try:
-                        ctx_id, waiter = await conn.acquire_context(
-                            emitter, opts, remaining_timeout
-                        )
-                        self._connections.append(conn)
-                        logger.debug(
-                            "Created new Inworld connection",
-                            extra={"pool_size": len(self._connections)},
-                        )
-                        return ctx_id, waiter, conn
-                    except Exception:
+                    created_new = True
+
+            # Acquire context OUTSIDE the lock to avoid head-of-line blocking
+            if conn:
+                try:
+                    ctx_id, waiter = await conn.acquire_context(
+                        emitter, opts, remaining_timeout
+                    )
+                except Exception:
+                    if created_new:
                         await conn.aclose()
-                        raise
+                    raise
 
-                # At max connections and all at capacity - wait for one to free up
-                pass
+                # Add newly created connection to pool
+                if created_new:
+                    async with self._pool_lock:
+                        if not conn._closed:
+                            self._connections.append(conn)
+                            logger.debug(
+                                "Created new Inworld connection",
+                                extra={"pool_size": len(self._connections)},
+                            )
+                return ctx_id, waiter, conn
 
-            # Wait outside the lock
+            # At max connections and all at capacity - wait for one to free up
             elapsed = time.time() - start_time
             remaining_timeout = timeout - elapsed
             if remaining_timeout <= 0:
