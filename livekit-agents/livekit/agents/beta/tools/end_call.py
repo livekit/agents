@@ -23,10 +23,6 @@ Don't generate any other text or response when the tool is called.
 """
 
 
-async def _default_on_end_call(ctx: RunContext) -> None:
-    await ctx.session.generate_reply(instructions="say goodbye to the user", tool_choice="none")
-
-
 class EndCallTool(Toolset):
     def __init__(
         self,
