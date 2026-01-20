@@ -21,7 +21,7 @@ class MyAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant.",
-            tools=[EndCallTool(end_instructions="thanks the user for calling and goodbye")],
+            tools=[EndCallTool(end_instructions="thanks the user for calling and tell them goodbye")],
         )
 
     async def on_enter(self) -> None:
@@ -36,7 +36,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt="assemblyai/universal-streaming",
         llm="openai/gpt-4.1-mini",
-        tts="elevenlabs",
+        tts="cartesia/sonic-3",
         vad=silero.VAD.load(),
     )
 

@@ -6,7 +6,7 @@ from ...llm import Tool, Toolset, function_tool
 from ...log import logger
 from ...voice.events import CloseEvent, RunContext
 
-END_CALL_INSTRUCTIONS = """
+END_CALL_DESCRIPTION = """
 Ends the current call and disconnects immediately.
 
 Call when:
@@ -27,7 +27,7 @@ class EndCallTool(Toolset):
     def __init__(
         self,
         *,
-        extra_instructions: str = "",
+        extra_description: str = "",
         delete_room: bool = True,
         end_instructions: str
         | Callable[[RunContext], Awaitable[None]]
@@ -38,7 +38,7 @@ class EndCallTool(Toolset):
 
         Args:
             extra_instructions: Additional instructions to add to the end call tool.
-            delete_room: Whether to delete the room when the user ends the call.
+            delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
             end_instructions: If a string is provided, it will be used as the instructions of
                 `session.generate_reply` when the user ends the call. If a callback, it will be called
                 when the user ends the call.
