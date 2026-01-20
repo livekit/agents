@@ -2,16 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentServer,
-    AgentSession,
-    CloseEvent,
-    JobContext,
-    cli,
-    room_io,
-    utils,
-)
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, RunContext, cli
 from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import silero
 
@@ -30,20 +21,15 @@ server = AgentServer()
 
 class MyAgent(Agent):
     def __init__(self):
+        async def on_end_call(ctx: RunContext) -> None:
+            logger.info("generating goodbye message")
+            await ctx.session.generate_reply(
+                instructions="say goodbye to the user", tool_choice="none"
+            )
+
         super().__init__(
             instructions="You are a helpful assistant.",
-            tools=[EndCallTool()],
-        )
-
-    @utils.log_exceptions(logger=logger)
-    async def on_exit(self) -> None:
-        logger.info("exiting the agent")
-        if self.session.current_speech:
-            await self.session.current_speech
-
-        logger.info("generating goodbye message")
-        await self.session.generate_reply(
-            instructions="say goodbye to the user", tool_choice="none"
+            tools=[EndCallTool(on_end_call=on_end_call)],
         )
 
 
@@ -55,20 +41,11 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt="assemblyai/universal-streaming",
         llm="openai/gpt-4.1-mini",
-        tts="rime/arcana",
+        tts="elevenlabs",
         vad=silero.VAD.load(),
     )
 
-    # session will be closed automatically when the linked participant disconnects
-    # with reason CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED
-    # or you can disable it by setting the RoomInputOptions.close_on_disconnect to False
-    await session.start(
-        agent=MyAgent(),
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            delete_room_on_close=True,
-        ),
-    )
+    await session.start(agent=MyAgent(), room=ctx.room)
 
     @session.on("close")
     def on_close(ev: CloseEvent):
