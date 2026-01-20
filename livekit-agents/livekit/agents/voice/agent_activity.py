@@ -1202,9 +1202,6 @@ class AgentActivity(RecognitionHooks):
 
             if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
                 self._session.output.audio.pause()
-                logger.info(
-                    "[AGENT_ACTIVITY] ✅ User interrupted agent (pause) - updating to listening state"
-                )
                 self._session._update_agent_state("listening")
             else:
                 if self._rt_session is not None:
@@ -1668,21 +1665,8 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
-                logger.info(
-                    f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _pipeline_reply_task) - "
-                    f"updating to speaking state (started_at: {started_speaking_at}, "
-                    f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted})"
-                )
             except BaseException as e:
-                logger.warning(
-                    f"[AGENT_ACTIVITY] ⚠️ Failed to get first frame result (location: _pipeline_reply_task): {e}"
-                )
                 return
-
-            logger.info(
-                f"[AGENT_ACTIVITY] 🔄 Calling _update_agent_state('speaking') "
-                f"with start_time={started_speaking_at} (location: _pipeline_reply_task)"
-            )
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -1791,10 +1775,6 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
-            logger.warning(
-                f"[AGENT_ACTIVITY] ⚠️  Force transition from speaking to listening "
-                f"(location: _pipeline_reply_task completion, stack: {__name__})"
-            )
             self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
@@ -1924,9 +1904,6 @@ class AgentActivity(RecognitionHooks):
             await text_tee.aclose()
             return
 
-        logger.info(
-            "[AGENT_ACTIVITY] ✅ User speech ended, authorization complete - updating to thinking state"
-        )
         self._session._update_agent_state("thinking")
 
         authorization_tasks: list[asyncio.Future[Any]] = [
@@ -1943,9 +1920,6 @@ class AgentActivity(RecognitionHooks):
             await text_tee.aclose()
             return
 
-        logger.info(
-            "[AGENT_ACTIVITY] ✅ User speech ended, waiting for authorization - updating to thinking state"
-        )
         self._session._update_agent_state("thinking")
 
         reply_started_at = time.time()
@@ -1981,50 +1955,15 @@ class AgentActivity(RecognitionHooks):
             try:
                 # Check future state before getting result
                 # Note: This callback is registered via add_done_callback, so fut.done() should always be True
-                fut_done = fut.done()
-                fut_cancelled = fut.cancelled()  # asyncio.Future always has cancelled() method
-                
-                logger.info(
-                    f"[AGENT_ACTIVITY] _on_first_frame called (location: _realtime_generation_task) - "
-                    f"fut.done: {fut_done}, fut.cancelled: {fut_cancelled}, "
-                    f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted}"
-                )
-                
-                if fut_cancelled:
-                    logger.warning(
-                        f"[AGENT_ACTIVITY] ⚠️ First frame future was cancelled (location: _realtime_generation_task)"
-                    )
+                if fut.cancelled():
                     return
                 
-                if not fut_done:
-                    logger.warning(
-                        f"[AGENT_ACTIVITY] ⚠️ First frame future not done yet (location: _realtime_generation_task) - "
-                        f"this should not happen in done callback"
-                    )
+                if not fut.done():
                     return
                 
                 started_speaking_at = fut.result() or time.time()
-                logger.info(
-                    f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _realtime_generation_task) - "
-                    f"updating to speaking state (started_at: {started_speaking_at})"
-                )
-            except asyncio.CancelledError:
-                logger.warning(
-                    f"[AGENT_ACTIVITY] ⚠️ First frame future cancelled (location: _realtime_generation_task)"
-                )
+            except (asyncio.CancelledError, Exception):
                 return
-            except Exception as e:
-                logger.error(
-                    f"[AGENT_ACTIVITY] ❌ Failed to get first frame result (location: _realtime_generation_task): "
-                    f"{type(e).__name__}: {e}, fut.done: {fut.done()}, fut.cancelled: {fut.cancelled()}",
-                    exc_info=True
-                )
-                return
-
-            logger.info(
-                f"[AGENT_ACTIVITY] 🔄 Calling _update_agent_state('speaking') "
-                f"with start_time={started_speaking_at} (location: _realtime_generation_task)"
-            )
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2138,10 +2077,6 @@ class AgentActivity(RecognitionHooks):
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
-                logger.warning(
-                    f"[AGENT_ACTIVITY] ⚠️  Force transition from speaking to listening "
-                    f"(location: interrupted speech_handle, first_frame_fut.done: {audio_out.first_frame_fut.done() if audio_out else 'N/A'})"
-                )
                 self._session._update_agent_state("listening")
 
             speech_handle._mark_generation_done()
@@ -2171,10 +2106,6 @@ class AgentActivity(RecognitionHooks):
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
         elif self._session.agent_state == "speaking":
-            logger.warning(
-                f"[AGENT_ACTIVITY] ⚠️  Force transition from speaking to listening "
-                f"(location: tool output processing, tool_output length: {len(tool_output.output)})"
-            )
             self._session._update_agent_state("listening")
 
         await text_tee.aclose()
@@ -2401,58 +2332,15 @@ class AgentActivity(RecognitionHooks):
                 # Check future state before getting result
                 # Note: This callback is registered via add_done_callback, so fut.done() should always be True
                 # However, we check anyway for safety
-                fut_done = fut.done()
-                
-                # asyncio.Future always has cancelled() method, no need for hasattr check
-                fut_cancelled = fut.cancelled()
-                
-                logger.info(
-                    f"[AGENT_ACTIVITY] _on_first_frame called (location: _realtime_generation_task_impl) - "
-                    f"fut.done: {fut_done}, fut.cancelled: {fut_cancelled}, "
-                    f"fut_type: {type(fut).__name__}, speech_handle.interrupted: {speech_handle.interrupted}"
-                )
-                
-                # If cancelled, don't try to get result (would raise CancelledError)
-                if fut_cancelled:
-                    logger.warning(
-                        f"[AGENT_ACTIVITY] ⚠️ First frame future was cancelled (location: _realtime_generation_task_impl)"
-                    )
+                if fut.cancelled():
                     return
                 
-                # This should never happen in a done callback, but check anyway
-                if not fut_done:
-                    logger.warning(
-                        f"[AGENT_ACTIVITY] ⚠️ First frame future not done yet (location: _realtime_generation_task_impl) - "
-                        f"this should not happen in done callback"
-                    )
+                if not fut.done():
                     return
                 
-                # Get result - this may raise CancelledError or other exceptions if Future completed with exception
-                # We catch these below
                 started_speaking_at = fut.result() or time.time()
-                logger.info(
-                    f"[AGENT_ACTIVITY] ✅ First audio frame received (location: _realtime_generation_task_impl) - "
-                    f"updating to speaking state (started_at: {started_speaking_at})"
-                )
-            except asyncio.CancelledError:
-                # Future was cancelled (should be caught by fut_cancelled check above, but handle anyway)
-                logger.warning(
-                    f"[AGENT_ACTIVITY] ⚠️ First frame future cancelled (location: _realtime_generation_task_impl)"
-                )
+            except (asyncio.CancelledError, Exception):
                 return
-            except Exception as e:
-                # Future completed with an exception, or other error occurred
-                logger.error(
-                    f"[AGENT_ACTIVITY] ❌ Failed to get first frame result (location: _realtime_generation_task_impl): "
-                    f"{type(e).__name__}: {e}, fut.done: {fut.done()}, fut.cancelled: {fut.cancelled()}",
-                    exc_info=True
-                )
-                return
-
-            logger.info(
-                f"[AGENT_ACTIVITY] 🔄 Calling _update_agent_state('speaking') "
-                f"with start_time={started_speaking_at} (location: _realtime_generation_task_impl)"
-            )
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,

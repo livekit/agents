@@ -1197,20 +1197,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         old_state = self._agent_state
         self._agent_state = state
         
-        # Debug logging for state changes
-        logger.info(
-            f"[AGENT_SESSION] 🔄 State update: {old_state} -> {state} "
-            f"(session_id: {getattr(self, 'session_id', 'unknown')})"
-        )
-        
         event = AgentStateChangedEvent(old_state=old_state, new_state=state)
         self.emit("agent_state_changed", event)
-        
-        listener_count = len(getattr(self, '_listeners', {}).get('agent_state_changed', []))
-        logger.info(
-            f"[AGENT_SESSION] ✅ Emitted agent_state_changed event: {old_state} -> {state} "
-            f"(listeners: {listener_count})"
-        )
 
     def _update_user_state(
         self, state: UserState, *, last_speaking_time: float | None = None

@@ -92,12 +92,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await self._subscribed_fut
 
-        logger.info(
-            f"[PARTICIPANT_AUDIO] capture_frame called - "
-            f"frame.duration: {frame.duration}, sample_rate: {frame.sample_rate}, "
-            f"_forwarding_task exists: {self._forwarding_task is not None}, "
-            f"_forwarding_task.done: {self._forwarding_task.done() if self._forwarding_task else 'N/A'}"
-        )
         await super().capture_frame(frame)
 
         if self._flush_task and not self._flush_task.done():
@@ -107,11 +101,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
         for f in self._audio_bstream.push(frame.data):
             self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
-        
-        logger.info(
-            f"[PARTICIPANT_AUDIO] capture_frame completed - "
-            f"pushed_duration: {self._pushed_duration}, audio_buf size: {self._audio_buf.qsize()}"
-        )
 
     def flush(self) -> None:
         super().flush()
@@ -185,15 +174,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
-        frame_count = 0
         async for frame in self._audio_buf:
-            frame_count += 1
-            
             if not self._playback_enabled.is_set():
-                logger.info(
-                    f"[PARTICIPANT_AUDIO] _forward_audio: playback not enabled, waiting... "
-                    f"(frame_count: {frame_count})"
-                )
                 self._audio_source.clear_queue()
                 await self._playback_enabled.wait()
                 # TODO(long): save the frames in the queue and play them later
@@ -201,26 +183,13 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
             if self._interrupted_event.is_set() or self._pushed_duration == 0:
                 if self._interrupted_event.is_set():
-                    logger.info(
-                        f"[PARTICIPANT_AUDIO] _forward_audio: interrupted, skipping frame "
-                        f"(frame_count: {frame_count}, pushed_duration: {self._pushed_duration})"
-                    )
                     if self._flush_task:
                         await self._flush_task
-                elif self._pushed_duration == 0:
-                    logger.info(
-                        f"[PARTICIPANT_AUDIO] _forward_audio: pushed_duration is 0, skipping frame "
-                        f"(frame_count: {frame_count})"
-                    )
 
                 # ignore frames if interrupted
                 continue
 
             if not self._first_frame_event.is_set():
-                logger.info(
-                    f"[PARTICIPANT_AUDIO] ✅ First frame received - triggering playback_started event "
-                    f"(frame_count: {frame_count}, pushed_duration: {self._pushed_duration})"
-                )
                 self._first_frame_event.set()
                 self.on_playback_started(created_at=time.time())
             await self._audio_source.capture_frame(frame)
