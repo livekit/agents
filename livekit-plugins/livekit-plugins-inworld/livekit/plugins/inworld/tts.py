@@ -577,9 +577,7 @@ class _ConnectionPool:
             # Acquire context OUTSIDE the lock to avoid head-of-line blocking
             if conn:
                 try:
-                    ctx_id, waiter = await conn.acquire_context(
-                        emitter, opts, remaining_timeout
-                    )
+                    ctx_id, waiter = await conn.acquire_context(emitter, opts, remaining_timeout)
                 except Exception:
                     if created_new:
                         await conn.aclose()
@@ -632,7 +630,7 @@ class _ConnectionPool:
                     if (
                         conn.is_idle
                         and now - conn.last_activity > self._idle_timeout
-                        and len(self._connections) > 1  # Keep at least one connection
+                        and len(self._connections) - len(connections_to_close) > 1
                     ):
                         connections_to_close.append(conn)
 
