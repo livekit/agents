@@ -12,7 +12,6 @@ from livekit.agents import (
     APIConnectOptions,
     NotGivenOr,
     get_job_context,
-    utils,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -44,23 +43,13 @@ class AvatarSession:
         self._agent_image_url = agent_image_url
         self._agent_prompt = agent_prompt
         self._idle_timeout = idle_timeout
+        self._api_url = api_url
+        self._api_key = api_key
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
-        self._api = LemonSliceAPI(
-            api_url=api_url,
-            api_key=api_key,
-            conn_options=conn_options,
-            session=self._ensure_http_session(),
-        )
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
-        if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
-
-        return self._http_session
 
     async def start(
         self,
@@ -93,14 +82,20 @@ class AvatarSession:
             .to_jwt()
         )
 
-        await self._api.start_agent_session(
-            agent_id=self._agent_id,
-            agent_image_url=self._agent_image_url,
-            agent_prompt=self._agent_prompt,
-            idle_timeout=self._idle_timeout,
-            livekit_url=livekit_url,
-            livekit_token=livekit_token,
-        )
+        async with LemonSliceAPI(
+            api_url=self._api_url,
+            api_key=self._api_key,
+            conn_options=self._conn_options,
+            session=self._http_session,
+        ) as lemonslice_api:
+            await lemonslice_api.start_agent_session(
+                agent_id=self._agent_id,
+                agent_image_url=self._agent_image_url,
+                agent_prompt=self._agent_prompt,
+                idle_timeout=self._idle_timeout,
+                livekit_url=livekit_url,
+                livekit_token=livekit_token,
+            )
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
