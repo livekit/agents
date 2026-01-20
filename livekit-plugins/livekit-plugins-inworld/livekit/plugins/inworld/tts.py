@@ -155,6 +155,7 @@ class _InworldConnection:
         # Context pool
         self._contexts: dict[str, _ContextInfo] = {}
         self._context_available = asyncio.Event()
+        self._pending_acquisitions: int = 0  # Reserved slots not yet in _contexts
 
         # Message queue for outbound messages
         self._outbound_queue: asyncio.Queue[_OutboundMessage] = asyncio.Queue()
@@ -181,13 +182,34 @@ class _InworldConnection:
 
     @property
     def has_capacity(self) -> bool:
-        """Whether this connection can accept more contexts."""
-        return self.context_count < self.MAX_CONTEXTS
+        """Whether this connection can accept more contexts.
+
+        Accounts for both active contexts and pending acquisitions (reserved slots
+        that haven't completed context creation yet).
+        """
+        return (self.context_count + self._pending_acquisitions) < self.MAX_CONTEXTS
+
+    def reserve_capacity(self) -> None:
+        """Reserve a slot for a pending context acquisition.
+
+        Call this before releasing the pool lock to prevent other callers from
+        over-subscribing this connection. The reservation is released when
+        acquire_context() completes (success or failure).
+        """
+        self._pending_acquisitions += 1
+
+    def release_reservation(self) -> None:
+        """Release a previously reserved slot.
+
+        Called automatically by acquire_context() on success, or manually on failure.
+        """
+        if self._pending_acquisitions > 0:
+            self._pending_acquisitions -= 1
 
     @property
     def is_idle(self) -> bool:
-        """Whether this connection has no active contexts."""
-        return self.context_count == 0
+        """Whether this connection has no active contexts and no pending acquisitions."""
+        return self.context_count == 0 and self._pending_acquisitions == 0
 
     @property
     def last_activity(self) -> float:
@@ -237,7 +259,9 @@ class _InworldConnection:
 
             # Use lock to ensure atomic capacity check + context creation
             async with self._acquire_lock:
-                if self.has_capacity:
+                # Check raw context_count, not has_capacity, because we ARE one of
+                # the pending acquisitions - has_capacity would always be false
+                if self.context_count < self.MAX_CONTEXTS:
                     self._last_activity = time.time()
                     ctx_id = utils.shortuuid()
                     waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
@@ -249,6 +273,8 @@ class _InworldConnection:
                         waiter=waiter,
                     )
                     self._contexts[ctx_id] = ctx_info
+                    # Release reservation now that we have a real context
+                    self.release_reservation()
 
                     await self._outbound_queue.put(_CreateContextMsg(context_id=ctx_id, opts=opts))
                     return ctx_id, waiter
@@ -573,25 +599,32 @@ class _ConnectionPool:
                         on_capacity_available=self.notify_capacity_available,
                     )
                     created_new = True
+                    # Add to pool IMMEDIATELY so other callers can see it
+                    self._connections.append(conn)
+                    logger.debug(
+                        "Created new Inworld connection",
+                        extra={"pool_size": len(self._connections)},
+                    )
+
+                # Reserve capacity BEFORE releasing lock so other callers see it
+                if conn:
+                    conn.reserve_capacity()
 
             # Acquire context OUTSIDE the lock to avoid head-of-line blocking
             if conn:
                 try:
                     ctx_id, waiter = await conn.acquire_context(emitter, opts, remaining_timeout)
                 except Exception:
+                    # Release reservation since we didn't get a context
+                    conn.release_reservation()
+                    # Remove failed new connection from pool
                     if created_new:
+                        async with self._pool_lock:
+                            if conn in self._connections:
+                                self._connections.remove(conn)
                         await conn.aclose()
                     raise
 
-                # Add newly created connection to pool
-                if created_new:
-                    async with self._pool_lock:
-                        if not conn._closed:
-                            self._connections.append(conn)
-                            logger.debug(
-                                "Created new Inworld connection",
-                                extra={"pool_size": len(self._connections)},
-                            )
                 return ctx_id, waiter, conn
 
             # At max connections and all at capacity - wait for one to free up
