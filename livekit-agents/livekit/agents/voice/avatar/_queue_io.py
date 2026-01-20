@@ -37,6 +37,14 @@ class QueueAudioOutput(
         await super().capture_frame(frame)
         if not self._capturing:
             self._capturing = True
+            # Trigger playback_started event when first frame is captured
+            # This is needed for first_frame_fut to complete
+            import time
+            logger.info(
+                f"[QUEUE_AUDIO] First frame captured - triggering playback_started event "
+                f"(frame.duration: {frame.duration}, sample_rate: {frame.sample_rate})"
+            )
+            self.on_playback_started(created_at=time.time())
 
         await self._data_ch.send(frame)
 
