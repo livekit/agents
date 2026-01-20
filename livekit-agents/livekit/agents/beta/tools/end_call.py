@@ -29,41 +29,37 @@ class EndCallTool(Toolset):
         *,
         extra_description: str = "",
         delete_room: bool = True,
-        end_instructions: str
-        | Callable[[RunContext], Awaitable[None]]
-        | None = "say goodbye to the user",
+        on_end: str | Callable[[RunContext], Awaitable[None]] | None = "say goodbye to the user",
     ):
         """
         This tool allows the agent to end the call and disconnect from the room.
 
         Args:
-            extra_instructions: Additional instructions to add to the end call tool.
+            extra_description: Additional description to add to the end call tool.
             delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
-            end_instructions: If a string is provided, it will be used as the instructions of
+            on_end: If a string is provided, it will be used as the instructions of
                 `session.generate_reply` when the user ends the call. If a callback, it will be called
                 when the user ends the call.
         """
         super().__init__()
         self._delete_room = delete_room
-        self._extra_instructions = extra_instructions
-        self._end_instructions = end_instructions
+        self._extra_description = extra_description
+        self._on_end = on_end
 
         self._end_call_tool = function_tool(
             self._end_call,
             name="end_call",
-            description=f"{END_CALL_INSTRUCTIONS}\n{extra_instructions}",
+            description=f"{END_CALL_DESCRIPTION}\n{extra_description}",
         )
 
     async def _end_call(self, ctx: RunContext) -> None:
         try:
             logger.debug("end_call tool called")
             ctx.session.once("close", self._on_session_close)
-            if isinstance(self._end_instructions, str):
-                await ctx.session.generate_reply(
-                    instructions=self._end_instructions, tool_choice="none"
-                )
-            elif callable(self._end_instructions):
-                await self._end_instructions(ctx)
+            if isinstance(self._on_end, str):
+                await ctx.session.generate_reply(instructions=self._on_end, tool_choice="none")
+            elif callable(self._on_end):
+                await self._on_end(ctx)
         finally:
             # close the AgentSession
             ctx.session.shutdown()

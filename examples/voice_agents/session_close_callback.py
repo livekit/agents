@@ -21,7 +21,7 @@ class MyAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant.",
-            tools=[EndCallTool(end_instructions="thanks the user for calling and tell them goodbye")],
+            tools=[EndCallTool(on_end="thanks the user for calling and tell them goodbye")],
         )
 
     async def on_enter(self) -> None:
