@@ -19,7 +19,7 @@ import textwrap
 import threading
 import time
 import traceback
-from collections.abc import Awaitable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Optional, Union
@@ -37,9 +37,10 @@ from rich.text import Text
 from rich.theme import Theme
 
 from livekit import api, rtc
+from livekit.protocol.agent import TextMessageRequest
 
 from .._exceptions import CLIError
-from ..job import JobExecutorType, TextMessageContext, get_job_context
+from ..job import JobExecutorType, get_job_context
 from ..log import logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
@@ -293,6 +294,12 @@ class AgentsConsole:
         self._lock = threading.Lock()
         self._io_acquired = False
         self._io_acquired_event = threading.Event()
+        self._io_loop: asyncio.AbstractEventLoop | None = None
+        self._io_context: contextvars.Context | None = None
+
+        self._io_audio_input: ConsoleAudioInput | None = None
+        self._io_audio_output: ConsoleAudioOutput | None = None
+        self._io_transcription_sync: TranscriptSynchronizer | None = None
 
         self._enabled = False
         self._record = False
@@ -318,12 +325,14 @@ class AgentsConsole:
             self._io_acquired = True
             self._io_loop = loop
             self._io_context = contextvars.copy_context()
+
             self._io_audio_input = ConsoleAudioInput(loop)
             self._io_audio_output = ConsoleAudioOutput(loop)
             self._io_transcription_sync = TranscriptSynchronizer(
                 next_in_chain_audio=self._io_audio_output,
                 next_in_chain_text=None,
             )
+
             self._io_acquired_event.set()
             self._io_session = session
 
@@ -335,6 +344,29 @@ class AgentsConsole:
                 self._io_transcription_sync.audio_output,
                 self._io_transcription_sync.text_output,
             )
+
+    def release_io(self) -> None:
+        with self._lock:
+            if not self._io_acquired:
+                return
+
+            self.set_microphone_enabled(False)
+            self.set_speaker_enabled(False)
+
+            if self._io_transcription_sync:
+                asyncio.run_coroutine_threadsafe(
+                    self._io_transcription_sync.aclose(),
+                    self.io_loop,
+                )
+                self._io_transcription_sync = None
+
+            self._io_acquired = False
+            self._io_session = None
+            self._io_loop = None
+            self._io_context = None
+            self._io_audio_input = None
+            self._io_audio_output = None
+            self._io_acquired_event.clear()
 
     @property
     def enabled(self) -> bool:
@@ -370,14 +402,14 @@ class AgentsConsole:
 
     @property
     def io_loop(self) -> asyncio.AbstractEventLoop:
-        if not self._io_acquired:
+        if not self._io_acquired or self._io_loop is None:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_loop
 
     @property
     def io_context(self) -> contextvars.Context:
-        if not self._io_acquired:
+        if not self._io_acquired or self._io_context is None:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_context
@@ -404,6 +436,9 @@ class AgentsConsole:
 
             if not self._io_acquired:
                 return
+
+            assert self._io_audio_input is not None
+            assert self._io_transcription_sync is not None
 
             self.io_loop.call_soon_threadsafe(
                 self._update_sess_io,
@@ -574,6 +609,9 @@ class AgentsConsole:
             ) from None
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time: Any, *_: Any) -> None:
+        assert self._io_audio_input is not None
+        assert self._io_loop is not None
+
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
 
@@ -646,6 +684,7 @@ class AgentsConsole:
             outdata[:] = 0
             return
 
+        assert self._io_audio_output is not None
         self._output_delay = time.outputBufferDacTime - time.currentTime
 
         FRAME_SAMPLES = 240
@@ -1124,9 +1163,10 @@ def _text_mode(c: AgentsConsole) -> None:
 
 def _sms_text_mode(
     c: AgentsConsole,
+    server: AgentServer,
     *,
-    sms_handler: Callable[[TextMessageContext], Awaitable[None]],
     sess_data_file: str,
+    loop: asyncio.AbstractEventLoop,
 ) -> None:
     while True:
         try:
@@ -1138,72 +1178,81 @@ def _sms_text_mode(
             c.console.bell()
             continue
 
-        def _generate_with_context(
-            text: str, resp_queue: queue.Queue[str | BaseException | None]
-        ) -> None:
-            async def _generate() -> None:
-                # simulate a sms received event
-                session_data: bytes | None = None
-                if os.path.isfile(sess_data_file):
-                    with open(sess_data_file, "rb") as f:
-                        session_data = f.read()
+        if os.path.exists(sess_data_file):
+            with open(sess_data_file, "rb") as rf:
+                session_data = rf.read()
+        else:
+            session_data = None
 
-                text_context = TextMessageContext(text=text, session_data=session_data)
-
-                async def _handle() -> None:
-                    try:
-                        await sms_handler(text_context)
-                    finally:
-                        text_context.response_ch.close()
-
-                async def _forward_responses() -> None:
-                    async for response in text_context.response_ch:
-                        resp_queue.put(response, block=False)
-
-                handle_task = asyncio.create_task(_handle())
-                forward_task = asyncio.create_task(_forward_responses())
-                await asyncio.gather(handle_task, forward_task)
-
-                if session := get_job_context()._primary_agent_session:
-                    # serialize the state of the session
-                    with open(sess_data_file, "wb") as wf:
-                        wf.write(session.serialize())
-                    logger.debug(
-                        "session state serialized", extra={"session_data_file": sess_data_file}
-                    )
-
-            def _done_callback(task: asyncio.Task[None]) -> None:
-                if exception := task.exception():
-                    resp_queue.put(exception)
-                else:
-                    resp_queue.put(None)
-
-            task = asyncio.create_task(_generate())
-            task.add_done_callback(_done_callback)
-
-        resp_queue = queue.Queue[str | BaseException | None]()
-        c.io_loop.call_soon_threadsafe(
-            _generate_with_context, text, resp_queue, context=c.io_context
+        # simulate a text message request
+        text_request = TextMessageRequest(
+            message_id=shortuuid("text-message-"),
+            session_id="text-session",
+            agent_name=None,
+            metadata="",
+            session_data=session_data,
+            text=text,
+        )
+        asyncio.run_coroutine_threadsafe(
+            server.simulate_job(
+                "text-mode-room",
+                agent_identity="text-agent",
+                fake_job=True,
+                text_request=text_request,
+            ),
+            loop,
         )
 
         c.print(text, tag="You")
+        c.wait_for_io_acquisition()
+
+        def _collect_responses(output_queue: queue.Queue[str | bytes]) -> None:
+            async def _collect() -> None:
+                text_ctx = get_job_context().text_message_context
+                if text_ctx is None:
+                    logger.error("no text context found")
+                    return
+
+                async for response in text_ctx.response_ch:
+                    output_queue.put(response, block=False)
+
+            def _done_callback(_: asyncio.Task[None]) -> None:
+                session = get_job_context()._primary_agent_session
+                if session is None:
+                    logger.warning("no session data available")
+                    output_queue.put(b"", block=False)
+                else:
+                    output_queue.put(session.serialize(), block=False)
+
+            task = asyncio.create_task(_collect())
+            task.add_done_callback(_done_callback)
+
+        response_queue = queue.Queue[str | bytes]()
+        c.io_loop.call_soon_threadsafe(_collect_responses, response_queue, context=c.io_context)
 
         while True:
-            resp: str | BaseException | None = ""
+            resp: str | bytes = ""
             with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
                 while True:
                     try:
-                        resp = resp_queue.get(timeout=0.1)
-                        if isinstance(resp, BaseException):
-                            raise resp
+                        resp = response_queue.get(timeout=0.1)
                         break
                     except queue.Empty:
                         pass
-            if resp:
+            if isinstance(resp, str) and resp:
                 c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
-
-            if resp is None:
+            elif isinstance(resp, bytes):
+                session_data = resp
                 break
+
+        # save the session data
+        if session_data:
+            with open(sess_data_file, "wb") as wf:
+                wf.write(session_data)
+            logger.debug("session data saved", extra={"session_data_file": sess_data_file})
+
+        # release the console for next run
+        c.release_io()
 
 
 AGENT_PALETTE: list[str] = [
@@ -1350,10 +1399,12 @@ def _audio_mode(c: AgentsConsole, *, input_device: str | None, output_device: st
 
 
 class _ConsoleWorker:
-    def __init__(self, *, server: AgentServer, shutdown_cb: Callable, sms_job: bool) -> None:
+    def __init__(
+        self, *, server: AgentServer, shutdown_cb: Callable, simulate_job_on_start: bool = True
+    ) -> None:
         self._loop = asyncio.new_event_loop()
-        self._sms_job = sms_job
         self._server = server
+        self._simulate_job_on_start = simulate_job_on_start
         self._shutdown_cb = shutdown_cb
         self._lock = threading.Lock()
         self._closed = False
@@ -1380,17 +1431,16 @@ class _ConsoleWorker:
 
             self._server._job_executor_type = JobExecutorType.THREAD  # TODO: better setter
 
-            @self._server.once("worker_started")
-            def _simulate_job() -> None:
-                asyncio.run_coroutine_threadsafe(
-                    self._server.simulate_job(
-                        "console-room",
-                        agent_identity="console",
-                        fake_job=True,
-                        sms_job=self._sms_job,
-                    ),
-                    self._loop,
-                )
+            if self._simulate_job_on_start:
+
+                @self._server.once("worker_started")
+                def _simulate_job() -> None:
+                    asyncio.run_coroutine_threadsafe(
+                        self._server.simulate_job(
+                            "console-room", agent_identity="console", fake_job=True
+                        ),
+                        self._loop,
+                    )
 
             await self._server.run(devmode=True, unregistered=True)
             self._shutdown_cb()
@@ -1454,9 +1504,7 @@ def _run_console(
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)
 
-        console_worker = _ConsoleWorker(
-            server=server, shutdown_cb=_on_worker_shutdown, sms_job=False
-        )
+        console_worker = _ConsoleWorker(server=server, shutdown_cb=_on_worker_shutdown)
         console_worker.start()
 
         # TODO: wait for a session request the agents console context before showing any of the mode
@@ -1518,17 +1566,12 @@ def _run_sms_console(*, server: AgentServer, sess_data_file: str) -> None:
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, _handle_exit)
 
-        if not server._text_handler_fnc:
-            raise ValueError("sms_handler is required when simulating SMS")
-
         console_worker = _ConsoleWorker(
-            server=server, shutdown_cb=_on_worker_shutdown, sms_job=True
+            server=server, shutdown_cb=_on_worker_shutdown, simulate_job_on_start=False
         )
         console_worker.start()
-
         try:
-            c.wait_for_io_acquisition()
-            _sms_text_mode(c, sms_handler=server._text_handler_fnc, sess_data_file=sess_data_file)
+            _sms_text_mode(c, server, loop=console_worker._loop, sess_data_file=sess_data_file)
         except _ExitCli:
             pass
         finally:

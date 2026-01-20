@@ -71,15 +71,28 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
-class _WrappedEntrypoint:
-    """Pickle-able wrapper for the entrypoint function."""
+class _EntrypointWrapper:
+    """Entrypoint wrapper that handles regular RTC sessions and SMS jobs."""
 
-    def __init__(self, entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None) -> None:
+    def __init__(
+        self,
+        entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None,
+        text_handler_fnc: Callable[[TextMessageContext], Awaitable[None]] | None,
+    ) -> None:
         self._entrypoint_fnc = entrypoint_fnc
+        self._text_handler_fnc = text_handler_fnc
 
     async def __call__(self, ctx: JobContext) -> None:
-        if ctx.is_sms_job():
-            # TODO(long): should we add a customizable sms entrypoint?
+        if ctx.text_message_context is not None:
+            if self._text_handler_fnc is None:
+                raise RuntimeError(
+                    "No text handler has been registered.\n"
+                    "Define one using the @server.text_handler() decorator, for example:\n"
+                    "    @server.text_handler()\n"
+                    "    async def my_text_handler(ctx: TextMessageContext):\n"
+                    "        ...\n"
+                )
+
             from .cli import AgentsConsole
 
             c = AgentsConsole.get_instance()
@@ -88,6 +101,12 @@ class _WrappedEntrypoint:
 
             if self._entrypoint_fnc:
                 logger.info("SMS job detected, skipping RTC entrypoint")
+
+            try:
+                await self._text_handler_fnc(ctx.text_message_context)
+            finally:
+                ctx.text_message_context.mark_done()
+                ctx.shutdown()  # job finished
             return
 
         if not self._entrypoint_fnc:
@@ -601,6 +620,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
             self._close_future: asyncio.Future[None] | None = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
+            self._text_request_ch = utils.aio.Chan["agent.TextMessageRequest"](loop=self._loop)
 
             self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = (
                 None
@@ -622,7 +642,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
-                job_entrypoint_fnc=_WrappedEntrypoint(self._entrypoint_fnc),
+                job_entrypoint_fnc=_EntrypointWrapper(self._entrypoint_fnc, self._text_handler_fnc),
                 session_end_fnc=self._session_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
@@ -672,6 +692,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
+            self._text_request_task: asyncio.Task[None] | None = None
 
             if not self._ws_url:
                 raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
@@ -807,6 +828,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._load_task = asyncio.create_task(_load_task(), name="load_task")
             tasks.append(self._load_task)
 
+            if self._text_handler_fnc:
+
+                @utils.log_exceptions(logger=logger)
+                async def _handle_text_request() -> None:
+                    async for req in self._text_request_ch:
+                        await self.simulate_job(
+                            room="text-mode-room",
+                            agent_identity=utils.shortuuid("text-agent-"),
+                            text_request=req,
+                        )
+
+                self._text_request_task = asyncio.create_task(
+                    _handle_text_request(), name="text_request_task"
+                )
+                tasks.append(self._text_request_task)
+
             if not unregistered:
                 self._conn_task = asyncio.create_task(
                     self._connection_task(), name="worker_conn_task"
@@ -911,7 +948,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
         token: str | None = None,
-        sms_job: bool = False,
+        text_request: agent.TextMessageRequest | None = None,
     ) -> None:
         async with self._lock:
             if token is not None:
@@ -955,7 +992,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=fake_job,
-                sms_job=sms_job,
+                text_request=text_request,
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -978,6 +1015,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
+
+            self._text_request_ch.close()
+            if self._text_request_task is not None:
+                await utils.aio.cancel_and_wait(self._text_request_task)
 
             if self._load_task is not None:
                 await utils.aio.cancel_and_wait(self._load_task)
@@ -1151,6 +1192,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._handle_availability(server_msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(server_msg.assignment)
+                elif which == "text_request":
+                    self._handle_text_request(server_msg.text_request)
                 elif which == "termination":
                     user_task = self._loop.create_task(
                         self._handle_termination(server_msg.termination),
@@ -1192,7 +1235,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=jwt.encode(decoded, self._api_secret, algorithm="HS256"),
                 worker_id=aj.worker_id,
                 fake_job=aj.fake_job,
-                sms_job=aj.sms_job,
+                text_request=aj.text_request,
             )
             await self._proc_pool.launch_job(running_info)
 
@@ -1266,7 +1309,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=job_assign.token,
                 worker_id=self._id,
                 fake_job=False,
-                sms_job=False,  # SMS jobs are not supported yet
+                text_request=None,
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1329,6 +1372,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "received assignment for an unknown job",
                 extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
+
+    def _handle_text_request(self, request: agent.TextMessageRequest) -> None:
+        logger.debug(
+            "received text request",
+            extra={
+                "agent_name": self._agent_name,
+                "message_id": request.message_id,
+                "session_id": request.session_id,
+            },
+        )
+        self._text_request_ch.send_nowait(request)
 
     async def _handle_termination(self, msg: agent.JobTermination) -> None:
         proc = self._proc_pool.get_by_job_id(msg.job_id)

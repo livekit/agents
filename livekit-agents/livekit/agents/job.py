@@ -96,7 +96,7 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
-    sms_job: bool
+    text_request: agent.TextMessageRequest | None = None
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -145,6 +145,9 @@ class TextMessageContext:
         elif ev.type == "message" and (text := ev.item.text_content):
             await self._response_ch.send(text)
 
+    def mark_done(self) -> None:
+        self._response_ch.close()
+
     @property
     def session_data(self) -> bytes | None:
         return self._session_data
@@ -192,6 +195,14 @@ class JobContext:
         self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+
+        self._text_message_context = (
+            TextMessageContext(
+                text=self._info.text_request.text, session_data=self._info.text_request.session_data
+            )
+            if self._info.text_request
+            else None
+        )
 
         self._log_fields: dict[str, Any] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -268,9 +279,6 @@ class JobContext:
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
-
-    def is_sms_job(self) -> bool:
-        return self._info.sms_job
 
     @property
     def session_directory(self) -> Path:
@@ -361,6 +369,10 @@ class JobContext:
             return identity
 
         return self._room.local_participant.identity
+
+    @property
+    def text_message_context(self) -> TextMessageContext | None:
+        return self._text_message_context
 
     @property
     def log_context_fields(self) -> dict[str, Any]:

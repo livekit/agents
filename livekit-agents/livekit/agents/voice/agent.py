@@ -118,13 +118,15 @@ class Agent:
     ) -> None:
         restart_required = False
         if is_given(turn_detection):
-            self._turn_detection = turn_detection
+            self._turn_detection = turn_detection  # type: ignore
             restart_required = True
+
         if is_given(stt):
             if isinstance(stt, str):
                 stt = inference.STT.from_model_string(stt)
-            self._stt = stt
+            self._stt = stt  # type: ignore
             restart_required = True
+
         if is_given(vad):
             self._vad = vad
             restart_required = True
@@ -132,11 +134,12 @@ class Agent:
         if is_given(llm):
             if isinstance(llm, str):
                 llm = inference.LLM.from_model_string(llm)
-            self._llm = llm
+            self._llm = llm  # type: ignore
+
         if is_given(tts):
             if isinstance(tts, str):
                 tts = inference.TTS.from_model_string(tts)
-            self._tts = tts
+            self._tts = tts  # type: ignore
 
         if is_given(mcp_servers):
             if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
