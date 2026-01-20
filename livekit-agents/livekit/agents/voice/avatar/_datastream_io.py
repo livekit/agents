@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Callable, Union
@@ -134,6 +135,11 @@ class DataStreamAudioOutput(AudioOutput):
                 },
             )
             self._pushed_duration = 0.0
+            # Trigger playback_started event when first frame is captured
+            # This is needed for first_frame_fut to complete
+            # DataStreamAudioOutput is the end of the audio chain (next_in_chain=None),
+            # so it must trigger playback_started itself since no downstream component will
+            self.on_playback_started(created_at=time.time())
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 
