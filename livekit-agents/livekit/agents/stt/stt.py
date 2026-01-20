@@ -26,6 +26,7 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
+
 if TYPE_CHECKING:
     from ..vad import VADEvent
 
@@ -235,7 +236,7 @@ class STT(
         """Close the STT, and every stream/requests associated with it"""
         ...
 
-    def on_vad_event(self, ev: "VADEvent") -> None:  # pragma: no cover - default hook
+    def on_vad_event(self, ev: VADEvent) -> None:
         """Receive LiveKit VAD events for observability.
 
         Implementations may override to react to LiveKit's voice activity detector

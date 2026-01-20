@@ -19,6 +19,7 @@ import json
 import time
 import weakref
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import aiohttp
@@ -142,43 +143,56 @@ class STT(stt.STT):
             conn_options=conn_options,
         )
 
+    def _vad_state_from_event(self, ev: agents_vad.VADEvent) -> bool | None:
+        if ev.type == agents_vad.VADEventType.START_OF_SPEECH:
+            return True
+        if ev.type == agents_vad.VADEventType.END_OF_SPEECH:
+            return False
+        return ev.speaking
+
+    def _maybe_log_vad_transition(
+        self,
+        *,
+        current: bool,
+        speech_total: float,
+        silence_total: float,
+    ) -> None:
+        if current == self._last_vad_speaking:
+            return
+
+        if self._last_vad_speaking is not None or current:
+            logger.info(
+                "LK VAD speaking=%s (speech=%.3fs silence=%.3fs)",
+                current,
+                speech_total,
+                silence_total,
+            )
+        self._last_vad_speaking = current
+        if current:
+            self._vad_silence_total = 0.0
+        else:
+            self._vad_speech_total = 0.0
+
+    def _update_vad_totals(self, ev: agents_vad.VADEvent) -> None:
+        if ev.speaking is True and ev.speech_duration > self._vad_speech_total:
+            self._vad_speech_total = ev.speech_duration
+        elif ev.speaking is False and ev.silence_duration > self._vad_silence_total:
+            self._vad_silence_total = ev.silence_duration
+
     def on_vad_event(self, ev: agents_vad.VADEvent) -> None:  # pragma: no cover - logging only
         if not self._use_vad_event:
             return
         try:
-            current: bool | None
-            if ev.type == agents_vad.VADEventType.START_OF_SPEECH:
-                current = True
-            elif ev.type == agents_vad.VADEventType.END_OF_SPEECH:
-                current = False
-            else:
-                current = ev.speaking
-
+            current = self._vad_state_from_event(ev)
             if current is None:
                 return
 
-            speech_total = self._vad_speech_total
-            silence_total = self._vad_silence_total
-            state_initialized = self._last_vad_speaking is not None
-
-            if current != self._last_vad_speaking:
-                if state_initialized or current:
-                    logger.info(
-                        "LK VAD speaking=%s (speech=%.3fs silence=%.3fs)",
-                        current,
-                        speech_total,
-                        silence_total,
-                    )
-                self._last_vad_speaking = current
-                if current:
-                    self._vad_silence_total = 0.0
-                else:
-                    self._vad_speech_total = 0.0
-
-            if ev.speaking is True and ev.speech_duration > self._vad_speech_total:
-                self._vad_speech_total = ev.speech_duration
-            elif ev.speaking is False and ev.silence_duration > self._vad_silence_total:
-                self._vad_silence_total = ev.silence_duration
+            self._maybe_log_vad_transition(
+                current=current,
+                speech_total=self._vad_speech_total,
+                silence_total=self._vad_silence_total,
+            )
+            self._update_vad_totals(ev)
 
             self._use_vad_endpointing = True
 
@@ -287,19 +301,29 @@ class SpeechStream(stt.SpeechStream):
             return
 
         self._fallback_mode = False
+        if not self._enqueue_vad_event(ev):
+            logger.warning("Dropping VAD event due to backpressure")
+
+    def _enqueue_vad_event(self, ev: agents_vad.VADEvent) -> bool:
         try:
             self._vad_event_queue.put_nowait(ev)
         except asyncio.QueueFull:
-            logger.warning("Dropping VAD event due to backpressure")
+            return False
+        return True
 
     async def _process_vad_events(self) -> None:
+        handlers: dict[
+            agents_vad.VADEventType, Callable[[agents_vad.VADEvent], Awaitable[None]]
+        ] = {
+            agents_vad.VADEventType.START_OF_SPEECH: self._handle_vad_start,
+            agents_vad.VADEventType.END_OF_SPEECH: self._handle_vad_end,
+        }
         try:
             while True:
                 ev = await self._vad_event_queue.get()
-                if ev.type == agents_vad.VADEventType.START_OF_SPEECH:
-                    await self._handle_vad_start(ev)
-                elif ev.type == agents_vad.VADEventType.END_OF_SPEECH:
-                    await self._handle_vad_end()
+                handler = handlers.get(ev.type)
+                if handler is not None:
+                    await handler(ev)
         except asyncio.CancelledError:  # pragma: no cover - task cancellation
             pass
 
@@ -323,7 +347,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_bytes(payload)
                 self._last_audio_at = time.monotonic()
 
-    async def _handle_vad_end(self) -> None:
+    async def _handle_vad_end(self, _ev: agents_vad.VADEvent) -> None:
         async with self._connection_lock:
             self._speech_active = False
 
