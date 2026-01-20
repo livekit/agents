@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Literal, Union
 
@@ -39,7 +40,8 @@ class QueueAudioOutput(
             self._capturing = True
             # Trigger playback_started event when first frame is captured
             # This is needed for first_frame_fut to complete
-            import time
+            # QueueAudioOutput is the end of the audio chain (next_in_chain=None),
+            # so it must trigger playback_started itself since no downstream component will
             logger.info(
                 f"[QUEUE_AUDIO] First frame captured - triggering playback_started event "
                 f"(frame.duration: {frame.duration}, sample_rate: {frame.sample_rate})"
