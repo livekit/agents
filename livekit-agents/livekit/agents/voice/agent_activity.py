@@ -1779,6 +1779,10 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
+            logger.warning(
+                f"[AGENT_ACTIVITY] ⚠️  Force transition from speaking to listening "
+                f"(location: _pipeline_reply_task completion, stack: {__name__})"
+            )
             self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
@@ -2080,6 +2084,10 @@ class AgentActivity(RecognitionHooks):
                 current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
             if self._session.agent_state == "speaking":
+                logger.warning(
+                    f"[AGENT_ACTIVITY] ⚠️  Force transition from speaking to listening "
+                    f"(location: interrupted speech_handle, first_frame_fut.done: {audio_out.first_frame_fut.done() if audio_out else 'N/A'})"
+                )
                 self._session._update_agent_state("listening")
 
             speech_handle._mark_generation_done()
@@ -2109,6 +2117,10 @@ class AgentActivity(RecognitionHooks):
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
         elif self._session.agent_state == "speaking":
+            logger.warning(
+                f"[AGENT_ACTIVITY] ⚠️  Force transition from speaking to listening "
+                f"(location: tool output processing, tool_output length: {len(tool_output.output)})"
+            )
             self._session._update_agent_state("listening")
 
         await text_tee.aclose()
