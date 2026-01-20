@@ -315,13 +315,11 @@ class SpeechStream(stt.SpeechStream):
                         for segment in segments
                     ]
                     start_time = (
-                        next((s.get("start_time", 0.0) for s in segments), 0.0)
-                        + self.start_time_offset
-                    )
+                        segments[0].get("start_time", 0.0) if segments else 0.0
+                    ) + self.start_time_offset
                     end_time = (
-                        next((s.get("end_time", 0.0) for s in segments), 0.0)
-                        + self.start_time_offset
-                    )
+                        segments[-1].get("end_time", 0.0) if segments else 0.0
+                    ) + self.start_time_offset
 
                     if not is_final:
                         if text:
