@@ -197,7 +197,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     def __init__(self, *, stt: STT, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
-        self._stt = stt
+        self._rtzr_stt: STT = stt
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._vad_event_queue: asyncio.Queue[agents_vad.VADEvent] = asyncio.Queue(maxsize=32)
@@ -209,36 +209,37 @@ class SpeechStream(stt.SpeechStream):
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
         self._last_audio_at: float | None = None
         self._idle_task: asyncio.Task[None] | None = None
-        self._fallback_mode = not self._stt._use_vad_endpointing
+        self._fallback_mode = not self._rtzr_stt._use_vad_endpointing
 
-        self._stt._register_stream(self)
+        self._rtzr_stt._register_stream(self)
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        config = self._stt._client.build_config(
-            model_name=self._stt._params.model_name,
-            domain=self._stt._params.domain,
-            sample_rate=self._stt._params.sample_rate,
-            encoding=self._stt._params.encoding,
-            epd_time=self._stt._params.epd_time,
-            noise_threshold=self._stt._params.noise_threshold,
-            active_threshold=self._stt._params.active_threshold,
-            use_punctuation=self._stt._params.use_punctuation,
-            keywords=self._stt._params.keywords,
+        config = self._rtzr_stt._client.build_config(
+            model_name=self._rtzr_stt._params.model_name,
+            domain=self._rtzr_stt._params.domain,
+            sample_rate=self._rtzr_stt._params.sample_rate,
+            encoding=self._rtzr_stt._params.encoding,
+            epd_time=self._rtzr_stt._params.epd_time,
+            noise_threshold=self._rtzr_stt._params.noise_threshold,
+            active_threshold=self._rtzr_stt._params.active_threshold,
+            use_punctuation=self._rtzr_stt._params.use_punctuation,
+            keywords=self._rtzr_stt._params.keywords,
         )
 
         try:
             ws = await asyncio.wait_for(
-                self._stt._client.connect_websocket(config), timeout=self._conn_options.timeout
+                self._rtzr_stt._client.connect_websocket(config),
+                timeout=self._conn_options.timeout,
             )
             logger.debug(
                 "RTZR STT WS connected (model=%s, sr=%s, epd=%.2fs, "
                 "noise=%.2f, active=%.2f, punct=%s)",
-                self._stt._params.model_name,
-                self._stt._params.sample_rate,
-                self._stt._params.epd_time,
-                self._stt._params.noise_threshold,
-                self._stt._params.active_threshold,
-                self._stt._params.use_punctuation,
+                self._rtzr_stt._params.model_name,
+                self._rtzr_stt._params.sample_rate,
+                self._rtzr_stt._params.epd_time,
+                self._rtzr_stt._params.noise_threshold,
+                self._rtzr_stt._params.active_threshold,
+                self._rtzr_stt._params.use_punctuation,
             )
             return ws
         except asyncio.TimeoutError as e:
@@ -272,12 +273,12 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.gracefully_cancel(self._idle_task)
             await self._await_recv_completion()
             await self._cleanup_connection()
-            self._stt._unregister_stream(self)
+            self._rtzr_stt._unregister_stream(self)
 
     def _handle_vad_event(self, ev: agents_vad.VADEvent) -> None:
         if self._closed:
             return
-        if not self._stt._use_vad_event:
+        if not self._rtzr_stt._use_vad_event:
             return
 
         if ev.type == agents_vad.VADEventType.INFERENCE_DONE:
@@ -329,7 +330,7 @@ class SpeechStream(stt.SpeechStream):
             if not self._ws:
                 self._last_audio_at = None
                 self._pending_speech_frames.clear()
-                self._fallback_mode = not self._stt._use_vad_endpointing
+                self._fallback_mode = not self._rtzr_stt._use_vad_endpointing
                 return
 
             await self._flush_pending_frames()
@@ -344,7 +345,7 @@ class SpeechStream(stt.SpeechStream):
             await self._cleanup_connection()
             self._pending_speech_frames.clear()
             self._last_audio_at = None
-            self._fallback_mode = not self._stt._use_vad_endpointing
+            self._fallback_mode = not self._rtzr_stt._use_vad_endpointing
 
     async def _handle_idle_timeout(self) -> None:
         async with self._connection_lock:
@@ -410,7 +411,11 @@ class SpeechStream(stt.SpeechStream):
             self._last_audio_at = time.monotonic()
 
     async def _emit_audio(self, payload: bytes) -> None:
-        if not self._stt._use_vad_endpointing and not self._speech_active and not self._closed:
+        if (
+            not self._rtzr_stt._use_vad_endpointing
+            and not self._speech_active
+            and not self._closed
+        ):
             synthetic_ev = agents_vad.VADEvent(
                 type=agents_vad.VADEventType.START_OF_SPEECH,
                 samples_index=0,
@@ -431,9 +436,10 @@ class SpeechStream(stt.SpeechStream):
     @utils.log_exceptions(logger=logger)
     async def _send_audio_task(self) -> None:
         audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._stt._params.sample_rate,
+            sample_rate=self._rtzr_stt._params.sample_rate,
             num_channels=1,
-            samples_per_channel=self._stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
+            samples_per_channel=self._rtzr_stt._params.sample_rate
+            // (1000 // _DEFAULT_CHUNK_MS),
         )
 
         async for data in self._input_ch:
@@ -501,7 +507,7 @@ class SpeechStream(stt.SpeechStream):
                                 alternatives=[
                                     stt.SpeechData(
                                         text=text,
-                                        language=self._stt._params.language,
+                                        language=self._rtzr_stt._params.language,
                                         start_time=start_time + self.start_time_offset,
                                         end_time=start_time + duration + self.start_time_offset,
                                         words=[
