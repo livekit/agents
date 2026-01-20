@@ -1665,7 +1665,7 @@ class AgentActivity(RecognitionHooks):
             nonlocal started_speaking_at
             try:
                 started_speaking_at = fut.result() or time.time()
-            except BaseException as e:
+            except BaseException:
                 return
             self._session._update_agent_state(
                 "speaking",
@@ -1957,10 +1957,10 @@ class AgentActivity(RecognitionHooks):
                 # Note: This callback is registered via add_done_callback, so fut.done() should always be True
                 if fut.cancelled():
                     return
-                
+
                 if not fut.done():
                     return
-                
+
                 started_speaking_at = fut.result() or time.time()
             except (asyncio.CancelledError, Exception):
                 return
@@ -2334,10 +2334,10 @@ class AgentActivity(RecognitionHooks):
                 # However, we check anyway for safety
                 if fut.cancelled():
                     return
-                
+
                 if not fut.done():
                     return
-                
+
                 started_speaking_at = fut.result() or time.time()
             except (asyncio.CancelledError, Exception):
                 return

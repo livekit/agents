@@ -184,7 +184,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             if self._interrupted_event.is_set() or self._pushed_duration == 0:
                 if self._interrupted_event.is_set():
                     if self._flush_task:
-                        await self._flush_task
+                    await self._flush_task
 
                 # ignore frames if interrupted
                 continue

@@ -1196,7 +1196,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._agent_state
         self._agent_state = state
-        
+
         event = AgentStateChangedEvent(old_state=old_state, new_state=state)
         self.emit("agent_state_changed", event)
 
