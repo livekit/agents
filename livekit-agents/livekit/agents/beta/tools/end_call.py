@@ -29,7 +29,9 @@ class EndCallTool(Toolset):
         *,
         extra_instructions: str = "",
         delete_room: bool = True,
-        end_instructions: str | Callable[[RunContext], Awaitable[None]] | None = None,
+        end_instructions: str
+        | Callable[[RunContext], Awaitable[None]]
+        | None = "say goodbye to the user",
     ):
         """
         This tool allows the agent to end the call and disconnect from the room.
