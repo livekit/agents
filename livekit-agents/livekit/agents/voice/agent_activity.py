@@ -1202,6 +1202,9 @@ class AgentActivity(RecognitionHooks):
 
             if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
                 self._session.output.audio.pause()
+                logger.info(
+                    "[AGENT_ACTIVITY] ✅ User interrupted agent (pause) - updating to listening state"
+                )
                 self._session._update_agent_state("listening")
             else:
                 if self._rt_session is not None:
@@ -1905,6 +1908,9 @@ class AgentActivity(RecognitionHooks):
             await text_tee.aclose()
             return
 
+        logger.info(
+            "[AGENT_ACTIVITY] ✅ User speech ended, authorization complete - updating to thinking state"
+        )
         self._session._update_agent_state("thinking")
 
         authorization_tasks: list[asyncio.Future[Any]] = [
@@ -1920,6 +1926,11 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
             await text_tee.aclose()
             return
+
+        logger.info(
+            "[AGENT_ACTIVITY] ✅ User speech ended, waiting for authorization - updating to thinking state"
+        )
+        self._session._update_agent_state("thinking")
 
         reply_started_at = time.time()
 
