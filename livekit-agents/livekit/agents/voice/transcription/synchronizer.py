@@ -516,9 +516,17 @@ class _SyncedAudioOutput(io.AudioOutput):
         # capture_frame isn't completed
         await self._synchronizer.barrier()
 
+        logger.info(
+            f"[SYNCED_AUDIO] capture_frame called - "
+            f"next_in_chain type: {type(self._next_in_chain).__name__}, "
+            f"frame.duration: {frame.duration}, sample_rate: {frame.sample_rate}"
+        )
         await self._next_in_chain.capture_frame(frame)  # passthrough audio
         await super().capture_frame(frame)
         self._pushed_duration += frame.duration
+        logger.info(
+            f"[SYNCED_AUDIO] capture_frame completed - pushed_duration: {self._pushed_duration}"
+        )
 
         if not self._synchronizer.enabled:
             return

@@ -92,6 +92,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await self._subscribed_fut
 
+        logger.info(
+            f"[PARTICIPANT_AUDIO] capture_frame called - "
+            f"frame.duration: {frame.duration}, sample_rate: {frame.sample_rate}, "
+            f"_forwarding_task exists: {self._forwarding_task is not None}, "
+            f"_forwarding_task.done: {self._forwarding_task.done() if self._forwarding_task else 'N/A'}"
+        )
         await super().capture_frame(frame)
 
         if self._flush_task and not self._flush_task.done():
@@ -101,6 +107,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         for f in self._audio_bstream.push(frame.data):
             self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
+        
+        logger.info(
+            f"[PARTICIPANT_AUDIO] capture_frame completed - "
+            f"pushed_duration: {self._pushed_duration}, audio_buf size: {self._audio_buf.qsize()}"
+        )
 
     def flush(self) -> None:
         super().flush()

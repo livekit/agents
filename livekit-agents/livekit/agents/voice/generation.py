@@ -365,7 +365,7 @@ async def _audio_forwarding_task(
             )
             out.first_frame_fut.set_result(ev.created_at)
         else:
-            logger.debug(
+            logger.info(
                 f"[AUDIO_FORWARDING] playback_started event received but first_frame_fut already done"
             )
 
