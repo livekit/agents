@@ -6,4 +6,4 @@ class Precision(str, Enum):
     PCM_16 = "PCM_16"
 
 
-TTSModels = Literal["chatterbox", "chatterbox-turbo"]
+TTSModels = Literal["resemble", "chatterbox", "chatterbox-turbo"]
