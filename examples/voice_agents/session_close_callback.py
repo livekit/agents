@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, RunContext, cli
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli
 from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import silero
 
