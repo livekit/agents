@@ -370,10 +370,17 @@ async def _audio_forwarding_task(
             )
 
     try:
+        logger.info(
+            f"[AUDIO_FORWARDING] Starting audio forwarding task - "
+            f"audio_output type: {type(audio_output).__name__}, "
+            f"first_frame_fut.done: {out.first_frame_fut.done()}"
+        )
         audio_output.on("playback_started", _on_playback_started)
         audio_output.resume()
 
+        frame_count = 0
         async for frame in tts_output:
+            frame_count += 1
             out.audio.append(frame)
 
             if (
@@ -393,10 +400,25 @@ async def _audio_forwarding_task(
                     await audio_output.capture_frame(f)
             else:
                 await audio_output.capture_frame(frame)
+            
+            # Log first few frames to debug
+            if frame_count <= 3:
+                logger.info(
+                    f"[AUDIO_FORWARDING] Processed frame {frame_count} - "
+                    f"first_frame_fut.done: {out.first_frame_fut.done()}, "
+                    f"frame.sample_rate: {frame.sample_rate}, "
+                    f"audio_output.sample_rate: {audio_output.sample_rate}"
+                )
 
         if resampler:
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
+        
+        logger.info(
+            f"[AUDIO_FORWARDING] Audio forwarding task completed - "
+            f"frames processed: {frame_count}, first_frame_fut.done: {out.first_frame_fut.done()}, "
+            f"first_frame_fut.cancelled: {out.first_frame_fut.cancelled()}"
+        )
 
     finally:
         audio_output.off("playback_started", _on_playback_started)

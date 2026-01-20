@@ -174,21 +174,42 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
+        frame_count = 0
         async for frame in self._audio_buf:
+            frame_count += 1
+            
             if not self._playback_enabled.is_set():
+                logger.info(
+                    f"[PARTICIPANT_AUDIO] _forward_audio: playback not enabled, waiting... "
+                    f"(frame_count: {frame_count})"
+                )
                 self._audio_source.clear_queue()
                 await self._playback_enabled.wait()
                 # TODO(long): save the frames in the queue and play them later
                 # TODO(long): ignore frames from previous syllable
 
             if self._interrupted_event.is_set() or self._pushed_duration == 0:
-                if self._interrupted_event.is_set() and self._flush_task:
-                    await self._flush_task
+                if self._interrupted_event.is_set():
+                    logger.info(
+                        f"[PARTICIPANT_AUDIO] _forward_audio: interrupted, skipping frame "
+                        f"(frame_count: {frame_count}, pushed_duration: {self._pushed_duration})"
+                    )
+                    if self._flush_task:
+                        await self._flush_task
+                elif self._pushed_duration == 0:
+                    logger.info(
+                        f"[PARTICIPANT_AUDIO] _forward_audio: pushed_duration is 0, skipping frame "
+                        f"(frame_count: {frame_count})"
+                    )
 
                 # ignore frames if interrupted
                 continue
 
             if not self._first_frame_event.is_set():
+                logger.info(
+                    f"[PARTICIPANT_AUDIO] ✅ First frame received - triggering playback_started event "
+                    f"(frame_count: {frame_count}, pushed_duration: {self._pushed_duration})"
+                )
                 self._first_frame_event.set()
                 self.on_playback_started(created_at=time.time())
             await self._audio_source.capture_frame(frame)
