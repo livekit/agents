@@ -435,11 +435,7 @@ class SpeechStream(stt.SpeechStream):
             self._last_audio_at = time.monotonic()
 
     async def _emit_audio(self, payload: bytes) -> None:
-        if (
-            not self._rtzr_stt._use_vad_endpointing
-            and not self._speech_active
-            and not self._closed
-        ):
+        if not self._rtzr_stt._use_vad_endpointing and not self._speech_active and not self._closed:
             synthetic_ev = agents_vad.VADEvent(
                 type=agents_vad.VADEventType.START_OF_SPEECH,
                 samples_index=0,
@@ -462,8 +458,7 @@ class SpeechStream(stt.SpeechStream):
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._rtzr_stt._params.sample_rate,
             num_channels=1,
-            samples_per_channel=self._rtzr_stt._params.sample_rate
-            // (1000 // _DEFAULT_CHUNK_MS),
+            samples_per_channel=self._rtzr_stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
         )
 
         async for data in self._input_ch:

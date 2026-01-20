@@ -177,9 +177,7 @@ class RTZROpenAPIClient:
                     raise RTZRStatusError("Invalid token response payload")
                 access_token = data.get("access_token")
                 expire_at = data.get("expire_at")
-                if not isinstance(access_token, str) or not isinstance(
-                    expire_at, (int, float)
-                ):
+                if not isinstance(access_token, str) or not isinstance(expire_at, (int, float)):
                     raise RTZRStatusError("Invalid token response payload")
                 self._token = {"access_token": access_token, "expire_at": float(expire_at)}
                 logger.debug("Successfully refreshed RTZR access token")
