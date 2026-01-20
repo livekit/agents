@@ -552,13 +552,19 @@ class _ConnectionPool:
                         authorization=self._authorization,
                         on_capacity_available=self.notify_capacity_available,
                     )
-                    self._connections.append(conn)
-                    logger.debug(
-                        "Created new Inworld connection",
-                        extra={"pool_size": len(self._connections)},
-                    )
-                    ctx_id, waiter = await conn.acquire_context(emitter, opts, remaining_timeout)
-                    return ctx_id, waiter, conn
+                    try:
+                        ctx_id, waiter = await conn.acquire_context(
+                            emitter, opts, remaining_timeout
+                        )
+                        self._connections.append(conn)
+                        logger.debug(
+                            "Created new Inworld connection",
+                            extra={"pool_size": len(self._connections)},
+                        )
+                        return ctx_id, waiter, conn
+                    except Exception:
+                        await conn.aclose()
+                        raise
 
                 # At max connections and all at capacity - wait for one to free up
                 pass
@@ -1036,6 +1042,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             logger.error("Inworld stream error", extra={"context_id": context_id, "error": e})
+            connection.close_context(context_id)
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
