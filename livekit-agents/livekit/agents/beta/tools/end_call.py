@@ -33,7 +33,7 @@ class EndCallTool(Toolset):
         *,
         extra_instructions: str = "",
         delete_room: bool = True,
-        on_end_call: Callable[[RunContext], Awaitable[None]] | None = _default_on_end_call,
+        end_instructions: str | Callable[[RunContext], Awaitable[str]] | None = None,
     ):
         """
         This tool allows the agent to end the call and disconnect from the room.
@@ -41,12 +41,14 @@ class EndCallTool(Toolset):
         Args:
             extra_instructions: Additional instructions to add to the end call tool.
             delete_room: Whether to delete the room when the user ends the call.
-            on_end_call: Callback to be called when the user ends the call.
+            end_instructions: If a string is provided, it will be used as the instructions of
+                `session.generate_reply` when the user ends the call. If a callback, it will be called
+                when the user ends the call.
         """
         super().__init__()
         self._delete_room = delete_room
         self._extra_instructions = extra_instructions
-        self._on_end_call = on_end_call
+        self._end_instructions = end_instructions
 
         self._end_call_tool = function_tool(
             self._end_call,
@@ -58,8 +60,12 @@ class EndCallTool(Toolset):
         try:
             logger.debug("end_call tool called")
             ctx.session.once("close", self._on_session_close)
-            if self._on_end_call:
-                await self._on_end_call(ctx)
+            if isinstance(self._end_instructions, str):
+                await ctx.session.generate_reply(
+                    instructions=self._end_instructions, tool_choice="none"
+                )
+            elif callable(self._end_instructions):
+                await self._end_instructions(ctx)
         finally:
             # close the AgentSession
             ctx.session.shutdown()

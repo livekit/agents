@@ -19,15 +19,9 @@ load_dotenv()
 
 class MyAgent(Agent):
     def __init__(self):
-        async def on_end_call(ctx: RunContext) -> None:
-            logger.info("generating goodbye message")
-            await ctx.session.generate_reply(
-                instructions="say goodbye to the user", tool_choice="none"
-            )
-
         super().__init__(
             instructions="You are a helpful assistant.",
-            tools=[EndCallTool(on_end_call=on_end_call)],
+            tools=[EndCallTool(end_instructions="thanks the user for calling and goodbye")],
         )
 
     async def on_enter(self) -> None:
