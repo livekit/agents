@@ -308,7 +308,6 @@ class AvatarSession:
         self, livekit_url: str, livekit_token: str, room_name: str
     ) -> None:
         assert self._api_url is not None, "api_url is not set"
-        assert self._api_secret is not None, "api_secret is not set"
 
         # Determine if using custom API endpoint (not the default BitHuman auth API)
         # Custom endpoints use multipart/form-data format for direct avatar worker requests
@@ -320,6 +319,8 @@ class AvatarSession:
             async_mode = self._parse_async_parameter_from_url()
             await self._send_formdata_request(livekit_url, livekit_token, room_name, async_mode=async_mode)
         else:
+            # Default BitHuman API requires api_secret
+            assert self._api_secret is not None, "api_secret is not set"
             # Use JSON format for default BitHuman API
             await self._send_json_request(livekit_url, livekit_token, room_name)
 
@@ -332,8 +333,17 @@ class AvatarSession:
         """
         if self._api_url is None:
             return True
-        default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
-        return any(domain in self._api_url for domain in default_domains)
+        try:
+            parsed = urlparse(self._api_url)
+            hostname = parsed.netloc or parsed.hostname
+            if hostname is None:
+                return False
+            default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
+            return hostname in default_domains
+        except Exception:
+            # If parsing fails, fallback to substring matching
+            default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
+            return any(domain in self._api_url for domain in default_domains)
 
     async def _send_json_request(
         self, livekit_url: str, livekit_token: str, room_name: str
@@ -375,9 +385,12 @@ class AvatarSession:
         if utils.is_given(self._avatar_id):
             json_data["agent_id"] = self._avatar_id
 
+        assert self._api_secret is not None, "api_secret is required for default API"
+        api_secret_str: str = self._api_secret
+
         headers = {
             "Content-Type": "application/json",
-            "api-secret": self._api_secret,
+            "api-secret": api_secret_str,
         }
 
         await self._send_request_with_retry(
