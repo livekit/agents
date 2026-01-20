@@ -99,8 +99,8 @@ server = AgentServer()
 
 
 @server.text_handler()
-async def sms_handler(ctx: TextMessageContext):
-    logger.info(f"SMS received: {ctx.text}")
+async def text_handler(ctx: TextMessageContext):
+    logger.info(f"text message received: {ctx.text}")
 
     session = AgentSession(
         llm="openai/gpt-4.1-mini",

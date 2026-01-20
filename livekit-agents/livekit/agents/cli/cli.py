@@ -5,7 +5,6 @@ import contextlib
 import contextvars
 import datetime
 import enum
-import functools
 import hashlib
 import json
 import logging
@@ -41,10 +40,10 @@ from livekit import api, rtc
 from livekit.protocol.agent import TextMessageRequest
 
 from .._exceptions import CLIError
-from ..job import JobExecutorType, TextMessageContext, get_job_context
+from ..job import JobExecutorType, get_job_context
 from ..log import logger
 from ..plugin import Plugin
-from ..utils import aio, log_exceptions, shortuuid
+from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
 from ..voice.run_result import RunEvent
 from ..voice.transcription import TranscriptSynchronizer
@@ -295,6 +294,8 @@ class AgentsConsole:
         self._lock = threading.Lock()
         self._io_acquired = False
         self._io_acquired_event = threading.Event()
+        self._io_loop: asyncio.AbstractEventLoop | None = None
+        self._io_context: contextvars.Context | None = None
 
         self._io_audio_input: ConsoleAudioInput | None = None
         self._io_audio_output: ConsoleAudioOutput | None = None
@@ -352,13 +353,19 @@ class AgentsConsole:
             self.set_microphone_enabled(False)
             self.set_speaker_enabled(False)
 
+            if self._io_transcription_sync:
+                asyncio.run_coroutine_threadsafe(
+                    self._io_transcription_sync.aclose(),
+                    self.io_loop,
+                )
+                self._io_transcription_sync = None
+
             self._io_acquired = False
             self._io_session = None
             self._io_loop = None
             self._io_context = None
             self._io_audio_input = None
             self._io_audio_output = None
-            self._io_transcription_sync = None
             self._io_acquired_event.clear()
 
     @property
@@ -395,14 +402,14 @@ class AgentsConsole:
 
     @property
     def io_loop(self) -> asyncio.AbstractEventLoop:
-        if not self._io_acquired:
+        if not self._io_acquired or self._io_loop is None:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_loop
 
     @property
     def io_context(self) -> contextvars.Context:
-        if not self._io_acquired:
+        if not self._io_acquired or self._io_context is None:
             raise RuntimeError("AgentsConsole is not acquired")
 
         return self._io_context
@@ -602,6 +609,9 @@ class AgentsConsole:
             ) from None
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time: Any, *_: Any) -> None:
+        assert self._io_audio_input is not None
+        assert self._io_loop is not None
+
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
 
@@ -1152,12 +1162,12 @@ def _text_mode(c: AgentsConsole) -> None:
 
 
 def _sms_text_mode(
-    c: AgentsConsole, server: AgentServer, *, sess_data_file: str, loop: asyncio.AbstractEventLoop
+    c: AgentsConsole,
+    server: AgentServer,
+    *,
+    sess_data_file: str,
+    loop: asyncio.AbstractEventLoop,
 ) -> None:
-    text_handler = server._text_handler_fnc
-    if text_handler is None:
-        raise ValueError("text_handler is required when simulating SMS")
-
     while True:
         try:
             text = prompt(Text.from_markup("  [bold]User input[/bold]: "), console=c.console)
@@ -1174,62 +1184,75 @@ def _sms_text_mode(
         else:
             session_data = None
 
-        @log_exceptions(logger=logger)
-        async def _text_handle_wrapper(
-            ctx: TextMessageContext, resp_queue: queue.Queue[str | None]
-        ) -> None:
-            async def _forward_responses() -> None:
-                async for response in ctx.response_ch:
-                    resp_queue.put(response, block=False)
-                resp_queue.put(None, block=False)
+        # simulate a text message request
+        text_request = TextMessageRequest(
+            message_id=shortuuid("text-message-"),
+            session_id="text-session",
+            agent_name=None,
+            metadata="",
+            session_data=session_data,
+            text=text,
+        )
+        asyncio.run_coroutine_threadsafe(
+            server.simulate_job(
+                "text-mode-room",
+                agent_identity="text-agent",
+                fake_job=True,
+                text_request=text_request,
+            ),
+            loop,
+        )
 
-            forward_task = asyncio.create_task(_forward_responses())
-            try:
-                await text_handler(ctx)
-            finally:
-                ctx.mark_done()
-                await forward_task
+        c.print(text, tag="You")
+        c.wait_for_io_acquisition()
 
-            if session := get_job_context()._primary_agent_session:
-                # serialize the state of the session
-                with open(sess_data_file, "wb") as wf:
-                    wf.write(session.serialize())
-                logger.debug(
-                    "session state serialized", extra={"session_data_file": sess_data_file}
-                )
+        def _collect_responses(output_queue: queue.Queue[str | bytes]) -> None:
+            async def _collect() -> None:
+                text_ctx = get_job_context().text_message_context
+                if text_ctx is None:
+                    logger.error("no text context found")
+                    return
 
-        resp_queue = queue.Queue[str | None]()
-        server._text_handler_fnc = functools.partial(_text_handle_wrapper, resp_queue=resp_queue)
-        try:
-            # simulate a text message request
-            text_request = agent.TextMessageRequest()
-            asyncio.run_coroutine_threadsafe(
-                server.simulate_job(
-                    "text-mode-room",
-                    agent_identity="text-agent",
-                    fake_job=True,
-                    text_request=text_request,
-                ),
-                loop,
-            )
+                async for response in text_ctx.response_ch:
+                    output_queue.put(response, block=False)
 
-            c.print(text, tag="You")
+            def _done_callback(_: asyncio.Task[None]) -> None:
+                session = get_job_context()._primary_agent_session
+                if session is None:
+                    logger.warning("no session data available")
+                    output_queue.put(b"", block=False)
+                else:
+                    output_queue.put(session.serialize(), block=False)
 
-            while True:
-                resp: str | None = ""
-                with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
-                    while True:
-                        try:
-                            resp = resp_queue.get(timeout=0.1)
-                            break
-                        except queue.Empty:
-                            pass
-                if resp:
-                    c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
-                elif resp is None:
-                    break
-        finally:
-            server._text_handler_fnc = text_handler
+            task = asyncio.create_task(_collect())
+            task.add_done_callback(_done_callback)
+
+        response_queue = queue.Queue[str | bytes]()
+        c.io_loop.call_soon_threadsafe(_collect_responses, response_queue, context=c.io_context)
+
+        while True:
+            resp: str | bytes = ""
+            with live_status(c.console, Text.from_markup("   [bold]Generating...[/bold]")):
+                while True:
+                    try:
+                        resp = response_queue.get(timeout=0.1)
+                        break
+                    except queue.Empty:
+                        pass
+            if isinstance(resp, str) and resp:
+                c.print(resp, tag="Agent", tag_style=Style.parse("black on #B11FF9"))
+            elif isinstance(resp, bytes):
+                session_data = resp
+                break
+
+        # save the session data
+        if session_data:
+            with open(sess_data_file, "wb") as wf:
+                wf.write(session_data)
+            logger.debug("session data saved", extra={"session_data_file": sess_data_file})
+
+        # release the console for next run
+        c.release_io()
 
 
 AGENT_PALETTE: list[str] = [

@@ -948,7 +948,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         agent_identity: str | None = None,
         room_info: models.Room | None = None,
         token: str | None = None,
-        text_request: "agent.TextMessageRequest" | None = None,
+        text_request: agent.TextMessageRequest | None = None,
     ) -> None:
         async with self._lock:
             if token is not None:
@@ -1373,7 +1373,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
             )
 
-    def _handle_text_request(self, request: "agent.TextMessageRequest") -> None:
+    def _handle_text_request(self, request: agent.TextMessageRequest) -> None:
         logger.debug(
             "received text request",
             extra={

@@ -96,7 +96,7 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
-    text_request: "agent.TextMessageRequest" | None = None
+    text_request: agent.TextMessageRequest | None = None
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
