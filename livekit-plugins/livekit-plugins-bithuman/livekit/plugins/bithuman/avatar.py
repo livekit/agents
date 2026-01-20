@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import cv2
@@ -395,11 +395,11 @@ class AvatarSession:
         """
         if self._api_url is None:
             return None
-        
+
         try:
             parsed = urlparse(self._api_url)
             query_params = parse_qs(parsed.query)
-            
+
             if "async" in query_params:
                 async_value = query_params["async"][0].lower()
                 if async_value == "true":
@@ -409,7 +409,7 @@ class AvatarSession:
         except Exception:
             # If parsing fails, return None (don't add async_mode parameter)
             pass
-        
+
         return None
 
     async def _send_formdata_request(
@@ -434,7 +434,7 @@ class AvatarSession:
         form_data.add_field("livekit_url", livekit_url)
         form_data.add_field("livekit_token", livekit_token)
         form_data.add_field("room_name", room_name)
-        
+
         # Add async_mode parameter if parsed from URL
         # FastAPI Form bool accepts "true"/"false" strings and converts them to boolean
         if async_mode is not None:
