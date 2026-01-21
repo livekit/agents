@@ -41,8 +41,8 @@ class Tagger:
             reason: Optional reason for the success (stored separately from the tag).
         """
         # Remove any existing outcome tag
-        self._tags = {t for t in self._tags if not t.startswith("lk.outcome:")}
-        self._tags.add("lk.outcome:success")
+        self._tags.discard("lk.fail")
+        self._tags.add("lk.success")
         self._outcome_reason = reason
 
     def fail(self, reason: str | None = None) -> None:
@@ -52,8 +52,8 @@ class Tagger:
             reason: Optional reason for the failure (stored separately from the tag).
         """
         # Remove any existing outcome tag
-        self._tags = {t for t in self._tags if not t.startswith("lk.outcome:")}
-        self._tags.add("lk.outcome:failure")
+        self._tags.discard("lk.success")
+        self._tags.add("lk.fail")
         self._outcome_reason = reason
 
     def add(self, tag: str) -> None:
