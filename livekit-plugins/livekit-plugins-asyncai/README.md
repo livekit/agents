@@ -1,8 +1,8 @@
 # Async plugin for LiveKit Agents
 
-Support for text to speech with [Async](https://async.ai/).
+Support for text-to-speech with [Async](https://async.com/).
 
-See https://docs.livekit.io/agents/integrations/tts/asyncai/ for more information.
+See [AsyncAI TTS docs](https://docs.livekit.io/agents/integrations/tts/asyncai/) for more information.
 
 ## Installation
 

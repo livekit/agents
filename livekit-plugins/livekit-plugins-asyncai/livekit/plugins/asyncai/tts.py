@@ -23,6 +23,7 @@ import weakref
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import Union, cast
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -58,7 +59,7 @@ class _TTSOptions:
     sample_rate: int
     voice: str | list[float]
     api_key: str
-    language: str
+    language: str | None
     base_url: str
 
     def get_http_url(self, path: str) -> str:
@@ -90,7 +91,7 @@ class TTS(tts.TTS):
 
         Args:
             model (TTSModels, optional): The Async TTS model to use. Defaults to "asyncflow_multilingual_v1.0".
-            language (str, optional): The language code for synthesis. Defaults to "en".
+            language (str, optional): The language code for synthesis.
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str, optional): The voice ID.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 32000.
@@ -143,9 +144,8 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        url = self._opts.get_ws_url(
-            f"/text_to_speech/websocket/ws?{API_AUTH_HEADER}={self._opts.api_key}&{API_VERSION_HEADER}={API_VERSION}"
-        )
+        query = urlencode({API_AUTH_HEADER: self._opts.api_key, API_VERSION_HEADER: API_VERSION})
+        url = self._opts.get_ws_url(f"/text_to_speech/websocket/ws?{query}")
 
         init_payload = {
             "model_id": self._opts.model,
@@ -209,8 +209,8 @@ class TTS(tts.TTS):
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ):
-        pass
+    ) -> tts.ChunkedStream:
+        raise NotImplementedError("AsyncAI TTS supports streaming only; use tts.stream().")
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
@@ -245,7 +245,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str
         ) -> None:
             async for ev in sent_tokenizer_stream:
-                token_pkt = {}
+                token_pkt: dict[str, object] = {}
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["context_id"] = asyncai_context_id
                 token_pkt["force"] = True
@@ -294,7 +294,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if current_segment_id is None:
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
-                if data.get("final") and data["final"] is True:
+                final = data.get("final")
+                if isinstance(final, bool) and final:
                     if sent_tokenizer_stream.closed:
                         output_emitter.end_input()
                         break
