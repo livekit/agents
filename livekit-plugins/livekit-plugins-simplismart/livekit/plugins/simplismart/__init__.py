@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,26 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resemble plugin for LiveKit Agents
+"""SimpliSmart plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/resemble/ for more information.
+Support for speech-to-text and text-to-speech with [SimpliSmart](https://simplismart.ai/).
+
+SimpliSmart provides high-quality STT and TTS for Indian languages.
+
+For API access, visit https://simplismart.ai/
 """
 
-from .models import TTSModels
-from .tts import TTS, ChunkedStream, SynthesizeStream
+from .stt import STT
+from .tts import TTS
 from .version import __version__
 
-__all__ = ["TTS", "TTSModels", "ChunkedStream", "SynthesizeStream", "__version__"]
+__all__ = ["STT", "TTS", "__version__"]
+
 
 from livekit.agents import Plugin
 
+from .log import logger
 
-class ResemblePlugin(Plugin):
+
+class SimplismartPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(ResemblePlugin())
+Plugin.register_plugin(SimplismartPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
