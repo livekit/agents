@@ -12,26 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resemble plugin for LiveKit Agents
+"""AsyncAI plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/resemble/ for more information.
+See https://docs.livekit.io/agents/integrations/tts/asyncai/ for more information.
 """
 
-from .models import TTSModels
-from .tts import TTS, ChunkedStream, SynthesizeStream
+from .tts import TTS
 from .version import __version__
 
-__all__ = ["TTS", "TTSModels", "ChunkedStream", "SynthesizeStream", "__version__"]
+__all__ = ["TTS", "__version__"]
 
 from livekit.agents import Plugin
 
+from .log import logger
 
-class ResemblePlugin(Plugin):
+
+class AsyncAIPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(ResemblePlugin())
+Plugin.register_plugin(AsyncAIPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
