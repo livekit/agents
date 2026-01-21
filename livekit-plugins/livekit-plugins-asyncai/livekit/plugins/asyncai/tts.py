@@ -241,7 +241,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str) -> None:
+        async def _sentence_stream_task(
+            ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str
+        ) -> None:
             async for ev in sent_tokenizer_stream:
                 token_pkt = {}
                 token_pkt["transcript"] = ev.token + " "
