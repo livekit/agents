@@ -146,7 +146,7 @@ class AudioRecognition:
 
         self._tasks: set[asyncio.Task[Any]] = set()
 
-        # used for interruption detection
+        # used for adaptive interruption detection
         self._interruption_atask: asyncio.Task[None] | None = None
         self._interruption_detection = interruption_detection
         self._interruption_ch: (
@@ -443,6 +443,10 @@ class AudioRecognition:
             self._vad_atask = None
             self._vad_ch = None
 
+        self._interruption_enabled = (
+            self._interruption_detection is not None and self._vad is not None
+        )
+
     def update_interruption_detection(
         self, interruption_detection: inference.AdaptiveInterruptionDetector | None
     ) -> None:
@@ -471,6 +475,10 @@ class AudioRecognition:
             self._tasks.add(task)
             self._interruption_atask = None
             self._interruption_ch = None
+
+        self._interruption_enabled = (
+            self._interruption_detection is not None and self._vad is not None
+        )
 
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
