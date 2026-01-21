@@ -82,8 +82,14 @@ def _get_latest_instructions(chat_ctx: ChatContext) -> str | None:
 
 
 def _has_handoffs(chat_ctx: ChatContext) -> bool:
-    """Check if the chat context contains any agent handoffs."""
-    return any(item.type == "agent_handoff" for item in chat_ctx.items)
+    """Check if the chat context contains any real agent handoffs.
+
+    Excludes initial agent assignments (where old_agent_id is None).
+    """
+    return any(
+        item.type == "agent_handoff" and item.old_agent_id is not None
+        for item in chat_ctx.items
+    )
 
 
 def _parse_verdict(response: str) -> Verdict | None:
@@ -377,7 +383,9 @@ def tool_use_judge(llm: LLM | None = None) -> Judge:
         name="tool_use",
         instructions=(
             "The agent must use tools correctly when needed. "
-            "Fail if the agent should have called a tool but didn't, "
+            "Pass if no tools were needed for the conversation (e.g., simple greetings, "
+            "user declined service, or no actionable request was made). "
+            "Fail only if the agent should have called a tool but didn't, "
             "called a tool with incorrect or missing parameters, "
             "called an inappropriate tool for the task, "
             "misinterpreted or ignored the tool's output, "
@@ -419,11 +427,10 @@ def relevancy_judge(llm: LLM | None = None) -> Judge:
         llm=llm,
         name="relevancy",
         instructions=(
-            "The agent's response must be relevant to the user's question and stay on topic. "
-            "Fail if the agent ignores the question, goes off-topic, provides "
-            "a noncommittal or evasive answer, discusses unrelated matters, "
-            "or fails to redirect off-topic user requests appropriately. "
-            "Pass if the response directly addresses the user's needs and stays focused."
+            "The agent's response must be relevant to the user's input. "
+            "Pass if the agent appropriately acknowledges and responds to what the user said. "
+            "Fail if the agent ignores the user's input, goes off-topic, provides "
+            "an evasive answer, or discusses unrelated matters."
         ),
     )
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from ..llm import LLM, ChatContext
 from .judge import JudgmentResult
+
+_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
 
 if TYPE_CHECKING:
     from ..inference import LLMModels
@@ -154,6 +157,12 @@ class JudgeGroup:
 
         results = await asyncio.gather(*[run_judge(j) for j in self._judges])
         evaluation_result = EvaluationResult(judgments=dict(results))
+
+        if _evals_verbose:
+            print("\n+ JudgeGroup evaluation results:")
+            for name, judgment in evaluation_result.judgments.items():
+                print(f"  [{name}] verdict={judgment.verdict}")
+                print(f"    reasoning: {judgment.reasoning}\n")
 
         # Auto-tag if running within a job context
         try:
