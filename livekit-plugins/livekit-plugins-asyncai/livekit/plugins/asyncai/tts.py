@@ -45,10 +45,11 @@ from .constants import (
 )
 from .log import logger
 from .models import (
+    TTSDefaultVoiceId,
     TTSEncoding,
     TTSModels,
-    TTSDefaultVoiceId,
 )
+
 
 @dataclass
 class _TTSOptions:
