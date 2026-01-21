@@ -51,37 +51,36 @@ async def list_voices(
     if not api_key:
         raise ValueError("api_key required (or set CAMB_API_KEY environment variable)")
 
-    client = AsyncCambAI(api_key=api_key, base_url=base_url)
+    async with AsyncCambAI(api_key=api_key, base_url=base_url) as client:
+        try:
+            voice_list = await client.voice_cloning.list_voices()
+            voices = []
 
-    try:
-        voice_list = await client.voice_cloning.list_voices()
-        voices = []
+            for voice in voice_list:
+                voice_id = voice.get("id")
+                if voice_id is None:
+                    continue
 
-        for voice in voice_list:
-            voice_id = voice.get("id")
-            if voice_id is None:
-                continue
+                gender_int = voice.get("gender")
+                gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
 
-            gender_int = voice.get("gender")
-            gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
+                voices.append(
+                    {
+                        "id": voice_id,
+                        "name": voice.get("voice_name", ""),
+                        "gender": gender,
+                        "age": voice.get("age"),
+                        "language": voice.get("language"),
+                    }
+                )
 
-            voices.append(
-                {
-                    "id": voice_id,
-                    "name": voice.get("voice_name", ""),
-                    "gender": gender,
-                    "age": voice.get("age"),
-                    "language": voice.get("language"),
-                }
-            )
+            return voices
 
-        return voices
-
-    except ApiError as e:
-        raise APIStatusError(
-            f"Failed to list voices: {e.body}",
-            status_code=e.status_code or 500,
-        ) from e
+        except ApiError as e:
+            raise APIStatusError(
+                f"Failed to list voices: {e.body}",
+                status_code=e.status_code or 500,
+            ) from e
 
 
 class CambPlugin(Plugin):

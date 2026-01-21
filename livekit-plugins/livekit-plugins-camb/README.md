@@ -30,28 +30,36 @@ Or obtain it from [Camb.ai Studio](https://studio.camb.ai/public/onboarding).
 ## Quick Start
 
 ```python
+import asyncio
 from livekit.plugins.camb import TTS
 
-# Initialize TTS (uses CAMB_API_KEY env var)
-tts = TTS()
+async def main():
+    # Initialize TTS (uses CAMB_API_KEY env var)
+    tts = TTS()
 
-# Synthesize speech
-stream = tts.synthesize("Hello from Camb.ai!")
-audio_frame = await stream.collect()
+    # Synthesize speech
+    stream = tts.synthesize("Hello from Camb.ai!")
+    audio_frame = await stream.collect()
 
-# Save to file
-with open("output.wav", "wb") as f:
-    f.write(audio_frame.to_wav_bytes())
+    # Save to file
+    with open("output.wav", "wb") as f:
+        f.write(audio_frame.to_wav_bytes())
+
+asyncio.run(main())
 ```
 
 ## List Available Voices
 
 ```python
+import asyncio
 from livekit.plugins.camb import list_voices
 
-voices = await list_voices()
-for voice in voices:
-    print(f"{voice['name']} ({voice['id']}): {voice['gender']}, {voice['language']}")
+async def main():
+    voices = await list_voices()
+    for voice in voices:
+        print(f"{voice['name']} ({voice['id']}): {voice['gender']}, {voice['language']}")
+
+asyncio.run(main())
 ```
 
 ## Select a Specific Voice

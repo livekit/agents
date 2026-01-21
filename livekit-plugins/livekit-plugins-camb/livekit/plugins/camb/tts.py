@@ -165,6 +165,8 @@ class TTS(tts.TTS):
             self._opts.language = language
         if model is not None:
             self._opts.speech_model = model
+            # Update sample rate to match the new model
+            self._sample_rate = MODEL_SAMPLE_RATES.get(model, 22050)
         if user_instructions is not None:
             self._opts.user_instructions = user_instructions
 
@@ -178,9 +180,8 @@ class TTS(tts.TTS):
 
     async def aclose(self) -> None:
         if self._close_client_on_cleanup and self._client is not None:
-            # The SDK client's httpx client will be closed when garbage collected
-            # or we can explicitly close it if we created it
-            pass
+            await self._client.aclose()
+            self._client = None
 
 
 class ChunkedStream(tts.ChunkedStream):
