@@ -997,10 +997,13 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
-            if self._interruption_ch:
-                while not self._interruption_ch.empty():
-                    self._interruption_ch.recv_nowait()
-                self._interruption_ch.close()
+            if isinstance(audio_input, aio.Chan):
+                while not audio_input.empty():
+                    audio_input.recv_nowait()
+                audio_input.close()
+            else:
+                async for _ in audio_input:
+                    pass
 
     def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
