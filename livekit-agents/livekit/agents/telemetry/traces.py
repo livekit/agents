@@ -109,15 +109,7 @@ class _TraceLevelLoggingHandler(LoggingHandler):
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
         if record.levelno == TRACE_LEVEL:
-            return OTelLogRecord(
-                timestamp=log_record.timestamp,
-                observed_timestamp=log_record.observed_timestamp,
-                context=log_record.context,
-                severity_number=SeverityNumber.TRACE,
-                severity_text=log_record.severity_text,
-                body=log_record.body,
-                attributes=log_record.attributes,
-            )
+            log_record.severity_number = SeverityNumber.TRACE
         return log_record
 
 
