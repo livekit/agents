@@ -335,7 +335,7 @@ class AvatarSession:
             return True
         try:
             parsed = urlparse(self._api_url)
-            hostname = parsed.netloc or parsed.hostname
+            hostname = parsed.hostname
             if hostname is None:
                 return False
             default_domains = ["auth.api.bithuman.ai", "api.bithuman.ai"]
@@ -386,11 +386,10 @@ class AvatarSession:
             json_data["agent_id"] = self._avatar_id
 
         assert self._api_secret is not None, "api_secret is required for default API"
-        api_secret_str: str = self._api_secret
 
         headers = {
             "Content-Type": "application/json",
-            "api-secret": api_secret_str,
+            "api-secret": self._api_secret,
         }
 
         await self._send_request_with_retry(
