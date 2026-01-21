@@ -77,9 +77,7 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
-        endpoint_url: Literal[
-            "wss://streaming.assemblyai.com/v3/ws", "wss://streaming.eu.assemblyai.com/v3/ws"
-        ] = "wss://streaming.assemblyai.com/v3/ws",
+        endpoint_url: str = "wss://streaming.assemblyai.com/v3/ws",
     ):
         """
         Args:
