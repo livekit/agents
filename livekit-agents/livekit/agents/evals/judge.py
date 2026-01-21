@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ..llm import LLM, ChatContext
+from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
 from ..types import NOT_GIVEN, NotGivenOr
 from ..log import logger
 
@@ -92,54 +91,59 @@ def _has_handoffs(chat_ctx: ChatContext) -> bool:
     )
 
 
-def _parse_verdict(response: str) -> Verdict | None:
-    """Parse the verdict from the LLM response.
-
-    Returns None if no valid verdict found.
-    """
-    response_lower = response.lower()
-
-    # Look for "Verdict: X" pattern
-    match = re.search(r"verdict:\s*(pass|fail|maybe)\b", response_lower)
-    if match:
-        return match.group(1)  # type: ignore
-
-    # Look for verdict keywords near end of response
-    last_part = response_lower[-200:]
-    if "pass" in last_part and "fail" not in last_part:
-        return "pass"
-    elif "fail" in last_part and "pass" not in last_part:
-        return "fail"
-    elif "maybe" in last_part or "uncertain" in last_part:
-        return "maybe"
-
-    return None
-
-
 async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
-    """Run LLM evaluation and parse the result."""
+    """Run LLM evaluation using function calling for reliable verdict extraction."""
+
+    @function_tool
+    async def submit_verdict(verdict: Verdict, reasoning: str) -> tuple[Verdict, str]:
+        """Submit your evaluation verdict.
+
+        Args:
+            verdict: Your judgment - 'pass' if criteria met, 'fail' if not, 'maybe' if uncertain.
+            reasoning: Brief explanation of your reasoning.
+        """
+        return verdict, reasoning
+
     eval_ctx = ChatContext()
+    eval_ctx.add_message(
+        role="system",
+        content=(
+            "You are an evaluator for conversational AI agents. "
+            "Analyze the conversation against the given criteria, then call submit_verdict "
+            "with your verdict ('pass', 'fail', or 'maybe') and a brief reasoning."
+        ),
+    )
     eval_ctx.add_message(role="user", content=prompt)
 
-    extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN
+    extra_kwargs: dict[str, Any] = {}
     excluded_models_temperature = ["gpt-5"]
 
     if not any(excluded_model in llm.model for excluded_model in excluded_models_temperature):
-        extra_kwargs = {"temperature": 0.0}
+        extra_kwargs["temperature"] = 0.0
 
-    response_chunks: list[str] = []
-    async for chunk in llm.chat(chat_ctx=eval_ctx, extra_kwargs=extra_kwargs):
-        if chunk.delta and chunk.delta.content:
-            response_chunks.append(chunk.delta.content)
+    arguments: str | None = None
+    async for chunk in llm.chat(
+        chat_ctx=eval_ctx,
+        tools=[submit_verdict],
+        tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
+        extra_kwargs=extra_kwargs,
+    ):
+        if not chunk.delta:
+            continue
 
-    response = "".join(response_chunks)
+        if chunk.delta.tool_calls:
+            tool = chunk.delta.tool_calls[0]
+            arguments = tool.arguments
 
-    verdict = _parse_verdict(response)
+    if not arguments:
+        raise ValueError("LLM did not return verdict arguments")
 
-    if verdict is None:
-        raise ValueError(f"Failed to parse verdict from LLM response: {response[:200]}")
+    fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+        fnc=submit_verdict, json_arguments=arguments
+    )
+    verdict, reasoning = await submit_verdict(*fnc_args, **fnc_kwargs)
 
-    return JudgmentResult(verdict=verdict, reasoning=response)
+    return JudgmentResult(verdict=verdict, reasoning=reasoning)
 
 
 class Judge:
@@ -181,10 +185,6 @@ class Judge:
             [
                 "",
                 "Evaluate if the conversation meets the criteria.",
-                "Think step by step, then provide your verdict.",
-                "",
-                "Reasoning: <your step-by-step reasoning>",
-                "Verdict: <pass or fail>",
             ]
         )
 
@@ -247,11 +247,6 @@ class _TaskCompletionJudge:
                 "Did the agent complete what it was instructed to do?",
                 "Consider: task completed, appropriately handed off, or correctly declined = pass",
                 "User's need ignored, no resolution, gave up without handoff = fail",
-                "",
-                "Think step by step, then provide your verdict.",
-                "",
-                "Reasoning: <your step-by-step reasoning>",
-                "Verdict: <pass or fail>",
             ]
         )
 
@@ -313,11 +308,6 @@ class _HandoffJudge:
                 "Did the new agent preserve context from the conversation?",
                 "Consider: remembered info (names, details, requests) = pass",
                 "Break in continuity, repeated questions, context lost = fail",
-                "",
-                "Think step by step, then provide your verdict.",
-                "",
-                "Reasoning: <your step-by-step reasoning>",
-                "Verdict: <pass or fail>",
             ]
         )
 

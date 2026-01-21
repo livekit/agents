@@ -145,24 +145,39 @@ class JudgeGroup:
             EvaluationResult containing all judgment results.
         """
         from ..job import get_job_context
+        from ..log import logger
 
         # Run all judges concurrently
-        async def run_judge(judge: Evaluator) -> tuple[str, JudgmentResult]:
-            result = await judge.evaluate(
-                chat_ctx=chat_ctx,
-                reference=reference,
-                llm=self._llm,
-            )
-            return judge.name, result
+        async def run_judge(judge: Evaluator) -> tuple[str, JudgmentResult | BaseException]:
+            try:
+                result = await judge.evaluate(
+                    chat_ctx=chat_ctx,
+                    reference=reference,
+                    llm=self._llm,
+                )
+                return judge.name, result
+            except Exception as e:
+                logger.warning(f"Judge '{judge.name}' failed: {e}")
+                return judge.name, e
 
         results = await asyncio.gather(*[run_judge(j) for j in self._judges])
-        evaluation_result = EvaluationResult(judgments=dict(results))
+
+        # Filter out failed judges
+        judgments: dict[str, JudgmentResult] = {}
+        for name, result in results:
+            if isinstance(result, JudgmentResult):
+                judgments[name] = result
+
+        evaluation_result = EvaluationResult(judgments=judgments)
 
         if _evals_verbose:
             print("\n+ JudgeGroup evaluation results:")
-            for name, judgment in evaluation_result.judgments.items():
-                print(f"  [{name}] verdict={judgment.verdict}")
-                print(f"    reasoning: {judgment.reasoning}\n")
+            for name, result in results:
+                if isinstance(result, JudgmentResult):
+                    print(f"  [{name}] verdict={result.verdict}")
+                    print(f"    reasoning: {result.reasoning}\n")
+                else:
+                    print(f"  [{name}] ERROR: {result}\n")
 
         # Auto-tag if running within a job context
         try:
