@@ -202,6 +202,8 @@ async def on_session_end(ctx: JobContext) -> None:
     else:
         ctx.tagger.fail(reason="Appointment was not booked")
 
+    logger.info("session tags: %s", ctx.tagger.tags)
+
 
 @server.rtc_session(on_session_end=on_session_end)
 async def frontdesk_agent(ctx: JobContext):
