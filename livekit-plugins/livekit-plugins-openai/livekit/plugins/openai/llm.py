@@ -47,7 +47,6 @@ from .models import (
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
     PerplexityChatModels,
-    SimplismartChatModels,
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
@@ -874,50 +873,6 @@ class LLM(llm.LLM):
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
-        )
-
-    @staticmethod
-    def with_simplismart(
-        *,
-        model: str | SimplismartChatModels = "meta-llama/Llama-3.1-8B-Instruct",
-        api_key: str | None = None,
-        base_url: str = "https://api.simplismart.live",
-        client: openai.AsyncClient | None = None,
-        user: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice = "auto",
-        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
-        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
-        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
-        top_p: NotGivenOr[float] = NOT_GIVEN,
-    ) -> LLM:
-        """
-        Create a new instance of Simplismart LLM.
-
-        ``api_key`` must be set to your Simplismart API key, either using the argument or by setting
-        the ``SIMPLISMART_API_KEY`` environmental variable.
-        """
-
-        api_key = api_key or os.environ.get("SIMPLISMART_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Simplismart API key is required, either as argument or set SIMPLISMART_API_KEY environmental variable"  # noqa: E501
-            )
-
-        return LLM(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            client=client,
-            user=user,
-            temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
-            reasoning_effort=reasoning_effort,
-            safety_identifier=safety_identifier,
-            prompt_cache_key=prompt_cache_key,
-            top_p=top_p,
         )
 
     def chat(
