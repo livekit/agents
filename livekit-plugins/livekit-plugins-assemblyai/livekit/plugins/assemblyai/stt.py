@@ -82,7 +82,8 @@ class STT(stt.STT):
         """
         Args:
             endpoint_url: The AssemblyAI streaming WebSocket endpoint URL. Use the EU endpoint
-                (wss://streaming.eu.assemblyai.com/v3/ws) for streaming in the EU. Defaults to US
+                (wss://streaming.eu.assemblyai.com/v3/ws) for streaming in the EU. Defaults to
+                wss://streaming.assemblyai.com/v3/ws.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
