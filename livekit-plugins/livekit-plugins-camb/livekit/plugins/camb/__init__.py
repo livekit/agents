@@ -51,36 +51,47 @@ async def list_voices(
     if not api_key:
         raise ValueError("api_key required (or set CAMB_API_KEY environment variable)")
 
-    async with AsyncCambAI(api_key=api_key, base_url=base_url) as client:
-        try:
-            voice_list = await client.voice_cloning.list_voices()
-            voices = []
+    client = AsyncCambAI(api_key=api_key, base_url=base_url)
 
-            for voice in voice_list:
-                voice_id = voice.get("id")
-                if voice_id is None:
-                    continue
+    try:
+        voice_list = await client.voice_cloning.list_voices()
+        voices = []
 
-                gender_int = voice.get("gender")
-                gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
+        for voice in voice_list:
+            voice_id = voice.get("id")
+            if voice_id is None:
+                continue
 
-                voices.append(
-                    {
-                        "id": voice_id,
-                        "name": voice.get("voice_name", ""),
-                        "gender": gender,
-                        "age": voice.get("age"),
-                        "language": voice.get("language"),
-                    }
-                )
+            gender_int = voice.get("gender")
+            gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
 
-            return voices
+            voices.append(
+                {
+                    "id": voice_id,
+                    "name": voice.get("voice_name", ""),
+                    "gender": gender,
+                    "age": voice.get("age"),
+                    "language": voice.get("language"),
+                }
+            )
 
-        except ApiError as e:
-            raise APIStatusError(
-                f"Failed to list voices: {e.body}",
-                status_code=e.status_code or 500,
-            ) from e
+        return voices
+
+    except ApiError as e:
+        raise APIStatusError(
+            f"Failed to list voices: {e.body}",
+            status_code=e.status_code or 500,
+        ) from e
+    finally:
+        # Close the internal httpx client
+        # Path: AsyncCambAI._client_wrapper.httpx_client.httpx_client
+        client_wrapper = getattr(client, "_client_wrapper", None)
+        if client_wrapper is not None:
+            http_client = getattr(client_wrapper, "httpx_client", None)
+            if http_client is not None:
+                httpx_client = getattr(http_client, "httpx_client", None)
+                if httpx_client is not None:
+                    await httpx_client.aclose()
 
 
 class CambPlugin(Plugin):

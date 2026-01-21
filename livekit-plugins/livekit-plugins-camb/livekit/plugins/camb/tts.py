@@ -180,7 +180,15 @@ class TTS(tts.TTS):
 
     async def aclose(self) -> None:
         if self._close_client_on_cleanup and self._client is not None:
-            await self._client.aclose()
+            # Close the internal httpx client via SDK's internal structure
+            # Path: AsyncCambAI._client_wrapper.httpx_client.httpx_client
+            client_wrapper = getattr(self._client, "_client_wrapper", None)
+            if client_wrapper is not None:
+                http_client = getattr(client_wrapper, "httpx_client", None)
+                if http_client is not None:
+                    httpx_client = getattr(http_client, "httpx_client", None)
+                    if httpx_client is not None:
+                        await httpx_client.aclose()
             self._client = None
 
 
