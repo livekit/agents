@@ -205,14 +205,14 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        language: str | None = language if is_given(language) else self._opts.language
+        resolved_language: str | None = language if is_given(language) else self._opts.language
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
         audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
         payload = self._opts.model_dump()
 
         payload["audio_data"] = audio_b64
-        payload["language"] = language
+        payload["language"] = resolved_language
         payload["model"] = self._model
 
         try:
@@ -242,7 +242,7 @@ class STT(stt.STT):
                 transcription = response_json.get("transcription", [])
 
                 info = response_json.get("info", {})
-                detected_language = info.get("language", language or "en")
+                detected_language = info.get("language", resolved_language or "en")
 
                 start_time = timestamps[0][0] if timestamps else 0.0
                 end_time = timestamps[-1][1] if timestamps else 0.0
