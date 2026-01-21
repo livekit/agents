@@ -148,8 +148,6 @@ class DurableScheduler:
                     if not nv._c:
                         g.throw(RuntimeError("invalid CallEffect state"))
 
-
-                    # TODO(theomonnom): Copy contextvars
                     async def _execute_step(ec: EffectCall) -> None:
                         try:
                             task = ec._c_ctx.run(asyncio.create_task, ec._c)
