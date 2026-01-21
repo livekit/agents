@@ -43,6 +43,7 @@ class ThreadJobExecutor:
         ping_interval: float,
         high_ping_threshold: float,
         http_proxy: str | None,
+        reuse_process: bool,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
@@ -69,6 +70,11 @@ class ThreadJobExecutor:
         self._inference_executor = inference_executor
         self._inference_tasks: list[asyncio.Task[None]] = []
         self._id = utils.shortuuid("THEXEC_")
+        self._jobs_completed = 0
+        self._baseline_memory_mb: float | None = None
+        self._current_memory_mb: float | None = None
+        self._reuse_process = reuse_process
+        self._job_reused_event = asyncio.Event()
 
     @property
     def id(self) -> str:
@@ -96,6 +102,24 @@ class ThreadJobExecutor:
     @property
     def running_job(self) -> RunningJobInfo | None:
         return self._running_job
+
+    @property
+    def jobs_completed(self) -> int:
+        return self._jobs_completed
+
+    @property
+    def baseline_memory_mb(self) -> float | None:
+        return self._baseline_memory_mb
+
+    @property
+    def current_memory_mb(self) -> float | None:
+        return self._current_memory_mb
+
+    @property
+    def memory_growth_mb(self) -> float:
+        if self._baseline_memory_mb is None or self._current_memory_mb is None:
+            return 0.0
+        return max(0.0, self._current_memory_mb - self._baseline_memory_mb)
 
     async def start(self) -> None:
         if self.started:
@@ -126,6 +150,7 @@ class ThreadJobExecutor:
                 session_end_fnc=self._opts.session_end_fnc,
                 user_arguments=self._user_args,
                 join_fnc=_on_join,
+                reuse_process=self._reuse_process,
             )
 
             self._thread = t = threading.Thread(
@@ -179,30 +204,6 @@ class ThreadJobExecutor:
         else:
             self._initialize_fut.set_result(None)
 
-    async def aclose(self) -> None:
-        """
-        attempt to gracefully close the job. warn if it takes too long to close
-        (in the threaded executor, the job can't be "killed")
-        """
-        if not self.started:
-            return
-
-        self._closing = True
-        with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
-            await channel.asend_message(self._pch, proto.ShutdownRequest())
-
-        try:
-            if self._main_atask:
-                await asyncio.wait_for(
-                    asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
-                )
-        except asyncio.TimeoutError:
-            logger.error("job shutdown is taking too much time..", extra=self.logging_extra())
-
-        async with self._lock:
-            if self._main_atask:
-                await asyncio.shield(self._main_atask)
-
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
             logger.warning("inference request received but no inference executor")
@@ -240,6 +241,72 @@ class ThreadJobExecutor:
         start_req = proto.StartJobRequest()
         start_req.running_job = info
         await channel.asend_message(self._pch, start_req)
+
+    def clear_running_job(self) -> None:
+        """Clear the running job (for reuse)"""
+        self._running_job = None
+        self._job_status = None
+        # Signal that job was reused
+        self._job_reused_event.set()
+
+    async def aclose(self) -> None:
+        """
+        Attempt to gracefully close the executor.
+        If process reuse is enabled and job completes during shutdown, skip closing.
+        """
+        if not self.started:
+            return
+
+        self._closing = True
+        has_running_job = self._running_job is not None
+
+        with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
+            await channel.asend_message(self._pch, proto.ShutdownRequest())
+
+        # Wait for either thread exit OR job reuse (if reuse enabled with active job)
+        try:
+            if self._main_atask:
+                if self._reuse_process and has_running_job:
+                    # Create a task for the reuse event
+                    reuse_task = asyncio.create_task(self._job_reused_event.wait())
+
+                    # Wait for either main task completion or job reuse event
+                    done, pending = await asyncio.wait(
+                        [self._main_atask, reuse_task],
+                        timeout=self._opts.close_timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    # Cancel pending tasks
+                    for task in pending:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+
+                    # Check if job was reused
+                    if self._job_reused_event.is_set():
+                        logger.info(
+                            "thread executor completed job and will be reused, skipping shutdown",
+                            extra=self.logging_extra(),
+                        )
+                        self._closing = False
+                        self._job_reused_event.clear()  # Reset for next time
+                        return
+
+                    # If we got here via timeout, raise TimeoutError
+                    if not done:
+                        raise asyncio.TimeoutError()
+                else:
+                    # Normal close without reuse consideration
+                    await asyncio.wait_for(
+                        asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
+                    )
+        except asyncio.TimeoutError:
+            logger.error("job shutdown is taking too much time..", extra=self.logging_extra())
+
+        async with self._lock:
+            if self._main_atask:
+                await asyncio.shield(self._main_atask)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -283,6 +350,29 @@ class ThreadJobExecutor:
 
             if isinstance(msg, proto.InferenceRequest):
                 self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+
+            if isinstance(msg, proto.JobCompleted):
+                self._handle_job_completed(msg)
+
+    def _handle_job_completed(self, msg: proto.JobCompleted) -> None:
+        """Handle job completion notification from subprocess"""
+        self._jobs_completed += 1
+        self._current_memory_mb = msg.memory_mb
+
+        # Set baseline on first job completion
+        if self._baseline_memory_mb is None:
+            self._baseline_memory_mb = msg.memory_mb
+
+        logger.debug(
+            "job completed in thread executor",
+            extra={
+                **self.logging_extra(),
+                "jobs_completed": self._jobs_completed,
+                "current_memory_mb": self._current_memory_mb,
+                "baseline_memory_mb": self._baseline_memory_mb,
+                "memory_growth_mb": self.memory_growth_mb,
+            },
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:

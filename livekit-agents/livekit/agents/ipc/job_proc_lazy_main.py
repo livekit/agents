@@ -29,6 +29,7 @@ from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
+from . import proto
 from .channel import Message
 from .inference_executor import InferenceExecutor
 from .proc_client import _dump_stack_traces_impl, _ProcClient
@@ -38,6 +39,7 @@ from .proto import (
     InferenceRequest,
     InferenceResponse,
     InitializeRequest,
+    JobCompleted,
     ShutdownRequest,
     StartJobRequest,
 )
@@ -52,6 +54,7 @@ class ProcStartArgs:
     mp_cch: socket.socket
     log_cch: socket.socket
     logger_levels: dict[str, int]
+    reuse_process: bool = False
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -74,6 +77,7 @@ def proc_main(args: ProcStartArgs) -> None:
         args.session_end_fnc,
         JobExecutorType.PROCESS,
         args.user_arguments,
+        args.reuse_process,
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
@@ -168,12 +172,14 @@ class _JobProc:
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
+        reuse_process: bool = False,
     ) -> None:
         self._executor_type = executor_type
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
+        self._reuse_process = reuse_process
         self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -183,6 +189,13 @@ class _JobProc:
     @property
     def has_running_job(self) -> bool:
         return self._job_task is not None
+
+    def _reset_for_next_job(self) -> None:
+        """Reset state in preparation for the next job (for process reuse)"""
+        self._job_task = None
+        self._ctx_connect_called = False
+        self._ctx_shutdown_called = False
+        self._shutdown_fut = asyncio.Future()
 
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
@@ -264,11 +277,17 @@ class _JobProc:
             inference_executor=self._inf_client,
         )
 
-        def _exit_proc_cb(_: asyncio.Task[None]) -> None:
-            self._exit_proc_flag.set()
+        def _job_done_cb(task: asyncio.Task[None]) -> None:
+            if self._reuse_process:
+                # Job state already cleared in _run_job_task before sending JobCompleted
+                # This ensures has_running_job returns False when ShutdownRequest arrives
+                pass
+            else:
+                # Original behavior: exit after job completion
+                self._exit_proc_flag.set()
 
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-        self._job_task.add_done_callback(_exit_proc_cb)
+        self._job_task.add_done_callback(_job_done_cb)
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
@@ -323,6 +342,14 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
+        # Wait for job entry task to complete before cleanup
+        if not job_entry_task.done():
+            await aio.cancel_and_wait(job_entry_task)
+
+        # Also cancel the warn task if still running
+        if not warn_unconnected_task.done():
+            await aio.cancel_and_wait(warn_unconnected_task)
+
         # TODO(theomonnom): move this code?
         if session := self._job_ctx._primary_agent_session:
             await session.aclose()
@@ -359,6 +386,24 @@ class _JobProc:
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 
+        # Send job completion notification if process reuse is enabled
+        if self._reuse_process:
+            import psutil
+
+            try:
+                process = psutil.Process()
+                memory_info = process.memory_info()
+                memory_mb = memory_info.rss / (1024 * 1024)
+            except Exception:
+                memory_mb = 0.0
+
+            await self._client.send(
+                proto.JobCompleted(success=(self._job_ctx is not None), memory_mb=memory_mb)
+            )
+
+            # Reset state for the next job
+            self._reset_for_next_job()
+
 
 @dataclass
 class ThreadStartArgs:
@@ -368,6 +413,7 @@ class ThreadStartArgs:
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
+    reuse_process: bool = False
 
 
 def thread_main(
@@ -383,6 +429,7 @@ def thread_main(
             args.session_end_fnc,
             JobExecutorType.THREAD,
             args.user_arguments,
+            args.reuse_process,
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)

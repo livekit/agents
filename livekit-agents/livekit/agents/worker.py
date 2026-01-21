@@ -232,6 +232,14 @@ class ServerOptions:
     """Maximum amount of time to wait for a job to shut down gracefully"""
     initialize_process_timeout: float = 10.0
     """Maximum amount of time to wait for a process to initialize/prewarm"""
+    reuse_processes: bool = False
+    """Enable process reuse after job completion to reduce startup overhead"""
+    max_process_reuses: int = 20
+    """Maximum number of jobs a process can handle before being retired (0 = unlimited)"""
+    reuse_memory_growth_mb: float = 100
+    """Don't reuse if memory increased by this amount since baseline (0 = no limit)"""
+    max_idle_processes: int | None = None
+    """Maximum idle processes to keep. When exceeded, most-used processes are retired (None = 2x num_idle_processes)"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
@@ -317,6 +325,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         initialize_process_timeout: float = 10.0,
+        reuse_processes: bool = False,
+        max_process_reuses: int = 20,
+        reuse_memory_growth_mb: float = 100,
+        max_idle_processes: int | None = None,
         permissions: WorkerPermissions = _default_permissions,
         max_retry: int = 16,
         ws_url: str | None = None,
@@ -350,6 +362,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._num_idle_processes = num_idle_processes
         self._shutdown_process_timeout = shutdown_process_timeout
         self._initialize_process_timeout = initialize_process_timeout
+        self._reuse_processes = reuse_processes
+        self._max_process_reuses = max_process_reuses
+        self._reuse_memory_growth_mb = reuse_memory_growth_mb
+        self._max_idle_processes = max_idle_processes
         self._permissions = permissions
         self._max_retry = max_retry
         self._prometheus_port = prometheus_port
@@ -431,6 +447,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
+            reuse_processes=options.reuse_processes,
+            max_process_reuses=options.max_process_reuses,
+            reuse_memory_growth_mb=options.reuse_memory_growth_mb,
             permissions=options.permissions,
             max_retry=options.max_retry,
             ws_url=options.ws_url,
@@ -653,6 +672,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 close_timeout=self._shutdown_process_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
+                reuse_processes=self._reuse_processes,
+                max_process_reuses=self._max_process_reuses,
+                reuse_memory_growth_mb=self._reuse_memory_growth_mb,
+                max_idle_processes=self._max_idle_processes,
                 http_proxy=self._http_proxy or None,
             )
 
@@ -833,6 +856,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 @utils.log_exceptions(logger=logger)
                 async def _handle_text_request() -> None:
                     async for req in self._text_request_ch:
+                        # TODO: assign to the existing rtc job with the same participant identity if available
                         await self.simulate_job(
                             room="text-mode-room",
                             agent_identity=utils.shortuuid("text-agent-"),

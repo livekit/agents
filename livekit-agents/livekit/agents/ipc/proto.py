@@ -214,6 +214,24 @@ class DumpStackTraceRequest:
         pass
 
 
+@dataclass
+class JobCompleted:
+    """sent by the subprocess to notify the main process that a job has completed
+    and the process is ready for reuse"""
+
+    MSG_ID: ClassVar[int] = 10
+    success: bool = True
+    memory_mb: float = 0.0  # current memory usage in MB
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_bool(b, self.success)
+        channel.write_float(b, self.memory_mb)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.success = channel.read_bool(b)
+        self.memory_mb = channel.read_float(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -225,4 +243,5 @@ IPC_MESSAGES = {
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
+    JobCompleted.MSG_ID: JobCompleted,
 }

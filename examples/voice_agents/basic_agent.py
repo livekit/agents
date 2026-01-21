@@ -65,7 +65,7 @@ class MyAgent(Agent):
         return "sunny with a temperature of 70 degrees."
 
 
-server = AgentServer()
+server = AgentServer(reuse_processes=True)
 
 
 def prewarm(proc: JobProcess):
@@ -127,6 +127,7 @@ async def entrypoint(ctx: JobContext):
                 # uncomment to enable the Krisp BVC noise cancellation
                 # noise_cancellation=noise_cancellation.BVC(),
             ),
+            delete_room_on_close=True,
         ),
     )
 
