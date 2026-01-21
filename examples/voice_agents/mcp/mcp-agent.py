@@ -2,8 +2,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, mcp
-from livekit.plugins import deepgram, openai, silero
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, mcp
+from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("mcp-agent")
@@ -33,9 +33,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(voice="ash"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         turn_detection=MultilingualModel(),
         mcp_servers=[
             mcp.MCPServerHTTP(url="http://localhost:8000/sse"),

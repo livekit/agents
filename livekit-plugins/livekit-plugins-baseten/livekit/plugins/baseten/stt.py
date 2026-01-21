@@ -37,6 +37,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEvent
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
@@ -83,6 +84,8 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,  # only final transcripts
+                aligned_transcript="word",
+                offline_recognize=False,
             ),
         )
 
@@ -301,11 +304,25 @@ class SpeechStream(stt.SpeechStream):
                     text = data.get("transcript", "")
                     confidence = data.get("confidence", 0.0)
 
+                    # Note: Baseten uses 'start_time' and 'end_time' field names (with underscores)
+                    timed_words = [
+                        TimedString(
+                            text=segment.get("text", ""),
+                            start_time=segment.get("start_time", 0.0) + self.start_time_offset,
+                            end_time=segment.get("end_time", 0.0) + self.start_time_offset,
+                            start_time_offset=self.start_time_offset,
+                        )
+                        for segment in segments
+                    ]
+                    start_time = (
+                        segments[0].get("start_time", 0.0) if segments else 0.0
+                    ) + self.start_time_offset
+                    end_time = (
+                        segments[-1].get("end_time", 0.0) if segments else 0.0
+                    ) + self.start_time_offset
+
                     if not is_final:
                         if text:
-                            start_time = segments[0].get("start", 0.0) if segments else 0.0
-                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[
@@ -315,6 +332,7 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
+                                        words=timed_words,
                                     )
                                 ],
                             )
@@ -324,9 +342,6 @@ class SpeechStream(stt.SpeechStream):
                         language = data.get("language_code", self._opts.language)
 
                         if text:
-                            start_time = segments[0].get("start", 0.0) if segments else 0.0
-                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
-
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 alternatives=[
@@ -336,6 +351,7 @@ class SpeechStream(stt.SpeechStream):
                                         confidence=confidence,
                                         start_time=start_time,
                                         end_time=end_time,
+                                        words=timed_words,
                                     )
                                 ],
                             )
@@ -386,18 +402,20 @@ class SpeechStream(stt.SpeechStream):
         ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
 
         # Build and send the metadata payload as the first message
+        # Note: Baseten server expects 'vad_params' and 'streaming_whisper_params' field names
         metadata = {
-            "streaming_vad_config": {
+            "vad_params": {
                 "threshold": self._opts.vad_threshold,
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
-            "streaming_params": {
+            "streaming_whisper_params": {
                 "encoding": self._opts.encoding,
                 "sample_rate": self._opts.sample_rate,
                 "enable_partial_transcripts": False,
+                "audio_language": self._opts.language,
+                "show_word_timestamps": True,
             },
-            "whisper_params": {"audio_language": self._opts.language},
         }
 
         await ws.send_str(json.dumps(metadata))

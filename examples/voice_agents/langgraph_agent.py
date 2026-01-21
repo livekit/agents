@@ -14,8 +14,9 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     cli,
+    inference,
 )
-from livekit.plugins import deepgram, langchain, silero
+from livekit.plugins import langchain, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
@@ -45,10 +46,10 @@ class State(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-# a simple StateGraph with a single GPT-4o node
+# a simple StateGraph with a single LLM node
 def create_graph() -> StateGraph:
     openai_llm = init_chat_model(
-        model="openai:gpt-4o",
+        model="openai:gpt-4.1-mini",
     )
 
     def chatbot_node(state: State):
@@ -72,8 +73,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=deepgram.TTS(),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        tts=inference.TTS("cartesia/sonic-3"),
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )

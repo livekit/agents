@@ -135,7 +135,12 @@ class STT(stt.STT):
             ValueError: If no API key is provided, found in environment variables, or if a parameter is invalid.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript=False,
+                offline_recognize=False,
+            ),
         )
         if sample_rate != 16000:
             raise ValueError("FireworksAI STT only supports a sample rate of 16000")
@@ -166,6 +171,14 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model if is_given(self._opts.model) else "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "FireworksAI"
 
     @property
     def session(self) -> aiohttp.ClientSession:

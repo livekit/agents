@@ -29,7 +29,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
+from .tool_context import Tool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -52,12 +52,16 @@ class FunctionToolCall(BaseModel):
     name: str
     arguments: str
     call_id: str
+    extra: dict[str, Any] | None = None
+    """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
 class ChoiceDelta(BaseModel):
     role: ChatRole | None = None
     content: str | None = None
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    extra: dict[str, Any] | None = None
+    """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
 class ChatChunk(BaseModel):
@@ -120,7 +124,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        tools: list[Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -153,7 +157,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool | RawFunctionTool],
+        tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -332,7 +336,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool | RawFunctionTool]:
+    def tools(self) -> list[Tool]:
         return self._tools
 
     async def aclose(self) -> None:

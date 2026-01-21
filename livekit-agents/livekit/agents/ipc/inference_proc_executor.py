@@ -81,13 +81,18 @@ class InferenceProcExecutor(SupervisedProc):
 
         request_id = shortuuid("inference_req_")
         fut = asyncio.Future[proto.InferenceResponse]()
-
-        await channel.asend_message(
-            self._pch,
-            proto.InferenceRequest(request_id=request_id, method=method, data=data),
-        )
-
         self._active_requests[request_id] = fut
+
+        try:
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceRequest(request_id=request_id, method=method, data=data),
+            )
+        except Exception:
+            if not fut.done():
+                fut.cancel()
+            self._active_requests.pop(request_id, None)
+            raise
 
         inf_resp = await fut
         if inf_resp.error:

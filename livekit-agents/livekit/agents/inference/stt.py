@@ -16,7 +16,13 @@ from livekit import rtc
 from .. import stt, utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given
 from ._utils import create_access_token
 
@@ -57,6 +63,7 @@ class DeepgramOptions(TypedDict, total=False):
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool
+    vad_events: bool  # default: False
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -243,7 +250,12 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True),
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                aligned_transcript="word",
+                offline_recognize=False,
+            ),
         )
 
         lk_base_url = (
@@ -540,12 +552,18 @@ class SpeechStream(stt.SpeechStream):
         }
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(f"{base_url}/stt", headers=headers),
+                self._session.ws_connect(
+                    f"{base_url}/stt?model={self._opts.model}", headers=headers
+                ),
                 self._conn_options.timeout,
             )
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except (
+            aiohttp.ClientConnectorError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as e:
             if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
                 raise APIStatusError("LiveKit STT quota exceeded", status_code=e.status) from e
             raise APIConnectionError("failed to connect to LiveKit STT") from e
@@ -555,6 +573,7 @@ class SpeechStream(stt.SpeechStream):
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
         language = data.get("language", self._opts.language or "en")
+        words = data.get("words", []) or []
 
         if not text and not is_final:
             return
@@ -566,10 +585,20 @@ class SpeechStream(stt.SpeechStream):
 
         speech_data = stt.SpeechData(
             language=language,
-            start_time=data.get("start", 0),
-            end_time=data.get("duration", 0),  # This is the duration transcribed so far
+            start_time=self.start_time_offset + data.get("start", 0),
+            end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=text,
+            words=[
+                TimedString(
+                    text=word.get("word", ""),
+                    start_time=word.get("start", 0) + self.start_time_offset,
+                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time_offset=self.start_time_offset,
+                    confidence=word.get("confidence", 0.0),
+                )
+                for word in words
+            ],
         )
 
         if is_final:

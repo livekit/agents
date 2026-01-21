@@ -10,9 +10,10 @@ from livekit.agents import (
     RunContext,
     beta,
     cli,
+    inference,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("get-email-agent")
 
@@ -54,9 +55,9 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(),
-        tts=cartesia.TTS(),
+        llm=inference.LLM("google/gemini-2.5-flash"),
+        stt=inference.STT("deepgram/nova-3"),
+        tts=inference.TTS("cartesia/sonic-3"),
     )
 
     await session.start(agent=MyAgent(), room=ctx.room)
