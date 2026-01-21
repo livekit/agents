@@ -276,7 +276,7 @@ class AgentsConsole:
             "logging.level.critical": Style(color="red", bold=True, reverse=True),
         }
         self.tag_width = 11
-        self.console = Console(theme=Theme(theme))
+        self.console = Console(theme=Theme(theme), force_terminal=True)
 
         self._apm = rtc.AudioProcessingModule(
             echo_cancellation=True,
