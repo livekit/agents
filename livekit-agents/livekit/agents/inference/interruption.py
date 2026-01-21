@@ -189,7 +189,7 @@ class AdaptiveInterruptionDetector(
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
             detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.1s.
             inference_timeout (float, optional): The timeout for the interruption detection, defaults to 1 second.
-            base_url (str, optional): The base URL for the interruption detection, defaults to the LIVEKIT_INTERRUPTION_INFERENCE_URL environment variable.
+            base_url (str, optional): The base URL for the interruption detection, defaults to the shared LIVEKIT_REMOTE_EOT_URL environment variable.
             api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
             api_secret (str, optional): The API secret for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.
             http_session (aiohttp.ClientSession, optional): The HTTP session to use for the interruption detection.
@@ -600,6 +600,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
 
                 if isinstance(input_frame, InterruptionStreamBase._OverlapSpeechEndedSentinel):
                     if overlap_speech_started:
+                        logger.debug("overlap speech ended, stopping interruption inference")
                         self._user_speech_span = None
                         _, last_entry = cache.pop(
                             lambda x: x.total_duration is not None and x.total_duration > 0
@@ -620,7 +621,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                             probability=entry.get_probability(),
                         )
                         self._event_ch.send_nowait(ev)
-                        self._model.emit("overlap_speech_ended", ev)
+                        self._model.emit("user_non_interruption_detected", ev)
                     overlap_speech_started = False
                     accumulated_samples = 0
                     start_idx = 0
@@ -670,6 +671,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
                     is_interruption=resp["is_bargein"],
                 )
                 if overlap_speech_started and entry.is_interruption:
+                    logger.debug("user interruption detected")
                     if self._user_speech_span:
                         self._update_user_speech_span(self._user_speech_span, entry)
                         self._user_speech_span = None
@@ -696,7 +698,7 @@ class InterruptionHttpStream(InterruptionStreamBase):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await aio.utils.cancel_and_wait(*tasks)
+            await aio.cancel_and_wait(*tasks)
             data_chan.close()
 
     @log_exceptions(logger=logger)
