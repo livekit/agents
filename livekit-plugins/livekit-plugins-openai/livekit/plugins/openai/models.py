@@ -314,7 +314,7 @@ SimplismartChatModels = Literal[
     "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     "mistralai/Devstral-Small-2505",
     "Qwen/Qwen3-14B-FP8",
-    "Qwen/Qwen3-14B"
+    "Qwen/Qwen3-14B",
 ]
 
 
