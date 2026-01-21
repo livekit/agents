@@ -19,8 +19,10 @@ This module provides an STT implementation that uses the SimpliSmart API.
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
+import traceback
 import weakref
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -200,10 +202,10 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        language = language if language is not None else self._opts.language
+        language = language if is_given(language) else self._opts.language
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
         audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
@@ -267,15 +269,16 @@ class STT(stt.STT):
         except aiohttp.ClientError as e:
             logger.error(f"Simplismart API client error: {e}")
             raise APIConnectionError(f"Simplismart API connection error: {e}") from e
+        except APIStatusError:
+            raise
         except Exception as e:
-            logger.error(f"Error during Simplismart STT processing: {e}")
+            logger.error(f"Error during Simplismart STT processing: {traceback.format_exc()}")
             raise APIConnectionError(f"Unexpected error in Simplismart STT: {e}") from e
 
     def stream(
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         **kwargs: Any,
     ) -> "SpeechStream":
@@ -360,12 +363,8 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="simplismart connection closed unexpectedly",
-                        status_code=-1,
-                        request_id=self._request_id,
-                        body=None,
-                    )
+                    self._reconnect_event.set()
+                    return
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
@@ -406,7 +405,8 @@ class SpeechStream(stt.SpeechStream):
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                    with contextlib.suppress(asyncio.CancelledError):
+                        tasks_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()
