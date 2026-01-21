@@ -231,13 +231,16 @@ class STT(stt.STT):
                     raise APIStatusError(
                         message=f"Simplismart API Error: {error_text}",
                         status_code=res.status,
+                        request_id=None,
+                        body=error_text,
                     )
 
                 response_json = await res.json()
                 timestamps = response_json.get("timestamps", [])
                 transcription = response_json.get("transcription", [])
 
-                detected_language = response_json["info"]["language"]
+                info = response_json.get("info", {})
+                detected_language = info.get("language", language or "en")
 
                 start_time = timestamps[0][0] if timestamps else 0.0
                 end_time = timestamps[-1][1] if timestamps else 0.0
