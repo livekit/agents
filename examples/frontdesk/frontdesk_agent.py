@@ -197,7 +197,7 @@ async def on_session_end(ctx: JobContext) -> None:
 
     await judges.evaluate(report.chat_history)
 
-    if ctx.userdata.appointment_booked:
+    if ctx.primary_session.userdata.appointment_booked:
         ctx.tagger.success()
     else:
         ctx.tagger.fail(reason="Appointment was not booked")

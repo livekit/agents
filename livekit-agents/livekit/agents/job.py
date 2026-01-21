@@ -343,6 +343,13 @@ class JobContext:
         return self._room.local_participant
 
     @property
+    def primary_session(self) -> AgentSession:
+        """Returns the primary AgentSession for this job."""
+        if not self._primary_agent_session:
+            raise RuntimeError("No AgentSession was started for this job")
+        return self._primary_agent_session
+
+    @property
     def local_participant_identity(self) -> str:
         if identity := self.token_claims().identity:
             return identity
