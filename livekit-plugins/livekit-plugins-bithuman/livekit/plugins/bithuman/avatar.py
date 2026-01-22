@@ -49,6 +49,46 @@ _AVATAR_AGENT_IDENTITY = "bithuman-avatar-agent"
 _AVATAR_AGENT_NAME = "bithuman-avatar-agent"
 
 
+def _is_valid_base64(s: str) -> bool:
+    """
+    Strictly validate if a string is valid base64 encoded data.
+
+    Args:
+        s: String to validate
+
+    Returns:
+        True if the string is valid base64, False otherwise
+    """
+    import base64
+    import re
+
+    # Base64 strings should only contain A-Z, a-z, 0-9, +, /, and = for padding
+    # Remove whitespace for validation
+    s_clean = s.strip().replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "")
+    
+    # Check if string is empty after cleaning
+    if not s_clean:
+        return False
+    
+    # Base64 strings must have length that is a multiple of 4 (after padding)
+    # Padding can be 0, 1, or 2 '=' characters
+    if len(s_clean) % 4 != 0:
+        return False
+    
+    # Check if string contains only valid base64 characters
+    base64_pattern = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+    if not base64_pattern.match(s_clean):
+        return False
+    
+    # Try to decode and verify it doesn't raise an exception
+    try:
+        decoded = base64.b64decode(s_clean)
+        # Additional check: decoded data should not be empty
+        return len(decoded) > 0
+    except Exception:
+        return False
+
+
 class BitHumanException(Exception):
     """Exception for BitHuman errors"""
 
@@ -477,8 +517,8 @@ class AvatarSession:
             # String can be URL or base64 - check if it's a URL
             if self._avatar_image.startswith(("http://", "https://")):
                 form_data.add_field("avatar_image_url", self._avatar_image)
-            else:
-                # Assume base64, decode and upload as file
+            elif _is_valid_base64(self._avatar_image):
+                # Valid base64 string, decode and upload as file
                 try:
                     import base64
 
@@ -491,8 +531,11 @@ class AvatarSession:
                         content_type="image/jpeg",
                     )
                 except Exception:
-                    # If decode fails, treat as URL
+                    # If decode fails despite validation, treat as URL
                     form_data.add_field("avatar_image_url", self._avatar_image)
+            else:
+                # Not a URL and not valid base64, treat as URL
+                form_data.add_field("avatar_image_url", self._avatar_image)
 
         # Add avatar_id if provided
         if utils.is_given(self._avatar_id):
