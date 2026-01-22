@@ -303,9 +303,10 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_bytes(frame.data.tobytes())
                     self._last_audio_at = time.monotonic()
 
-            if has_ended and self._ws:
-                await self._end_segment()
-                has_ended = False
+            if has_ended:
+                if self._ws:
+                    await self._end_segment()
+                has_ended = False  # always reset - flush without active WS is a no-op
 
         # Final shutdown
         if self._ws:
