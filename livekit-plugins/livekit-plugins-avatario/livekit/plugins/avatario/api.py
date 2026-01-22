@@ -100,7 +100,6 @@ class AvatarioAPI:
         Make a POST request to the Avatario API with retry logic.
 
         Args:
-            endpoint: API endpoint path (without leading slash)
             payload: JSON payload for the request
 
         Returns:

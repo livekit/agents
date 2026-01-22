@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 import os
 from typing import Optional
-from dataclasses import asdict, dataclass
 
 import aiohttp
 
