@@ -50,6 +50,7 @@ dependencies = [
   "typing-extensions>=4.12",
   "watchfiles>=1.0",
 ]
+dynamic = ["version"]
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.10.0, <2; python_version >= '3.10'"]

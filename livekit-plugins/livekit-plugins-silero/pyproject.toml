@@ -23,6 +23,7 @@ dependencies = [
   # onnxruntime 1.23.2 is missing wheel on MacOS
   "onnxruntime>=1.18,<=1.23.1",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

@@ -21,6 +21,7 @@ dependencies = [
   "livekit-agents[codecs, images]>=1.4.0.rc1",
   "openai[realtime]>=1.107.2",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

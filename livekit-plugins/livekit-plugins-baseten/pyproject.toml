@@ -22,6 +22,7 @@ dependencies = [
   "livekit",
   "livekit-agents>=1.4.0.rc1",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
