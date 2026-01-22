@@ -34,6 +34,7 @@ The key for the timed transcripts in the audio frame userdata.
 _T = TypeVar("_T")
 
 
+@dataclass
 class FlushSentinel:
     type: Literal["flush_sentinel"] = "flush_sentinel"
 
