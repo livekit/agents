@@ -11,12 +11,13 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace
+from opentelemetry import context as otel_context, trace, trace as trace_api
 from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
@@ -25,9 +26,7 @@ from opentelemetry.sdk._logs import (
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.trace import SpanProcessor 
+from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
@@ -163,10 +162,10 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
             "job_id": job_id,
         }
     )
-     # We check against trace_api.TracerProvider since it is the abstract base class
+    # We check against trace_api.TracerProvider since it is the abstract base class
     if not isinstance(tracer._tracer_provider, trace_api.TracerProvider):
         # ⬇️ This is a sdk TracerProvider which inherits from trace_api.TracerProvider
-        tracer_provider = trace_sdk.TracerProvider(resource=resource) 
+        tracer_provider = trace_sdk.TracerProvider(resource=resource)
         set_tracer_provider(tracer_provider)
     else:
         # attach the processor to the existing tracer provider
