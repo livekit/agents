@@ -162,9 +162,14 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
             "job_id": job_id,
         }
     )
-    # We check against trace_api.TracerProvider since it is the abstract base class
-    if not isinstance(tracer._tracer_provider, trace_api.TracerProvider):
-        # ⬇️ This is a sdk TracerProvider which inherits from trace_api.TracerProvider
+
+    # Check if a tracer provider is not set and set one up
+    # below shows how the ProxyTracerProvider is returned when none have been setup
+    # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
+    tracer_provider: trace_api.TracerProvider
+    if isinstance(
+        tracer._tracer_provider, (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider)
+    ):
         tracer_provider = trace_sdk.TracerProvider(resource=resource)
         set_tracer_provider(tracer_provider)
     else:
