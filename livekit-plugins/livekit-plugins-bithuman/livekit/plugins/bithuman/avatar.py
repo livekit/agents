@@ -65,21 +65,21 @@ def _is_valid_base64(s: str) -> bool:
     # Base64 strings should only contain A-Z, a-z, 0-9, +, /, and = for padding
     # Remove whitespace for validation
     s_clean = s.strip().replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "")
-    
+
     # Check if string is empty after cleaning
     if not s_clean:
         return False
-    
+
     # Base64 strings must have length that is a multiple of 4 (after padding)
     # Padding can be 0, 1, or 2 '=' characters
     if len(s_clean) % 4 != 0:
         return False
-    
+
     # Check if string contains only valid base64 characters
     base64_pattern = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
     if not base64_pattern.match(s_clean):
         return False
-    
+
     # Try to decode and verify it doesn't raise an exception
     try:
         decoded = base64.b64decode(s_clean)
@@ -357,7 +357,9 @@ class AvatarSession:
             # Use FormData format for custom endpoints
             # Parse async parameter from URL if present
             async_mode = self._parse_async_parameter_from_url()
-            await self._send_formdata_request(livekit_url, livekit_token, room_name, async_mode=async_mode)
+            await self._send_formdata_request(
+                livekit_url, livekit_token, room_name, async_mode=async_mode
+            )
         else:
             # Default BitHuman API requires api_secret
             assert self._api_secret is not None, "api_secret is not set"
