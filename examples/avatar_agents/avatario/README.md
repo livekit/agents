@@ -1,6 +1,6 @@
 # LiveKit Avatario Avatar Agent
 
-This example demonstrates how to create a animated avatar using [Avatario](https://avatario.ai/).
+This example demonstrates how to create an animated avatar using [Avatario](https://avatario.ai/).
 
 ## Usage
 
