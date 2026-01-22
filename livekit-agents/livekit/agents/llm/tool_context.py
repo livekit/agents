@@ -21,11 +21,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import Any, Callable, Generic, Literal, TypeVar, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, Union, overload
 
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeGuard
 
 from . import _provider_format
+
+if TYPE_CHECKING:
+    from ..voice.events import RunContext
 
 
 class Tool(ABC):  # noqa: B024
@@ -39,6 +42,16 @@ class ProviderTool(Tool):
 
 
 class Toolset(ABC):
+    @dataclass
+    class ToolCalledEvent:
+        ctx: RunContext
+        arguments: dict[str, Any]
+
+    @dataclass
+    class ToolCompletedEvent:
+        ctx: RunContext
+        output: Any | Exception | None
+
     @property
     @abstractmethod
     def tools(self) -> list[Tool]:

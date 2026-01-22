@@ -1,10 +1,12 @@
+import asyncio
 from collections.abc import Awaitable
-from typing import Callable
+from typing import Any, Callable
 
 from ...job import get_job_context
-from ...llm import Tool, Toolset, function_tool
+from ...llm import RealtimeModel, Tool, Toolset, function_tool
 from ...log import logger
-from ...voice.events import CloseEvent, RunContext
+from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
+from ...voice.speech_handle import SpeechHandle
 
 END_CALL_DESCRIPTION = """
 Ends the current call and disconnects immediately.
@@ -29,7 +31,9 @@ class EndCallTool(Toolset):
         *,
         extra_description: str = "",
         delete_room: bool = True,
-        on_end: str | Callable[[RunContext], Awaitable[None]] | None = "say goodbye to the user",
+        end_instructions: str | None = "say goodbye to the user",
+        on_tool_called: Callable[[Toolset.ToolCalledEvent], Awaitable[None]] | None = None,
+        on_tool_completed: Callable[[Toolset.ToolCompletedEvent], Awaitable[None]] | None = None,
     ):
         """
         This tool allows the agent to end the call and disconnect from the room.
@@ -37,34 +41,80 @@ class EndCallTool(Toolset):
         Args:
             extra_description: Additional description to add to the end call tool.
             delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
-            on_end: If a string is provided, it will be used as the instructions of
-                `session.generate_reply` when the user ends the call. If a callback, it will be called
-                when the user ends the call.
+            end_instructions: Instructions to generate a reply when the user ends the call if provided.
+            on_tool_called: Callback to call when the tool is called.
+            on_tool_completed: Callback to call when the tool is completed.
         """
         super().__init__()
         self._delete_room = delete_room
         self._extra_description = extra_description
-        self._on_end = on_end
+
+        self._end_instructions = end_instructions
+        self._on_tool_called = on_tool_called
+        self._on_tool_completed = on_tool_completed
 
         self._end_call_tool = function_tool(
             self._end_call,
             name="end_call",
             description=f"{END_CALL_DESCRIPTION}\n{extra_description}",
         )
+        self._shutdown_session_task: asyncio.Task[None] | None = None
 
-    async def _end_call(self, ctx: RunContext) -> None:
+    async def _end_call(self, ctx: RunContext) -> Any | None:
+        def _on_speech_done(_: SpeechHandle) -> None:
+            if (
+                not isinstance(llm := ctx.session._activity.llm, RealtimeModel)
+                or not llm.capabilities.auto_tool_reply_generation
+            ):
+                # tool reply will reuse the same speech handle, so we can shutdown the session
+                # directly after this speech handle is done
+                ctx.session.shutdown()
+            else:
+                self._shutdown_session_task = asyncio.create_task(
+                    self._delayed_session_shutdown(ctx)
+                )
+
+        ctx.speech_handle.add_done_callback(_on_speech_done)
+
+        if self._on_tool_called:
+            await self._on_tool_called(Toolset.ToolCalledEvent(ctx=ctx, arguments={}))
+
+        completed_ev = Toolset.ToolCompletedEvent(ctx=ctx, output=None)
         try:
             logger.debug("end_call tool called")
             ctx.session.once("close", self._on_session_close)
-            if isinstance(self._on_end, str):
-                await ctx.session.generate_reply(instructions=self._on_end, tool_choice="none")
-            elif callable(self._on_end):
-                await self._on_end(ctx)
+            if self._end_instructions:
+                await ctx.session.generate_reply(
+                    instructions=self._end_instructions, tool_choice="none"
+                )
+        except Exception as e:
+            completed_ev.output = e
+
+        if self._on_tool_completed:
+            await self._on_tool_completed(completed_ev)
+
+        return completed_ev.output
+
+    async def _delayed_session_shutdown(self, ctx: RunContext) -> None:
+        """Shutdown the session after the tool reply is played out"""
+        speech_created_fut = asyncio.Future[SpeechHandle]()
+
+        @ctx.session.once("speech_created")
+        def _on_speech_created(ev: SpeechCreatedEvent) -> None:
+            if not speech_created_fut.done():
+                speech_created_fut.set_result(ev.speech_handle)
+
+        try:
+            speech_handle = await asyncio.wait_for(speech_created_fut, timeout=5.0)
+            await speech_handle
+        except asyncio.TimeoutError:
+            logger.warning("tool reply timed out, shutting down session")
         finally:
-            # close the AgentSession
+            ctx.session.off("speech_created", _on_speech_created)
             ctx.session.shutdown()
 
     def _on_session_close(self, ev: CloseEvent) -> None:
+        """Close the job process when AgentSession is closed"""
         job_ctx = get_job_context()
 
         if self._delete_room:
