@@ -14,11 +14,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Generic
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.pregel.protocol import PregelProtocol
+from langgraph.typing import ContextT
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
@@ -31,17 +32,19 @@ from livekit.agents.types import (
 )
 
 
-class LLMAdapter(llm.LLM):
+class LLMAdapter(llm.LLM, Generic[ContextT]):
     def __init__(
         self,
-        graph: PregelProtocol,
+        graph: PregelProtocol[Any, ContextT, Any, Any],
         *,
         config: RunnableConfig | None = None,
+        context: ContextT | None = None,
         subgraphs: bool = False,
     ) -> None:
         super().__init__()
         self._graph = graph
         self._config = config
+        self._context = context
         self._subgraphs = subgraphs
 
     @property
@@ -62,7 +65,7 @@ class LLMAdapter(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> LangGraphStream:
+    ) -> LangGraphStream[ContextT]:
         return LangGraphStream(
             self,
             chat_ctx=chat_ctx,
@@ -70,20 +73,22 @@ class LLMAdapter(llm.LLM):
             graph=self._graph,
             conn_options=conn_options,
             config=self._config,
+            context=self._context,
             subgraphs=self._subgraphs,
         )
 
 
-class LangGraphStream(llm.LLMStream):
+class LangGraphStream(llm.LLMStream, Generic[ContextT]):
     def __init__(
         self,
-        llm: LLMAdapter,
+        llm: LLMAdapter[ContextT],
         *,
         chat_ctx: ChatContext,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions,
-        graph: PregelProtocol,
+        graph: PregelProtocol[Any, ContextT, Any, Any],
         config: RunnableConfig | None = None,
+        context: ContextT | None = None,
         subgraphs: bool = False,
     ):
         super().__init__(
@@ -94,17 +99,19 @@ class LangGraphStream(llm.LLMStream):
         )
         self._graph = graph
         self._config = config
+        self._context = context
         self._subgraphs = subgraphs
 
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
 
-        # Some LangGraph versions don't accept the `subgraphs` kwarg yet.
-        # Try with it first; fall back gracefully if it's unsupported.
+        # Some LangGraph versions don't accept the `subgraphs` or `context` kwargs yet.
+        # Try with them first; fall back gracefully if unsupported.
         try:
             aiter = self._graph.astream(
                 state,
                 self._config,
+                context=self._context,
                 stream_mode="messages",
                 subgraphs=self._subgraphs,
             )
