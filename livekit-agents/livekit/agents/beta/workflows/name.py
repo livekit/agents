@@ -31,7 +31,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         extra_instructions: str = "",
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -93,7 +93,7 @@ class GetNameTask(AgentTask[GetNameResult]):
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=tools,
             stt=stt,
             vad=vad,
             llm=llm,
@@ -147,7 +147,9 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._middle_name = middle_name.strip()
         self._last_name = last_name.strip()
 
-        full_name = " ".join([self._first_name, self._middle_name, self._last_name])
+        full_name = " ".join(
+            part for part in [self._first_name, self._middle_name, self._last_name] if part
+        )
 
         if self._verify_spelling:
             return (
