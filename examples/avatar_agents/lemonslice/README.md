@@ -11,10 +11,6 @@ This example demonstrates how to create an animated avatar using [LemonSlice](ht
 export LEMONSLICE_API_KEY="..."
 export LEMONSLICE_IMAGE_URL="..." # Publicly accessible image url for the avatar.
 
-# STT + LLM + TTS config
-export OPENAI_API_KEY="..."
-export DEEPGRAM_API_KEY="..."
-
 # LiveKit config
 export LIVEKIT_API_KEY="..."
 export LIVEKIT_API_SECRET="..."
