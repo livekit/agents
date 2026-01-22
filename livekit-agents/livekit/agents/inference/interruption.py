@@ -177,7 +177,6 @@ class AdaptiveInterruptionDetector(
         api_key: str | None = None,
         api_secret: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        use_proxy: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Initialize a AdaptiveInterruptionDetector instance.
@@ -193,7 +192,6 @@ class AdaptiveInterruptionDetector(
             api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
             api_secret (str, optional): The API secret for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.
             http_session (aiohttp.ClientSession, optional): The HTTP session to use for the interruption detection.
-            use_proxy (bool, optional): Whether to use the inference instead of the hosted API, defaults to False.
         """
         super().__init__()
         if max_audio_duration > 3.0:
