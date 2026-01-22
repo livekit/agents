@@ -217,7 +217,7 @@ class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: LLMError | STTError | TTSError | RealtimeModelError | Any
-    source: LLM | STT | TTS | RealtimeModel | Any
+    source: LLM | STT | TTS | RealtimeModel | Any = Field(..., exclude=True)
     created_at: float = Field(default_factory=time.time)
 
 

@@ -74,7 +74,7 @@ class SessionReport:
                             continue
                         # remove audio frames from VAD event
                         data = asdict(e)
-                        data["frames"] = {}
+                        data["frames"] = []
                         internal_events_dict.append(data)
                         continue
                     internal_events_dict.append(asdict(e))

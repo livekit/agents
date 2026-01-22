@@ -537,6 +537,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []
+            self._recorded_internal_events = []
             self._room_io = None
             self._recorder_io = None
 

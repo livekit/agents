@@ -98,7 +98,6 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
-    "RealtimeSessionRestoredEvent",
     "LLMError",
     "LLMOutputEvent",
 ]
