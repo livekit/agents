@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import base64
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from livekit.rtc import AudioFrame
 
-from ..llm import ChatChunk, ChatContext, LLMOutputEvent
+from ..llm import ChatChunk, ChatContext, GenerationCreatedEvent, LLMOutputEvent
 from ..tts import SynthesizedAudio
 from ..types import TimedString
 from ..vad import VADEvent, VADEventType
@@ -67,17 +67,25 @@ class SessionReport:
                     elif isinstance(e.data, ChatChunk):
                         data["data"] = e.data.model_dump(mode="json")
                     internal_events_dict.append(data)
-                else:
-                    if isinstance(e, VADEvent):
-                        # skip inference done events, they are too frequent and too noisy
-                        if e.type == VADEventType.INFERENCE_DONE:
-                            continue
-                        # remove audio frames from VAD event
-                        data = asdict(e)
-                        data["frames"] = []
-                        internal_events_dict.append(data)
+                elif isinstance(e, VADEvent):
+                    # skip inference done events, they are too frequent and too noisy
+                    if e.type == VADEventType.INFERENCE_DONE:
                         continue
+                    # remove audio frames from VAD event
+                    data = asdict(e)
+                    data["frames"] = []
+                    internal_events_dict.append(data)
+                    continue
+                elif isinstance(e, GenerationCreatedEvent):
+                    data = asdict(e)
+                    data["message_stream"] = []
+                    data["function_stream"] = []
+                    internal_events_dict.append(data)
+                    continue
+                elif is_dataclass(e):
                     internal_events_dict.append(asdict(e))
+                else:
+                    raise ValueError(f"Unknown internal event type: {type(e)}")
 
         return {
             "job_id": self.job_id,

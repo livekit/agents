@@ -369,7 +369,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
-        self._recorded_internal_events.append(arg)
+        if self._include_internal_events:
+            self._recorded_internal_events.append(arg)
         super().emit(event, arg)
 
     def maybe_collect(self, event: InternalEvent) -> None:
