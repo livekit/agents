@@ -107,9 +107,8 @@ def set_tracer_provider(
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
     """
-    if metadata:
-        if isinstance(tracer_provider, trace_sdk.TracerProvider):
-            tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+    if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
+        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
     tracer.set_provider(tracer_provider)
 
