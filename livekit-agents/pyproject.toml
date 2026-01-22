@@ -50,6 +50,7 @@ dependencies = [
   "typing-extensions>=4.12",
   "watchfiles>=1.0",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

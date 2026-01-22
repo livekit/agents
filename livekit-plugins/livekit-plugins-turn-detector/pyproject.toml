@@ -24,6 +24,7 @@ dependencies = [
   "onnxruntime>=1.18",
   "transformers>=4.47.1,<=4.57.1",  # transformers 4.57.2 has a bug with local_files_only=True
 ]
+dynamic = ["version"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

@@ -33,6 +33,7 @@ dependencies = [
   "aws_sdk_transcribe_streaming>=0.2.0; python_version >= '3.12'",
   "livekit-agents>=1.4.0.rc1",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
