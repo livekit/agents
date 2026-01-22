@@ -25,7 +25,9 @@ from opentelemetry.sdk._logs import (
 )
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry import trace as trace_api
+from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry.sdk.trace import SpanProcessor 
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
@@ -48,7 +50,7 @@ class _DynamicTracer(Tracer):
         self._tracer_provider = trace.get_tracer_provider()
         self._tracer = trace.get_tracer(instrumenting_module_name)
 
-    def set_provider(self, tracer_provider: TracerProvider) -> None:
+    def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
         self._tracer_provider = tracer_provider
         self._tracer = trace.get_tracer(
             self._instrumenting_module_name,
@@ -98,7 +100,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
 
 
 def set_tracer_provider(
-    tracer_provider: TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+    tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
     """Set the tracer provider for the livekit-agents.
 
@@ -161,9 +163,10 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
             "job_id": job_id,
         }
     )
-
-    if not isinstance(tracer._tracer_provider, TracerProvider):
-        tracer_provider = TracerProvider(resource=resource)
+     # We check against trace_api.TracerProvider since it is the abstract base class
+    if not isinstance(tracer._tracer_provider, trace_api.TracerProvider):
+        # ⬇️ This is a sdk TracerProvider which inherits from trace_api.TracerProvider
+        tracer_provider = trace_sdk.TracerProvider(resource=resource) 
         set_tracer_provider(tracer_provider)
     else:
         # attach the processor to the existing tracer provider
@@ -428,7 +431,7 @@ async def _upload_session_report(
 
 
 def _shutdown_telemetry() -> None:
-    if isinstance(tracer_provider := tracer._tracer_provider, TracerProvider):
+    if isinstance(tracer_provider := tracer._tracer_provider, trace_api.TracerProvider):
         logger.debug("shutting down telemetry tracer provider")
         tracer_provider.force_flush()
         tracer_provider.shutdown()
