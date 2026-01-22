@@ -48,36 +48,36 @@ class SessionReport:
             events_dict.append(event.model_dump())
 
         if self.include_internal_events:
-            for event in self.internal_events:
-                if isinstance(event, BaseModel):
-                    internal_events_dict.append(event.model_dump())
-                elif isinstance(event, SynthesizedAudio):
+            for e in self.internal_events:
+                if isinstance(e, BaseModel):
+                    internal_events_dict.append(e.model_dump())
+                elif isinstance(e, SynthesizedAudio):
                     # coming from TTS
-                    data = asdict(event)
-                    data["frame"] = self._serialize_audio_frame(event.frame)
+                    data = asdict(e)
+                    data["frame"] = self._serialize_audio_frame(e.frame)
                     internal_events_dict.append(data)
-                elif isinstance(event, LLMOutputEvent):
-                    data = asdict(event)
-                    if isinstance(event.data, AudioFrame):
-                        data["data"] = self._serialize_audio_frame(event.data)
-                    elif isinstance(event.data, str):
-                        data["data"] = event.data
-                    elif isinstance(event.data, TimedString):
-                        data["data"] = event.data.to_dict()
-                    elif isinstance(event.data, ChatChunk):
-                        data["data"] = event.data.model_dump(mode="json")
+                elif isinstance(e, LLMOutputEvent):
+                    data = asdict(e)
+                    if isinstance(e.data, AudioFrame):
+                        data["data"] = self._serialize_audio_frame(e.data)
+                    elif isinstance(e.data, str):
+                        data["data"] = e.data
+                    elif isinstance(e.data, TimedString):
+                        data["data"] = e.data.to_dict()
+                    elif isinstance(e.data, ChatChunk):
+                        data["data"] = e.data.model_dump(mode="json")
                     internal_events_dict.append(data)
                 else:
-                    if isinstance(event, VADEvent):
+                    if isinstance(e, VADEvent):
                         # skip inference done events, they are too frequent and too noisy
-                        if event.type == VADEventType.INFERENCE_DONE:
+                        if e.type == VADEventType.INFERENCE_DONE:
                             continue
                         # remove audio frames from VAD event
-                        data = asdict(event)
+                        data = asdict(e)
                         data["frames"] = {}
                         internal_events_dict.append(data)
                         continue
-                    internal_events_dict.append(asdict(event))
+                    internal_events_dict.append(asdict(e))
 
         return {
             "job_id": self.job_id,
