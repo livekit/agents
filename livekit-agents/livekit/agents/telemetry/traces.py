@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
-        self._tracer_provider = trace.get_tracer_provider()
+        self._tracer_provider: trace_api.TracerProvider = trace.get_tracer_provider()
         self._tracer = trace.get_tracer(instrumenting_module_name)
 
     def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
@@ -108,7 +108,8 @@ def set_tracer_provider(
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
     """
     if metadata:
-        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+        if isinstance(tracer_provider, trace_sdk.TracerProvider):
+            tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
     tracer.set_provider(tracer_provider)
 
@@ -170,7 +171,8 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
     else:
         # attach the processor to the existing tracer provider
         tracer_provider = tracer._tracer_provider
-        tracer_provider.resource.merge(resource)
+        if isinstance(tracer_provider, trace_sdk.TracerProvider):
+            tracer_provider.resource.merge(resource)
 
     span_exporter = OTLPSpanExporter(
         endpoint=f"https://{cloud_hostname}/observability/traces/otlp/v0",
@@ -178,8 +180,9 @@ def _setup_cloud_tracer(*, room_id: str, job_id: str, cloud_hostname: str) -> No
         session=session,
     )
 
-    tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
-    tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    if isinstance(tracer_provider, trace_sdk.TracerProvider):
+        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
     logger_provider = get_logger_provider()
     if not isinstance(logger_provider, LoggerProvider):
@@ -430,7 +433,7 @@ async def _upload_session_report(
 
 
 def _shutdown_telemetry() -> None:
-    if isinstance(tracer_provider := tracer._tracer_provider, trace_api.TracerProvider):
+    if isinstance(tracer_provider := tracer._tracer_provider, trace_sdk.TracerProvider):
         logger.debug("shutting down telemetry tracer provider")
         tracer_provider.force_flush()
         tracer_provider.shutdown()
