@@ -20,6 +20,7 @@ from .llm import (
     CompletionUsage,
     FunctionToolCall,
     LLMError,
+    LLMOutputEvent,
     LLMStream,
 )
 from .realtime import (
@@ -99,6 +100,7 @@ __all__ = [
     "RealtimeSessionReconnectedEvent",
     "RealtimeSessionRestoredEvent",
     "LLMError",
+    "LLMOutputEvent",
 ]
 
 # Cleanup docs of unexported modules

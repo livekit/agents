@@ -1248,8 +1248,7 @@ class AgentActivity(RecognitionHooks):
             self._start_false_interruption_timer(timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if ev:
-            self._session.collect(ev)
+        self._session.collect(ev)
 
         if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm

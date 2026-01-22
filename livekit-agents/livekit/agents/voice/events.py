@@ -7,11 +7,8 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Uni
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
-from livekit.rtc import AudioFrame
-
 from ..llm import (
     LLM,
-    ChatChunk,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
@@ -19,6 +16,7 @@ from ..llm import (
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
     LLMError,
+    LLMOutputEvent,
     RealtimeModel,
     RealtimeModelError,
 )
@@ -26,7 +24,7 @@ from ..log import logger
 from ..metrics import AgentMetrics
 from ..stt import STT, SpeechEvent, STTError
 from ..tts import TTS, SynthesizedAudio, TTSError
-from ..types import FlushSentinel, TimedString
+from ..types import FlushSentinel
 from ..vad import VADEvent
 from .io import PlaybackFinishedEvent
 from .room_io.types import TextInputEvent
@@ -268,10 +266,7 @@ InternalEvent = Annotated[
         TextInputEvent,
         SynthesizedAudio,
         FlushSentinel,
-        ChatChunk,
-        str,
-        TimedString,
-        AudioFrame,
+        LLMOutputEvent,
     ],
     Field(discriminator="type"),
 ]

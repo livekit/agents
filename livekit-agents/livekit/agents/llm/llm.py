@@ -5,6 +5,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, ClassVar, Generic, Literal, TypeVar, Union
@@ -26,6 +27,7 @@ from ..types import (
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
+    TimedString,
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
@@ -68,6 +70,17 @@ class ChatChunk(BaseModel):
     id: str
     delta: ChoiceDelta | None = None
     usage: CompletionUsage | None = None
+
+
+@dataclass
+class LLMOutputEvent:
+    type: Literal[
+        "llm_chunk_output",
+        "llm_str_output",
+        "llm_timed_string_output",
+        "realtime_audio_output",
+    ]
+    data: ChatChunk | str | TimedString | rtc.AudioFrame
 
 
 class LLMError(BaseModel):

@@ -325,6 +325,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._on_audio_output_changed,
             self._on_text_output_changed,
         )
+        self._prev_audio_output: io.AudioOutput | None = None
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
         self._forward_video_atask: asyncio.Task[None] | None = None
@@ -637,7 +638,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._job_context_cb_registered = True
 
             if self._output.audio:
-                self._output.audio.on("playback_finished", self.collect)
+                self._prev_audio_output = self._output.audio
+                self._prev_audio_output.on("playback_started", self.collect)
+                self._prev_audio_output.on("playback_finished", self.collect)
 
             run_state: RunResult | None = None
             if capture_run:
@@ -796,6 +799,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # detach the inputs and outputs
                 self.input.audio = None
                 self.input.video = None
+                if self._prev_audio_output is not None:
+                    self._prev_audio_output.off("playback_started", self.collect)
+                    self._prev_audio_output.off("playback_finished", self.collect)
+                    self._prev_audio_output = None
                 self.output.audio = None
                 self.output.transcription = None
 
@@ -1311,6 +1318,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         pass
 
     def _on_audio_output_changed(self) -> None:
+        if self._prev_audio_output is not None:
+            self._prev_audio_output.off("playback_started", self.collect)
+            self._prev_audio_output.off("playback_finished", self.collect)
+
         if (
             self._started
             and self._opts.resume_false_interruption
@@ -1321,6 +1332,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "resume_false_interruption is enabled, but the audio output does not support pause, ignored",
                 extra={"audio_output": audio_output.label},
             )
+
+        if self.output.audio is not None:
+            self._prev_audio_output = self.output.audio
+            self._prev_audio_output.on("playback_started", self.collect)
+            self._prev_audio_output.on("playback_finished", self.collect)
 
     def _on_text_output_changed(self) -> None:
         pass

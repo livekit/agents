@@ -12,7 +12,7 @@ from livekit.agents.types import TimedString
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.rtc import AudioFrame
 
-from ..llm import ChatContext
+from ..llm import ChatChunk, ChatContext, LLMOutputEvent
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent, InternalEvent
 
@@ -64,18 +64,27 @@ class SessionReport:
                     data = asdict(event)
                     data["frame"] = _serialize_audio_frame(event.frame)
                     internal_events_dict.append(data)
-                elif isinstance(event, AudioFrame):
-                    # coming from Realtime Audio Output
-                    internal_events_dict.append(_serialize_audio_frame(event))
-                elif isinstance(event, (str, TimedString)):
-                    # sources: user transcript, agent response
-                    pass
+                elif isinstance(event, LLMOutputEvent):
+                    data = asdict(event)
+                    if isinstance(event.data, AudioFrame):
+                        data["data"] = _serialize_audio_frame(event.data)
+                    elif isinstance(event.data, str):
+                        data["data"] = event.data
+                    elif isinstance(event.data, TimedString):
+                        data["data"] = event.data.to_dict()
+                    elif isinstance(event.data, ChatChunk):
+                        data["data"] = event.data.model_dump(mode="json")
+                    internal_events_dict.append(data)
                 else:
                     if isinstance(event, VADEvent):
-                        event.frames = []
                         # skip inference done events, they are too frequent and too noisy
                         if event.type == VADEventType.INFERENCE_DONE:
                             continue
+                        # remove audio frames from VAD event
+                        data = asdict(event)
+                        data["frames"] = {}
+                        internal_events_dict.append(data)
+                        continue
                     internal_events_dict.append(asdict(event))
 
         return {

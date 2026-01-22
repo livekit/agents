@@ -114,3 +114,12 @@ class TimedString(str):
         obj.confidence = confidence
         obj.start_time_offset = start_time_offset
         return obj
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "confidence": self.confidence,
+            "start_time_offset": self.start_time_offset,
+        }

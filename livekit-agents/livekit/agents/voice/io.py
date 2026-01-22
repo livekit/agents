@@ -131,6 +131,7 @@ class PlaybackFinishedEvent:
 class PlaybackStartedEvent:
     created_at: float
     """The timestamp (time.time())when the playback started"""
+    type: Literal["playback_started"] = "playback_started"
 
 
 @dataclass

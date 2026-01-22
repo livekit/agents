@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, find_function_tools
+from ..llm import ChatContext, LLMOutputEvent, RealtimeModel, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
+from .io import TimedString
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -22,7 +23,6 @@ if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .audio_recognition import TurnDetectionMode
-    from .io import TimedString
 
 
 @dataclass
@@ -419,7 +419,9 @@ class Agent:
             ) as stream:
                 async for chunk in stream:
                     if activity.session._include_internal_events:
-                        activity.session.collect(chunk)
+                        activity.session.collect(
+                            LLMOutputEvent(type="llm_chunk_output", data=chunk)
+                        )
                     yield chunk
 
         @staticmethod
@@ -464,7 +466,12 @@ class Agent:
             activity = agent._get_activity_or_raise()
             async for delta in text:
                 if activity.session._include_internal_events:
-                    activity.session.collect(delta)
+                    if isinstance(delta, TimedString):
+                        activity.session.collect(
+                            LLMOutputEvent(type="llm_timed_string_output", data=delta)
+                        )
+                    else:
+                        activity.session.collect(LLMOutputEvent(type="llm_str_output", data=delta))
                 yield delta
 
         @staticmethod
@@ -479,7 +486,9 @@ class Agent:
 
             async for frame in audio:
                 if activity.session._include_internal_events:
-                    activity.session.collect(frame)
+                    activity.session.collect(
+                        LLMOutputEvent(type="realtime_audio_output", data=frame)
+                    )
                 yield frame
 
     @property
