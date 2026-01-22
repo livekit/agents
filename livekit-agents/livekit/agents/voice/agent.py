@@ -390,9 +390,8 @@ class Agent:
                 forward_task = asyncio.create_task(_forward_input())
                 try:
                     async for event in stream:
-                        if activity.session._include_internal_events:
-                            activity.session.collect(event)
                         yield event
+                        activity.session.maybe_collect(event)
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
 
@@ -418,11 +417,10 @@ class Agent:
                 chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
             ) as stream:
                 async for chunk in stream:
-                    if activity.session._include_internal_events:
-                        activity.session.collect(
-                            LLMOutputEvent(type="llm_chunk_output", data=chunk)
-                        )
                     yield chunk
+                    activity.session.maybe_collect(
+                        LLMOutputEvent(type="llm_chunk_output", data=chunk)
+                    )
 
         @staticmethod
         async def tts_node(
@@ -452,9 +450,8 @@ class Agent:
                 forward_task = asyncio.create_task(_forward_input())
                 try:
                     async for ev in stream:
-                        if activity.session._include_internal_events:
-                            activity.session.collect(ev)
                         yield ev.frame
+                        activity.session.maybe_collect(ev)
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
 
@@ -465,14 +462,15 @@ class Agent:
             """Default implementation for `Agent.transcription_node`"""
             activity = agent._get_activity_or_raise()
             async for delta in text:
-                if activity.session._include_internal_events:
-                    if isinstance(delta, TimedString):
-                        activity.session.collect(
-                            LLMOutputEvent(type="llm_timed_string_output", data=delta)
-                        )
-                    else:
-                        activity.session.collect(LLMOutputEvent(type="llm_str_output", data=delta))
                 yield delta
+                if isinstance(delta, TimedString):
+                    activity.session.maybe_collect(
+                        LLMOutputEvent(type="llm_timed_string_output", data=delta)
+                    )
+                else:
+                    activity.session.maybe_collect(
+                        LLMOutputEvent(type="llm_str_output", data=delta)
+                    )
 
         @staticmethod
         async def realtime_audio_output_node(
@@ -485,11 +483,10 @@ class Agent:
             )
 
             async for frame in audio:
-                if activity.session._include_internal_events:
-                    activity.session.collect(
-                        LLMOutputEvent(type="realtime_audio_output", data=frame)
-                    )
                 yield frame
+                activity.session.maybe_collect(
+                    LLMOutputEvent(type="realtime_audio_output", data=frame)
+                )
 
     @property
     def realtime_llm_session(self) -> llm.RealtimeSession:

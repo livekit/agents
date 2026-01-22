@@ -15,6 +15,7 @@ from ..llm import (
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
+    InputTranscriptionCompleted,
     LLMError,
     LLMOutputEvent,
     RealtimeModel,
@@ -26,7 +27,7 @@ from ..stt import STT, SpeechEvent, STTError
 from ..tts import TTS, SynthesizedAudio, TTSError
 from ..types import FlushSentinel
 from ..vad import VADEvent
-from .io import PlaybackFinishedEvent
+from .io import PlaybackFinishedEvent, PlaybackStartedEvent
 from .room_io.types import TextInputEvent
 from .run_result import (
     RunEvent,
@@ -261,8 +262,10 @@ InternalEvent = Annotated[
         SpeechEvent,
         InputSpeechStartedEvent,
         InputSpeechStoppedEvent,
+        InputTranscriptionCompleted,
         GenerationCreatedEvent,
         PlaybackFinishedEvent,
+        PlaybackStartedEvent,
         TextInputEvent,
         SynthesizedAudio,
         FlushSentinel,

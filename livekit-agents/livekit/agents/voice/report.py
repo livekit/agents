@@ -7,12 +7,12 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from livekit.agents.tts import SynthesizedAudio
-from livekit.agents.types import TimedString
-from livekit.agents.vad import VADEvent, VADEventType
 from livekit.rtc import AudioFrame
 
 from ..llm import ChatChunk, ChatContext, LLMOutputEvent
+from ..tts import SynthesizedAudio
+from ..types import TimedString
+from ..vad import VADEvent, VADEventType
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent, InternalEvent
 
@@ -47,14 +47,6 @@ class SessionReport:
 
             events_dict.append(event.model_dump())
 
-        def _serialize_audio_frame(frame: AudioFrame) -> dict:
-            return {
-                "sample_rate": frame.sample_rate,
-                "num_channels": frame.num_channels,
-                "samples_per_channel": frame.samples_per_channel,
-                "data": base64.b64encode(frame.data).decode("utf-8"),
-            }
-
         if self.include_internal_events:
             for event in self.internal_events:
                 if isinstance(event, BaseModel):
@@ -62,12 +54,12 @@ class SessionReport:
                 elif isinstance(event, SynthesizedAudio):
                     # coming from TTS
                     data = asdict(event)
-                    data["frame"] = _serialize_audio_frame(event.frame)
+                    data["frame"] = self._serialize_audio_frame(event.frame)
                     internal_events_dict.append(data)
                 elif isinstance(event, LLMOutputEvent):
                     data = asdict(event)
                     if isinstance(event.data, AudioFrame):
-                        data["data"] = _serialize_audio_frame(event.data)
+                        data["data"] = self._serialize_audio_frame(event.data)
                     elif isinstance(event.data, str):
                         data["data"] = event.data
                     elif isinstance(event.data, TimedString):
@@ -111,4 +103,13 @@ class SessionReport:
             },
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
+        }
+
+    @staticmethod
+    def _serialize_audio_frame(frame: AudioFrame) -> dict:
+        return {
+            "sample_rate": frame.sample_rate,
+            "num_channels": frame.num_channels,
+            "samples_per_channel": frame.samples_per_channel,
+            "data": base64.b64encode(frame.data).decode("utf-8"),
         }

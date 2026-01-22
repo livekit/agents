@@ -93,7 +93,7 @@ class RunResult(Generic[Run_T]):
         return self._recorded_items
 
     def _record_event(self, event: RunEvent, index: int | None = None) -> None:
-        self._agent_session.collect(event)
+        self._agent_session.maybe_collect(event)
         if index is None:
             self._recorded_items.append(event)
         else:

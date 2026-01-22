@@ -412,7 +412,7 @@ class RoomIO:
                 self._agent_session,
                 text_event,
             )
-            self._agent_session.collect(text_event)
+            self._agent_session.maybe_collect(text_event)
             if asyncio.iscoroutine(text_input_result):
                 await text_input_result
 

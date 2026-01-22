@@ -130,6 +130,7 @@ class InputTranscriptionCompleted:
     transcript: str
     """transcript of the input audio"""
     is_final: bool
+    type: Literal["input_transcription_completed"] = "input_transcription_completed"
 
 
 @dataclass

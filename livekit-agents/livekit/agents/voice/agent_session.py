@@ -372,8 +372,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recorded_internal_events.append(arg)
         super().emit(event, arg)
 
-    def collect(self, event: InternalEvent) -> None:
-        self._recorded_internal_events.append(event)
+    def maybe_collect(self, event: InternalEvent) -> None:
+        """Collect the event if internal events are enabled. AgentEvent should be collected already with `emit`."""
+        if self._include_internal_events:
+            self._recorded_internal_events.append(event)
 
     @property
     def userdata(self) -> Userdata_T:
@@ -639,8 +641,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._output.audio:
                 self._prev_audio_output = self._output.audio
-                self._prev_audio_output.on("playback_started", self.collect)
-                self._prev_audio_output.on("playback_finished", self.collect)
+                self._prev_audio_output.on("playback_started", self.maybe_collect)
+                self._prev_audio_output.on("playback_finished", self.maybe_collect)
 
             run_state: RunResult | None = None
             if capture_run:
@@ -800,8 +802,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.input.audio = None
                 self.input.video = None
                 if self._prev_audio_output is not None:
-                    self._prev_audio_output.off("playback_started", self.collect)
-                    self._prev_audio_output.off("playback_finished", self.collect)
+                    self._prev_audio_output.off("playback_started", self.maybe_collect)
+                    self._prev_audio_output.off("playback_finished", self.maybe_collect)
                     self._prev_audio_output = None
                 self.output.audio = None
                 self.output.transcription = None
@@ -1319,8 +1321,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_audio_output_changed(self) -> None:
         if self._prev_audio_output is not None:
-            self._prev_audio_output.off("playback_started", self.collect)
-            self._prev_audio_output.off("playback_finished", self.collect)
+            self._prev_audio_output.off("playback_started", self.maybe_collect)
+            self._prev_audio_output.off("playback_finished", self.maybe_collect)
 
         if (
             self._started
@@ -1335,8 +1337,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self.output.audio is not None:
             self._prev_audio_output = self.output.audio
-            self._prev_audio_output.on("playback_started", self.collect)
-            self._prev_audio_output.on("playback_finished", self.collect)
+            self._prev_audio_output.on("playback_started", self.maybe_collect)
+            self._prev_audio_output.on("playback_finished", self.maybe_collect)
 
     def _on_text_output_changed(self) -> None:
         pass
