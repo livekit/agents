@@ -24,6 +24,7 @@ class SpeechHandle:
     def __init__(self, *, speech_id: str, allow_interruptions: bool) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._tool_cancelable = True
 
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
@@ -109,6 +110,14 @@ class SpeechHandle:
         self._allow_interruptions = value
 
     @property
+    def tool_cancelable(self) -> bool:
+        return self._tool_cancelable
+
+    @tool_cancelable.setter
+    def tool_cancelable(self, value: bool) -> None:
+        self._tool_cancelable = value
+
+    @property
     def chat_items(self) -> list[llm.ChatItem]:
         return self._chat_items
 
@@ -192,9 +201,10 @@ class SpeechHandle:
                     task.cancel()
                 self._mark_done()
 
-            self._interrupt_timeout_handle = asyncio.get_event_loop().call_later(
-                INTERRUPTION_TIMEOUT, _on_timeout
-            )
+            if self.tool_cancelable:
+                self._interrupt_timeout_handle = asyncio.get_event_loop().call_later(
+                    INTERRUPTION_TIMEOUT, _on_timeout
+                )
 
         return self
 

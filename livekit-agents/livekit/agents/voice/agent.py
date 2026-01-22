@@ -751,6 +751,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_agent = old_activity.agent
         session = old_activity.session
 
+        old_tool_cancelable = True
+        if speech_handle and speech_handle._generations:
+            # the speech is still interruptable, but the tool call cannot be cancelled anymore
+            # there should be no await before this line to avoid race conditions
+            old_tool_cancelable = speech_handle.tool_cancelable
+            speech_handle.tool_cancelable = False
+
         blocked_tasks = [current_task]
         if (
             old_activity._on_enter_task
@@ -785,6 +792,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             return await asyncio.shield(self.__fut)
 
         finally:
+            if speech_handle:
+                speech_handle.tool_cancelable = old_tool_cancelable
+
             # run_state could have changed after self.__fut
             run_state = session._global_run_state
 
