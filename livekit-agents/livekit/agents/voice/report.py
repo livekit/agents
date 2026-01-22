@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from livekit.rtc import AudioFrame
 
 from ..llm import ChatChunk, ChatContext, GenerationCreatedEvent, LLMOutputEvent
+from ..log import logger
 from ..tts import SynthesizedAudio
 from ..types import TimedString
 from ..vad import VADEvent, VADEventType
@@ -71,21 +72,26 @@ class SessionReport:
                     # skip inference done events, they are too frequent and too noisy
                     if e.type == VADEventType.INFERENCE_DONE:
                         continue
-                    # remove audio frames from VAD event
+                    # remove audio frames from VAD event since we can reproduce them cheaply
                     data = asdict(e)
                     data["frames"] = []
                     internal_events_dict.append(data)
                     continue
                 elif isinstance(e, GenerationCreatedEvent):
-                    data = asdict(e)
-                    data["message_stream"] = []
-                    data["function_stream"] = []
+                    # skip message_stream and function_stream as they are not serializable
+                    data = {
+                        "message_stream": None,
+                        "function_stream": None,
+                        "user_initiated": e.user_initiated,
+                        "response_id": e.response_id,
+                        "type": e.type,
+                    }
                     internal_events_dict.append(data)
                     continue
                 elif is_dataclass(e):
                     internal_events_dict.append(asdict(e))
                 else:
-                    raise ValueError(f"Unknown internal event type: {type(e)}")
+                    logger.warning(f"Unknown internal event type: {type(e)}")
 
         return {
             "job_id": self.job_id,
