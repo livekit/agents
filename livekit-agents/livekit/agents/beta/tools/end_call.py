@@ -41,7 +41,7 @@ class EndCallTool(Toolset):
         Args:
             extra_description: Additional description to add to the end call tool.
             delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
-            end_instructions: Instructions to generate a reply when the user ends the call if provided.
+            end_instructions: Tool output to the LLM for generating the tool response.
             on_tool_called: Callback to call when the tool is called.
             on_tool_completed: Callback to call when the tool is completed.
         """
@@ -83,15 +83,7 @@ class EndCallTool(Toolset):
         if self._on_tool_called:
             await self._on_tool_called(Toolset.ToolCalledEvent(ctx=ctx, arguments={}))
 
-        completed_ev = Toolset.ToolCompletedEvent(ctx=ctx, output=None)
-        try:
-            if self._end_instructions:
-                await ctx.session.generate_reply(
-                    instructions=self._end_instructions, tool_choice="none"
-                )
-        except Exception as e:
-            completed_ev.output = e
-
+        completed_ev = Toolset.ToolCompletedEvent(ctx=ctx, output=self._end_instructions)
         if self._on_tool_completed:
             await self._on_tool_completed(completed_ev)
 
