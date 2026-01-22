@@ -1,11 +1,15 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'"
+]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-avatario = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
