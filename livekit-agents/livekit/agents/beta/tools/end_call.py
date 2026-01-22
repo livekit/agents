@@ -61,10 +61,12 @@ class EndCallTool(Toolset):
         self._shutdown_session_task: asyncio.Task[None] | None = None
 
     async def _end_call(self, ctx: RunContext) -> Any | None:
+        llm_v = ctx.session.current_agent._get_activity_or_raise().llm
+
         def _on_speech_done(_: SpeechHandle) -> None:
             if (
-                not isinstance(llm := ctx.session._activity.llm, RealtimeModel)
-                or not llm.capabilities.auto_tool_reply_generation
+                not isinstance(llm_v, RealtimeModel)
+                or not llm_v.capabilities.auto_tool_reply_generation
             ):
                 # tool reply will reuse the same speech handle, so we can shutdown the session
                 # directly after this speech handle is done
