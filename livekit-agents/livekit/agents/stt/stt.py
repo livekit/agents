@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,9 +26,6 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
-
-if TYPE_CHECKING:
-    from ..vad import VADEvent
 
 
 @unique
@@ -235,19 +232,6 @@ class STT(
     async def aclose(self) -> None:
         """Close the STT, and every stream/requests associated with it"""
         ...
-
-    def on_vad_event(self, ev: VADEvent) -> None:
-        """Receive LiveKit VAD events for observability.
-
-        Implementations may override to react to LiveKit's voice activity detector
-        (e.g. to align their own endpointing or emit logs). The default implementation
-        ignores the event. Providers must avoid long-running work and should never
-        raise from this hook; callers will swallow exceptions.
-
-        Args:
-            ev: The VAD event emitted by the LiveKit pipeline.
-        """
-        return
 
     async def __aenter__(self) -> STT:
         return self

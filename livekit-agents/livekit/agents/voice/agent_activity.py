@@ -1223,12 +1223,6 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
 
-        if self.stt is not None and ev is not None:
-            try:
-                self.stt.on_vad_event(ev)
-            except Exception:
-                logger.debug("stt.on_vad_event hook failed", exc_info=True)
-
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
         if ev:
@@ -1246,12 +1240,6 @@ class AgentActivity(RecognitionHooks):
             # schedule a resume timer when user stops speaking
             self._start_false_interruption_timer(timeout)
 
-        if self.stt is not None and ev is not None:
-            try:
-                self.stt.on_vad_event(ev)
-            except Exception:
-                logger.debug("stt.on_vad_event hook failed", exc_info=True)
-
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
@@ -1268,12 +1256,6 @@ class AgentActivity(RecognitionHooks):
             self._user_silence_event.clear()
         else:
             self._user_silence_event.set()
-
-        if self.stt is not None:
-            try:
-                self.stt.on_vad_event(ev)
-            except Exception:
-                logger.debug("stt.on_vad_event hook failed", exc_info=True)
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:

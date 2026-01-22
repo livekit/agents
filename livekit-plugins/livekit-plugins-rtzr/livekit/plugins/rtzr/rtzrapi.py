@@ -126,7 +126,6 @@ class RTZROpenAPIClient:
         client_secret: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        self._logger = logging.getLogger(__name__)
         self.client_id = client_id or os.environ.get("RTZR_CLIENT_ID")
         self.client_secret = client_secret or os.environ.get("RTZR_CLIENT_SECRET")
 
