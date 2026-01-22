@@ -45,19 +45,42 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """
+        Initialize Avatario avatar session
+
+        Args:
+            avatar_id: The ID of avatar to use in the session. If not provided it will read
+                        from the AVATARIO_AVATAR_ID environment variable.
+                        IDs of our stock avatars can be found here:-
+                        (https://avatario.ai/dashboard/9pqbj80f/avatars/stock)
+            video_info: a dataclass containing information about the video resolution
+                        and background of the avatar session.
+            api_key: Your Avatario API key. If not provided, it will be read from
+                     the AVATARIO_API_KEY environment variable.
+            avatar_participant_identity: Identity of the avatario participant that will
+                                         join the room. Defaults to "avatario-avatar-agent"
+            avatar_participant_name: Name of the avatario participant that will join the
+                                     room. Defaults to "avatario-avatar-agent"
+            conn_options: Connection options for the aiohttp session.
+        """
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
+        self._video_info = asdict(video_info)
 
-        self._api = AvatarioAPI(
-            api_key=api_key,
-            video_info=asdict(video_info),
-            avatar_id=avatar_id,
-            conn_options=conn_options,
-            session=self._ensure_http_session(),
+        avatar_id = avatar_id or (os.getenv("AVATARIO_AVATAR_ID") or NOT_GIVEN)
+        if not utils.is_given(avatar_id):
+            raise AvatarioException("AVATARIO_AVATAR_ID must be set")
+        self._avatar_id = avatar_id
+
+        avatario_api_key = api_key or (os.getenv("AVATARIO_API_KEY") or NOT_GIVEN)
+        if not avatario_api_key:
+            raise AvatarioException("AVATARIO_API_KEY must be set")
+        self._api_key = avatario_api_key
+
+        self._avatar_participant_identity = (
+            avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         )
-
-        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -75,9 +98,11 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        livekit_url = livekit_url or os.getenv("LIVEKIT_URL")
-        livekit_api_key = livekit_api_key or os.getenv("LIVEKIT_API_KEY")
-        livekit_api_secret = livekit_api_secret or os.getenv("LIVEKIT_API_SECRET")
+        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (
+            os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN
+        )
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise AvatarioException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
@@ -96,14 +121,20 @@ class AvatarSession:
             .to_jwt()
         )
 
-        logger.debug("starting avatar session")
-        await self._api.start_session(
-            livekit_agent_identity=local_participant_identity,
-            properties={
-                "url": livekit_url,
-                "token": livekit_token,
-            },
-        )
+        async with AvatarioAPI(
+            api_key=self._api_key,
+            avatar_id=self._avatar_id,
+            video_info=self._video_info,
+            conn_options=self._conn_options,
+        ) as avatario_api:
+            logger.debug("starting avatar session")
+            await avatario_api.start_session(
+                livekit_agent_identity=local_participant_identity,
+                properties={
+                    "url": livekit_url,
+                    "token": livekit_token,
+                },
+            )
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
