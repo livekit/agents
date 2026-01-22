@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import asyncio
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import aiohttp
 
@@ -26,7 +28,7 @@ DEFAULT_API_URL = "https://avatario.ai/api/sdk"
 class AvatarioAPI:
     """
     An asynchronous client for interacting with the Avatario API.
-    
+
     This class handles authentication, request signing, and retries.
     """
 
@@ -50,11 +52,11 @@ class AvatarioAPI:
         self._session = session
         self._owns_session = session is None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> AvatarioAPI:
         if self._owns_session:
             self._session = aiohttp.ClientSession()
         return self
-    
+
     async def __aexit__(
         self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
     ) -> None:
@@ -81,7 +83,7 @@ class AvatarioAPI:
                 "to ensure its proper communication with avatario backend"
             )
 
-        properties = properties or {}
+        properties = properties if utils.is_given(properties) else {}
 
         payload = {
             "avatario_face_id": self._avatar_id,
@@ -107,6 +109,12 @@ class AvatarioAPI:
         Raises:
             APIConnectionError: If the request fails after all retries
         """
+
+        if self._session is None:
+            raise RuntimeError(
+                "Session not initialized. Use 'async with AvatarioAPI(...)'."
+            )
+
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._session.post(
@@ -116,7 +124,7 @@ class AvatarioAPI:
                         "x-api-key": self._api_key,
                     },
                     json=payload,
-                    timeout=self._conn_options.timeout,
+                    timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
                 ) as response:
                     if not response.ok:
                         text = await response.text()
@@ -125,7 +133,8 @@ class AvatarioAPI:
                             status_code=response.status,
                             body=text,
                         )
-                    return await response.json()
+                    data = await response.json()
+                    return cast(dict[str, Any], data)
             except Exception as e:
                 if isinstance(e, APIConnectionError):
                     logger.warning(

@@ -68,12 +68,16 @@ class AvatarSession:
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
         self._video_info = asdict(video_info)
 
-        avatar_id = avatar_id or (os.getenv("AVATARIO_AVATAR_ID") or NOT_GIVEN)
-        if not utils.is_given(avatar_id):
+        avatario_avatar_id = (
+            avatar_id if utils.is_given(avatar_id) else os.getenv("AVATARIO_AVATAR_ID")
+        )
+        if not avatario_avatar_id:
             raise AvatarioException("AVATARIO_AVATAR_ID must be set")
-        self._avatar_id = avatar_id
+        self._avatar_id = avatario_avatar_id
 
-        avatario_api_key = api_key or (os.getenv("AVATARIO_API_KEY") or NOT_GIVEN)
+        avatario_api_key = (
+            api_key if utils.is_given(api_key) else os.getenv("AVATARIO_API_KEY")
+        )
         if not avatario_api_key:
             raise AvatarioException("AVATARIO_API_KEY must be set")
         self._api_key = avatario_api_key
