@@ -119,8 +119,10 @@ class TimedString(str):
     def to_dict(self) -> dict:
         return {
             "text": self,
-            "start_time": self.start_time or None,
-            "end_time": self.end_time or None,
-            "confidence": self.confidence or None,
-            "start_time_offset": self.start_time_offset or None,
+            "start_time": self.start_time if self.start_time is not NOT_GIVEN else None,
+            "end_time": self.end_time if self.end_time is not NOT_GIVEN else None,
+            "confidence": self.confidence if self.confidence is not NOT_GIVEN else None,
+            "start_time_offset": self.start_time_offset
+            if self.start_time_offset is not NOT_GIVEN
+            else None,
         }
