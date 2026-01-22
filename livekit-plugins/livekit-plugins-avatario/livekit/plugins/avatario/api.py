@@ -147,6 +147,6 @@ class AvatarioAPI:
             if i < self._conn_options.max_retry - 1:
                 await asyncio.sleep(self._conn_options.retry_interval)
 
-            if isinstance(last_exc, APIStatusError):
-                raise last_exc
+        if isinstance(last_exc, APIStatusError):
+            raise last_exc
         raise APIConnectionError("Failed to call Avatario API after all retries")
