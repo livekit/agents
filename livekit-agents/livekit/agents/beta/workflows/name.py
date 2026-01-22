@@ -45,7 +45,9 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._collect_middle_name = middle_name
         self._verify_spelling = verify_spelling
 
-        self._requested_name_parts: list[str] = []
+        self._requested_name_parts: list[
+            str
+        ] = []  # this builds a string to pass into the LLM instructions
         if first_name:
             self._requested_name_parts.append("first name")
         if middle_name:
@@ -139,13 +141,13 @@ class GetNameTask(AgentTask[GetNameResult]):
             errors.append("last name is required but was not provided")
 
         if errors:
-            raise ToolError(f"Invalid name: {'; '.join(errors)}")
+            raise ToolError(f"Incomplete name: {'; '.join(errors)}")
 
         self._first_name = first_name.strip()
         self._middle_name = middle_name.strip()
         self._last_name = last_name.strip()
 
-        full_name = " ".join(filter(None, [self._first_name, self._middle_name, self._last_name]))
+        full_name = " ".join([self._first_name, self._middle_name, self._last_name])
 
         if self._verify_spelling:
             return (
