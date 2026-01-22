@@ -83,9 +83,11 @@ class AvatarSession:
         self._api_key = avatario_api_key
 
         self._avatar_participant_identity = (
-            avatar_participant_identity or _AVATAR_AGENT_IDENTITY
+            avatar_participant_identity if utils.is_given(avatar_participant_identity) else _AVATAR_AGENT_IDENTITY
         )
-        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+        self._avatar_participant_name = (
+            avatar_participant_name if utils.is_given(avatar_participant_name) else _AVATAR_AGENT_NAME
+        )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -102,6 +104,7 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """Entrypoint to start the video avatar session"""
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (
