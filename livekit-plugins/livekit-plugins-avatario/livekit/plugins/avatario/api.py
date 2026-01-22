@@ -114,7 +114,7 @@ class AvatarioAPI:
             raise RuntimeError(
                 "Session not initialized. Use 'async with AvatarioAPI(...)'."
             )
-
+        last_exc: Optional[Exception] = None
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._session.post(
@@ -135,15 +135,18 @@ class AvatarioAPI:
                         )
                     data = await response.json()
                     return cast(dict[str, Any], data)
+            except APIStatusError as e:
+                last_exc = e
+                if not e.retryable:
+                    raise
+                logger.warning("Avatario API returned error", extra={"error": str(e)})
             except Exception as e:
-                if isinstance(e, APIConnectionError):
-                    logger.warning(
-                        "failed to call Avatario API", extra={"error": str(e)}
-                    )
-                else:
-                    logger.exception("failed to call avatario api")
+                last_exc = e
+                logger.exception("failed to call Avatario API")
 
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+            if i < self._conn_options.max_retry - 1:
+                await asyncio.sleep(self._conn_options.retry_interval)
 
+            if isinstance(last_exc, APIStatusError):
+                raise last_exc
         raise APIConnectionError("Failed to call Avatario API after all retries")
