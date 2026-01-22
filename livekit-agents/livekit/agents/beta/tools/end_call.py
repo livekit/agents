@@ -61,6 +61,7 @@ class EndCallTool(Toolset):
         self._shutdown_session_task: asyncio.Task[None] | None = None
 
     async def _end_call(self, ctx: RunContext) -> Any | None:
+        logger.debug("end_call tool called")
         llm_v = ctx.session.current_agent._get_activity_or_raise().llm
 
         def _on_speech_done(_: SpeechHandle) -> None:
@@ -77,14 +78,13 @@ class EndCallTool(Toolset):
                 )
 
         ctx.speech_handle.add_done_callback(_on_speech_done)
+        ctx.session.once("close", self._on_session_close)
 
         if self._on_tool_called:
             await self._on_tool_called(Toolset.ToolCalledEvent(ctx=ctx, arguments={}))
 
         completed_ev = Toolset.ToolCompletedEvent(ctx=ctx, output=None)
         try:
-            logger.debug("end_call tool called")
-            ctx.session.once("close", self._on_session_close)
             if self._end_instructions:
                 await ctx.session.generate_reply(
                     instructions=self._end_instructions, tool_choice="none"
