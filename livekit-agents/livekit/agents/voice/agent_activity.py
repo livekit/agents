@@ -2167,7 +2167,7 @@ class AgentActivity(RecognitionHooks):
                         ),
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
                         # tool response generation
-                        _previous_user_metrics=user_metrics if forwarded_text else None,
+                        _previous_user_metrics=user_metrics if not forwarded_text else None,
                         _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
