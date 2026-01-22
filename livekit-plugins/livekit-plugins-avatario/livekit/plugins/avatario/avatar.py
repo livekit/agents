@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 from dataclasses import asdict, dataclass
 
 import aiohttp
@@ -33,7 +34,7 @@ class AvatarSession:
     class VideoInfo:
         video_height: int = 720
         video_width: int = 1280
-        custom_background_url: str | None = None
+        custom_background_url: Optional[str] = None
 
     def __init__(
         self,
@@ -63,7 +64,7 @@ class AvatarSession:
                                      room. Defaults to "avatario-avatar-agent"
             conn_options: Connection options for the aiohttp session.
         """
-        self._http_session: aiohttp.ClientSession | None = None
+        self._http_session: Optional[aiohttp.ClientSession] = None
         self._conn_options = conn_options
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
         self._video_info = asdict(video_info)

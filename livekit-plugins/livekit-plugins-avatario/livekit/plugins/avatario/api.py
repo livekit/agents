@@ -58,7 +58,7 @@ class AvatarioAPI:
         return self
 
     async def __aexit__(
-        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
+        self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Any
     ) -> None:
         if self._owns_session and self._session:
             await self._session.close()
