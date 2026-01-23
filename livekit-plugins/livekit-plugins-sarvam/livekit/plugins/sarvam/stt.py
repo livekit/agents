@@ -52,7 +52,7 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saarika:v2.0", "saaras:v2.5"]
+SarvamSTTModels = Literal["saarika:v2.5", "saarika:v2.0", "saaras:v2.5", "saaras:v3"]
 
 
 class ConnectionState(enum.Enum):

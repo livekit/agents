@@ -47,7 +47,7 @@ SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
 # Sarvam TTS specific models and speakers
-SarvamTTSModels = Literal["bulbul:v2"]
+SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta"]
 
 # Supported languages in BCP-47 format
 SarvamTTSLanguages = Literal[
@@ -74,6 +74,35 @@ SarvamTTSSpeakers = Literal[
     "abhilash",
     "karun",
     "hitesh",
+
+    # bulbul:v3-beta Customer Care
+    "shubh",
+    "ritu",
+    "rahul",
+    "pooja",
+    "simran",
+    "kavya",
+    "amit",
+    "ratan",
+    "rohan",
+    "dev",
+    "ishita",
+    "shreya",
+    "manan",
+    "sumit",
+    "priya",
+    # bulbul:v3-beta Content Creation
+    "aditya",
+    "kabir",
+    "neha",
+    "varun",
+    "roopa",
+    "aayan",
+    "ashutosh",
+    "advait",
+    # bulbul:v3-beta International
+    "amelia",
+    "sophia",
 ]
 
 # Model-Speaker compatibility mapping
@@ -82,7 +111,65 @@ MODEL_SPEAKER_COMPATIBILITY = {
         "female": ["anushka", "manisha", "vidya", "arya"],
         "male": ["abhilash", "karun", "hitesh"],
         "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    }
+    },
+    "bulbul:v3-beta": {
+        "female": [
+            "ritu",
+            "pooja",
+            "simran",
+            "kavya",
+            "ishita",
+            "shreya",
+            "priya",
+            "neha",
+            "roopa",
+            "amelia",
+            "sophia",
+        ],
+        "male": [
+            "shubh",
+            "rahul",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "manan",
+            "sumit",
+            "aditya",
+            "kabir",
+            "varun",
+            "aayan",
+            "ashutosh",
+            "advait",
+        ],
+        "all": [
+            "shubh",
+            "ritu",
+            "rahul",
+            "pooja",
+            "simran",
+            "kavya",
+            "amit",
+            "ratan",
+            "rohan",
+            "dev",
+            "ishita",
+            "shreya",
+            "manan",
+            "sumit",
+            "priya",
+            "aditya",
+            "kabir",
+            "neha",
+            "varun",
+            "roopa",
+            "aayan",
+            "ashutosh",
+            "advait",
+            "amelia",
+            "sophia",
+        ],
+    },
 }
 
 
