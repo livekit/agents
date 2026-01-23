@@ -98,8 +98,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         month: int,
         day: int,
         ctx: RunContext,
-        hour: int | None = None,
-        minute: int | None = None,
     ) -> str:
         """Update the date of birth provided by the user.
 
@@ -107,8 +105,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             year: The birth year (e.g., 1990)
             month: The birth month (1-12)
             day: The birth day (1-31)
-            hour: The birth hour (0-23), optional
-            minute: The birth minute (0-59), optional
         """
         self._dob_update_speech_handle = ctx.speech_handle
 
@@ -126,23 +122,51 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         self._current_dob = dob
 
-        birth_time: time | None = None
-        if hour is not None and minute is not None:
-            try:
-                birth_time = time(hour, minute)
-            except ValueError as e:
-                raise ToolError(f"Invalid time: {e}") from None
-            self._current_time = birth_time
-
         formatted_date = dob.strftime("%B %d, %Y")
         response = f"The date of birth has been updated to {formatted_date}"
 
-        if birth_time:
-            formatted_time = birth_time.strftime("%I:%M %p")
+        if self._current_time:
+            formatted_time = self._current_time.strftime("%I:%M %p")
             response += f" at {formatted_time}"
 
         response += (
             "\nRepeat the date back to the user in a natural spoken format.\n"
+            "Prompt the user for confirmation, do not call `confirm_dob` directly"
+        )
+
+        return response
+
+    @function_tool
+    async def update_time(
+        self,
+        hour: int,
+        minute: int,
+        ctx: RunContext,
+    ) -> str:
+        """Update the time of birth provided by the user.
+
+        Args:
+            hour: The birth hour (0-23)
+            minute: The birth minute (0-59)
+        """
+        self._dob_update_speech_handle = ctx.speech_handle
+
+        try:
+            birth_time = time(hour, minute)
+        except ValueError as e:
+            raise ToolError(f"Invalid time: {e}") from None
+
+        self._current_time = birth_time
+
+        formatted_time = birth_time.strftime("%I:%M %p")
+        response = f"The time of birth has been updated to {formatted_time}"
+
+        if self._current_dob:
+            formatted_date = self._current_dob.strftime("%B %d, %Y")
+            response = f"The date and time of birth has been updated to {formatted_date} at {formatted_time}"
+
+        response += (
+            "\nRepeat the time back to the user in a natural spoken format.\n"
             "Prompt the user for confirmation, do not call `confirm_dob` directly"
         )
 
