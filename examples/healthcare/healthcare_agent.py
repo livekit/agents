@@ -93,26 +93,6 @@ class ScheduleAppointmentTask(AgentTask[ScheduleAppointmentResult]):
     async def confirm_visit_reason(self, visit_reason: str): ...
 
 
-def information_tg_factory() -> TaskGroup:
-    """Creates a TaskGroup that collects user information"""
-    task_group = TaskGroup(return_exceptions=False)
-
-    task_group.add(lambda: GetNameTask(), id="get_name_task", description="Gathers the user's name")
-    task_group.add(
-        lambda: GetDOBTask(), id="get_dob_task", description="Gathers the user's date of birth"
-    )
-    task_group.add(
-        lambda: GetEmailTask(), id="get_email_task", description="Gathers the user's email"
-    )
-    task_group.add(
-        lambda: GetInsuranceTask(),
-        id="get_insurance_task",
-        description="Gathers the user's insurance",
-    )
-
-    return task_group
-
-
 class HealthcareAgent(Agent):
     def __init__(self, database=None) -> None:
         super().__init__(
@@ -126,6 +106,27 @@ class HealthcareAgent(Agent):
             instructions="Greet the user and gather the reason for their call."
         )
 
+    def information_tg_factory(self) -> TaskGroup:
+        """Creates a TaskGroup that collects user information"""
+        task_group = TaskGroup(chat_ctx=self.chat_ctx, return_exceptions=False)
+
+        task_group.add(
+            lambda: GetNameTask(), id="get_name_task", description="Gathers the user's name"
+        )
+        task_group.add(
+            lambda: GetDOBTask(), id="get_dob_task", description="Gathers the user's date of birth"
+        )
+        task_group.add(
+            lambda: GetEmailTask(), id="get_email_task", description="Gathers the user's email"
+        )
+        task_group.add(
+            lambda: GetInsuranceTask(),
+            id="get_insurance_task",
+            description="Gathers the user's insurance",
+        )
+
+        return task_group
+
     @function_tool()
     async def schedule_appointment(self):
         """Call to schedule an appointment for the user."""
@@ -133,13 +134,8 @@ class HealthcareAgent(Agent):
             instructions="Inform the user that you will now be collecting their information."
         )
 
-        task_group = TaskGroup(chat_ctx=self.chat_ctx)
+        task_group = self.information_tg_factory()
 
-        task_group.add(
-            information_tg_factory,
-            id="manage_information_task",
-            description="Collects and updates user information",
-        )
         task_group.add(
             lambda: ScheduleAppointmentTask(),
             id="schedule_appointment_task",
@@ -154,12 +150,13 @@ class HealthcareAgent(Agent):
     # @function_tool()
     # async def medication_refill(self):
     #     """Facilitates medicine refill"""
-    #     results = await information_tg_factory()
+    #     task_group = self.information_tg_factory()
+    #     task_group.add(lambda: RefillPrescriptionTask(), id="refill_prescription_task", description="Refills user's prescription if available")
 
     # @function_tool()
-    # async def update_records(self, field: str):
-    #     """ Updates the user's information in the database """
-    #     results = await information_tg_factory()
+    async def update_records(self, field: str):
+        """Updates the user's information in the database"""
+        results = await self.information_tg_factory()
 
 
 server = AgentServer()
