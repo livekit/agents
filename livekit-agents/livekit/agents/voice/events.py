@@ -194,7 +194,7 @@ class SpeechCreatedEvent(BaseModel):
     type: Literal["speech_created"] = "speech_created"
     user_initiated: bool
     """True if the speech was created using public methods like `say` or `generate_reply`"""
-    source: Literal["say", "generate_reply"]
+    source: Literal["say", "generate_reply", "acknowledgment"]
     """Source indicating how the speech handle was created"""
     speech_handle: SpeechHandle = Field(..., exclude=True)
     """The speech handle that was created"""
