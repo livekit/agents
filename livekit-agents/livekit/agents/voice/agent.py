@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing_extensions import Self
 
 from livekit import rtc
 
@@ -415,47 +416,27 @@ class Agent:
 
         return self._activity
 
-    @staticmethod
-    def _reconstruct(cls: type[Agent], init_kwargs: dict[str, Any], state: dict[str, Any]) -> Agent:
-        try:
-            agent = cls(**init_kwargs)
-        except TypeError:
-            logger.error(
-                "arguments mismatch when reconstructing agent", extra={"init_kwargs": init_kwargs}
-            )
-            raise
-        agent.__setstate__(state)
-        return agent
+    def get_state(self) -> dict[str, Any]:
+        tool_ctx = llm.ToolContext(self.tools)
+        chat_ctx: dict[str, Any] = self.chat_ctx.to_dict(
+            exclude_image=False, exclude_function_call=False, exclude_timestamp=False
+        )
 
-    def __reduce__(self) -> tuple[type, tuple[Any, ...]]:
         init_kwargs: dict[str, Any] = {}
         if "get_init_kwargs" in type(self).__dict__:
             # only use get_init_kwargs if it's defined directly on type(self), not inherited
             init_kwargs = self.get_init_kwargs()
-        return (
-            self._reconstruct,  # type: ignore
-            (self.__class__, init_kwargs, self.__getstate__()),
-        )
-
-    def __getstate__(self) -> dict[str, Any]:
-        tool_ctx = llm.ToolContext(self.tools)
-        chat_ctx: dict[str, Any] | bytes = self.chat_ctx.to_dict(
-            exclude_image=False, exclude_function_call=False, exclude_timestamp=False
-        )
-
-        encrypted = False
-        if (passphrase := _state_passphrase_ctx.get()) is not None:
-            chat_ctx = utils.encryption.encrypt(pickle.dumps(chat_ctx), passphrase)
-            encrypted = True
 
         return {
+            "cls": type(self),
+            "id": self._id,
+            "init_kwargs": init_kwargs,
             "tools": list(tool_ctx.function_tools.keys()),
             "chat_ctx": chat_ctx,
-            "chat_ctx_encrypted": encrypted,
-            # TODO: add parent agent
+            "parent_agent": None,
         }
 
-    def __setstate__(self, state: dict[str, Any]) -> None:
+    def set_state(self, state: dict[str, Any]) -> None:
         tool_ctx = llm.ToolContext(self.tools)
         valid_tools: list[llm.Tool | llm.Toolset] = []
         for name in state["tools"]:
@@ -469,19 +450,18 @@ class Agent:
         # TODO: support AgentTask
 
         self._tools = valid_tools
+        if "chat_ctx" in state:
+            self._chat_ctx = llm.ChatContext.from_dict(state["chat_ctx"])
 
-        # decrypt and unpickle chat context
-        chat_ctx = state["chat_ctx"]
-        if isinstance(chat_ctx, bytes):
-            if state.get("chat_ctx_encrypted", False):
-                if (passphrase := _state_passphrase_ctx.get()) is not None:
-                    chat_ctx = utils.encryption.decrypt(chat_ctx, passphrase)
-                else:
-                    raise ValueError("state_passphrase required to decrypt encrypted session state")
-            chat_ctx = pickle.loads(chat_ctx)
-        self._chat_ctx = llm.ChatContext.from_dict(chat_ctx)
+        # skip on_enter when rehydrating
+        self._rehydrated = True
 
-        self._rehydrated = True  # skip on_enter when rehydrating
+    @staticmethod
+    def create_from_state(state: dict[str, Any]) -> Agent:
+        cls = state["cls"]
+        obj: Agent = cls(**state.get("init_kwargs", {}))
+        obj.set_state(state)
+        return obj
 
     def is_rehydrated(self) -> bool:
         return self._rehydrated
@@ -972,16 +952,17 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__awaited = True
         return self.__await_impl().__await__()
 
-    def __getstate__(self) -> dict[str, Any]:
-        state = super().__getstate__()
-        state["_old_agent"] = self._old_agent
+    def get_state(self) -> dict[str, Any]:
+        state = super().get_state()
+        state["parent_agent"] = self._old_agent.get_state() if self._old_agent else None
         state["_started"] = self.__started
         return state
 
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        super().__setstate__(state)
-        self._old_agent = state["_old_agent"]
+    def set_state(self, state: dict[str, Any]) -> None:
+        super().set_state(state)
         self.__started = state["_started"]
+        if "parent_agent" in state:
+            self._old_agent = Agent.create_from_state(state["parent_agent"])
 
 
 @dataclass
