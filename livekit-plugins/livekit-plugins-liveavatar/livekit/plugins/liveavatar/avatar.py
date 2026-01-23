@@ -22,7 +22,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.avatar import QueueAudioOutput
+from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
