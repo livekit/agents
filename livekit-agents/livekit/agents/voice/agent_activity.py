@@ -48,6 +48,7 @@ from .events import (
     AgentFalseInterruptionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
+    FunctionToolsExecutingEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -1981,6 +1982,10 @@ class AgentActivity(RecognitionHooks):
             # reset the `created_at` to the start time of the tool execution
             fnc_call.created_at = time.time()
             speech_handle._item_added([fnc_call])
+            self._session.emit(
+                "function_tools_executing",
+                FunctionToolsExecutingEvent(function_call=fnc_call),
+            )
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
@@ -2471,6 +2476,10 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx.items.append(fnc_call)
             self._session._tool_items_added([fnc_call])
+            self._session.emit(
+                "function_tools_executing",
+                FunctionToolsExecutingEvent(function_call=fnc_call),
+            )
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
