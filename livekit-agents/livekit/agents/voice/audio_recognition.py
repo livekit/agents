@@ -350,7 +350,8 @@ class AudioRecognition:
             if not self._last_language or (
                 language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
             ):
-                self._last_language = language
+                normalized_language = "en" if language == "eng" else language
+                self._last_language = normalized_language
 
             if not transcript:
                 return
@@ -409,6 +410,7 @@ class AudioRecognition:
             if not self._last_language or (
                 language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
             ):
+                normalized_language = "en" if language == "eng" else language
                 self._last_language = language
 
             if not transcript:
