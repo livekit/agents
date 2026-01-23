@@ -216,6 +216,14 @@ class AvatarSession:
 
                         self.send_event(msg)
                         self._playback_position += resampled_frame.duration
+                elif isinstance(audio_frame, AudioSegmentEnd):
+                    if self._audio_playing:
+                        self._audio_buffer.notify_playback_finished(
+                            playback_position=self._playback_position,
+                            interrupted=False,
+                        )
+                        self._playback_position = 0.0
+                        self._audio_playing = False
 
         async def _keep_alive_task() -> None:
             try:
