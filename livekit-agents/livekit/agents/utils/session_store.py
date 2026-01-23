@@ -36,13 +36,41 @@ class DBOperation:
 
 
 @dataclass
-class ChangesetMetadata:
-    """Metadata for a changeset (returned to caller for cloud storage)."""
+class SessionSnapshot:
+    """
+    Full database snapshot for initial upload or full sync.
+
+    Used when:
+    - First time creating session in cloud
+    - Cloud requests full resync
+    - Worker needs to download entire state
+    """
+
+    version_hash: str  # Content hash of the database
+    db_data: bytes  # Complete database file content
+    timestamp: float  # When snapshot was created
+
+    def size(self) -> int:
+        """Size of the snapshot in bytes."""
+        return len(self.db_data)
+
+
+@dataclass
+class SessionDelta:
+    """
+    Incremental changeset for efficient sync (formerly ChangesetMetadata).
+
+    Used for normal operation after initial snapshot exists.
+    """
 
     base_version: str | None  # Hash of the base version (None for initial)
     new_version: str  # Hash of the new version (content-addressable)
-    changeset: bytes  # The actual changeset bytes
-    timestamp: float  # When this changeset was created
+    changeset: bytes  # SQLite changeset bytes (binary delta)
+    timestamp: float  # When this delta was created
+
+    def size(self) -> int:
+        """Size of the changeset in bytes."""
+        return len(self.changeset)
 
 
 # Table schemas for generic diffing
@@ -86,40 +114,6 @@ TABLE_SCHEMAS = {
 class SessionStore:
     """
     SQLite-based session store with git-like hash-based versioning.
-
-    Design Principles:
-    - One SQLite DB per session
-    - Hash-based versioning (content-addressable like Git)
-    - Generic table diffing based on primary keys
-    - Changesets for efficient delta sync
-    - Cloud manages version history/chain
-
-    Usage:
-        # Create store from state
-        state = agent_session.get_state()
-        store = SessionStore.from_state(state, "./local.db")
-
-        # Or load existing store
-        store = SessionStore.from_db("./local.db")
-
-        # Later: get new state and create new store
-        new_state = agent_session.get_state()
-        new_store = SessionStore.from_state(new_state, "./new.db")
-
-        # Compute changeset between stores
-        metadata = store.compute_changesets(new_store)
-
-        # Send to cloud
-        cloud.store(metadata)
-
-        # Worker sync: Get changesets from cloud
-        changesets = cloud.get_changesets(
-            from_version=store.get_version(),
-            to_version=cloud_head
-        )
-
-        # Apply with automatic version verification
-        store.apply_changesets(changesets)
     """
 
     # Schema version for migrations
@@ -619,8 +613,8 @@ class SessionStore:
 
         # Load session history
         history_items = []
-        for item_id, item_data, is_encrypted, created_at in cursor.execute(
-            "SELECT item_id, item_data, is_encrypted, created_at FROM session_history ORDER BY created_at"
+        for item_data, is_encrypted in cursor.execute(
+            "SELECT item_data, is_encrypted FROM session_history ORDER BY created_at"
         ):
             item_dict = self._deserialize_data(item_data, bool(is_encrypted), None)
             history_items.append(item_dict)
@@ -662,8 +656,8 @@ class SessionStore:
 
         # Load agent's chat context
         chat_items = []
-        for item_id, item_data, is_encrypted, created_at in cursor.execute(
-            "SELECT item_id, item_data, is_encrypted, created_at FROM agent_chat_items WHERE agent_id = ? ORDER BY created_at",
+        for item_data, is_encrypted in cursor.execute(
+            "SELECT item_data, is_encrypted FROM agent_chat_items WHERE agent_id = ? ORDER BY created_at",
             (agent_id,),
         ):
             item_dict = self._deserialize_data(item_data, bool(is_encrypted), None)
@@ -694,7 +688,7 @@ class SessionStore:
 
     def compute_changesets(
         self, target_store: SessionStore, in_place: bool = False
-    ) -> ChangesetMetadata:
+    ) -> SessionDelta:
         """
         Compute changeset from this store to target store.
 
@@ -704,7 +698,7 @@ class SessionStore:
                      If True, uses rollback on current DB (faster but requires transaction).
 
         Returns:
-            ChangesetMetadata with base_version (this), new_version (target), and changeset
+            SessionDelta with base_version (this), new_version (target), and changeset
         """
         tmp_db_path: str | None = None
 
@@ -737,7 +731,7 @@ class SessionStore:
                 work_store._apply_operation(cursor, op)
             changeset = work_store.end_tracking()
 
-            return ChangesetMetadata(
+            return SessionDelta(
                 base_version=self._current_version,
                 new_version=target_store.get_version(),
                 changeset=changeset or b"",
@@ -749,12 +743,12 @@ class SessionStore:
                 work_store.close()
                 os.unlink(tmp_db_path)
 
-    def apply_changesets(self, changesets: list[ChangesetMetadata]) -> None:
+    def apply_changesets(self, changesets: list[SessionDelta]) -> None:
         """
         Apply a list of changesets in order, verifying version hashes.
 
         Args:
-            changesets: List of ChangesetMetadata to apply in order
+            changesets: List of SessionDelta to apply in order
 
         Raises:
             ValueError: If version hash mismatch detected
@@ -806,6 +800,31 @@ class SessionStore:
             Current version hash (SHA256 hex string) or None if no versions yet
         """
         return self._current_version
+
+    def export_snapshot(self) -> SessionSnapshot:
+        """
+        Export the entire database as a snapshot for cloud upload.
+
+        Use this for:
+        - Initial upload to cloud
+        - Full resync when deltas are unavailable
+
+        Returns:
+            SessionSnapshot containing full database content
+        """
+        # Read entire database file
+        with open(self.db_path, "rb") as f:
+            db_data = f.read()
+
+        version = self.get_version()
+        if not version:
+            raise ValueError("Database has no version - cannot export snapshot")
+
+        return SessionSnapshot(
+            version_hash=version,
+            db_data=db_data,
+            timestamp=time.time(),
+        )
 
     # Helper methods (internal)
 
