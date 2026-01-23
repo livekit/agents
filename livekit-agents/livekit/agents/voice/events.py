@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeAlias, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
@@ -273,3 +273,5 @@ InternalEvent = Annotated[
     ],
     Field(discriminator="type"),
 ]
+
+TimedInternalEvent: TypeAlias = tuple[float, InternalEvent]

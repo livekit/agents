@@ -15,7 +15,7 @@ from ..tts import SynthesizedAudio
 from ..types import TimedString
 from ..vad import VADEvent, VADEventType
 from .agent_session import AgentSessionOptions
-from .events import AgentEvent, InternalEvent
+from .events import AgentEvent, TimedInternalEvent
 
 
 @dataclass
@@ -27,7 +27,7 @@ class SessionReport:
     room: str
     options: AgentSessionOptions
     events: list[AgentEvent]
-    internal_events: list[InternalEvent]
+    internal_events: list[TimedInternalEvent]
     chat_history: ChatContext
     audio_recording_path: Path | None = None
     audio_recording_started_at: float | None = None
@@ -49,14 +49,14 @@ class SessionReport:
             events_dict.append(event.model_dump())
 
         if self.include_internal_events:
-            for e in self.internal_events:
+            for created_at, e in self.internal_events:
                 if isinstance(e, BaseModel):
-                    internal_events_dict.append(e.model_dump())
+                    internal_events_dict.append({**e.model_dump(), "__created_at": created_at})
                 elif isinstance(e, SynthesizedAudio):
                     # coming from TTS
                     data = asdict(e)
                     data["frame"] = self._serialize_audio_frame(e.frame)
-                    internal_events_dict.append(data)
+                    internal_events_dict.append({**data, "__created_at": created_at})
                 elif isinstance(e, LLMOutputEvent):
                     data = asdict(e)
                     if isinstance(e.data, AudioFrame):
@@ -67,7 +67,7 @@ class SessionReport:
                         data["data"] = e.data.to_dict()
                     elif isinstance(e.data, ChatChunk):
                         data["data"] = e.data.model_dump(mode="json")
-                    internal_events_dict.append(data)
+                    internal_events_dict.append({**data, "__created_at": created_at})
                 elif isinstance(e, VADEvent):
                     # skip inference done events, they are too frequent and too noisy
                     if e.type == VADEventType.INFERENCE_DONE:
@@ -75,8 +75,7 @@ class SessionReport:
                     # remove audio frames from VAD event since we can reproduce them cheaply
                     data = asdict(e)
                     data["frames"] = []
-                    internal_events_dict.append(data)
-                    continue
+                    internal_events_dict.append({**data, "__created_at": created_at})
                 elif isinstance(e, GenerationCreatedEvent):
                     # skip message_stream and function_stream as they are not serializable
                     data = {
@@ -86,10 +85,9 @@ class SessionReport:
                         "response_id": e.response_id,
                         "type": e.type,
                     }
-                    internal_events_dict.append(data)
-                    continue
+                    internal_events_dict.append({**data, "__created_at": created_at})
                 elif is_dataclass(e):
-                    internal_events_dict.append(asdict(e))
+                    internal_events_dict.append({**asdict(e), "__created_at": created_at})
                 else:
                     logger.warning(f"Unknown internal event type: {type(e)}")
 

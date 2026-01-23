@@ -50,6 +50,7 @@ from .events import (
     ConversationItemAddedEvent,
     EventTypes,
     InternalEvent,
+    TimedInternalEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -359,7 +360,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
-        self._recorded_internal_events: list[InternalEvent] = []
+        self._recorded_internal_events: list[TimedInternalEvent] = []
         self._enable_recording: bool = False
         self._include_internal_events: bool = False
         self._started_at: float | None = None
@@ -370,13 +371,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore
         self._recorded_events.append(arg)
         if self._include_internal_events:
-            self._recorded_internal_events.append(arg)
+            self._recorded_internal_events.append((time.time(), arg))
         super().emit(event, arg)
 
     def maybe_collect(self, event: InternalEvent) -> None:
         """Collect the event if internal events are enabled. AgentEvent should be collected already with `emit`."""
         if self._include_internal_events:
-            self._recorded_internal_events.append(event)
+            self._recorded_internal_events.append((time.time(), event))
 
     @property
     def userdata(self) -> Userdata_T:
