@@ -98,7 +98,13 @@ class StreamBuffer:
                 if data:
                     # shrink the buffer to remove already-read data
                     remaining = self._buffer.read()
-                    self._buffer = io.BytesIO(remaining)
+
+                    # Reuse the same buffer instead of reallocating
+                    self._buffer.seek(0)
+                    self._buffer.truncate()
+                    self._buffer.write(remaining)
+                    self._buffer.seek(0)
+
                     return data
 
                 if self._eof:
