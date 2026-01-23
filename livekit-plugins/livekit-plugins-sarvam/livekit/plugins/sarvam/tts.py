@@ -400,7 +400,7 @@ class TTS(tts.TTS):
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            if model not in ["bulbul:v2"]:
+            if model not in ["bulbul:v2", "bulbul:v3-beta"]:
                 raise ValueError(f"Unsupported model: {model}")
             self._opts.model = model
 
@@ -480,9 +480,9 @@ class ChunkedStream(tts.ChunkedStream):
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
             "speaker": self._opts.speaker,
-            "pitch": self._opts.pitch,
+            "pitch": self._opts.pitch,  #include only for bulbul:v2 model
             "pace": self._opts.pace,
-            "loudness": self._opts.loudness,
+            "loudness": self._opts.loudness,  #include only for bulbul:v2 model
             "speech_sample_rate": self._opts.speech_sample_rate,
             "enable_preprocessing": self._opts.enable_preprocessing,
             "model": self._opts.model,
