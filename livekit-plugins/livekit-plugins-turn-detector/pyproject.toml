@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
   "jinja2",
-  "livekit-agents>=1.4.0.rc1",
+  "livekit-agents>=1.4.0.rc2",
   "numpy>=1.26",
   "onnxruntime>=1.18",
   "transformers>=4.47.1,<=4.57.1",  # transformers 4.57.2 has a bug with local_files_only=True

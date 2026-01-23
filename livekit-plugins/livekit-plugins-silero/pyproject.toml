@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "livekit-agents>=1.4.0.rc1",
+  "livekit-agents>=1.4.0.rc2",
   "numpy>=1.26",
   # onnxruntime 1.23.2 is missing wheel on MacOS
   "onnxruntime>=1.18,<=1.23.1",
