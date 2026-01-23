@@ -278,7 +278,12 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | DeepgramOptions | ElevenlabsOptions | RimeOptions | InworldOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | ElevenlabsOptions
+            | RimeOptions
+            | InworldOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,

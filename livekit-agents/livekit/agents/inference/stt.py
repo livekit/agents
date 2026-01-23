@@ -251,7 +251,11 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[
-            dict[str, Any] | CartesiaOptions | DeepgramOptions | AssemblyaiOptions | ElevenlabsOptions
+            dict[str, Any]
+            | CartesiaOptions
+            | DeepgramOptions
+            | AssemblyaiOptions
+            | ElevenlabsOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
