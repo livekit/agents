@@ -10,22 +10,6 @@ from .misc import is_given, nodename, shortuuid, time_ms
 from .moving_average import MovingAverage
 from .participant import wait_for_participant, wait_for_track_publication
 
-# Optional session_store module (requires apsw)
-try:
-    from . import session_store, session_store_integration
-    from .session_store import SessionStore, StoredState
-    from .session_store_integration import (
-        create_store_for_session,
-        rehydrate_agent_session_from_store,
-        serialize_agent_session_to_store,
-    )
-
-    _HAS_SESSION_STORE = True
-except ImportError:
-    _HAS_SESSION_STORE = False
-    session_store = None  # type: ignore
-    session_store_integration = None  # type: ignore
-
 EventEmitter = rtc.EventEmitter
 
 __all__ = [
@@ -54,19 +38,6 @@ __all__ = [
     "encryption",
 ]
 
-# Add session_store exports if available
-if _HAS_SESSION_STORE:
-    __all__.extend(
-        [
-            "session_store",
-            "session_store_integration",
-            "SessionStore",
-            "StoredState",
-            "serialize_agent_session_to_store",
-            "rehydrate_agent_session_from_store",
-            "create_store_for_session",
-        ]
-    )
 
 # Cleanup docs of unexported modules
 _module = dir()

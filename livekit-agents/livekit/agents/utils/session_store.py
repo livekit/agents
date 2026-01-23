@@ -1,12 +1,6 @@
-"""
-Session Store using SQLite Session Extension for efficient delta synchronization.
-
-This module provides a store for AgentSession state that tracks changes incrementally
-using SQLite's session extension, enabling efficient delta sync to cloud storage.
-"""
-
 from __future__ import annotations
 
+import hashlib
 import json
 import pickle
 import time
@@ -14,13 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-try:
-    import apsw
-except ImportError:
-    raise ImportError("apsw is required for session_store. Install it with: pip install apsw")
+import apsw
+import apsw.ext
 
-from .. import utils
 from ..log import logger
+
+
+@dataclass
+class TableSchema:
+    """Metadata for generic table diffing."""
+
+    name: str  # Table name
+    pk_columns: list[str]  # Primary key columns
+    compare_columns: list[str] | None = None  # Columns to compare for UPDATE detection (None = all)
+    # If compare_columns is None, compares all non-PK columns
+    # If [], only checks existence (INSERT/DELETE, no UPDATE)
 
 
 @dataclass
@@ -34,93 +36,155 @@ class DBOperation:
 
 
 @dataclass
-class StoredState:
-    """
-    Represents the complete state stored in the database.
+class ChangesetMetadata:
+    """Metadata for a changeset (returned to caller for cloud storage)."""
 
-    Matches the structure from AgentSession.get_state():
-    {
-        "userdata": dict,
-        "tools": list[str],
-        "history": dict,  # chat_ctx.to_dict()
-        "agent": dict,    # Agent.get_state()
-    }
-    """
+    base_version: str | None  # Hash of the base version (None for initial)
+    new_version: str  # Hash of the new version (content-addressable)
+    changeset: bytes  # The actual changeset bytes
+    timestamp: float  # When this changeset was created
 
-    session_id: str
-    version: int
-    userdata: dict[str, Any]
-    tools: list[str]
-    history: dict[str, Any]
-    agent: dict[str, Any]
+
+# Table schemas for generic diffing
+TABLE_SCHEMAS = {
+    "session_metadata": TableSchema(
+        name="session_metadata",
+        pk_columns=[],  # Single row table, no PK
+        compare_columns=["current_agent_id"],  # Only compare these, ignore version/timestamps
+    ),
+    "userdata": TableSchema(
+        name="userdata",
+        pk_columns=["key"],
+        compare_columns=["value", "is_encrypted"],  # Compare value and encryption flag
+    ),
+    "tools": TableSchema(
+        name="tools",
+        pk_columns=["tool_name"],
+        compare_columns=[],  # Only INSERT/DELETE, no UPDATE (tool names are atomic)
+    ),
+    "session_history": TableSchema(
+        name="session_history",
+        pk_columns=["item_id"],
+        compare_columns=[
+            "item_data",
+            "is_encrypted",
+        ],  # Compare data, ignore created_at (immutable)
+    ),
+    "agent_states": TableSchema(
+        name="agent_states",
+        pk_columns=["agent_id"],
+        compare_columns=None,  # Compare all non-PK columns
+    ),
+    "agent_chat_items": TableSchema(
+        name="agent_chat_items",
+        pk_columns=["agent_id", "item_id"],
+        compare_columns=["item_data", "is_encrypted"],  # Compare data, ignore created_at
+    ),
+}
 
 
 class SessionStore:
     """
-    SQLite-based session store with delta tracking using session extension.
+    SQLite-based session store with git-like hash-based versioning.
 
     Design Principles:
-    - One SQLite DB per session (no session_id in tables)
-    - Chat items use ID-based updates (not index-based)
-    - Userdata stored as K-V pairs for granular deltas
-    - Agent hierarchy via parent_id text references
-    - Base64 encoding for encrypted/binary data
-    - agent_id (TEXT) as primary key for agents
+    - One SQLite DB per session
+    - Hash-based versioning (content-addressable like Git)
+    - Generic table diffing based on primary keys
+    - Changesets for efficient delta sync
+    - Cloud manages version history/chain
 
     Usage:
-        # Initialize store (one DB per session)
-        store = SessionStore(session_id="session_123", db_path="./session_123.db")
+        # Create store from state
+        state = agent_session.get_state()
+        store = SessionStore.from_state(state, "./local.db")
 
-        # Save initial state
-        store.save_session_state(
-            userdata={"user_id": "123", "credits": 100},
-            session_history=[
-                {"id": "item_abc", "role": "user", "content": "Hello", "created_at": 1706123456.0}
-            ],
-            tools=["tool1", "tool2"],
-            current_agent_id="main_agent",
-            agent_states={
-                "main_agent": {  # agent_id as key
-                    "instructions": "Be helpful",
-                    "chat_items": [...]
-                }
-            }
+        # Or load existing store
+        store = SessionStore.from_db("./local.db")
+
+        # Later: get new state and create new store
+        new_state = agent_session.get_state()
+        new_store = SessionStore.from_state(new_state, "./new.db")
+
+        # Compute changeset between stores
+        metadata = store.compute_changesets(new_store)
+
+        # Send to cloud
+        cloud.store(metadata)
+
+        # Worker sync: Get changesets from cloud
+        changesets = cloud.get_changesets(
+            from_version=store.get_version(),
+            to_version=cloud_head
         )
 
-        # Track changes for delta sync
-        store.begin_tracking()
-        # ... make updates ...
-        changeset = store.end_tracking()
-        upload_to_cloud(changeset)
-
-        # On worker side: reconstruct from base + changesets
-        worker_store = SessionStore.from_base_and_changesets(
-            session_id="session_123",
-            base_db_path="./base.db",
-            changesets=[changeset1, changeset2, ...]
-        )
+        # Apply with automatic version verification
+        store.apply_changesets(changesets)
     """
 
     # Schema version for migrations
     SCHEMA_VERSION = 1
 
-    def __init__(self, session_id: str, db_path: str | Path, create_schema: bool = True):
+    def __init__(self, db_path: str | Path, create_schema: bool = True):
         """
         Initialize session store.
 
         Args:
-            session_id: Unique identifier for this session
             db_path: Path to SQLite database file
             create_schema: If True, creates schema if it doesn't exist
         """
-        self.session_id = session_id
         self.db_path = Path(db_path)
         self.conn = apsw.Connection(str(self.db_path))
         self._session: apsw.Session | None = None
-        self._current_version = 0
+        self._current_version: str | None = None  # Hash of current version
 
         if create_schema:
             self._create_schema()
+
+        self._load_current_version()
+
+    def _load_current_version(self) -> None:
+        """Load current version hash from database."""
+        cursor = self.conn.cursor()
+        result = cursor.execute("SELECT version_hash FROM session_metadata").fetchone()
+        if result:
+            self._current_version = result[0]
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any], db_path: str | Path) -> SessionStore:
+        """
+        Create a SessionStore from a state dict.
+
+        Args:
+            state: State dict from AgentSession.get_state()
+            db_path: Where to create the database
+
+        Returns:
+            SessionStore with state written to DB
+        """
+        store = cls(db_path=db_path, create_schema=True)
+
+        # Compute version hash from state
+        version_hash = store._compute_version_hash_from_state(state)
+
+        # Write state to DB with version
+        store._write_state_to_db(state, version_hash)
+        store._current_version = version_hash
+
+        return store
+
+    @classmethod
+    def from_db(cls, db_path: str | Path) -> SessionStore:
+        """
+        Load existing SessionStore from database file.
+
+        Args:
+            db_path: Path to existing database
+
+        Returns:
+            SessionStore loaded from DB
+        """
+        return cls(db_path=db_path, create_schema=False)
 
     def _create_schema(self) -> None:
         """Create database schema if it doesn't exist."""
@@ -137,10 +201,8 @@ class SessionStore:
         # Session metadata (single row since one DB = one session)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS session_metadata (
-                version INTEGER NOT NULL DEFAULT 0,
+                version_hash TEXT NOT NULL,
                 current_agent_id TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
                 FOREIGN KEY (current_agent_id) REFERENCES agent_states(agent_id)
             )
         """)
@@ -225,7 +287,7 @@ class SessionStore:
 
         logger.debug(
             "began tracking session changes",
-            extra={"session_id": self.session_id, "version": self._current_version},
+            extra={"version": self._current_version},
         )
 
     def end_tracking(self) -> bytes | None:
@@ -245,280 +307,252 @@ class SessionStore:
             self._session = None
             logger.debug(
                 "ended tracking session changes",
-                extra={"session_id": self.session_id, "version": self._current_version},
+                extra={"version": self._current_version},
             )
 
-    def init_session(
-        self, *, current_agent_id: str = "default_agent", passphrase: str | None = None
-    ) -> int:
+    def _compute_version_hash_from_state(self, state: dict[str, Any]) -> str:
         """
-        Initialize a new session with metadata and default agent.
+        Compute content-addressable hash from state dict.
 
-        Creates session_metadata row and initial agent_states entry.
+        Hash is SHA256 of pickled state, making it deterministic:
+        - Same state = same hash
+        - Can verify integrity by recomputing
+        - Independent of how we got to this state
 
         Args:
-            current_agent_id: ID of the initial agent (default: "default_agent")
-            passphrase: Optional passphrase for encryption
+            state: State dict from AgentSession.get_state()
 
         Returns:
-            Initial version number (0)
+            Hex string hash (64 characters)
         """
-        raise NotImplementedError
+        # Pickle the state for deterministic byte representation
+        pickled = pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def save_session_state(self, new_state: dict[str, Any]) -> int:
+        # Hash the pickled bytes
+        return hashlib.sha256(pickled).hexdigest()
+
+    def _write_state_to_db(self, state: dict[str, Any], version_hash: str) -> None:
         """
-        Save session state to database, incrementing version.
+        Write state dict to database (semantic conversion: state → DB).
 
-        Takes the output from AgentSession.get_state() which has:
-        {
-            "userdata": dict,
-            "tools": list[str],
-            "history": dict,  # from chat_ctx.to_dict()
-            "agent": dict,    # from Agent.get_state()
-        }
+        This is the only place where we understand the state structure.
 
         Args:
-            new_state: State dict from AgentSession.get_state()
-
-        Returns:
-            New version number
-        """
-        cursor = self.conn.cursor()
-        self._current_version += 1
-        now = time.time()
-
-        # ===== PHASE 1: GET CURRENT STATE AND COMPUTE DIFF =====
-        current_state = self.get_session_state()
-        operations = self._compute_state_diff(current_state, new_state)
-
-        # ===== PHASE 2: APPLY ALL OPERATIONS =====
-        for op in operations:
-            self._apply_operation(cursor, op)
-
-        logger.debug(
-            "saved session state",
-            extra={
-                "session_id": self.session_id,
-                "version": self._current_version,
-                "num_operations": len(operations),
-            },
-        )
-
-        return self._current_version
-
-    def _compute_state_diff(
-        self, old_state: dict[str, Any], new_state: dict[str, Any]
-    ) -> list[DBOperation]:
-        """
-        Compute database operations needed to transform current_state into new_state.
-
-        Returns list of DBOperation objects.
+            state: State dict from AgentSession.get_state()
+            version_hash: Pre-computed version hash for this state
         """
         from ..llm import ChatContext
-        from ..llm.utils import compute_chat_ctx_diff
 
-        operations: list[DBOperation] = []
-        now = time.time()
+        cursor = self.conn.cursor()
 
-        # 1. Metadata operations
-        is_first_save = not old_state.get("agent")
-        new_agent_id = new_state["agent"]["id"]
-
-        if is_first_save:
-            operations.append(
-                DBOperation(
-                    table="session_metadata",
-                    operation="INSERT",
-                    data={
-                        "version": self._current_version,
-                        "current_agent_id": new_agent_id,
-                        "created_at": now,
-                        "updated_at": now,
-                    },
-                )
-            )
-        else:
-            operations.append(
-                DBOperation(
-                    table="session_metadata",
-                    operation="UPDATE",
-                    data={
-                        "version": self._current_version,
-                        "current_agent_id": new_agent_id,
-                        "updated_at": now,
-                    },
-                    where={},  # Single row table, no WHERE needed
-                )
+        # 1. Write metadata
+        if state.get("agent"):
+            cursor.execute(
+                "INSERT INTO session_metadata (version_hash, current_agent_id) VALUES (?, ?)",
+                (version_hash, state["agent"]["id"]),
             )
 
-        # 2. Userdata operations
-        current_userdata = old_state.get("userdata", {})
-        new_userdata = new_state.get("userdata", {})
-
-        for key, value in new_userdata.items():
+        # 2. Write userdata
+        for key, value in state.get("userdata", {}).items():
             value_text, is_encrypted = self._serialize_data(value, None)
-            if key in current_userdata:
-                # Update if changed
-                if current_userdata[key] != value:
-                    operations.append(
-                        DBOperation(
-                            table="userdata",
-                            operation="UPDATE",
-                            data={"value": value_text, "is_encrypted": is_encrypted},
-                            where={"key": key},
-                        )
-                    )
-            else:
-                # Insert new key
-                operations.append(
-                    DBOperation(
-                        table="userdata",
-                        operation="INSERT",
-                        data={"key": key, "value": value_text, "is_encrypted": is_encrypted},
-                    )
-                )
-
-        # Delete removed keys
-        for key in current_userdata:
-            if key not in new_userdata:
-                operations.append(
-                    DBOperation(table="userdata", operation="DELETE", where={"key": key})
-                )
-
-        # 3. Tools operations
-        current_tools = set(old_state.get("tools", []))
-        new_tools = set(new_state.get("tools", []))
-
-        for tool_name in new_tools - current_tools:
-            operations.append(
-                DBOperation(table="tools", operation="INSERT", data={"tool_name": tool_name})
+            cursor.execute(
+                "INSERT INTO userdata (key, value, is_encrypted) VALUES (?, ?, ?)",
+                (key, value_text, is_encrypted),
             )
 
-        for tool_name in current_tools - new_tools:
-            operations.append(
-                DBOperation(table="tools", operation="DELETE", where={"tool_name": tool_name})
-            )
+        # 3. Write tools
+        for tool in state.get("tools", []):
+            cursor.execute("INSERT INTO tools (tool_name) VALUES (?)", (tool,))
 
-        # 4. Session history operations
-        current_history = ChatContext.from_dict(old_state.get("history", {"items": []}))
-        new_history = ChatContext.from_dict(new_state.get("history", {"items": []}))
-
-        current_history_ids = [item.id for item in current_history.items]
-        history_diff = compute_chat_ctx_diff(current_history_ids, new_history)
-
-        # Delete operations
-        for item_id in history_diff.to_remove:
-            operations.append(
-                DBOperation(table="session_history", operation="DELETE", where={"item_id": item_id})
-            )
-
-        # Insert/Update operations
-        new_history_by_id = {item.id: item for item in new_history.items}
-        for _, item_id in history_diff.to_create + history_diff.to_update:
-            item = new_history_by_id[item_id]
+        # 4. Write session history
+        history_ctx = ChatContext.from_dict(state.get("history", {"items": []}))
+        for item in history_ctx.items:
             item_dict = item.model_dump()
             item_text, is_encrypted = self._serialize_data(item_dict, None)
-            operations.append(
-                DBOperation(
-                    table="session_history",
-                    operation="INSERT",  # Use INSERT OR REPLACE
-                    data={
-                        "item_id": item.id,
-                        "item_data": item_text,
-                        "is_encrypted": is_encrypted,
-                        "created_at": item.created_at,
-                    },
-                )
+            cursor.execute(
+                "INSERT INTO session_history (item_id, item_data, is_encrypted, created_at) VALUES (?, ?, ?, ?)",
+                (item.id, item_text, is_encrypted, item.created_at),
             )
 
-        # 5. Agent states operations (recursive)
-        current_agent = old_state.get("agent", {})
-        new_agent = new_state.get("agent", {})
-        agent_ops = self._compute_agent_diff_recursive(current_agent, new_agent)
-        operations.extend(agent_ops)
+        # 5. Write agent states (recursive)
+        self._write_agent_to_db_recursive(cursor, state.get("agent", {}))
 
-        return operations
-
-    def _compute_agent_diff_recursive(
-        self, current_agent: dict[str, Any], new_agent: dict[str, Any]
-    ) -> list[DBOperation]:
-        """Recursively compute agent state operations."""
-        if not new_agent:
-            return []
-
+    def _write_agent_to_db_recursive(
+        self, cursor: apsw.Cursor, agent_state: dict[str, Any]
+    ) -> None:
+        """Recursively write agent state and parents to DB."""
         from ..llm import ChatContext
-        from ..llm.utils import compute_chat_ctx_diff
 
-        operations: list[DBOperation] = []
+        if not agent_state:
+            return
 
-        # Process parent agent first (if exists)
-        current_parent = current_agent.get("parent_agent", {})
-        new_parent = new_agent.get("parent_agent", {})
-        if new_parent:
-            operations.extend(self._compute_agent_diff_recursive(current_parent, new_parent))
+        # Write parent first (if exists)
+        parent_agent = agent_state.get("parent_agent", {})
+        if parent_agent:
+            self._write_agent_to_db_recursive(cursor, parent_agent)
 
-        # Process current agent
-        agent_id = new_agent["id"]
-        agent_cls = new_agent["cls"]
-        init_kwargs = new_agent.get("init_kwargs", {})
-        new_chat_ctx_dict = new_agent.get("chat_ctx", {})
+        # Write current agent
+        agent_id = agent_state["id"]
+        agent_cls = agent_state["cls"]
+        init_kwargs = agent_state.get("init_kwargs", {})
+        chat_ctx_dict = agent_state.get("chat_ctx", {})
 
         # Extract custom fields
         standard_fields = {"cls", "id", "init_kwargs", "tools", "chat_ctx", "parent_agent"}
-        custom_state = {k: v for k, v in new_agent.items() if k not in standard_fields}
+        custom_state = {k: v for k, v in agent_state.items() if k not in standard_fields}
 
-        # Agent metadata operation
-        operations.append(
-            DBOperation(
-                table="agent_states",
-                operation="INSERT",  # Use INSERT OR REPLACE
-                data={
-                    "agent_id": agent_id,
-                    "agent_cls": pickle.dumps(agent_cls),
-                    "parent_id": new_parent["id"] if new_parent else None,
-                    "init_kwargs_json": json.dumps(init_kwargs) if init_kwargs else None,
-                    "custom_state_json": json.dumps(custom_state) if custom_state else None,
-                    "runtime_stack": None,  # Placeholder for future runtime binary stack
-                },
-            )
+        # Write agent metadata
+        cursor.execute(
+            """
+            INSERT INTO agent_states
+            (agent_id, agent_cls, parent_id, init_kwargs_json, custom_state_json, runtime_stack)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agent_id,
+                pickle.dumps(agent_cls),
+                parent_agent["id"] if parent_agent else None,
+                json.dumps(init_kwargs) if init_kwargs else None,
+                json.dumps(custom_state) if custom_state else None,
+                None,
+            ),
         )
 
-        # Agent chat context operations
-        current_chat_ctx = ChatContext.from_dict(current_agent.get("chat_ctx", {"items": []}))
-        new_chat_ctx = ChatContext.from_dict(new_chat_ctx_dict)
-
-        current_chat_ids = [item.id for item in current_chat_ctx.items]
-        chat_diff = compute_chat_ctx_diff(current_chat_ids, new_chat_ctx)
-
-        # Delete operations
-        for item_id in chat_diff.to_remove:
-            operations.append(
-                DBOperation(
-                    table="agent_chat_items",
-                    operation="DELETE",
-                    where={"agent_id": agent_id, "item_id": item_id},
-                )
-            )
-
-        # Insert/Update operations
-        new_chat_by_id = {item.id: item for item in new_chat_ctx.items}
-        for _, item_id in chat_diff.to_create + chat_diff.to_update:
-            item = new_chat_by_id[item_id]
+        # Write agent chat items
+        chat_ctx = ChatContext.from_dict(chat_ctx_dict)
+        for item in chat_ctx.items:
             item_dict = item.model_dump()
             item_text, is_encrypted = self._serialize_data(item_dict, None)
-            operations.append(
-                DBOperation(
-                    table="agent_chat_items",
-                    operation="INSERT",  # Use INSERT OR REPLACE
-                    data={
-                        "agent_id": agent_id,
-                        "item_id": item.id,
-                        "item_data": item_text,
-                        "is_encrypted": is_encrypted,
-                        "created_at": item.created_at,
-                    },
-                )
+            cursor.execute(
+                "INSERT INTO agent_chat_items (agent_id, item_id, item_data, is_encrypted, created_at) VALUES (?, ?, ?, ?, ?)",
+                (agent_id, item.id, item_text, is_encrypted, item.created_at),
             )
+
+    def _compute_db_diff(
+        self, old_db_path: str | Path, new_db_path: str | Path
+    ) -> list[DBOperation]:
+        """
+        Compute diff between two databases (generic, no semantic knowledge).
+
+        Compares tables row-by-row based on TABLE_SCHEMAS configuration.
+
+        Args:
+            old_db_path: Path to old/current database
+            new_db_path: Path to new database
+
+        Returns:
+            List of DBOperation objects
+        """
+        operations: list[DBOperation] = []
+
+        # Open both databases
+        old_conn = apsw.Connection(str(old_db_path))
+        new_conn = apsw.Connection(str(new_db_path))
+
+        try:
+            # Compare each table
+            for table_name, schema in TABLE_SCHEMAS.items():
+                old_rows = self._read_table_rows(old_conn, table_name, schema)
+                new_rows = self._read_table_rows(new_conn, table_name, schema)
+
+                table_ops = self._compute_table_diff(old_rows, new_rows, schema)
+                operations.extend(table_ops)
+
+        finally:
+            old_conn.close()
+            new_conn.close()
+
+        return operations
+
+    def _read_table_rows(
+        self, conn: apsw.Connection, table_name: str, schema: TableSchema
+    ) -> list[dict[str, Any]]:
+        """Read all rows from a table as list of dicts."""
+        cursor = conn.cursor()
+
+        # Check if table exists
+        table_exists = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
+        ).fetchone()
+
+        if not table_exists:
+            return []
+
+        # Get column names
+        columns = [row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})")]
+
+        # Read all rows
+        rows = []
+        for row in cursor.execute(f"SELECT * FROM {table_name}"):
+            rows.append(dict(zip(columns, row)))
+
+        return rows
+
+    def _compute_table_diff(
+        self, old_rows: list[dict[str, Any]], new_rows: list[dict[str, Any]], schema: TableSchema
+    ) -> list[DBOperation]:
+        """
+        Generic table diff based on primary key and configured compare columns.
+
+        Returns list of DBOperations.
+        """
+        operations: list[DBOperation] = []
+
+        # Build lookup by primary key
+        def make_key(row: dict[str, Any]) -> tuple:
+            if not schema.pk_columns:
+                return ()  # Single row table
+            return tuple(row.get(col) for col in schema.pk_columns)
+
+        old_by_key = {make_key(row): row for row in old_rows}
+        new_by_key = {make_key(row): row for row in new_rows}
+
+        old_keys = set(old_by_key.keys())
+        new_keys = set(new_by_key.keys())
+
+        # DELETE: keys in old but not new
+        for key in old_keys - new_keys:
+            where = dict(zip(schema.pk_columns, key)) if schema.pk_columns else {}
+            operations.append(DBOperation(table=schema.name, operation="DELETE", where=where))
+
+        # INSERT: keys in new but not old
+        for key in new_keys - old_keys:
+            operations.append(
+                DBOperation(table=schema.name, operation="INSERT", data=new_by_key[key])
+            )
+
+        # UPDATE: keys in both, check if values changed
+        if schema.compare_columns is None:
+            # Compare all non-PK columns
+            compare_cols = (
+                set(new_by_key[list(new_keys)[0]].keys()) - set(schema.pk_columns)
+                if new_keys
+                else set()
+            )
+        elif schema.compare_columns:
+            # Compare only specified columns
+            compare_cols = set(schema.compare_columns)
+        else:
+            # Empty list means no comparison (skip UPDATE check)
+            compare_cols = set()
+
+        for key in old_keys & new_keys:
+            old_row = old_by_key[key]
+            new_row = new_by_key[key]
+
+            # Check if any compare column changed
+            if compare_cols:
+                changed = any(old_row.get(col) != new_row.get(col) for col in compare_cols)
+                if changed:
+                    where = dict(zip(schema.pk_columns, key)) if schema.pk_columns else {}
+                    operations.append(
+                        DBOperation(
+                            table=schema.name,
+                            operation="UPDATE",
+                            data=new_row,
+                            where=where,
+                        )
+                    )
 
         return operations
 
@@ -658,77 +692,120 @@ class SessionStore:
 
         return agent_state
 
-    def load_session_state(self, passphrase: str | None = None) -> StoredState:
+    def compute_changesets(
+        self, target_store: SessionStore, in_place: bool = False
+    ) -> ChangesetMetadata:
         """
-        Load complete session state from database.
+        Compute changeset from this store to target store.
 
         Args:
-            passphrase: Optional passphrase for decrypting encrypted data
+            target_store: The target SessionStore to compute diff to
+            in_place: If False (default), creates a copy of DB file to compute changeset.
+                     If True, uses rollback on current DB (faster but requires transaction).
 
         Returns:
-            StoredState containing all session data
+            ChangesetMetadata with base_version (this), new_version (target), and changeset
         """
-        state = self.get_session_state()
-        return StoredState(
-            session_id=self.session_id,
-            version=self._current_version,
-            **state,
-        )
+        tmp_db_path: str | None = None
 
-    def apply_changeset(self, changeset: bytes, conflict_strategy: str = "replace") -> None:
+        if in_place:
+            work_store = self
+        else:
+            # Create a consistent copy using SQLite backup API
+            import os
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+                tmp_db_path = tmp_file.name
+
+            # Use SQLite's backup API for consistent snapshot
+            # This handles WAL mode, locks, and ensures consistency
+            temp_conn = apsw.Connection(tmp_db_path)
+            with temp_conn.backup("main", self.conn, "main") as backup:
+                backup.step()  # Copy entire database
+            temp_conn.close()
+
+            work_store = SessionStore(db_path=tmp_db_path, create_schema=False)
+
+        try:
+            # Compute diff and generate changeset
+            operations = self._compute_db_diff(work_store.db_path, target_store.db_path)
+
+            work_store.begin_tracking()
+            cursor = work_store.conn.cursor()
+            for op in operations:
+                work_store._apply_operation(cursor, op)
+            changeset = work_store.end_tracking()
+
+            return ChangesetMetadata(
+                base_version=self._current_version,
+                new_version=target_store.get_version(),
+                changeset=changeset or b"",
+                timestamp=time.time(),
+            )
+
+        finally:
+            if tmp_db_path:
+                work_store.close()
+                os.unlink(tmp_db_path)
+
+    def apply_changesets(self, changesets: list[ChangesetMetadata]) -> None:
         """
-        Apply a changeset to the database.
+        Apply a list of changesets in order, verifying version hashes.
 
         Args:
-            changeset: Changeset bytes from end_tracking()
-            conflict_strategy: How to handle conflicts ("replace" or "abort")
-                              "replace" = take new value (default for single writer)
-                              "abort" = raise error on conflict
-        """
-        raise NotImplementedError
+            changesets: List of ChangesetMetadata to apply in order
 
-    def get_version(self) -> int:
+        Raises:
+            ValueError: If version hash mismatch detected
         """
-        Get current version number.
+        for cs_meta in changesets:
+            # Verify base version matches current
+            if cs_meta.base_version != self._current_version:
+                raise ValueError(
+                    f"Changeset base version {cs_meta.base_version} does not match "
+                    f"current version {self._current_version}"
+                )
+
+            # Apply changeset
+            if cs_meta.changeset:
+
+                def conflict_handler(conflict_reason: int, table_change: Any) -> int:
+                    # Always take the new value (single writer scenario)
+                    return apsw.SQLITE_CHANGESET_REPLACE
+
+                apsw.Changeset.apply(cs_meta.changeset, self.conn, conflict=conflict_handler)
+
+            # Read version hash from DB and verify
+            cursor = self.conn.cursor()
+            result = cursor.execute("SELECT version_hash FROM session_metadata").fetchone()
+            db_version = result[0] if result else None
+
+            if db_version != cs_meta.new_version:
+                raise ValueError(
+                    f"Version hash mismatch after applying changeset! "
+                    f"Expected {cs_meta.new_version}, got {db_version}"
+                )
+
+            self._current_version = cs_meta.new_version
+
+            logger.debug(
+                "applied changeset",
+                extra={
+                    "base_version": cs_meta.base_version,
+                    "new_version": cs_meta.new_version,
+                    "changeset_size": len(cs_meta.changeset),
+                },
+            )
+
+    def get_version(self) -> str | None:
+        """
+        Get current version hash.
 
         Returns:
-            Current version number
+            Current version hash (SHA256 hex string) or None if no versions yet
         """
         return self._current_version
-
-    @classmethod
-    def from_base_and_changesets(
-        cls,
-        session_id: str,
-        base_db_path: str | Path,
-        changesets: list[bytes],
-        output_db_path: str | Path | None = None,
-    ) -> SessionStore:
-        """
-        Create a session store by applying changesets to a base database.
-
-        Typically used on worker side to reconstruct current state from
-        base snapshot plus incremental changes.
-
-        Args:
-            session_id: Session identifier
-            base_db_path: Path to base database
-            changesets: List of changesets to apply in order
-            output_db_path: Where to create the new DB (default: temp file)
-
-        Returns:
-            SessionStore with all changes applied
-        """
-        raise NotImplementedError
-
-    def create_snapshot(self, output_path: str | Path) -> None:
-        """
-        Create a snapshot (full copy) of the current database.
-
-        Args:
-            output_path: Where to save the snapshot
-        """
-        raise NotImplementedError
 
     # Helper methods (internal)
 
@@ -785,54 +862,11 @@ class SessionStore:
                 # If all else fails, return the raw text
                 return data_text
 
-    def _insert_chat_item(
-        self,
-        cursor: apsw.Cursor,
-        table_name: str,
-        agent_id: str | None,
-        item: Any,
-        passphrase: str | None,
-    ) -> None:
-        """
-        Insert or replace a single chat item into the database.
-
-        Args:
-            cursor: Database cursor
-            table_name: "session_history" or "agent_chat_items"
-            agent_id: Required for agent_chat_items, None for session_history
-            item: Chat item (dict or object with id and created_at)
-            passphrase: Optional encryption passphrase
-        """
-        raise NotImplementedError
-
-    def _save_chat_items_diff(
-        self,
-        cursor: apsw.Cursor,
-        table_name: str,
-        agent_id: str | None,
-        new_items: list[Any],
-        passphrase: str | None,
-    ) -> None:
-        """
-        Save chat items using diff-based approach.
-
-        Computes INSERT/UPDATE/DELETE operations based on item IDs.
-
-        Args:
-            cursor: Database cursor
-            table_name: "session_history" or "agent_chat_items"
-            agent_id: Required for agent_chat_items, None for session_history
-            new_items: List of chat items with id field
-            passphrase: Optional encryption passphrase
-        """
-        raise NotImplementedError
-
     def close(self) -> None:
         """Close the database connection."""
         if self._session is not None:
             self._session = None
         self.conn.close()
-        logger.debug("closed session store", extra={"session_id": self.session_id})
 
     def __enter__(self) -> SessionStore:
         return self
