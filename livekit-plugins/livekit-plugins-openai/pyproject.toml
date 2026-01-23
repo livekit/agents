@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "livekit-agents[codecs, images]>=1.4.0.rc1",
+  "livekit-agents[codecs, images]>=1.4.0.rc2",
   "openai[realtime]>=1.107.2",
 ]
 dynamic = ["version"]

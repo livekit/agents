@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
   "aiohttp>=3.8.0",
-  "livekit-agents[codecs]>=1.4.0.rc1",
+  "livekit-agents[codecs]>=1.4.0.rc2",
   "numpy>=1.26",
 ]
 dynamic = ["version"]

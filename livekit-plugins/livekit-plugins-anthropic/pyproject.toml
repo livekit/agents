@@ -17,7 +17,7 @@ classifiers = [
   "Topic :: Multimedia :: Video",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = ["anthropic>=0.41", "httpx", "livekit-agents>=1.4.0.rc1"]
+dependencies = ["anthropic>=0.41", "httpx", "livekit-agents>=1.4.0.rc2"]
 dynamic = ["version"]
 
 [project.urls]

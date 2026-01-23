@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
   "fish-audio-sdk; python_version >= '3.10'",
-  "livekit-agents[codecs]>=1.4.0.rc1",
+  "livekit-agents[codecs]>=1.4.0.rc2",
 ]
 dynamic = ["version"]
 
