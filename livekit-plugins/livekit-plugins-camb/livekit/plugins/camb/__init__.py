@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import os
 
-from camb.client import AsyncCambAI
-from camb.core.api_error import ApiError
+import aiohttp
+
 from livekit.agents import APIStatusError, Plugin
 
 from .log import logger
-from .tts import TTS
+from .tts import API_BASE_URL, API_KEY_HEADER, TTS
 from .version import __version__
 
 # Gender mapping from API integer to string
@@ -31,7 +31,7 @@ GENDER_MAP = {0: "Not Specified", 1: "Male", 2: "Female", 9: "Not Applicable"}
 async def list_voices(
     *,
     api_key: str | None = None,
-    base_url: str = "https://client.camb.ai/apis",
+    base_url: str = API_BASE_URL,
 ) -> list[dict]:
     """
     List available voices from Camb.ai.
@@ -51,47 +51,40 @@ async def list_voices(
     if not api_key:
         raise ValueError("api_key required (or set CAMB_API_KEY environment variable)")
 
-    client = AsyncCambAI(api_key=api_key, base_url=base_url)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{base_url}/list-voices",
+            headers={API_KEY_HEADER: api_key},
+        ) as resp:
+            if resp.status != 200:
+                content = await resp.text()
+                raise APIStatusError(
+                    f"Failed to list voices: {content}",
+                    status_code=resp.status,
+                )
 
-    try:
-        voice_list = await client.voice_cloning.list_voices()
-        voices = []
+            voice_list = await resp.json()
+            voices = []
 
-        for voice in voice_list:
-            voice_id = voice.get("id")
-            if voice_id is None:
-                continue
+            for voice in voice_list:
+                voice_id = voice.get("id")
+                if voice_id is None:
+                    continue
 
-            gender_int = voice.get("gender")
-            gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
+                gender_int = voice.get("gender")
+                gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
 
-            voices.append(
-                {
-                    "id": voice_id,
-                    "name": voice.get("voice_name", ""),
-                    "gender": gender,
-                    "age": voice.get("age"),
-                    "language": voice.get("language"),
-                }
-            )
+                voices.append(
+                    {
+                        "id": voice_id,
+                        "name": voice.get("voice_name", ""),
+                        "gender": gender,
+                        "age": voice.get("age"),
+                        "language": voice.get("language"),
+                    }
+                )
 
-        return voices
-
-    except ApiError as e:
-        raise APIStatusError(
-            f"Failed to list voices: {e.body}",
-            status_code=e.status_code or 500,
-        ) from e
-    finally:
-        # Close the internal httpx client
-        # Path: AsyncCambAI._client_wrapper.httpx_client.httpx_client
-        client_wrapper = getattr(client, "_client_wrapper", None)
-        if client_wrapper is not None:
-            http_client = getattr(client_wrapper, "httpx_client", None)
-            if http_client is not None:
-                httpx_client = getattr(http_client, "httpx_client", None)
-                if httpx_client is not None:
-                    await httpx_client.aclose()
+            return voices
 
 
 class CambPlugin(Plugin):
