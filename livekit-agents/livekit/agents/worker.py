@@ -610,16 +610,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
 
-            if not self._ws_url:
-                raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
+            if not unregistered:
+                if not self._ws_url:
+                    raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
 
-            if not self._api_key:
-                raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
+                if not self._api_key:
+                    raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
 
-            if not self._api_secret:
-                raise ValueError(
-                    "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
-                )
+                if not self._api_secret:
+                    raise ValueError(
+                        "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
+                    )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
@@ -693,9 +694,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             await self._proc_pool.start()
 
             self._http_session = aiohttp.ClientSession(proxy=self._http_proxy or None)
-            self._api = api.LiveKitAPI(
-                self._ws_url, self._api_key, self._api_secret, session=self._http_session
-            )
+            if not unregistered:
+                self._api = api.LiveKitAPI(
+                    self._ws_url, self._api_key, self._api_secret, session=self._http_session
+                )
+            else:
+                self._api = None
             self._close_future = asyncio.Future(loop=self._loop)
 
             @utils.log_exceptions(logger=logger)
@@ -878,17 +882,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
 
             token = token or (
-                api.AccessToken(self._api_key, self._api_secret)
+                api.AccessToken(self._api_key or "", self._api_secret or "")
                 .with_identity(agent_identity)
                 .with_kind("agent")
                 .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
                 .to_jwt()
+                if self._api_key and self._api_secret
+                else "fake-token"
             )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
                 job=job,
-                url=self._ws_url,
+                url=self._ws_url or "",
                 token=token,
                 fake_job=fake_job,
             )
