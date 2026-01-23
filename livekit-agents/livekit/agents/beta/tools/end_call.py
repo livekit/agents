@@ -109,6 +109,11 @@ class EndCallTool(Toolset):
 
     def _on_session_close(self, ev: CloseEvent) -> None:
         """Close the job process when AgentSession is closed"""
+        if self._shutdown_session_task:
+            # cleanup
+            self._shutdown_session_task.cancel()
+            self._shutdown_session_task = None
+
         job_ctx = get_job_context()
 
         if self._delete_room:
