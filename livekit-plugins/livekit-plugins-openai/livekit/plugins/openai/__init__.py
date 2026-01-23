@@ -17,7 +17,7 @@
 Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
 
 Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras,
-Fireworks, Perplexity, Telnyx, xAI, Ollama, DeepSeek, OpenRouter, and OVHcloud AI Endpoints.
+Fireworks, Perplexity, Telnyx, xAI, Ollama, DeepSeek, OpenRouter, Cohere, and OVHcloud AI Endpoints.
 
 See https://docs.livekit.io/agents/integrations/openai/ and
 https://docs.livekit.io/agents/integrations/llm/ for more information.
@@ -27,6 +27,7 @@ from . import realtime, responses, tools
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import (
+    CohereChatModels,
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
     STTModels,
@@ -42,6 +43,7 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "CohereChatModels",
     "OpenRouterProviderPreferences",
     "OpenRouterWebPlugin",
     "STTModels",
