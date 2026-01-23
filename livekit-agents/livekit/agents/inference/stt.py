@@ -27,7 +27,6 @@ from ..utils import is_given
 from ._utils import create_access_token
 
 DeepgramModels = Literal[
-    "deepgram",
     "deepgram/nova-3",
     "deepgram/nova-3-general",
     "deepgram/nova-3-medical",
@@ -37,14 +36,8 @@ DeepgramModels = Literal[
     "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
-CartesiaModels = Literal[
-    "cartesia",
-    "cartesia/ink-whisper",
-]
-AssemblyAIModels = Literal[
-    "assemblyai",
-    "assemblyai/universal-streaming",
-]
+CartesiaModels = Literal["cartesia/ink-whisper",]
+AssemblyAIModels = Literal["assemblyai/universal-streaming",]
 
 
 class CartesiaOptions(TypedDict, total=False):
