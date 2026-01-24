@@ -360,7 +360,8 @@ class TTS(tts.TTS):
         ws = None
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(f"{base_url}/tts", headers=headers), timeout
+                session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
+                timeout,
             )
         except (
             aiohttp.ClientConnectorError,
@@ -448,7 +449,7 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        raise NotImplementedError("ChunkedStream is not implemented")
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

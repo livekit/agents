@@ -12,12 +12,6 @@ from ..job import JobAcceptArguments, RunningJobInfo
 
 
 @dataclass
-class SimulateJobArgs:
-    room: str
-    participant_identity: str
-
-
-@dataclass
 class CliArgs:
     log_level: str
 
@@ -29,7 +23,7 @@ class CliArgs:
     devmode: bool = False
     reload: bool = False
 
-    simulate_job: SimulateJobArgs | None = None
+    # simulate_job: str | None = None
 
     # internal states
     # amount of time this worker has been reloaded

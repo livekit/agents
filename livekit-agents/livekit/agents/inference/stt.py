@@ -27,7 +27,6 @@ from ..utils import is_given
 from ._utils import create_access_token
 
 DeepgramModels = Literal[
-    "deepgram",
     "deepgram/nova-3",
     "deepgram/nova-3-general",
     "deepgram/nova-3-medical",
@@ -37,14 +36,8 @@ DeepgramModels = Literal[
     "deepgram/nova-2-conversationalai",
     "deepgram/nova-2-phonecall",
 ]
-CartesiaModels = Literal[
-    "cartesia",
-    "cartesia/ink-whisper",
-]
-AssemblyAIModels = Literal[
-    "assemblyai",
-    "assemblyai/universal-streaming",
-]
+CartesiaModels = Literal["cartesia/ink-whisper",]
+AssemblyAIModels = Literal["assemblyai/universal-streaming",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -63,6 +56,7 @@ class DeepgramOptions(TypedDict, total=False):
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool
+    vad_events: bool  # default: False
 
 
 class AssemblyaiOptions(TypedDict, total=False):
@@ -551,7 +545,9 @@ class SpeechStream(stt.SpeechStream):
         }
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(f"{base_url}/stt", headers=headers),
+                self._session.ws_connect(
+                    f"{base_url}/stt?model={self._opts.model}", headers=headers
+                ),
                 self._conn_options.timeout,
             )
             params["type"] = "session.create"
